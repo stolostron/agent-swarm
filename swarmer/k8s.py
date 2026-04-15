@@ -352,8 +352,8 @@ def exec_model_json(pod_name: str, namespace: str, model: str) -> None:
     model_json = json.dumps(model_data)
     cmd = [
         "sh", "-c",
-        "mkdir -p /root/.local/state/opencode && "
-        f"printf '%s' {shlex.quote(model_json)} > /root/.local/state/opencode/model.json",
+        "mkdir -p $HOME/.local/state/opencode && "
+        f"printf '%s' {shlex.quote(model_json)} > $HOME/.local/state/opencode/model.json",
     ]
     v1 = client.CoreV1Api()
     stream(

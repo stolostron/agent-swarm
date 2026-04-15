@@ -145,7 +145,13 @@ def build_session_pod(
         ),
         client.V1VolumeMount(
             name="opencode-config",
-            mount_path="/root/.config/opencode",
+            mount_path="/home/node/.config/opencode",
+            read_only=True,
+        ),
+        client.V1VolumeMount(
+            name="opencode-config",
+            mount_path="/etc/gitconfig",
+            sub_path="gitconfig",
             read_only=True,
         ),
     ]
@@ -191,7 +197,7 @@ def build_session_pod(
             "if [ -n \"${GITHUB_PAT}\" ]; then "
             "git config --global credential.helper store && "
             "echo \"https://${GITHUB_USERNAME}:${GITHUB_PAT}@github.com\" "
-            "> /root/.git-credentials; "
+            "> $HOME/.git-credentials; "
             "fi"
         )
         full_cmd = credential_setup + " && " + " && ".join(clone_cmds)
@@ -258,9 +264,9 @@ def build_session_pod(
             "variant": {f"{provider_id}/{model_id}": "default"},
         })
         model_setup = (
-            "mkdir -p /root/.local/state/opencode && "
+            "mkdir -p $HOME/.local/state/opencode && "
             f"printf '%s' {shlex.quote(model_json)} "
-            "> /root/.local/state/opencode/model.json && "
+            "> $HOME/.local/state/opencode/model.json && "
         )
     else:
         model_setup = ""
@@ -268,9 +274,9 @@ def build_session_pod(
     # Symlink opencode's share dir into the PVC so session history persists
     # across pod restarts. Must run before opencode starts.
     share_setup = (
-        "mkdir -p /workspace/.opencode /root/.local/share && "
-        "rm -rf /root/.local/share/opencode && "
-        "ln -sf /workspace/.opencode /root/.local/share/opencode && "
+        "mkdir -p /workspace/.opencode $HOME/.local/share && "
+        "rm -rf $HOME/.local/share/opencode && "
+        "ln -sf /workspace/.opencode $HOME/.local/share/opencode && "
     )
 
     # ---------- main container command ----------

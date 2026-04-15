@@ -25,6 +25,11 @@ rules:
     resources: ["secrets"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
 
+  # ConfigMap management (opencode-config in workspace namespaces)
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+
   # PVC management (session workspace storage)
   - apiGroups: [""]
     resources: ["persistentvolumeclaims"]
