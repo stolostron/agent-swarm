@@ -141,6 +141,42 @@ async def session_list(
 
 
 # ============================================================
+# Sessions list rows (HTMX polling partial)
+# ============================================================
+
+@router.get(
+    "/workspaces/{ws_id}/sessions/list-rows",
+    dependencies=[Depends(require_auth)],
+    response_class=HTMLResponse,
+)
+async def session_list_rows(
+    ws_id: int, request: Request, db: AsyncSession = Depends(get_db)
+):
+    """Return only the tbody rows for the sessions list table (HTMX polling partial)."""
+    ws = await _get_workspace(ws_id, db)
+    if ws is None:
+        return HTMLResponse("")
+
+    result = await db.execute(
+        select(Session)
+        .where(Session.workspace_id == ws_id)
+        .options(selectinload(Session.github_pat), selectinload(Session.repos))
+        .order_by(Session.name)
+    )
+    sessions = result.scalars().all()
+    return templates.TemplateResponse(
+        "sessions/_list_rows.html",
+        {
+            "request": request,
+            "ws": ws,
+            "sessions": sessions,
+            "mode_label": _session_mode_label,
+            "mode_badge": _session_mode_badge_class,
+        },
+    )
+
+
+# ============================================================
 # Create
 # ============================================================
 

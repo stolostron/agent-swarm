@@ -1,0 +1,29 @@
+{# HTMX partial — polled every 10s to keep the workspace list fresh #}
+<tbody id="ws-list-body"
+       hx-get="/workspaces/rows"
+       hx-trigger="every 10s"
+       hx-swap="outerHTML">
+{% for ws in workspaces %}
+  <tr>
+    <td>
+      <a href="/workspaces/{{ ws.id }}" class="fw-semibold text-decoration-none">
+        {{ ws.display_name }}
+      </a>
+    </td>
+    <td><code class="namespace-badge">{{ ws.namespace }}</code></td>
+    <td class="text-muted small">{{ ws.description or '—' }}</td>
+    <td class="text-muted small">{{ ws.created_at.strftime('%Y-%m-%d') }}</td>
+    <td class="text-end">
+      <a href="/workspaces/{{ ws.id }}/edit" class="btn btn-sm btn-outline-secondary me-1">Edit</a>
+      <button class="btn btn-sm btn-outline-danger"
+              onclick="showDeleteConfirm({{ ws.id }})"
+              id="delete-trigger-{{ ws.id }}">Delete</button>
+    </td>
+  </tr>
+  <tr id="delete-row-{{ ws.id }}" class="d-none">
+    <td colspan="5" class="p-0">
+      <div id="delete-confirm-{{ ws.id }}" class="p-3"></div>
+    </td>
+  </tr>
+{% endfor %}
+</tbody>

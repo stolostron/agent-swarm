@@ -18,29 +18,7 @@
         <th class="text-end">Actions</th>
       </tr>
     </thead>
-    <tbody>
-    {% for ws in workspaces %}
-      <tr>
-        <td>
-          <a href="/workspaces/{{ ws.id }}" class="fw-semibold text-decoration-none">
-            {{ ws.display_name }}
-          </a>
-        </td>
-        <td><code class="namespace-badge">{{ ws.namespace }}</code></td>
-        <td class="text-muted small">{{ ws.description or '—' }}</td>
-        <td class="text-muted small">{{ ws.created_at.strftime('%Y-%m-%d') }}</td>
-        <td class="text-end">
-          <a href="/workspaces/{{ ws.id }}/edit" class="btn btn-sm btn-outline-secondary me-1">Edit</a>
-          <span id="delete-btn-{{ ws.id }}">
-            <button class="btn btn-sm btn-outline-danger"
-                    hx-get="/workspaces/{{ ws.id }}/delete"
-                    hx-target="#delete-btn-{{ ws.id }}"
-                    hx-swap="outerHTML">Delete</button>
-          </span>
-        </td>
-      </tr>
-    {% endfor %}
-    </tbody>
+    {% include "workspaces/_list_rows.html" %}
   </table>
 </div>
 {% else %}
@@ -52,4 +30,25 @@
   </div>
 </div>
 {% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+function showDeleteConfirm(wsId) {
+  const row = document.getElementById('delete-row-' + wsId);
+  const container = document.getElementById('delete-confirm-' + wsId);
+  if (!row || !container) return;
+  row.classList.remove('d-none');
+  htmx.ajax('GET', '/workspaces/' + wsId + '/delete', {
+    target: '#delete-confirm-' + wsId,
+    swap: 'innerHTML'
+  });
+}
+function hideDeleteConfirm(wsId) {
+  const row = document.getElementById('delete-row-' + wsId);
+  const container = document.getElementById('delete-confirm-' + wsId);
+  if (row) row.classList.add('d-none');
+  if (container) container.innerHTML = '';
+}
+</script>
 {% endblock %}

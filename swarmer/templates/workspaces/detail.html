@@ -40,52 +40,13 @@
       <tr>
         <th>Name</th>
         <th>Mode</th>
-
         <th>Status</th>
         <th>GitHub PAT</th>
         <th>Persist</th>
         <th class="text-end">Actions</th>
       </tr>
     </thead>
-    <tbody>
-    {% for s in sessions %}
-      <tr>
-        <td>
-          <a href="/workspaces/{{ ws.id }}/sessions/{{ s.id }}"
-             class="fw-semibold text-decoration-none">{{ s.name }}</a>
-        </td>
-        <td>
-          <span class="badge bg-{{ 'info' if s.mode == 'server' else ('primary' if s.mode == 'tui' else 'secondary') }}">
-            {{ s.mode | capitalize }}
-          </span>
-        </td>
-        <td>
-          {% if s.phase == 'running' %}
-            <span class="badge bg-success">● Active</span>
-          {% elif s.phase == 'pending' %}
-            <span class="badge bg-warning text-dark">⏳ Pending</span>
-          {% elif s.phase == 'succeeded' %}
-            <span class="badge bg-primary">✓ Succeeded</span>
-          {% elif s.phase == 'failed' %}
-            <span class="badge bg-danger">✗ Failed</span>
-          {% elif s.phase == 'stopped' %}
-            <span class="badge bg-secondary">■ Stopped</span>
-          {% else %}
-            <span class="badge bg-secondary">○ Idle</span>
-          {% endif %}
-        </td>
-        <td class="small text-muted">{{ s.github_pat.name if s.github_pat else '—' }}</td>
-        <td>
-          {% if s.persist %}<span class="badge bg-info text-dark">Yes</span>
-          {% else %}<span class="text-muted">—</span>{% endif %}
-        </td>
-        <td class="text-end">
-          <a href="/workspaces/{{ ws.id }}/sessions/{{ s.id }}"
-             class="btn btn-sm btn-outline-secondary">Open</a>
-        </td>
-      </tr>
-    {% endfor %}
-    </tbody>
+    {% include "workspaces/_sessions_table.html" %}
   </table>
 </div>
 {% else %}

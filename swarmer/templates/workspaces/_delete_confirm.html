@@ -17,7 +17,7 @@
              placeholder="{{ ws.display_name }}" autofocus>
       <button type="submit" class="btn btn-danger">Delete</button>
       <button type="button" class="btn btn-outline-secondary"
-              onclick="this.closest('form').parentElement.outerHTML = '<span id=\'delete-btn-{{ ws.id }}\'><button class=\'btn btn-sm btn-danger\' hx-get=\'/workspaces/{{ ws.id }}/delete\' hx-target=\'#delete-btn-{{ ws.id }}\' hx-swap=\'outerHTML\'>Delete Workspace</button></span>'; htmx.process(document.getElementById('delete-btn-{{ ws.id }}'))">
+              onclick="hideDeleteConfirm({{ ws.id }})">
         Cancel
       </button>
     </div>

@@ -6,6 +6,7 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import selectinload
 
 from swarmer import k8s
 from swarmer.database import get_db
@@ -31,6 +32,23 @@ async def workspace_list(request: Request, db: AsyncSession = Depends(get_db)):
     workspaces = result.scalars().all()
     return templates.TemplateResponse(
         "workspaces/list.html", {"request": request, "workspaces": workspaces}
+    )
+
+
+# ---------- Workspace list rows (HTMX polling partial) ----------
+
+@router.get(
+    "/workspaces/rows",
+    dependencies=[Depends(require_auth)],
+    response_class=HTMLResponse,
+)
+async def workspace_list_rows(request: Request, db: AsyncSession = Depends(get_db)):
+    """Return only the tbody rows for the workspaces table (HTMX polling partial)."""
+    result = await db.execute(select(Workspace).order_by(Workspace.display_name))
+    workspaces = result.scalars().all()
+    return templates.TemplateResponse(
+        "workspaces/_list_rows.html",
+        {"request": request, "workspaces": workspaces},
     )
 
 
@@ -126,6 +144,35 @@ async def workspace_detail(
     return templates.TemplateResponse(
         "workspaces/detail.html",
         {"request": request, "ws": ws, "ns_status": ns_status, "sessions": sessions},
+    )
+
+
+# ---------- Workspace detail sessions rows (HTMX polling partial) ----------
+
+@router.get(
+    "/workspaces/{ws_id}/sessions/rows",
+    dependencies=[Depends(require_auth)],
+    response_class=HTMLResponse,
+)
+async def workspace_sessions_rows(
+    ws_id: int, request: Request, db: AsyncSession = Depends(get_db)
+):
+    """Return only the session tbody rows for the workspace detail page (HTMX polling partial)."""
+    from swarmer.models.session import Session
+
+    ws = await db.get(Workspace, ws_id)
+    if ws is None:
+        return HTMLResponse("")
+    result = await db.execute(
+        select(Session)
+        .where(Session.workspace_id == ws_id)
+        .options(selectinload(Session.github_pat))
+        .order_by(Session.name)
+    )
+    sessions = result.scalars().all()
+    return templates.TemplateResponse(
+        "workspaces/_sessions_table.html",
+        {"request": request, "ws": ws, "sessions": sessions},
     )
 
 
