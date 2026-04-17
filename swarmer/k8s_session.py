@@ -5,6 +5,10 @@ PVC management, pod spec generation, and Service management.
 import json
 import logging
 import shlex
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from kubernetes import client
 
 log = logging.getLogger(__name__)
 

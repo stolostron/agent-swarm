@@ -290,7 +290,6 @@ async def github_pat_delete(
     except Exception as exc:
         flash(request, f"K8s secret deletion failed: {exc}", "warning")
 
-    name = pat.name
     await db.delete(pat)
     await db.commit()
     return RedirectResponse(url=f"/workspaces/{ws_id}/secrets?tab=pats", status_code=302)
