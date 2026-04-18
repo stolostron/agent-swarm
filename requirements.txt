@@ -1,6 +1,6 @@
-fastapi>=0.111
+fastapi>=0.133
 uvicorn[standard]>=0.29
-starlette>=1.0
+starlette>=1.0,<2.0
 jinja2>=3.1
 python-multipart>=0.0.9
 sqlalchemy[asyncio]>=2.0
