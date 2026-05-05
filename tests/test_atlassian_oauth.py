@@ -1,9 +1,9 @@
 """
-Unit and integration tests for the Atlassian OAuth 2.1 integration.
+Unit and integration tests for the Atlassian OAuth 2.0 (3LO) integration.
 
 Covers:
-  - atlassian_oauth router helpers (redirect URI, PKCE, state validation)
-  - atlassian_oauth_start route (metadata discovery, DCR, redirect)
+  - atlassian_oauth router helpers (redirect URI, state validation)
+  - atlassian_oauth_start route (redirect to Atlassian with client_id)
   - atlassian_oauth_callback route (CSRF validation, token exchange, session storage)
   - k8s.apply_atlassian_oauth_secret / delete_atlassian_oauth_secret
   - opencode.build_share_setup_cmd with has_atlassian_oauth
@@ -21,7 +21,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import base64
 import json
 import time
-from unittest.mock import MagicMock, patch, call
+from unittest.mock import MagicMock, patch
 
 import pytest
 import respx
@@ -36,7 +36,6 @@ class TestMakeRedirectUri:
     """_make_redirect_uri() constructs the correct callback URL."""
 
     def _call(self, public_url: str, ws_id: int) -> str:
-        from unittest.mock import MagicMock
         from swarmer.routers.atlassian_oauth import _make_redirect_uri
 
         request = MagicMock()
@@ -57,32 +56,6 @@ class TestMakeRedirectUri:
     def test_falls_back_to_request_base_url(self):
         uri = self._call("", 1)
         assert uri == "http://localhost:8080/workspaces/1/atlassian-oauth/callback"
-
-
-class TestPkce:
-    """_pkce_pair() produces a valid PKCE S256 code_challenge."""
-
-    def test_returns_two_strings(self):
-        from swarmer.routers.atlassian_oauth import _pkce_pair
-        verifier, challenge = _pkce_pair()
-        assert isinstance(verifier, str) and len(verifier) > 10
-        assert isinstance(challenge, str) and len(challenge) > 10
-
-    def test_challenge_is_sha256_of_verifier(self):
-        import hashlib
-        from base64 import urlsafe_b64encode
-        from swarmer.routers.atlassian_oauth import _pkce_pair
-
-        verifier, challenge = _pkce_pair()
-        expected = urlsafe_b64encode(
-            hashlib.sha256(verifier.encode()).digest()
-        ).rstrip(b"=").decode()
-        assert challenge == expected
-
-    def test_pairs_are_unique(self):
-        from swarmer.routers.atlassian_oauth import _pkce_pair
-        pairs = {_pkce_pair()[0] for _ in range(10)}
-        assert len(pairs) == 10  # all different
 
 
 class TestSafeState:
@@ -109,102 +82,6 @@ class TestSafeState:
         from swarmer.routers.atlassian_oauth import _safe_state
         # None is not a valid state — falsy check
         assert _safe_state(None) is False  # type: ignore[arg-type]
-
-
-# ---------------------------------------------------------------------------
-# _discover_oauth_metadata
-# ---------------------------------------------------------------------------
-
-class TestDiscoverOAuthMetadata:
-    """_discover_oauth_metadata() fetches and returns the JSON metadata."""
-
-    @pytest.mark.asyncio
-    async def test_returns_metadata_dict(self):
-        from swarmer.routers.atlassian_oauth import _discover_oauth_metadata
-
-        metadata = {
-            "authorization_endpoint": "https://auth.atlassian.com/authorize",
-            "token_endpoint": "https://auth.atlassian.com/oauth/token",
-            "registration_endpoint": "https://auth.atlassian.com/oauth/register",
-        }
-        with respx.mock:
-            respx.get(
-                "https://mcp.atlassian.com/v1/mcp/authv2/.well-known/oauth-authorization-server"
-            ).mock(return_value=httpx.Response(200, json=metadata))
-
-            result = await _discover_oauth_metadata("https://mcp.atlassian.com/v1/mcp/authv2")
-
-        assert result["authorization_endpoint"] == "https://auth.atlassian.com/authorize"
-        assert result["token_endpoint"] == "https://auth.atlassian.com/oauth/token"
-
-    @pytest.mark.asyncio
-    async def test_raises_on_http_error(self):
-        from swarmer.routers.atlassian_oauth import _discover_oauth_metadata
-
-        with respx.mock:
-            respx.get(
-                "https://mcp.atlassian.com/v1/mcp/authv2/.well-known/oauth-authorization-server"
-            ).mock(return_value=httpx.Response(500))
-
-            with pytest.raises(Exception):
-                await _discover_oauth_metadata("https://mcp.atlassian.com/v1/mcp/authv2")
-
-
-# ---------------------------------------------------------------------------
-# _do_dcr
-# ---------------------------------------------------------------------------
-
-class TestDoDcr:
-    """_do_dcr() performs Dynamic Client Registration and returns a client_id."""
-
-    @pytest.mark.asyncio
-    async def test_returns_client_id(self):
-        from swarmer.routers.atlassian_oauth import _do_dcr
-
-        reg_url = "https://auth.atlassian.com/oauth/register"
-        redirect = "https://swarmer.example.com/workspaces/1/atlassian-oauth/callback"
-
-        with respx.mock:
-            respx.post(reg_url).mock(
-                return_value=httpx.Response(201, json={"client_id": "test-client-123"})
-            )
-            client_id = await _do_dcr(reg_url, redirect)
-
-        assert client_id == "test-client-123"
-
-    @pytest.mark.asyncio
-    async def test_raises_when_no_client_id(self):
-        from swarmer.routers.atlassian_oauth import _do_dcr
-
-        reg_url = "https://auth.atlassian.com/oauth/register"
-
-        with respx.mock:
-            respx.post(reg_url).mock(
-                return_value=httpx.Response(201, json={"error": "bad request"})
-            )
-            with pytest.raises(ValueError, match="client_id"):
-                await _do_dcr(reg_url, "https://example.com/cb")
-
-    @pytest.mark.asyncio
-    async def test_sends_correct_payload(self):
-        from swarmer.routers.atlassian_oauth import _do_dcr
-
-        reg_url = "https://auth.atlassian.com/oauth/register"
-        redirect = "https://swarmer.example.com/cb"
-        captured: dict = {}
-
-        def _handler(request):
-            captured.update(json.loads(request.content))
-            return httpx.Response(201, json={"client_id": "c1"})
-
-        with respx.mock:
-            respx.post(reg_url).mock(side_effect=_handler)
-            await _do_dcr(reg_url, redirect)
-
-        assert captured["redirect_uris"] == [redirect]
-        assert captured["grant_types"] == ["authorization_code"]
-        assert captured["token_endpoint_auth_method"] == "none"
-        assert "Swarmer" in captured["client_name"]
 
 
 # ---------------------------------------------------------------------------
@@ -320,14 +197,7 @@ class TestBuildSessionPodAtlassian:
         return session
 
     def _run(self, session, has_atlassian_oauth: bool):
-        """Call build_session_pod with mocked kubernetes client.
-
-        k8s_session.py imports kubernetes.client lazily inside functions,
-        so we patch the kubernetes.client module directly.
-        """
-        from unittest.mock import MagicMock, patch
-
-        # Build a simple mock that returns dicts so we can inspect them
+        """Call build_session_pod with mocked kubernetes client."""
         mock_k8s_client = MagicMock()
         mock_k8s_client.V1EnvFromSource = lambda **kw: {"type": "envFrom", **kw}
         mock_k8s_client.V1SecretEnvSource = lambda **kw: {"secretEnvSource": kw}
@@ -346,8 +216,6 @@ class TestBuildSessionPodAtlassian:
         mock_k8s_client.V1LocalObjectReference = lambda **kw: kw
         mock_k8s_client.V1ContainerPort = lambda **kw: kw
 
-        # kubernetes.client is imported lazily inside build_session_pod,
-        # so we patch the module-level import inside kubernetes package.
         import kubernetes
         with patch.object(kubernetes, "client", mock_k8s_client):
             with patch("swarmer.k8s_session.settings") as mock_settings:
@@ -387,31 +255,26 @@ class TestBuildSessionPodAtlassian:
 
 
 # ---------------------------------------------------------------------------
-# atlassian_oauth_start route (mocked DB and HTTP)
+# atlassian_oauth_start route (mocked DB)
 # ---------------------------------------------------------------------------
 
 class TestAtlassianOAuthStart:
     """GET /workspaces/{ws_id}/atlassian-oauth/start redirects to Atlassian."""
 
-    def _metadata(self):
-        return {
-            "authorization_endpoint": "https://auth.atlassian.com/authorize",
-            "token_endpoint": "https://auth.atlassian.com/oauth/token",
-            "registration_endpoint": "https://auth.atlassian.com/oauth/register",
-        }
+    def _fake_app(self, client_id: str = "test-client-id"):
+        fake_app = MagicMock()
+        fake_app.site_url = "https://myorg.atlassian.net"
+        fake_app.client_id = client_id
+        return fake_app
 
     @pytest.mark.asyncio
     async def test_redirects_to_authorization_endpoint(self):
-        """When AtlassianOAuthApp is configured and DCR succeeds, redirect to Atlassian."""
+        """When AtlassianOAuthApp is configured, redirect to auth.atlassian.com."""
         from swarmer.routers.atlassian_oauth import atlassian_oauth_start
-        from unittest.mock import AsyncMock, MagicMock, patch
-
-        # Fake DB that returns a configured AtlassianOAuthApp
-        fake_app = MagicMock()
-        fake_app.site_url = "https://myorg.atlassian.net"
+        from unittest.mock import AsyncMock
 
         mock_result = MagicMock()
-        mock_result.scalar_one_or_none.return_value = fake_app
+        mock_result.scalar_one_or_none.return_value = self._fake_app("my-client-id")
 
         mock_db = AsyncMock()
         mock_db.execute = AsyncMock(return_value=mock_result)
@@ -420,32 +283,24 @@ class TestAtlassianOAuthStart:
         mock_request.base_url = "http://localhost:8080/"
         mock_request.session = {}
 
-        with respx.mock:
-            respx.get(
-                "https://mcp.atlassian.com/v1/mcp/authv2/.well-known/oauth-authorization-server"
-            ).mock(return_value=httpx.Response(200, json=self._metadata()))
-            respx.post("https://auth.atlassian.com/oauth/register").mock(
-                return_value=httpx.Response(201, json={"client_id": "dcr-client-abc"})
+        with patch("swarmer.routers.atlassian_oauth.settings") as mock_settings:
+            mock_settings.swarmer_public_url = "https://swarmer.example.com"
+            response = await atlassian_oauth_start(
+                ws_id=1, request=mock_request, return_session=5, db=mock_db
             )
 
-            with patch("swarmer.routers.atlassian_oauth.settings") as mock_settings:
-                mock_settings.swarmer_public_url = "https://swarmer.example.com"
-                response = await atlassian_oauth_start(
-                    ws_id=1, request=mock_request, return_session=5, db=mock_db
-                )
-
-        # Should be a redirect to the authorization endpoint
         assert response.status_code == 302
         location = response.headers["location"]
         assert "https://auth.atlassian.com/authorize" in location
-        assert "client_id=dcr-client-abc" in location
-        assert "code_challenge_method=S256" in location
+        assert "client_id=my-client-id" in location
+        assert "response_type=code" in location
+        assert "state=" in location
 
     @pytest.mark.asyncio
     async def test_redirects_to_secrets_when_not_configured(self):
         """When no AtlassianOAuthApp exists, redirect to secrets page."""
         from swarmer.routers.atlassian_oauth import atlassian_oauth_start
-        from unittest.mock import AsyncMock, MagicMock, patch
+        from unittest.mock import AsyncMock
 
         mock_result = MagicMock()
         mock_result.scalar_one_or_none.return_value = None  # not configured
@@ -465,14 +320,36 @@ class TestAtlassianOAuthStart:
         assert "secrets" in response.headers["location"]
 
     @pytest.mark.asyncio
-    async def test_stores_state_in_http_session(self):
-        """After successful DCR, CSRF state is stored in request.session."""
-        from swarmer.routers.atlassian_oauth import atlassian_oauth_start, _STATE_KEY
-        from unittest.mock import AsyncMock, MagicMock, patch
+    async def test_redirects_to_secrets_when_client_id_missing(self):
+        """AtlassianOAuthApp exists but has no client_id → redirect to secrets."""
+        from swarmer.routers.atlassian_oauth import atlassian_oauth_start
+        from unittest.mock import AsyncMock
 
-        fake_app = MagicMock()
         mock_result = MagicMock()
-        mock_result.scalar_one_or_none.return_value = fake_app
+        mock_result.scalar_one_or_none.return_value = self._fake_app(client_id="")
+
+        mock_db = AsyncMock()
+        mock_db.execute = AsyncMock(return_value=mock_result)
+
+        mock_request = MagicMock()
+        mock_request.session = {}
+
+        with patch("swarmer.routers.atlassian_oauth.flash"):
+            response = await atlassian_oauth_start(
+                ws_id=3, request=mock_request, return_session=0, db=mock_db
+            )
+
+        assert response.status_code == 302
+        assert "secrets" in response.headers["location"]
+
+    @pytest.mark.asyncio
+    async def test_stores_state_in_http_session(self):
+        """After building the auth URL, CSRF state is stored in request.session."""
+        from swarmer.routers.atlassian_oauth import atlassian_oauth_start, _STATE_KEY
+        from unittest.mock import AsyncMock
+
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = self._fake_app("client-abc")
         mock_db = AsyncMock()
         mock_db.execute = AsyncMock(return_value=mock_result)
 
@@ -481,27 +358,19 @@ class TestAtlassianOAuthStart:
         mock_request.base_url = "http://localhost:8080/"
         mock_request.session = session_store
 
-        with respx.mock:
-            respx.get(
-                "https://mcp.atlassian.com/v1/mcp/authv2/.well-known/oauth-authorization-server"
-            ).mock(return_value=httpx.Response(200, json=self._metadata()))
-            respx.post("https://auth.atlassian.com/oauth/register").mock(
-                return_value=httpx.Response(201, json={"client_id": "c1"})
+        with patch("swarmer.routers.atlassian_oauth.settings") as mock_settings:
+            mock_settings.swarmer_public_url = ""
+            await atlassian_oauth_start(
+                ws_id=3, request=mock_request, return_session=10, db=mock_db
             )
-
-            with patch("swarmer.routers.atlassian_oauth.settings") as mock_settings:
-                mock_settings.swarmer_public_url = ""
-                await atlassian_oauth_start(
-                    ws_id=3, request=mock_request, return_session=10, db=mock_db
-                )
 
         assert _STATE_KEY in session_store
         stored = session_store[_STATE_KEY]
-        assert stored["client_id"] == "c1"
         assert stored["ws_id"] == 3
         assert stored["return_session"] == 10
         assert "state" in stored
-        assert "code_verifier" in stored
+        # No client_id or code_verifier stored (those are in the model / not needed)
+        assert "code_verifier" not in stored
 
 
 # ---------------------------------------------------------------------------
@@ -514,14 +383,18 @@ class TestAtlassianOAuthCallback:
     def _stored_state(self, ws_id: int = 1, state: str = "a" * 32, session_id: int = 5):
         return {
             "state": state,
-            "client_id": "dcr-client",
-            "code_verifier": "verifier-xyz",
-            "token_endpoint": "https://auth.atlassian.com/oauth/token",
             "redirect_uri": "https://swarmer.example.com/workspaces/1/atlassian-oauth/callback",
             "ws_id": ws_id,
             "return_session": session_id,
             "created_at": int(time.time()),
         }
+
+    def _fake_app(self):
+        app = MagicMock()
+        app.client_id = "my-client-id"
+        app.client_secret = "my-client-secret"
+        app.client_secret_enc = "encrypted"
+        return app
 
     @pytest.mark.asyncio
     async def test_successful_token_exchange_stores_in_session(self):
@@ -529,14 +402,18 @@ class TestAtlassianOAuthCallback:
         from swarmer.routers.atlassian_oauth import (
             atlassian_oauth_callback, _STATE_KEY, _token_session_key
         )
-        from unittest.mock import AsyncMock, MagicMock, patch
+        from unittest.mock import AsyncMock
 
         state = "a" * 32
         session_store = {_STATE_KEY: self._stored_state(ws_id=1, state=state)}
 
         mock_request = MagicMock()
         mock_request.session = session_store
+
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = self._fake_app()
         mock_db = AsyncMock()
+        mock_db.execute = AsyncMock(return_value=mock_result)
 
         with respx.mock:
             respx.post("https://auth.atlassian.com/oauth/token").mock(
@@ -565,7 +442,7 @@ class TestAtlassianOAuthCallback:
     async def test_csrf_mismatch_redirects_with_error(self):
         """Mismatched CSRF state → flash error, redirect, no token stored."""
         from swarmer.routers.atlassian_oauth import atlassian_oauth_callback, _STATE_KEY
-        from unittest.mock import AsyncMock, MagicMock, patch
+        from unittest.mock import AsyncMock
 
         good_state = "a" * 32
         bad_state = "b" * 32
@@ -590,7 +467,7 @@ class TestAtlassianOAuthCallback:
     async def test_user_denied_redirects_with_error(self):
         """error=access_denied from Atlassian → flash error, redirect."""
         from swarmer.routers.atlassian_oauth import atlassian_oauth_callback, _STATE_KEY
-        from unittest.mock import AsyncMock, MagicMock, patch
+        from unittest.mock import AsyncMock
 
         state = "c" * 32
         session_store = {_STATE_KEY: self._stored_state(ws_id=2, state=state)}
@@ -614,7 +491,7 @@ class TestAtlassianOAuthCallback:
     async def test_missing_session_state_redirects(self):
         """No stored OAuth state → flash error and redirect."""
         from swarmer.routers.atlassian_oauth import atlassian_oauth_callback
-        from unittest.mock import AsyncMock, MagicMock, patch
+        from unittest.mock import AsyncMock
 
         mock_request = MagicMock()
         mock_request.session = {}  # no stored state
@@ -634,14 +511,18 @@ class TestAtlassianOAuthCallback:
     async def test_token_exchange_failure_redirects(self):
         """HTTP error on token endpoint → flash error, no token stored."""
         from swarmer.routers.atlassian_oauth import atlassian_oauth_callback, _STATE_KEY
-        from unittest.mock import AsyncMock, MagicMock, patch
+        from unittest.mock import AsyncMock
 
         state = "d" * 32
         session_store = {_STATE_KEY: self._stored_state(ws_id=1, state=state)}
 
         mock_request = MagicMock()
         mock_request.session = session_store
+
+        mock_result = MagicMock()
+        mock_result.scalar_one_or_none.return_value = self._fake_app()
         mock_db = AsyncMock()
+        mock_db.execute = AsyncMock(return_value=mock_result)
 
         with respx.mock:
             respx.post("https://auth.atlassian.com/oauth/token").mock(

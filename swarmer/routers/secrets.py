@@ -406,6 +406,8 @@ async def atlassian_oauth_save(
     ws_id: int,
     request: Request,
     site_url: str = Form(""),
+    client_id: str = Form(""),
+    client_secret: str = Form(""),
     db: AsyncSession = Depends(get_db),
 ):
     """Create or update the Atlassian OAuth configuration for a workspace."""
@@ -418,19 +420,15 @@ async def atlassian_oauth_save(
     )
     app_config = result.scalar_one_or_none()
 
-    # Derive the redirect URI to store for reference
-    if settings.swarmer_public_url:
-        base = settings.swarmer_public_url.rstrip("/")
-    else:
-        base = str(request.base_url).rstrip("/")
-    redirect_uri = f"{base}/workspaces/{ws_id}/atlassian-oauth/callback"
-
     if app_config is None:
         app_config = AtlassianOAuthApp(workspace_id=ws_id)
         db.add(app_config)
 
     app_config.site_url = site_url.strip()
-    app_config.redirect_uri = redirect_uri
+    app_config.client_id = client_id.strip()
+    # Only overwrite client_secret if a new value was submitted
+    if client_secret.strip():
+        app_config.client_secret = client_secret.strip()
 
     await db.commit()
     flash(request, "Atlassian OAuth configuration saved.", "success")
