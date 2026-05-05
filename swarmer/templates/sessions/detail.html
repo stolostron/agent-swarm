@@ -247,8 +247,8 @@
             </div>
 
             {% if atlassian_token and atlassian_token.access_token_enc %}
-            <div style="display:flex; align-items:center; margin-bottom:var(--pf-t--global--spacer--sm);">
-              <div style="flex:0 0 40%; color:var(--pf-t--global--text--color--subtle); font-size:var(--pf-t--global--font--size--sm);">
+            <div style="display:flex; align-items:flex-start; margin-bottom:var(--pf-t--global--spacer--sm);">
+              <div style="flex:0 0 40%; color:var(--pf-t--global--text--color--subtle); font-size:var(--pf-t--global--font--size--sm); padding-top:2px;">
                 Jira MCP
                 {% if atlassian_token.token_status == 'expiring_soon' %}
                   <span class="pf-v6-c-label pf-m-gold pf-m-compact" title="Token expiring soon" style="margin-left:4px;">
@@ -266,6 +266,13 @@
                          id="cfg_jira_mcp" value="true"
                          {{ 'checked' if session.enable_jira_mcp }}
                          {% if session.is_active %}disabled{% endif %}>
+                </div>
+                <div id="cfg_jira_mcp_persist_hint"
+                     style="display:{% if session.persist %}block{% else %}none{% endif %};
+                            font-size:var(--pf-t--global--font--size--xs);
+                            color:var(--pf-t--global--text--color--subtle);
+                            margin-top:2px;">
+                  Unchecking removes the cached token on next launch.
                 </div>
               </div>
             </div>
@@ -789,11 +796,14 @@ function syncResume() {
   const persist = document.getElementById('cfg_persist');
   const row = document.getElementById('cfg_resume_row');
   const resume = document.getElementById('cfg_resume');
+  const jiraMcpHint = document.getElementById('cfg_jira_mcp_persist_hint');
   if (!persist.checked) {
     row.style.display = 'none';
     resume.checked = false;
+    if (jiraMcpHint) jiraMcpHint.style.display = 'none';
   } else {
     row.style.display = '';
+    if (jiraMcpHint) jiraMcpHint.style.display = 'block';
   }
 }
 
