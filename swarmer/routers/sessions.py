@@ -1433,15 +1433,25 @@ _atlassian_auth_state: dict[int, dict] = {}
 _MCP_AUTH_JSON_PATH = "/workspace/.opencode/mcp-auth.json"
 _MCP_AUTH_DEST_PATH = "/workspace/.opencode/mcp-auth.json"
 
-# Resolve opencode binary at import time.
-# Try PATH first, then the npm-global wrapper, then the native ELF binary
-# (the wrapper is a node script and needs node on PATH; the ELF binary is
-# self-contained and works regardless of PATH).
-_OPENCODE_BIN: str = (
-    shutil.which("opencode")
-    or shutil.which("opencode", path="/usr/local/share/npm-global/bin")
-    or "/usr/local/share/npm-global/lib/node_modules/opencode-ai/node_modules/opencode-linux-x64/bin/opencode"
-)
+# Known candidate paths for the opencode binary, in preference order.
+# The native ELF binaries are self-contained and don't require PATH resolution.
+_OPENCODE_CANDIDATES = [
+    "/usr/local/share/npm-global/bin/opencode",
+    "/usr/local/share/npm-global/lib/node_modules/opencode-ai/node_modules/opencode-linux-x64/bin/opencode",
+    "/usr/local/share/npm-global/lib/node_modules/opencode-ai/node_modules/opencode-linux-x64-baseline/bin/opencode",
+]
+
+
+def _find_opencode_bin() -> str | None:
+    """Return the first executable opencode binary found, checking PATH then known paths."""
+    import os
+    found = shutil.which("opencode")
+    if found:
+        return found
+    for candidate in _OPENCODE_CANDIDATES:
+        if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+            return candidate
+    return None
 
 
 async def _read_auth_url(proc: asyncio.subprocess.Process) -> str | None:
@@ -1482,15 +1492,22 @@ async def atlassian_auth_start(ws_id: int, sid: int, db: AsyncSession = Depends(
         except Exception:
             pass
 
+    opencode_bin = _find_opencode_bin()
+    if not opencode_bin:
+        return JSONResponse(
+            {"error": "opencode binary not found. Tried: " + ", ".join(_OPENCODE_CANDIDATES)},
+            status_code=500,
+        )
+    log.info("atlassian_auth_start: using opencode binary %r", opencode_bin)
     try:
         proc = await asyncio.create_subprocess_exec(
-            _OPENCODE_BIN, "mcp", "auth", "atlassian-rovo",
+            opencode_bin, "mcp", "auth", "atlassian-rovo",
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
         )
     except FileNotFoundError:
         return JSONResponse(
-            {"error": f"opencode binary not found at {_OPENCODE_BIN!r}. Check PATH."},
+            {"error": f"opencode binary not executable at {opencode_bin!r}."},
             status_code=500,
         )
 
