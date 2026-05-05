@@ -3,6 +3,7 @@ import hashlib
 import logging
 import secrets
 from datetime import datetime, timedelta
+from urllib.parse import parse_qs, urlparse
 
 import httpx
 from fastapi import APIRouter, Depends, Form, Request
@@ -24,12 +25,11 @@ router = APIRouter()
 templates = Jinja2Templates(directory="swarmer/templates")
 
 OAUTH_CALLBACK_PATH = "/mcp-servers/oauth/callback"
+OAUTH_LOCALHOST_REDIRECT = "http://localhost:8080/mcp-servers/oauth/callback"
 
 
 def _get_redirect_uri(request: Request) -> str:
-    from swarmer.config import settings
-    base_url = settings.redirect_base_url or str(request.base_url).rstrip("/")
-    return f"{base_url}{OAUTH_CALLBACK_PATH}"
+    return OAUTH_LOCALHOST_REDIRECT
 
 
 async def _get_workspace(ws_id: int, db: AsyncSession) -> Workspace | None:
@@ -56,10 +56,12 @@ async def mcp_servers_list(
     )
     servers = result.scalars().all()
 
+    pending_oauth = request.session.get("mcp_pending_oauth", {})
+
     return templates.TemplateResponse(
         request,
         "mcp_servers/list.html",
-        {"ws": ws, "servers": servers, "catalog": MCP_SERVER_CATALOG},
+        {"ws": ws, "servers": servers, "catalog": MCP_SERVER_CATALOG, "pending_oauth": pending_oauth},
     )
 
 
@@ -171,49 +173,69 @@ async def mcp_server_oauth_connect(
     if server.scopes:
         params["scope"] = server.scopes
 
+    pending = request.session.get("mcp_pending_oauth", {})
+    pending[str(server_id)] = True
+    request.session["mcp_pending_oauth"] = pending
+
     from urllib.parse import urlencode
     auth_url = server.authorization_endpoint
     query = urlencode(params)
+    flash(
+        request,
+        f"Authorize with {server.display_name}, then copy the localhost URL "
+        "your browser is redirected to and paste it below.",
+        "info",
+    )
     return RedirectResponse(url=f"{auth_url}?{query}", status_code=302)
 
 
 # ============================================================
-# OAuth: Callback  (workspace-agnostic — ws_id is in the state)
+# OAuth: Complete  (paste the localhost callback URL)
 # ============================================================
 
-@router.get(
-    OAUTH_CALLBACK_PATH,
+@router.post(
+    "/workspaces/{ws_id}/mcp-servers/{server_id}/complete-oauth",
     dependencies=[Depends(require_auth)],
 )
-async def mcp_server_oauth_callback(
+async def mcp_server_oauth_complete(
+    ws_id: int,
+    server_id: int,
     request: Request,
-    code: str = "",
-    state: str = "",
-    error: str = "",
+    callback_url: str = Form(...),
     db: AsyncSession = Depends(get_db),
 ):
+    """Parse the pasted localhost callback URL and exchange the code for tokens."""
+    ws = await _get_workspace(ws_id, db)
+    server = await db.get(McpServer, server_id)
+    if ws is None or server is None or server.workspace_id != ws_id:
+        return RedirectResponse(url=f"/workspaces/{ws_id}/mcp-servers", status_code=302)
+
+    parsed = urlparse(callback_url.strip())
+    params = parse_qs(parsed.query)
+
+    error = params.get("error", [None])[0]
+    if error:
+        flash(request, f"OAuth authorization failed: {error}", "danger")
+        return RedirectResponse(url=f"/workspaces/{ws_id}/mcp-servers", status_code=302)
+
+    code = params.get("code", [None])[0]
+    state = params.get("state", [None])[0]
+
+    if not code or not state:
+        flash(request, "Invalid callback URL — missing code or state parameter.", "danger")
+        return RedirectResponse(url=f"/workspaces/{ws_id}/mcp-servers", status_code=302)
+
     session_key = f"mcp_oauth_{state}"
     oauth_state = request.session.pop(session_key, None)
 
-    if error:
-        ws_id = oauth_state["ws_id"] if oauth_state else 0
-        flash(request, f"OAuth authorization failed: {error}", "danger")
-        if ws_id:
-            return RedirectResponse(url=f"/workspaces/{ws_id}/mcp-servers", status_code=302)
-        return RedirectResponse(url="/workspaces", status_code=302)
-
     if not oauth_state:
-        flash(request, "Invalid OAuth state. Please try connecting again.", "danger")
-        return RedirectResponse(url="/workspaces", status_code=302)
-
-    ws_id = oauth_state["ws_id"]
-
-    server = await db.get(McpServer, oauth_state["server_id"])
-    if server is None or server.workspace_id != ws_id:
-        flash(request, "MCP server not found.", "danger")
+        flash(request, "OAuth state expired or invalid. Please reconnect.", "danger")
         return RedirectResponse(url=f"/workspaces/{ws_id}/mcp-servers", status_code=302)
 
-    # Exchange authorization code for tokens
+    if oauth_state["server_id"] != server_id or oauth_state["ws_id"] != ws_id:
+        flash(request, "OAuth state mismatch. Please reconnect.", "danger")
+        return RedirectResponse(url=f"/workspaces/{ws_id}/mcp-servers", status_code=302)
+
     redirect_uri = _get_redirect_uri(request)
 
     token_data = {
@@ -257,9 +279,45 @@ async def mcp_server_oauth_callback(
 
     await db.commit()
 
+    pending = request.session.get("mcp_pending_oauth", {})
+    pending.pop(str(server_id), None)
+    request.session["mcp_pending_oauth"] = pending
+
     await _sync_mcp_to_k8s(ws_id, db, request)
     flash(request, f"Successfully connected to {server.display_name}!", "success")
     return RedirectResponse(url=f"/workspaces/{ws_id}/mcp-servers", status_code=302)
+
+
+# ============================================================
+# OAuth: Callback  (kept for direct localhost use, but normally
+# the user will paste the URL via the complete-oauth form)
+# ============================================================
+
+@router.get(
+    OAUTH_CALLBACK_PATH,
+)
+async def mcp_server_oauth_callback(
+    request: Request,
+    code: str = "",
+    state: str = "",
+    error: str = "",
+):
+    """If someone hits this endpoint directly (e.g. localhost is reachable),
+    show a simple page with the full URL for pasting."""
+    from fastapi.responses import HTMLResponse
+    full_url = str(request.url)
+    html = f"""
+    <html><head><title>OAuth Callback</title></head>
+    <body style="font-family:sans-serif; padding:2em; max-width:800px; margin:auto;">
+    <h2>OAuth Authorization Complete</h2>
+    <p>Copy the URL below and paste it into the <strong>"Paste Callback URL"</strong>
+       field on the MCP Servers page in Swarmer.</p>
+    <textarea rows="5" style="width:100%; font-family:monospace; font-size:14px;"
+              onclick="this.select()" readonly>{full_url}</textarea>
+    <p style="margin-top:1em; color:#666;">You can close this tab after copying.</p>
+    </body></html>
+    """
+    return HTMLResponse(content=html)
 
 
 # ============================================================
