@@ -55,7 +55,7 @@ class CrushStrategy(AgentToolStrategy):
     def get_share_dir(self) -> str:
         return "$HOME/.local/share/crush"
 
-    def build_share_setup_cmd(self) -> str:
+    def build_share_setup_cmd(self, has_atlassian_oauth: bool = False) -> str:
         crush_version = getattr(settings, "crush_version", "0.57.0")
         return (
             "mkdir -p /workspace/.crush $HOME/.local/share $HOME/.local/bin && "

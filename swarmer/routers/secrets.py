@@ -8,9 +8,11 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from swarmer import k8s
+from swarmer.config import settings
 from swarmer.database import get_db
 from swarmer.deps import require_auth
 from swarmer.flash import flash
+from swarmer.models.atlassian_oauth_app import AtlassianOAuthApp
 from swarmer.models.github_pat import GitHubPAT
 from swarmer.models.opencode_secret import OpencodeSecret
 from swarmer.models.workspace import Workspace
@@ -18,14 +20,14 @@ from swarmer.models.workspace import Workspace
 router = APIRouter()
 templates = Jinja2Templates(directory="swarmer/templates")
 
-_VALID_TABS = ("credentials", "pats", "pull-secret")
+_VALID_TABS = ("credentials", "pats", "pull-secret", "atlassian-oauth")
 
 
 async def _get_workspace(ws_id: int, db: AsyncSession) -> Workspace | None:
     return await db.get(Workspace, ws_id)
 
 
-async def _secrets_context(ws_id: int, ws, db: AsyncSession) -> dict:
+async def _secrets_context(ws_id: int, ws, db: AsyncSession, request: Request | None = None) -> dict:
     """Fetch all data needed to render the tabbed secrets page."""
     result = await db.execute(
         select(OpencodeSecret).where(OpencodeSecret.workspace_id == ws_id)
@@ -43,7 +45,27 @@ async def _secrets_context(ws_id: int, ws, db: AsyncSession) -> dict:
     except Exception:
         pass
 
-    return {"secret": opencode_secret, "pats": pats, "pull_secret_info": pull_secret_info}
+    atlassian_result = await db.execute(
+        select(AtlassianOAuthApp).where(AtlassianOAuthApp.workspace_id == ws_id)
+    )
+    atlassian_oauth_app = atlassian_result.scalar_one_or_none()
+
+    # Compute the redirect URI for display in the form
+    if settings.swarmer_public_url:
+        base = settings.swarmer_public_url.rstrip("/")
+    elif request is not None:
+        base = str(request.base_url).rstrip("/")
+    else:
+        base = ""
+    atlassian_redirect_uri = f"{base}/workspaces/{ws_id}/atlassian-oauth/callback" if base else ""
+
+    return {
+        "secret": opencode_secret,
+        "pats": pats,
+        "pull_secret_info": pull_secret_info,
+        "atlassian_oauth_app": atlassian_oauth_app,
+        "atlassian_redirect_uri": atlassian_redirect_uri,
+    }
 
 
 # ============================================================
@@ -64,7 +86,7 @@ async def secrets_tabs(
     if tab not in _VALID_TABS:
         tab = "credentials"
 
-    ctx = await _secrets_context(ws_id, ws, db)
+    ctx = await _secrets_context(ws_id, ws, db, request)
     return templates.TemplateResponse(
         request,
         "secrets/tabs.html",
@@ -129,7 +151,7 @@ async def opencode_secret_save(
         try:
             json.loads(content)
         except json.JSONDecodeError:
-            ctx = await _secrets_context(ws_id, ws, db)
+            ctx = await _secrets_context(ws_id, ws, db, request)
             ctx["secret"] = secret  # show in-progress values
             return templates.TemplateResponse(
                 request,
@@ -370,3 +392,72 @@ async def pull_secret_delete(
         flash(request, f"Failed to delete pull secret: {exc}", "warning")
 
     return RedirectResponse(url=f"/workspaces/{ws_id}/secrets?tab=pull-secret", status_code=302)
+
+
+# ============================================================
+# Atlassian OAuth App
+# ============================================================
+
+@router.post(
+    "/workspaces/{ws_id}/secrets/atlassian-oauth",
+    dependencies=[Depends(require_auth)],
+)
+async def atlassian_oauth_save(
+    ws_id: int,
+    request: Request,
+    site_url: str = Form(""),
+    db: AsyncSession = Depends(get_db),
+):
+    """Create or update the Atlassian OAuth configuration for a workspace."""
+    ws = await _get_workspace(ws_id, db)
+    if ws is None:
+        return RedirectResponse(url="/workspaces", status_code=302)
+
+    result = await db.execute(
+        select(AtlassianOAuthApp).where(AtlassianOAuthApp.workspace_id == ws_id)
+    )
+    app_config = result.scalar_one_or_none()
+
+    # Derive the redirect URI to store for reference
+    if settings.swarmer_public_url:
+        base = settings.swarmer_public_url.rstrip("/")
+    else:
+        base = str(request.base_url).rstrip("/")
+    redirect_uri = f"{base}/workspaces/{ws_id}/atlassian-oauth/callback"
+
+    if app_config is None:
+        app_config = AtlassianOAuthApp(workspace_id=ws_id)
+        db.add(app_config)
+
+    app_config.site_url = site_url.strip()
+    app_config.redirect_uri = redirect_uri
+
+    await db.commit()
+    flash(request, "Atlassian OAuth configuration saved.", "success")
+    return RedirectResponse(url=f"/workspaces/{ws_id}/secrets?tab=atlassian-oauth", status_code=302)
+
+
+@router.post(
+    "/workspaces/{ws_id}/secrets/atlassian-oauth/delete",
+    dependencies=[Depends(require_auth)],
+)
+async def atlassian_oauth_delete(
+    ws_id: int,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+):
+    """Delete the Atlassian OAuth configuration for a workspace."""
+    ws = await _get_workspace(ws_id, db)
+    if ws is None:
+        return RedirectResponse(url="/workspaces", status_code=302)
+
+    result = await db.execute(
+        select(AtlassianOAuthApp).where(AtlassianOAuthApp.workspace_id == ws_id)
+    )
+    app_config = result.scalar_one_or_none()
+    if app_config is not None:
+        await db.delete(app_config)
+        await db.commit()
+        flash(request, "Atlassian OAuth configuration removed.", "success")
+
+    return RedirectResponse(url=f"/workspaces/{ws_id}/secrets?tab=atlassian-oauth", status_code=302)

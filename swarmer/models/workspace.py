@@ -29,6 +29,9 @@ class Workspace(Base):
     sessions: Mapped[list["Session"]] = relationship(  # noqa: F821
         back_populates="workspace", cascade="all, delete-orphan"
     )
+    atlassian_oauth_app: Mapped["AtlassianOAuthApp | None"] = relationship(  # noqa: F821
+        back_populates="workspace", uselist=False, cascade="all, delete-orphan"
+    )
 
     @property
     def k8s_namespace(self) -> str:

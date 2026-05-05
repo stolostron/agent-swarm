@@ -46,7 +46,7 @@ class AgentToolStrategy(ABC):
         ...
 
     @abstractmethod
-    def build_share_setup_cmd(self) -> str:
+    def build_share_setup_cmd(self, has_atlassian_oauth: bool = False) -> str:
         ...
 
     @abstractmethod

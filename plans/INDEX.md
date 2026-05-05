@@ -66,6 +66,7 @@ Parent epic: [ACM-32892](https://redhat.atlassian.net/browse/ACM-32892) — Impl
 
 | Plan | Summary | Jira | PR |
 |------|---------|------|-----|
+| [2026-05-04-jira-oauth-mcp.md](2026-05-04-jira-oauth-mcp.md) | Atlassian OAuth MCP integration for agent sessions | — | — |
 | [2026-04-14-01-foundation.md](2026-04-14-01-foundation.md) | Bootstrap FastAPI + auth + K8s base | [ACM-32894](https://redhat.atlassian.net/browse/ACM-32894) | [#1](https://github.com/stolostron/agent-swarm/pull/1) |
 | [2026-04-14-02-workspaces.md](2026-04-14-02-workspaces.md) | Workspace CRUD + namespace mgmt | [ACM-32895](https://redhat.atlassian.net/browse/ACM-32895) | [#1](https://github.com/stolostron/agent-swarm/pull/1) |
 | [2026-04-14-03-secrets.md](2026-04-14-03-secrets.md) | Per-workspace secrets + K8s sync | [ACM-32896](https://redhat.atlassian.net/browse/ACM-32896) | [#1](https://github.com/stolostron/agent-swarm/pull/1) |
