@@ -242,6 +242,7 @@ async def session_create(
     instruction_prompt: str = Form(""),
     persist: bool = Form(False),
     resume: bool = Form(False),
+    enable_jira_mcp: bool = Form(True),
     mode: str = Form("prompt"),
     model: str = Form(""),
     agent_tool: str = Form("opencode"),
@@ -278,6 +279,7 @@ async def session_create(
         model=model.strip(),
         persist=persist,
         resume=resume,
+        enable_jira_mcp=enable_jira_mcp,
         instruction_prompt=instruction_prompt.strip(),
         agent_tool=agent_tool,
         working_branch=wb,
@@ -369,6 +371,11 @@ async def session_detail(
     pat_token = session.github_pat.pat if session.github_pat else None
     repo_info = await _fetch_repo_info(session.repos, pat_token)
 
+    atlassian_result = await db.execute(
+        select(AtlassianToken).where(AtlassianToken.workspace_id == ws_id)
+    )
+    atlassian_token = atlassian_result.scalar_one_or_none()
+
     _tools = all_tools()
     _avail = await asyncio.gather(
         *[k8s.get_image_available(t.get_image(), ws.k8s_namespace) for t in _tools]
@@ -392,6 +399,7 @@ async def session_detail(
             "status_detail": status_detail,
             "model_options": model_options,
             "repo_info": repo_info,
+            "atlassian_token": atlassian_token,
             "agent_tools": _tools,
             "tool_image_available": dict(zip([t.name for t in _tools], _avail, strict=False)),
             "patch_filename": _patch_filename(session),
@@ -417,6 +425,7 @@ async def session_edit(
     instruction_prompt: str = Form(""),
     persist: bool = Form(False),
     resume: bool = Form(False),
+    enable_jira_mcp: bool = Form(True),
     mode: str = Form("prompt"),
     model: str = Form(""),
     agent_tool: str = Form("opencode"),
@@ -435,6 +444,7 @@ async def session_edit(
     session.instruction_prompt = instruction_prompt.strip()
     session.persist = persist
     session.resume = resume
+    session.enable_jira_mcp = enable_jira_mcp
     if mode in ("tui", "server", "prompt"):
         session.mode = mode
     session.model = model.strip()
@@ -540,9 +550,12 @@ async def _do_launch(session: Session, ws: Workspace, db: AsyncSession) -> None:
     # We build the full mcp-auth.json blob here (with refresh token, expiry, clientInfo)
     # and pass it both to the K8s Secret (for TUI re-use) and directly into the pod
     # startup command (for server/prompt modes).
-    atlassian_access_token, atlassian_token_obj = await _get_atlassian_token_for_launch(
-        workspace_id=session.workspace_id, db=db
-    )
+    # Skip entirely if the session has Jira MCP disabled.
+    atlassian_access_token, atlassian_token_obj = (None, None)
+    if session.enable_jira_mcp:
+        atlassian_access_token, atlassian_token_obj = await _get_atlassian_token_for_launch(
+            workspace_id=session.workspace_id, db=db
+        )
     atlassian_mcp_auth_json = ""
     if atlassian_access_token and atlassian_token_obj:
         try:

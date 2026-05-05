@@ -246,6 +246,31 @@
               </div>
             </div>
 
+            {% if atlassian_token and atlassian_token.access_token_enc %}
+            <div style="display:flex; align-items:center; margin-bottom:var(--pf-t--global--spacer--sm);">
+              <div style="flex:0 0 40%; color:var(--pf-t--global--text--color--subtle); font-size:var(--pf-t--global--font--size--sm);">
+                Jira MCP
+                {% if atlassian_token.token_status == 'expiring_soon' %}
+                  <span class="pf-v6-c-label pf-m-gold pf-m-compact" title="Token expiring soon" style="margin-left:4px;">
+                    <span class="pf-v6-c-label__content">expiring</span>
+                  </span>
+                {% elif atlassian_token.token_status == 'expired' %}
+                  <span class="pf-v6-c-label pf-m-red pf-m-compact" title="Token expired — reconnect in Secrets" style="margin-left:4px;">
+                    <span class="pf-v6-c-label__content">expired</span>
+                  </span>
+                {% endif %}
+              </div>
+              <div style="flex:1;">
+                <div class="pf-v6-c-check">
+                  <input type="checkbox" class="pf-v6-c-check__input" name="enable_jira_mcp"
+                         id="cfg_jira_mcp" value="true"
+                         {{ 'checked' if session.enable_jira_mcp }}
+                         {% if session.is_active %}disabled{% endif %}>
+                </div>
+              </div>
+            </div>
+            {% endif %}
+
             {% if model_options %}
             <div class="pf-v6-c-form__group" style="margin-bottom:var(--pf-t--global--spacer--md);">
               <label class="pf-v6-c-form__label" style="color:var(--pf-t--global--text--color--subtle); font-size:var(--pf-t--global--font--size--sm);">

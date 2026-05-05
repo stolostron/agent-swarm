@@ -55,6 +55,7 @@ class Session(Base):
     persist: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     resume: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     privileged: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="0")
+    enable_jira_mcp: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="1")
     agent_tool: Mapped[str] = mapped_column(String(32), nullable=False, default="opencode", server_default="opencode")
     instruction_prompt: Mapped[str] = mapped_column(Text, nullable=False, default="")
     working_branch: Mapped[str] = mapped_column(String(255), nullable=False, default="", server_default="")
