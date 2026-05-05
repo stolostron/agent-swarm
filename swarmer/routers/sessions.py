@@ -470,7 +470,6 @@ async def _do_launch(
     """Core launch logic shared by the HTTP endpoint and the background scheduler.
 
     *request* is None when called from the scheduler (headless, no HTTP session).
-    When None, Atlassian OAuth is skipped — scheduled sessions run without MCP.
     """
     import secrets as _secrets
     session.last_output = ""
