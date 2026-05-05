@@ -108,6 +108,12 @@
        class="pf-v6-c-button pf-m-primary pf-m-small{% if session.phase != 'running' %}" style="display:none{% endif %}"
        id="server-chat-btn">Open Web Chat ↗</a>
     {% endif %}
+
+    <button type="button" class="pf-v6-c-button pf-m-secondary pf-m-small"
+            onclick="atlassianAuthOpen()"
+            title="Authenticate this workspace with Atlassian (Jira/Confluence) via MCP OAuth">
+      Connect Atlassian
+    </button>
   </div>
 
   <div style="margin-left:auto;">
@@ -120,6 +126,121 @@
     </form>
   </div>
 </div>
+
+{# ── Atlassian MCP OAuth modal ─────────────────────────────────────────── #}
+<div id="atlassian-auth-modal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,.6); z-index:1000; align-items:center; justify-content:center;">
+  <div class="pf-v6-c-card" style="width:min(560px,95vw); padding:var(--pf-t--global--spacer--lg);">
+    <h2 class="pf-v6-c-title pf-m-xl" style="margin-bottom:var(--pf-t--global--spacer--md);">Connect Atlassian</h2>
+
+    {# Step 1: get the auth URL #}
+    <div id="atl-step1">
+      <p style="margin-bottom:var(--pf-t--global--spacer--md); color:var(--pf-t--global--color--200);">
+        Click <strong>Start</strong> to begin the Atlassian OAuth flow. You will be given a URL to open in your browser.
+      </p>
+      <div style="display:flex; gap:var(--pf-t--global--spacer--sm);">
+        <button type="button" class="pf-v6-c-button pf-m-primary" id="atl-start-btn" onclick="atlassianAuthStart()">Start</button>
+        <button type="button" class="pf-v6-c-button pf-m-secondary" onclick="atlassianAuthClose()">Cancel</button>
+      </div>
+      <p id="atl-step1-error" style="color:var(--pf-t--global--danger-color--100); margin-top:var(--pf-t--global--spacer--sm); display:none;"></p>
+    </div>
+
+    {# Step 2: user visits URL, pastes callback #}
+    <div id="atl-step2" style="display:none;">
+      <p style="margin-bottom:var(--pf-t--global--spacer--sm); color:var(--pf-t--global--color--200);">
+        Open this URL in your browser and approve access:
+      </p>
+      <a id="atl-auth-url" href="#" target="_blank" rel="noopener"
+         style="display:block; word-break:break-all; font-family:var(--pf-t--global--font--family--mono); font-size:var(--pf-t--global--font--size--sm); margin-bottom:var(--pf-t--global--spacer--md); color:var(--pf-t--global--link--color--default);"></a>
+      <p style="margin-bottom:var(--pf-t--global--spacer--sm); color:var(--pf-t--global--color--200);">
+        After approving, your browser will redirect to a URL starting with <code>http://127.0.0.1:19876/...</code>.
+        Paste that full URL below:
+      </p>
+      <input id="atl-callback-input" type="text" class="pf-v6-c-form-control"
+             placeholder="http://127.0.0.1:19876/mcp/oauth/callback?code=...&state=..."
+             style="width:100%; margin-bottom:var(--pf-t--global--spacer--md); font-family:var(--pf-t--global--font--family--mono); font-size:var(--pf-t--global--font--size--sm);" />
+      <div style="display:flex; gap:var(--pf-t--global--spacer--sm);">
+        <button type="button" class="pf-v6-c-button pf-m-primary" id="atl-submit-btn" onclick="atlassianAuthSubmit()">Complete</button>
+        <button type="button" class="pf-v6-c-button pf-m-secondary" onclick="atlassianAuthClose()">Cancel</button>
+      </div>
+      <p id="atl-step2-error" style="color:var(--pf-t--global--danger-color--100); margin-top:var(--pf-t--global--spacer--sm); display:none;"></p>
+    </div>
+  </div>
+</div>
+
+<script>
+const _atlStartUrl  = "/workspaces/{{ ws.id }}/sessions/{{ session.id }}/atlassian-auth/start";
+const _atlCallbackUrl = "/workspaces/{{ ws.id }}/sessions/{{ session.id }}/atlassian-auth/callback";
+
+function atlassianAuthOpen() {
+  document.getElementById("atl-step1").style.display = "";
+  document.getElementById("atl-step2").style.display = "none";
+  document.getElementById("atl-step1-error").style.display = "none";
+  document.getElementById("atl-callback-input").value = "";
+  document.getElementById("atlassian-auth-modal").style.display = "flex";
+}
+function atlassianAuthClose() {
+  document.getElementById("atlassian-auth-modal").style.display = "none";
+}
+async function atlassianAuthStart() {
+  const btn = document.getElementById("atl-start-btn");
+  const err = document.getElementById("atl-step1-error");
+  btn.disabled = true;
+  btn.textContent = "Starting…";
+  err.style.display = "none";
+  try {
+    const resp = await fetch(_atlStartUrl, {method:"POST"});
+    const data = await resp.json();
+    if (!resp.ok || data.error) {
+      err.textContent = data.error || "Unknown error.";
+      err.style.display = "";
+      btn.disabled = false;
+      btn.textContent = "Start";
+      return;
+    }
+    document.getElementById("atl-auth-url").href = data.auth_url;
+    document.getElementById("atl-auth-url").textContent = data.auth_url;
+    document.getElementById("atl-step1").style.display = "none";
+    document.getElementById("atl-step2").style.display = "";
+  } catch(e) {
+    err.textContent = "Request failed: " + e;
+    err.style.display = "";
+    btn.disabled = false;
+    btn.textContent = "Start";
+  }
+}
+async function atlassianAuthSubmit() {
+  const btn = document.getElementById("atl-submit-btn");
+  const err = document.getElementById("atl-step2-error");
+  const url = document.getElementById("atl-callback-input").value.trim();
+  if (!url) { err.textContent = "Please paste the callback URL."; err.style.display = ""; return; }
+  btn.disabled = true;
+  btn.textContent = "Completing…";
+  err.style.display = "none";
+  try {
+    const resp = await fetch(_atlCallbackUrl, {
+      method: "POST",
+      headers: {"Content-Type":"application/json"},
+      body: JSON.stringify({callback_url: url}),
+    });
+    const data = await resp.json();
+    if (!resp.ok || data.error) {
+      err.textContent = data.error || "Unknown error.";
+      err.style.display = "";
+      btn.disabled = false;
+      btn.textContent = "Complete";
+      return;
+    }
+    atlassianAuthClose();
+    // Show success via flash reload
+    window.location.reload();
+  } catch(e) {
+    err.textContent = "Request failed: " + e;
+    err.style.display = "";
+    btn.disabled = false;
+    btn.textContent = "Complete";
+  }
+}
+</script>
 
 {# Compact summary row — visible when a prompt value exists #}
 <button id="prompt-compact" type="button" onclick="togglePrompt()"
