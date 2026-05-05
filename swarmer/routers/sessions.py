@@ -559,6 +559,23 @@ async def _do_launch(session: Session, ws: Workspace, db: AsyncSession) -> None:
             atlassian_mcp_auth_json = ""
             atlassian_token_obj = None
 
+    # Always regenerate the agent ConfigMap at launch time so the mcp section
+    # in opencode.json reflects the current Atlassian token state — even if the
+    # token was connected after the workspace was first created.
+    try:
+        await asyncio.to_thread(
+            k8s.apply_agent_config,
+            ws.k8s_namespace,
+            oc_secret,
+            session.agent_tool,
+            atlassian_token_obj,
+        )
+    except Exception as exc:
+        log.warning(
+            "Failed to update agent ConfigMap for workspace %d at launch: %s",
+            session.workspace_id, exc,
+        )
+
     pod_spec = k8s_sess.build_session_pod(
         session=session,
         namespace=ws.k8s_namespace,
