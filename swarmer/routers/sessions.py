@@ -2,6 +2,7 @@ import asyncio
 import logging
 import re
 import shlex
+import shutil
 import subprocess
 import uuid
 from datetime import datetime
@@ -1432,6 +1433,12 @@ _atlassian_auth_state: dict[int, dict] = {}
 _MCP_AUTH_JSON_PATH = "/workspace/.opencode/mcp-auth.json"
 _MCP_AUTH_DEST_PATH = "/workspace/.opencode/mcp-auth.json"
 
+# Resolve opencode binary at import time; fall back to known npm-global location.
+_OPENCODE_BIN: str = (
+    shutil.which("opencode")
+    or "/usr/local/share/npm-global/bin/opencode"
+)
+
 
 async def _read_auth_url(proc: asyncio.subprocess.Process) -> str | None:
     """Read lines from the process stdout until the auth URL is found."""
@@ -1471,11 +1478,17 @@ async def atlassian_auth_start(ws_id: int, sid: int, db: AsyncSession = Depends(
         except Exception:
             pass
 
-    proc = await asyncio.create_subprocess_exec(
-        "opencode", "mcp", "auth", "atlassian-rovo",
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.STDOUT,
-    )
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            _OPENCODE_BIN, "mcp", "auth", "atlassian-rovo",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+        )
+    except FileNotFoundError:
+        return JSONResponse(
+            {"error": f"opencode binary not found at {_OPENCODE_BIN!r}. Check PATH."},
+            status_code=500,
+        )
 
     auth_url = await _read_auth_url(proc)
     if not auth_url:
