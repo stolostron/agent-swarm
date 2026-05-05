@@ -11,6 +11,7 @@ from swarmer import k8s
 from swarmer.database import get_db
 from swarmer.deps import require_auth
 from swarmer.flash import flash
+from swarmer.models.atlassian_token import AtlassianToken
 from swarmer.models.github_pat import GitHubPAT
 from swarmer.models.opencode_secret import OpencodeSecret
 from swarmer.models.workspace import Workspace
@@ -37,13 +38,23 @@ async def _secrets_context(ws_id: int, ws, db: AsyncSession) -> dict:
     )
     pats = pats_result.scalars().all()
 
+    atlassian_result = await db.execute(
+        select(AtlassianToken).where(AtlassianToken.workspace_id == ws_id)
+    )
+    atlassian_token = atlassian_result.scalar_one_or_none()
+
     pull_secret_info = None
     try:
         pull_secret_info = k8s.get_pull_secret_info(ws.k8s_namespace)
     except Exception:
         pass
 
-    return {"secret": opencode_secret, "pats": pats, "pull_secret_info": pull_secret_info}
+    return {
+        "secret": opencode_secret,
+        "pats": pats,
+        "atlassian_token": atlassian_token,
+        "pull_secret_info": pull_secret_info,
+    }
 
 
 # ============================================================

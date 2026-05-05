@@ -144,7 +144,10 @@ def get_namespace_status(namespace: str) -> str:
 # ---------- ConfigMap helpers ----------
 
 def apply_agent_config(
-    namespace: str, secret=None, agent_tool: str = "opencode"
+    namespace: str,
+    secret=None,
+    agent_tool: str = "opencode",
+    atlassian_token=None,
 ) -> None:
     """Create or update the agent tool's ConfigMap in the given namespace."""
     from kubernetes import client
@@ -152,7 +155,11 @@ def apply_agent_config(
 
     tool = get_tool(agent_tool)
     cm_name = tool.get_config_map_name()
-    data = tool.build_config_data(secret)
+    # Pass atlassian_token through if the strategy supports it
+    try:
+        data = tool.build_config_data(secret, atlassian_token=atlassian_token)
+    except TypeError:
+        data = tool.build_config_data(secret)
 
     v1 = client.CoreV1Api()
     body = client.V1ConfigMap(
@@ -203,6 +210,38 @@ def _delete_secret(namespace: str, name: str) -> None:
     except client.exceptions.ApiException as exc:
         if exc.status != 404:
             raise
+
+
+def _atlassian_secret_name(workspace_id: int) -> str:
+    """Return the K8s Secret name for a workspace's Atlassian token."""
+    return f"atlassian-rovo-{workspace_id}"
+
+
+def apply_atlassian_token_secret(
+    namespace: str,
+    workspace_id: int,
+    mcp_auth_json: str,
+    access_token: str,
+) -> str:
+    """Create or update the Atlassian Rovo token K8s Secret.
+
+    Stores both the raw access_token (for env-var injection) and the full
+    mcp-auth.json blob (written to the filesystem by the pod startup script).
+
+    Returns the secret name.
+    """
+    name = _atlassian_secret_name(workspace_id)
+    data = {
+        "access_token": _b64(access_token),
+        "mcp-auth.json": _b64(mcp_auth_json),
+    }
+    _apply_secret(namespace, name, data)
+    return name
+
+
+def delete_atlassian_token_secret(namespace: str, workspace_id: int) -> None:
+    """Delete the Atlassian Rovo token K8s Secret (no-op if not found)."""
+    _delete_secret(namespace, _atlassian_secret_name(workspace_id))
 
 
 def apply_agent_secret(

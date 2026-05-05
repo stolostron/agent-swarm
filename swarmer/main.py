@@ -11,6 +11,7 @@ from swarmer.config import settings
 from swarmer.crypto import derive_session_secret, init_crypto
 from swarmer.database import create_tables, migrate_db, init_db
 from swarmer.deps import NotAuthenticated
+from swarmer.routers import atlassian as atlassian_router
 from swarmer.routers import auth as auth_router
 from swarmer.routers import chat_proxy as chat_proxy_router
 from swarmer.routers import sessions as sessions_router
@@ -80,6 +81,7 @@ async def not_authenticated_handler(request: Request, exc: NotAuthenticated):
 
 
 # Routers
+app.include_router(atlassian_router.router)
 app.include_router(auth_router.router)
 app.include_router(workspaces_router.router)
 app.include_router(secrets_router.router)

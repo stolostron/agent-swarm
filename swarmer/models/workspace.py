@@ -23,6 +23,9 @@ class Workspace(Base):
     opencode_secret: Mapped["OpencodeSecret"] = relationship(  # noqa: F821
         back_populates="workspace", uselist=False, cascade="all, delete-orphan"
     )
+    atlassian_token: Mapped["AtlassianToken"] = relationship(  # noqa: F821
+        back_populates="workspace", uselist=False, cascade="all, delete-orphan"
+    )
     github_pats: Mapped[list["GitHubPAT"]] = relationship(  # noqa: F821
         back_populates="workspace", cascade="all, delete-orphan"
     )

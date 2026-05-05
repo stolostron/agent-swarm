@@ -19,6 +19,7 @@ class Settings(BaseSettings):
     agent_image_pull_secret: str = ""
     agent_image_pull_policy: str = "IfNotPresent"
     k8s_namespace: str = ""
+    atlassian_mcp_url: str = "https://mcp.atlassian.com/v1/mcp"
 
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8", "extra": "ignore"}
 

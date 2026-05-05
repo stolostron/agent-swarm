@@ -26,7 +26,7 @@ class OpenCodeStrategy(AgentToolStrategy):
     def get_config_map_name(self) -> str:
         return "opencode-config"
 
-    def build_config_data(self, secret=None) -> dict[str, str]:
+    def build_config_data(self, secret=None, atlassian_token=None) -> dict[str, str]:
         config: dict = {
             "$schema": "https://opencode.ai/config.json",
             "disabled_providers": ["opencode"],
@@ -36,10 +36,49 @@ class OpenCodeStrategy(AgentToolStrategy):
             },
         }
 
+        # Add Atlassian Rovo MCP server entry when a valid token is available.
+        # The actual bearer token is injected via mcp-auth.json at pod startup;
+        # this entry just tells OpenCode the server exists.
+        if atlassian_token is not None and not atlassian_token.is_expired:
+            config["mcp"] = {
+                "atlassian-rovo": {
+                    "type": "remote",
+                    "url": settings.atlassian_mcp_url,
+                    "enabled": True,
+                }
+            }
+
         return {
             "opencode.json": json.dumps(config, indent=2),
             "gitconfig": "[safe]\n\tdirectory = *\n",
         }
+
+    def build_mcp_auth_setup_cmd(self, access_token: str) -> str:
+        """Return a shell snippet that writes mcp-auth.json into the pod.
+
+        The snippet is inserted into the pod startup command preamble so
+        OpenCode finds a valid Atlassian bearer token before it starts.
+        Returns an empty string when *access_token* is empty.
+        """
+        if not access_token:
+            return ""
+
+        from swarmer.routers.atlassian import build_mcp_auth_json
+        mcp_auth_content = build_mcp_auth_json(
+            access_token=access_token,
+            refresh_token=None,  # pod only needs the access token
+            expires_at_ts=None,
+            scope="",
+            client_id="",
+            client_id_issued_at=0,
+            server_url=settings.atlassian_mcp_url,
+        )
+        quoted = shlex.quote(mcp_auth_content)
+        return (
+            "mkdir -p /workspace/.local/share/opencode && "
+            f"printf '%s' {quoted} "
+            "> /workspace/.local/share/opencode/mcp-auth.json && "
+        )
 
     def get_config_mount_path(self) -> str:
         return "/workspace/.config/opencode"

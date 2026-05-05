@@ -71,11 +71,17 @@ def build_session_pod(
     has_gemini: bool = False,
     privileged: bool = False,
     agent_tool: str = "opencode",
+    atlassian_access_token: str = "",
+    atlassian_token=None,
 ):  # -> client.V1Pod
     """Build a V1Pod spec for the given session.
 
     Delegates tool-specific behavior (commands, config paths, env vars)
     to the AgentToolStrategy identified by *agent_tool*.
+
+    When *atlassian_access_token* is provided (and non-empty), the pod
+    startup command includes a step that writes mcp-auth.json so OpenCode
+    can connect to the Atlassian Rovo MCP server immediately on start.
     """
     from kubernetes import client
     from swarmer.agent_tools.registry import get as get_tool
@@ -240,6 +246,11 @@ def build_session_pod(
     if session.instruction_prompt and session.mode in ("tui", "server"):
         agent_md_setup = "printf '%s' \"${SWARMER_AGENT_MD}\" > /workspace/AGENTS.md && "
 
+    # Atlassian Rovo MCP: inject mcp-auth.json if a valid token was provided
+    mcp_auth_setup = ""
+    if atlassian_access_token and hasattr(tool, "build_mcp_auth_setup_cmd"):
+        mcp_auth_setup = tool.build_mcp_auth_setup_cmd(atlassian_access_token)
+
     # ---------- main container command ----------
     ports = []
     if session.mode == "server":
@@ -278,7 +289,18 @@ def build_session_pod(
                 f"cd /workspace && "
             )
 
-    command = ["sh", "-c", config_setup + safe_dir_setup + git_setup + share_setup + agent_md_setup + model_setup + branch_setup + main_cmd]
+    command = [
+        "sh", "-c",
+        config_setup
+        + safe_dir_setup
+        + git_setup
+        + share_setup
+        + mcp_auth_setup
+        + agent_md_setup
+        + model_setup
+        + branch_setup
+        + main_cmd,
+    ]
 
     # ---------- envFrom ----------
     env_from = tool.get_env_from_sources()

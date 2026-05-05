@@ -51,6 +51,21 @@ async def migrate_db() -> None:
         "ALTER TABLE sessions ADD COLUMN cron_schedule VARCHAR(128) NOT NULL DEFAULT ''",
         "ALTER TABLE sessions ADD COLUMN cron_next_run DATETIME",
         "ALTER TABLE github_pats ADD COLUMN github_org TEXT NOT NULL DEFAULT ''",
+        # Atlassian Rovo MCP OAuth tokens
+        (
+            "CREATE TABLE IF NOT EXISTS atlassian_tokens ("
+            "id INTEGER PRIMARY KEY, "
+            "workspace_id INTEGER UNIQUE NOT NULL REFERENCES workspaces(id), "
+            "client_id_enc TEXT NOT NULL DEFAULT '', "
+            "client_id_issued_at INTEGER NOT NULL DEFAULT 0, "
+            "access_token_enc TEXT NOT NULL DEFAULT '', "
+            "refresh_token_enc TEXT NOT NULL DEFAULT '', "
+            "expires_at DATETIME, "
+            "scopes TEXT NOT NULL DEFAULT '', "
+            "created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, "
+            "updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP"
+            ")"
+        ),
     ]
     async with _engine.begin() as conn:
         for stmt in migrations:

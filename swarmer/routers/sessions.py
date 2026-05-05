@@ -22,11 +22,16 @@ from swarmer.ansi import ansi_to_html
 from swarmer.flash import flash
 from swarmer.github import fetch_repo_info as _fetch_repo_info
 from swarmer.github import list_repos_for_pat as _list_repos_for_pat
+from swarmer.models.atlassian_token import AtlassianToken
 from swarmer.models.github_pat import GitHubPAT
 from swarmer.models.opencode_secret import OpencodeSecret
 from swarmer.models.session import CRON_PRESETS, Session
 from swarmer.models.session_repo import SessionRepo
 from swarmer.models.workspace import Workspace
+from swarmer.routers.atlassian import (
+    _build_mcp_auth_json_from_token,
+    refresh_atlassian_token,
+)
 
 log = logging.getLogger(__name__)
 
@@ -461,6 +466,52 @@ async def session_edit(
 # Launch / Stop
 # ============================================================
 
+async def _get_atlassian_token_for_launch(
+    workspace_id: int,
+    db: AsyncSession,
+) -> tuple[str | None, AtlassianToken | None]:
+    """Fetch and (if needed) refresh the Atlassian token for pod injection.
+
+    Returns (access_token, token_obj) where access_token is None when no
+    valid token is available (not connected, or refresh failed).
+    """
+    result = await db.execute(
+        select(AtlassianToken).where(AtlassianToken.workspace_id == workspace_id)
+    )
+    token_obj = result.scalar_one_or_none()
+    if token_obj is None or not token_obj.access_token_enc:
+        return None, None
+
+    if token_obj.needs_refresh:
+        log.info("Atlassian token for workspace %d needs refresh — refreshing now", workspace_id)
+        success = await refresh_atlassian_token(token_obj, db)
+        if not success:
+            log.warning(
+                "Atlassian token refresh failed for workspace %d — "
+                "pod will launch without Rovo MCP access",
+                workspace_id,
+            )
+            return None, token_obj
+
+    return token_obj.access_token, token_obj
+
+
+async def _apply_atlassian_secret_async(
+    namespace: str,
+    workspace_id: int,
+    mcp_auth_json: str,
+    access_token: str,
+) -> None:
+    """Apply the Atlassian token K8s Secret in a thread (non-blocking)."""
+    await asyncio.to_thread(
+        k8s.apply_atlassian_token_secret,
+        namespace,
+        workspace_id,
+        mcp_auth_json,
+        access_token,
+    )
+
+
 async def _do_launch(session: Session, ws: Workspace, db: AsyncSession) -> None:
     """Core launch logic shared by the HTTP endpoint and the background scheduler."""
     import secrets as _secrets
@@ -485,6 +536,25 @@ async def _do_launch(session: Session, ws: Workspace, db: AsyncSession) -> None:
     has_adc = oc_secret.has_adc if oc_secret else False
     has_gemini = bool(oc_secret and oc_secret.google_api_key_enc)
 
+    # Fetch Atlassian token and inject into K8s Secret before building the pod spec
+    atlassian_access_token, atlassian_token_obj = await _get_atlassian_token_for_launch(
+        workspace_id=session.workspace_id, db=db
+    )
+    if atlassian_access_token and atlassian_token_obj:
+        try:
+            mcp_auth_json = _build_mcp_auth_json_from_token(atlassian_token_obj)
+            await _apply_atlassian_secret_async(
+                ws.k8s_namespace, session.workspace_id, mcp_auth_json, atlassian_access_token
+            )
+        except Exception as exc:
+            log.warning(
+                "Failed to apply Atlassian K8s secret for workspace %d: %s — "
+                "session will launch without Rovo MCP access",
+                session.workspace_id, exc,
+            )
+            atlassian_access_token = ""
+            atlassian_token_obj = None
+
     pod_spec = k8s_sess.build_session_pod(
         session=session,
         namespace=ws.k8s_namespace,
@@ -495,6 +565,8 @@ async def _do_launch(session: Session, ws: Workspace, db: AsyncSession) -> None:
         has_gemini=has_gemini,
         privileged=session.privileged,
         agent_tool=session.agent_tool,
+        atlassian_access_token=atlassian_access_token or "",
+        atlassian_token=atlassian_token_obj,
     )
     from kubernetes import client as k8s_client
 
