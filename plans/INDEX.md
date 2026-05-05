@@ -62,6 +62,15 @@ Parent epic: [ACM-32892](https://redhat.atlassian.net/browse/ACM-32892) — Impl
   pr: "https://github.com/stolostron/agent-swarm/pull/45"
   summary: "Reduced default workspace PVC size from 10Gi to 5Gi by updating the storage default in ensure_session_pvc() in swarmer/k8s_session.py."
 
+# ──────────────────────────────────────────────────────────
+- date: "2026-05-05"
+  title: "Add Crush support for small and large models"
+  jira: "ACM-33630"
+  jira_url: "https://redhat.atlassian.net/browse/ACM-33630"
+  status: "Done"
+  pr: ~
+  summary: "Added _derive_small_model() to crush.py: Opus→Sonnet, Sonnet→Haiku (vertexai/anthropic), Gemini Pro→Flash; CrushStrategy now injects models.small into the Crush config when derivable"
+
 ## Foundation & Feature Plans
 
 | Plan | Summary | Jira | PR |
