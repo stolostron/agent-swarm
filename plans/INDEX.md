@@ -67,7 +67,7 @@ Parent epic: [ACM-32892](https://redhat.atlassian.net/browse/ACM-32892) — Impl
   title: "Add Crush support for small and large models"
   jira: "ACM-33630"
   jira_url: "https://redhat.atlassian.net/browse/ACM-33630"
-  status: "Done"
+  status: "Closed"
   pr: "https://github.com/stolostron/agent-swarm/pull/50"
   summary: "Added _derive_small_model() to crush.py: Opus→Sonnet, Sonnet→Haiku (vertexai/anthropic), Gemini Pro→Flash; CrushStrategy now injects models.small into the Crush config when derivable"
 
