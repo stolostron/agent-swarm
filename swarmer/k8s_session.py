@@ -246,13 +246,18 @@ def build_session_pod(
     if session.instruction_prompt and session.mode in ("tui", "server"):
         agent_md_setup = "printf '%s' \"${SWARMER_AGENT_MD}\" > /workspace/AGENTS.md && "
 
-    # Atlassian Rovo MCP: inject mcp-auth.json if a valid token blob was provided.
-    # The full JSON (with refresh token, expiry, clientInfo) is written before
-    # the main command so OpenCode can authenticate and re-authenticate without
-    # user intervention.
+    # Atlassian Rovo MCP: inject or remove mcp-auth.json as part of pod startup.
+    # When enabled: write the full JSON blob (with refresh token, expiry, clientInfo)
+    # so OpenCode can authenticate without user intervention.
+    # When disabled: actively remove any stale copy that may exist on a persistent
+    # PVC from a previous launch where Jira MCP was enabled.
+    _MCP_AUTH_PATH = "/workspace/.local/share/opencode/mcp-auth.json"
     mcp_auth_setup = ""
     if atlassian_mcp_auth_json and hasattr(tool, "build_mcp_auth_setup_cmd"):
         mcp_auth_setup = tool.build_mcp_auth_setup_cmd(atlassian_mcp_auth_json)
+    elif not getattr(session, "enable_jira_mcp", True):
+        # Jira MCP explicitly disabled — remove any stale token file on the PVC.
+        mcp_auth_setup = f"rm -f {_MCP_AUTH_PATH} && "
 
     # ---------- main container command ----------
     ports = []
