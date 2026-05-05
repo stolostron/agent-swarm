@@ -343,6 +343,94 @@ def build_session_pod(
     )
 
 
+def launch_atlassian_auth_pod(
+    namespace: str,
+    pvc_name: str,
+    pod_name: str,
+    image: str,
+    image_pull_secret: str = "",
+) -> None:
+    """Launch a short-lived pod that runs 'opencode mcp auth atlassian-rovo'.
+
+    The pod mounts the session PVC so opencode writes mcp-auth.json there.
+    It runs with restartPolicy=Never and exits after the OAuth flow completes.
+    Port 19876 is exposed so swarmer can deliver the callback via kubectl exec.
+    """
+    from kubernetes import client
+
+    v1 = client.CoreV1Api()
+
+    # opencode mcp auth prints the URL then waits for the callback on :19876.
+    # We keep stdout/stderr unbuffered so log streaming picks it up immediately.
+    cmd = [
+        "sh", "-c",
+        "HOME=/workspace "
+        "opencode mcp auth atlassian-rovo 2>&1",
+    ]
+
+    pull_secrets = (
+        [client.V1LocalObjectReference(name=image_pull_secret)]
+        if image_pull_secret else []
+    )
+
+    pod = client.V1Pod(
+        metadata=client.V1ObjectMeta(
+            name=pod_name,
+            namespace=namespace,
+            labels={"app": "swarmer-atlassian-auth"},
+        ),
+        spec=client.V1PodSpec(
+            restart_policy="Never",
+            security_context=client.V1PodSecurityContext(fs_group=1000),
+            containers=[
+                client.V1Container(
+                    name="opencode-auth",
+                    image=image,
+                    image_pull_policy=settings.agent_image_pull_policy,
+                    command=cmd,
+                    env=[
+                        client.V1EnvVar(name="HOME", value="/workspace"),
+                        client.V1EnvVar(name="NODE_OPTIONS", value="--max-old-space-size=512"),
+                    ],
+                    volume_mounts=[
+                        client.V1VolumeMount(
+                            name="session-workspace",
+                            mount_path="/workspace",
+                        ),
+                    ],
+                    ports=[client.V1ContainerPort(container_port=19876)],
+                    resources=client.V1ResourceRequirements(
+                        requests={"memory": "256Mi", "cpu": "100m"},
+                        limits={"memory": "512Mi", "cpu": "500m"},
+                    ),
+                )
+            ],
+            volumes=[
+                client.V1Volume(
+                    name="session-workspace",
+                    persistent_volume_claim=client.V1PersistentVolumeClaimVolumeSource(
+                        claim_name=pvc_name,
+                    ),
+                ),
+            ],
+            image_pull_secrets=pull_secrets or None,
+        ),
+    )
+    v1.create_namespaced_pod(namespace, pod)
+
+
+def delete_atlassian_auth_pod(namespace: str, pod_name: str) -> None:
+    """Delete the Atlassian auth helper pod, ignoring 404."""
+    from kubernetes import client
+
+    v1 = client.CoreV1Api()
+    try:
+        v1.delete_namespaced_pod(pod_name, namespace)
+    except client.exceptions.ApiException as exc:
+        if exc.status != 404:
+            raise
+
+
 def create_session_service(
     session_id: int, namespace: str, port: int = 4096, port_name: str = "agent"
 ) -> str:

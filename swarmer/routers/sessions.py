@@ -2,8 +2,6 @@ import asyncio
 import logging
 import re
 import shlex
-import shutil
-import subprocess
 import uuid
 from datetime import datetime
 
@@ -1408,7 +1406,7 @@ async def repo_pick(
 
 
 # ============================================================
-# Atlassian MCP OAuth — swarmer-side broker
+# Atlassian MCP OAuth — helper-pod broker
 # ============================================================
 #
 # opencode's `mcp auth` command:
@@ -1417,60 +1415,78 @@ async def repo_pick(
 #   3. Starts a local HTTP listener on 127.0.0.1:19876 for the OAuth callback
 #   4. Exchanges the code for tokens and stores them in mcp-auth.json
 #
-# Because swarmer runs in the web tier (reachable by the user's browser),
-# we run `opencode mcp auth` inside swarmer's own process.  The user visits
-# the printed URL, Atlassian redirects to 127.0.0.1:19876, the user pastes
-# that callback URL back into the swarmer UI, and we forward it to opencode's
-# listener.  opencode then writes mcp-auth.json to ~/.local/share/opencode/
-# (symlinked to /workspace/.opencode on the PVC), making the tokens available
-# to all future agent pods that mount the same PVC.
+# The swarmer container does not have opencode installed, so we launch a
+# short-lived helper pod using the agent image (which does have opencode).
+# The helper mounts the session PVC so mcp-auth.json is written there and
+# is available to all future agent pods.
 #
-# State: keyed by session_id → {proc, auth_url, mcp_auth_path}
-# The subprocess is stored so we can wait() on it after the callback.
+# Flow:
+#   start    → launch helper pod, stream logs until auth URL appears, return to UI
+#   callback → exec `curl <callback_url>` inside the helper pod to deliver the code;
+#              opencode exchanges it and writes mcp-auth.json; helper pod exits.
+#
+# State: keyed by session_id → {pod_name, namespace}
 
 _atlassian_auth_state: dict[int, dict] = {}
 
-_MCP_AUTH_JSON_PATH = "/workspace/.opencode/mcp-auth.json"
-_MCP_AUTH_DEST_PATH = "/workspace/.opencode/mcp-auth.json"
-
-# Known candidate paths for the opencode binary, in preference order.
-# The native ELF binaries are self-contained and don't require PATH resolution.
-_OPENCODE_CANDIDATES = [
-    "/usr/local/share/npm-global/bin/opencode",
-    "/usr/local/share/npm-global/lib/node_modules/opencode-ai/node_modules/opencode-linux-x64/bin/opencode",
-    "/usr/local/share/npm-global/lib/node_modules/opencode-ai/node_modules/opencode-linux-x64-baseline/bin/opencode",
-]
+_ATL_AUTH_POD_LABEL = "swarmer-atlassian-auth"
+_ATL_AUTH_URL_PREFIX = "https://mcp.atlassian.com/v1/authorize"
 
 
-def _find_opencode_bin() -> str | None:
-    """Return the first executable opencode binary found, checking PATH then known paths."""
-    import os
-    found = shutil.which("opencode")
-    if found:
-        return found
-    for candidate in _OPENCODE_CANDIDATES:
-        if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
-            return candidate
-    return None
+def _exec_in_pod(pod_name: str, namespace: str, cmd: list[str]) -> str:
+    from kubernetes import client
+    from kubernetes.stream import stream
+    v1 = client.CoreV1Api()
+    return stream(
+        v1.connect_get_namespaced_pod_exec,
+        pod_name, namespace,
+        command=cmd,
+        stderr=True, stdin=False, stdout=True, tty=False,
+    )
 
 
-async def _read_auth_url(proc: asyncio.subprocess.Process) -> str | None:
-    """Read lines from the process stdout until the auth URL is found."""
-    assert proc.stdout is not None
-    while True:
+def _wait_for_pod_running(pod_name: str, namespace: str, timeout: int = 60) -> None:
+    """Block until pod phase is Running (or raises on timeout/failure)."""
+    import time
+    from kubernetes import client
+    v1 = client.CoreV1Api()
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        pod = v1.read_namespaced_pod(pod_name, namespace)
+        phase = (pod.status.phase or "").lower()
+        if phase == "running":
+            return
+        if phase in ("failed", "succeeded", "unknown"):
+            raise RuntimeError(f"Auth pod entered phase {phase!r} before running")
+        time.sleep(2)
+    raise TimeoutError(f"Auth pod {pod_name!r} did not reach Running within {timeout}s")
+
+
+def _stream_pod_logs_for_auth_url(pod_name: str, namespace: str, timeout: int = 60) -> str:
+    """Stream pod logs and return the first line containing the auth URL."""
+    import time
+    from kubernetes import client
+    v1 = client.CoreV1Api()
+    deadline = time.monotonic() + timeout
+    buf = ""
+    while time.monotonic() < deadline:
         try:
-            raw = await asyncio.wait_for(proc.stdout.readline(), timeout=15)
-        except TimeoutError:
-            return None
-        if not raw:
-            return None
-        line = raw.decode(errors="replace")
-        # opencode prints the URL on a line by itself after some ANSI noise
-        stripped = line.strip()
-        # Strip ANSI escape sequences
-        clean = re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", stripped).strip()
-        if clean.startswith("https://mcp.atlassian.com/v1/authorize"):
-            return clean
+            log_str = v1.read_namespaced_pod_log(
+                pod_name, namespace, timestamps=False, tail_lines=50
+            )
+            for raw_line in log_str.splitlines():
+                clean = re.sub(r"\x1b\[[0-9;]*[A-Za-z]|\r", "", raw_line).strip()
+                if _ATL_AUTH_URL_PREFIX in clean:
+                    # Extract just the URL (may have leading bullet/whitespace)
+                    idx = clean.index(_ATL_AUTH_URL_PREFIX)
+                    return clean[idx:]
+            buf = log_str
+        except Exception:
+            pass
+        time.sleep(2)
+    raise TimeoutError(
+        f"Auth URL not found in pod logs within {timeout}s. Last log:\n{buf[-500:]}"
+    )
 
 
 @router.post(
@@ -1478,48 +1494,57 @@ async def _read_auth_url(proc: asyncio.subprocess.Process) -> str | None:
     dependencies=[Depends(require_auth)],
 )
 async def atlassian_auth_start(ws_id: int, sid: int, db: AsyncSession = Depends(get_db)):
-    """Start the opencode MCP OAuth flow and return the auth URL to the UI."""
+    """Launch a helper pod that runs 'opencode mcp auth' and return the auth URL."""
     ws = await _get_workspace(ws_id, db)
     session = await db.get(Session, sid)
     if ws is None or session is None or session.workspace_id != ws_id:
         return JSONResponse({"error": "Not found."}, status_code=404)
+    if not session.pvc_name:
+        return JSONResponse({"error": "Session has no PVC. Launch the session at least once first."}, status_code=400)
 
-    # Kill any stale auth process for this session
+    namespace = ws.k8s_namespace
+    pod_name = f"atlassian-auth-{session.id}-{uuid.uuid4().hex[:6]}"
+
+    # Clean up any stale helper pod from a previous attempt
     existing = _atlassian_auth_state.pop(sid, None)
-    if existing and existing["proc"].returncode is None:
+    if existing:
         try:
-            existing["proc"].kill()
+            await asyncio.to_thread(
+                k8s_sess.delete_atlassian_auth_pod, existing["namespace"], existing["pod_name"]
+            )
         except Exception:
             pass
 
-    opencode_bin = _find_opencode_bin()
-    if not opencode_bin:
-        return JSONResponse(
-            {"error": "opencode binary not found. Tried: " + ", ".join(_OPENCODE_CANDIDATES)},
-            status_code=500,
-        )
-    log.info("atlassian_auth_start: using opencode binary %r", opencode_bin)
+    image = settings.agent_image_opencode or settings.agent_image
+    if not image:
+        return JSONResponse({"error": "No agent image configured."}, status_code=500)
+
     try:
-        proc = await asyncio.create_subprocess_exec(
-            opencode_bin, "mcp", "auth", "atlassian-rovo",
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.STDOUT,
+        await asyncio.to_thread(
+            k8s_sess.launch_atlassian_auth_pod,
+            namespace, session.pvc_name, pod_name, image,
+            settings.agent_image_pull_secret,
         )
-    except FileNotFoundError:
-        return JSONResponse(
-            {"error": f"opencode binary not executable at {opencode_bin!r}."},
-            status_code=500,
+    except Exception as exc:
+        return JSONResponse({"error": f"Failed to launch auth pod: {exc}"}, status_code=500)
+
+    _atlassian_auth_state[sid] = {"pod_name": pod_name, "namespace": namespace}
+
+    # Wait for pod to start, then stream logs for the auth URL
+    try:
+        await asyncio.to_thread(_wait_for_pod_running, pod_name, namespace, timeout=60)
+        auth_url = await asyncio.to_thread(
+            _stream_pod_logs_for_auth_url, pod_name, namespace, timeout=60
         )
+    except Exception as exc:
+        # Clean up pod on failure
+        _atlassian_auth_state.pop(sid, None)
+        try:
+            await asyncio.to_thread(k8s_sess.delete_atlassian_auth_pod, namespace, pod_name)
+        except Exception:
+            pass
+        return JSONResponse({"error": str(exc)}, status_code=500)
 
-    auth_url = await _read_auth_url(proc)
-    if not auth_url:
-        proc.kill()
-        return JSONResponse({"error": "Could not obtain auth URL from opencode."}, status_code=500)
-
-    _atlassian_auth_state[sid] = {
-        "proc": proc,
-        "auth_url": auth_url,
-    }
     return JSONResponse({"auth_url": auth_url})
 
 
@@ -1533,7 +1558,7 @@ async def atlassian_auth_callback(
     request: Request,
     db: AsyncSession = Depends(get_db),
 ):
-    """Receive the callback URL pasted by the user and deliver it to opencode."""
+    """Deliver the OAuth callback URL to the helper pod via kubectl exec curl."""
     ws = await _get_workspace(ws_id, db)
     session = await db.get(Session, sid)
     if ws is None or session is None or session.workspace_id != ws_id:
@@ -1546,61 +1571,32 @@ async def atlassian_auth_callback(
 
     state = _atlassian_auth_state.get(sid)
     if not state:
-        return JSONResponse({"error": "No active auth flow. Click 'Start' first."}, status_code=400)
+        return JSONResponse({"error": "No active auth flow. Click Start first."}, status_code=400)
 
-    proc: asyncio.subprocess.Process = state["proc"]
-    if proc.returncode is not None:
-        _atlassian_auth_state.pop(sid, None)
-        return JSONResponse({"error": "Auth process already exited. Start again."}, status_code=400)
+    pod_name = state["pod_name"]
+    namespace = state["namespace"]
 
-    # Deliver the callback to opencode's local listener
+    # Deliver the callback by running curl inside the helper pod
     try:
-        result = await asyncio.to_thread(
-            subprocess.run,
+        output = await asyncio.to_thread(
+            _exec_in_pod, pod_name, namespace,
             ["curl", "-si", callback_url],
-            capture_output=True, text=True, timeout=10,
         )
-        if "200 OK" not in result.stdout and "Authorization Successful" not in result.stdout:
+        if "200 OK" not in output and "Authorization Successful" not in output:
             return JSONResponse(
-                {"error": f"opencode rejected the callback: {result.stdout[:200]}"},
+                {"error": f"opencode rejected the callback: {output[:300]}"},
                 status_code=502,
             )
     except Exception as exc:
-        return JSONResponse({"error": f"Failed to deliver callback: {exc}"}, status_code=500)
+        return JSONResponse({"error": f"Failed to deliver callback to pod: {exc}"}, status_code=500)
 
-    # Wait briefly for opencode to exchange the code and write mcp-auth.json
-    try:
-        await asyncio.wait_for(proc.wait(), timeout=10)
-    except TimeoutError:
-        proc.kill()
-
+    # Give opencode a moment to write mcp-auth.json, then clean up the pod
+    await asyncio.sleep(3)
     _atlassian_auth_state.pop(sid, None)
-
-    # Copy mcp-auth.json into the session PVC via kubectl exec (if pod is running)
-    if session.pod_name and session.phase == "running":
-        try:
-            with open(_MCP_AUTH_JSON_PATH) as f:
-                mcp_auth_json = f.read()
-            quoted = shlex.quote(mcp_auth_json)
-            cmd = ["sh", "-c", f"printf '%s' {quoted} > {_MCP_AUTH_DEST_PATH}"]
-            await asyncio.to_thread(
-                _exec_in_pod, session.pod_name, ws.k8s_namespace, cmd
-            )
-        except Exception as exc:
-            log.warning("Could not copy mcp-auth.json to pod: %s", exc)
-            # Not fatal — the file is already on the PVC path via the symlink
+    try:
+        await asyncio.to_thread(k8s_sess.delete_atlassian_auth_pod, namespace, pod_name)
+    except Exception as exc:
+        log.warning("Could not delete atlassian auth pod %r: %s", pod_name, exc)
 
     flash(request, "Atlassian connected successfully.", "success")
     return JSONResponse({"ok": True})
-
-
-def _exec_in_pod(pod_name: str, namespace: str, cmd: list[str]) -> None:
-    from kubernetes import client
-    from kubernetes.stream import stream
-    v1 = client.CoreV1Api()
-    stream(
-        v1.connect_get_namespaced_pod_exec,
-        pod_name, namespace,
-        command=cmd,
-        stderr=True, stdin=False, stdout=True, tty=False,
-    )
