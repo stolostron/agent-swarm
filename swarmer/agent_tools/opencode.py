@@ -53,27 +53,19 @@ class OpenCodeStrategy(AgentToolStrategy):
             "gitconfig": "[safe]\n\tdirectory = *\n",
         }
 
-    def build_mcp_auth_setup_cmd(self, access_token: str) -> str:
+    def build_mcp_auth_setup_cmd(self, mcp_auth_json: str) -> str:
         """Return a shell snippet that writes mcp-auth.json into the pod.
 
-        The snippet is inserted into the pod startup command preamble so
-        OpenCode finds a valid Atlassian bearer token before it starts.
-        Returns an empty string when *access_token* is empty.
+        Accepts the full pre-built mcp-auth.json blob (including refresh token,
+        expiry, clientInfo) so OpenCode can re-authenticate without user
+        intervention.  The snippet is inserted before the main command in the
+        pod startup preamble.  Returns an empty string when *mcp_auth_json*
+        is empty.
         """
-        if not access_token:
+        if not mcp_auth_json:
             return ""
 
-        from swarmer.routers.atlassian import build_mcp_auth_json
-        mcp_auth_content = build_mcp_auth_json(
-            access_token=access_token,
-            refresh_token=None,  # pod only needs the access token
-            expires_at_ts=None,
-            scope="",
-            client_id="",
-            client_id_issued_at=0,
-            server_url=settings.atlassian_mcp_url,
-        )
-        quoted = shlex.quote(mcp_auth_content)
+        quoted = shlex.quote(mcp_auth_json)
         return (
             "mkdir -p /workspace/.local/share/opencode && "
             f"printf '%s' {quoted} "

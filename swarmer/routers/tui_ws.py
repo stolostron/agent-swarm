@@ -81,8 +81,34 @@ async def session_tui(
         tui_cmd_parts.extend(["--model", session.model])
     if session.resume:
         tui_cmd_parts.append("--continue")
+
+    # Inject mcp-auth.json before starting the TUI binary so OpenCode picks up
+    # the Atlassian Rovo MCP token.  The content is read from the K8s Secret
+    # applied at pod-launch time (if the workspace has a valid Atlassian token).
+    mcp_auth_preamble = ""
+    if hasattr(tool, "build_mcp_auth_setup_cmd"):
+        try:
+            from kubernetes import client as _k8s_client
+            from swarmer import k8s as _k8s
+            _v1 = _k8s_client.CoreV1Api()
+            _secret_name = _k8s._atlassian_secret_name(ws_id)
+            _secret = _v1.read_namespaced_secret(_secret_name, namespace)
+            import base64 as _b64mod
+            _raw = _secret.data.get("mcp-auth.json", "")
+            if _raw:
+                _mcp_auth_json = _b64mod.b64decode(_raw).decode()
+                mcp_auth_preamble = (
+                    "mkdir -p /workspace/.local/share/opencode && "
+                    f"printf '%s' {shlex.quote(_mcp_auth_json)} "
+                    "> /workspace/.local/share/opencode/mcp-auth.json && "
+                )
+        except Exception as _exc:
+            log.debug("TUI: could not read Atlassian secret for ws %d: %s", ws_id, _exc)
+
     tui_shell = (
-        "export PATH=\"$HOME/.local/bin:$PATH\" && exec "
+        "export PATH=\"$HOME/.local/bin:$PATH\" && "
+        + mcp_auth_preamble
+        + "exec "
         + " ".join(shlex.quote(p) for p in tui_cmd_parts)
     )
 

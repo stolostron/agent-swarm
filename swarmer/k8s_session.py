@@ -71,7 +71,7 @@ def build_session_pod(
     has_gemini: bool = False,
     privileged: bool = False,
     agent_tool: str = "opencode",
-    atlassian_access_token: str = "",
+    atlassian_mcp_auth_json: str = "",
     atlassian_token=None,
 ):  # -> client.V1Pod
     """Build a V1Pod spec for the given session.
@@ -246,10 +246,13 @@ def build_session_pod(
     if session.instruction_prompt and session.mode in ("tui", "server"):
         agent_md_setup = "printf '%s' \"${SWARMER_AGENT_MD}\" > /workspace/AGENTS.md && "
 
-    # Atlassian Rovo MCP: inject mcp-auth.json if a valid token was provided
+    # Atlassian Rovo MCP: inject mcp-auth.json if a valid token blob was provided.
+    # The full JSON (with refresh token, expiry, clientInfo) is written before
+    # the main command so OpenCode can authenticate and re-authenticate without
+    # user intervention.
     mcp_auth_setup = ""
-    if atlassian_access_token and hasattr(tool, "build_mcp_auth_setup_cmd"):
-        mcp_auth_setup = tool.build_mcp_auth_setup_cmd(atlassian_access_token)
+    if atlassian_mcp_auth_json and hasattr(tool, "build_mcp_auth_setup_cmd"):
+        mcp_auth_setup = tool.build_mcp_auth_setup_cmd(atlassian_mcp_auth_json)
 
     # ---------- main container command ----------
     ports = []

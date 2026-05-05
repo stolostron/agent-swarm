@@ -536,15 +536,19 @@ async def _do_launch(session: Session, ws: Workspace, db: AsyncSession) -> None:
     has_adc = oc_secret.has_adc if oc_secret else False
     has_gemini = bool(oc_secret and oc_secret.google_api_key_enc)
 
-    # Fetch Atlassian token and inject into K8s Secret before building the pod spec
+    # Fetch Atlassian token and inject into K8s Secret before building the pod spec.
+    # We build the full mcp-auth.json blob here (with refresh token, expiry, clientInfo)
+    # and pass it both to the K8s Secret (for TUI re-use) and directly into the pod
+    # startup command (for server/prompt modes).
     atlassian_access_token, atlassian_token_obj = await _get_atlassian_token_for_launch(
         workspace_id=session.workspace_id, db=db
     )
+    atlassian_mcp_auth_json = ""
     if atlassian_access_token and atlassian_token_obj:
         try:
-            mcp_auth_json = _build_mcp_auth_json_from_token(atlassian_token_obj)
+            atlassian_mcp_auth_json = _build_mcp_auth_json_from_token(atlassian_token_obj)
             await _apply_atlassian_secret_async(
-                ws.k8s_namespace, session.workspace_id, mcp_auth_json, atlassian_access_token
+                ws.k8s_namespace, session.workspace_id, atlassian_mcp_auth_json, atlassian_access_token
             )
         except Exception as exc:
             log.warning(
@@ -552,7 +556,7 @@ async def _do_launch(session: Session, ws: Workspace, db: AsyncSession) -> None:
                 "session will launch without Rovo MCP access",
                 session.workspace_id, exc,
             )
-            atlassian_access_token = ""
+            atlassian_mcp_auth_json = ""
             atlassian_token_obj = None
 
     pod_spec = k8s_sess.build_session_pod(
@@ -565,7 +569,7 @@ async def _do_launch(session: Session, ws: Workspace, db: AsyncSession) -> None:
         has_gemini=has_gemini,
         privileged=session.privileged,
         agent_tool=session.agent_tool,
-        atlassian_access_token=atlassian_access_token or "",
+        atlassian_mcp_auth_json=atlassian_mcp_auth_json,
         atlassian_token=atlassian_token_obj,
     )
     from kubernetes import client as k8s_client

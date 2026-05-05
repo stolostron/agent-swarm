@@ -19,7 +19,7 @@ from swarmer.models.workspace import Workspace
 router = APIRouter()
 templates = Jinja2Templates(directory="swarmer/templates")
 
-_VALID_TABS = ("credentials", "pats", "pull-secret")
+_VALID_TABS = ("credentials", "pats", "pull-secret", "atlassian")
 
 
 async def _get_workspace(ws_id: int, db: AsyncSession) -> Workspace | None:

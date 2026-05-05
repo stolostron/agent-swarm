@@ -218,26 +218,30 @@ class TestOpenCodeStrategyMcpConfig:
 # ---------------------------------------------------------------------------
 
 class TestBuildMcpAuthSetupCmd:
+    """build_mcp_auth_setup_cmd now takes the full mcp-auth.json blob."""
+
+    _SAMPLE_JSON = '{"atlassian-rovo":{"serverUrl":"https://mcp.atlassian.com/v1/mcp","tokens":{"accessToken":"my_secret_bearer"}}}'
 
     def test_cmd_writes_to_correct_path(self):
         from swarmer.agent_tools.opencode import OpenCodeStrategy
         strat = OpenCodeStrategy()
-        cmd = strat.build_mcp_auth_setup_cmd("bearer_token_xyz")
+        cmd = strat.build_mcp_auth_setup_cmd(self._SAMPLE_JSON)
         assert "/workspace/.local/share/opencode/mcp-auth.json" in cmd
 
     def test_cmd_creates_parent_dir(self):
         from swarmer.agent_tools.opencode import OpenCodeStrategy
         strat = OpenCodeStrategy()
-        cmd = strat.build_mcp_auth_setup_cmd("bearer_token_xyz")
+        cmd = strat.build_mcp_auth_setup_cmd(self._SAMPLE_JSON)
         assert "mkdir -p" in cmd
 
     def test_cmd_contains_token(self):
         from swarmer.agent_tools.opencode import OpenCodeStrategy
         strat = OpenCodeStrategy()
-        cmd = strat.build_mcp_auth_setup_cmd("my_secret_bearer")
+        cmd = strat.build_mcp_auth_setup_cmd(self._SAMPLE_JSON)
+        # The full JSON blob (which contains the token) must appear in the cmd
         assert "my_secret_bearer" in cmd
 
-    def test_empty_token_returns_empty(self):
+    def test_empty_json_returns_empty(self):
         from swarmer.agent_tools.opencode import OpenCodeStrategy
         strat = OpenCodeStrategy()
         cmd = strat.build_mcp_auth_setup_cmd("")
