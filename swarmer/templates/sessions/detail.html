@@ -108,14 +108,6 @@
        class="pf-v6-c-button pf-m-primary pf-m-small{% if session.phase != 'running' %}" style="display:none{% endif %}"
        id="server-chat-btn">Open Web Chat ↗</a>
     {% endif %}
-    {% if atlassian_oauth_app and not session.is_active %}
-    <a href="/workspaces/{{ ws.id }}/atlassian-oauth/start?return_session={{ session.id }}"
-       target="_blank" rel="noopener"
-       class="pf-v6-c-button pf-m-small {% if atlassian_connected %}pf-m-success{% else %}pf-m-secondary{% endif %}"
-       title="{% if atlassian_connected %}Atlassian connected — click to re-authenticate{% else %}Authenticate with Atlassian before launching{% endif %}">
-      {% if atlassian_connected %}Atlassian Connected ✓{% else %}Connect Atlassian ↗{% endif %}
-    </a>
-    {% endif %}
   </div>
 
   <div style="margin-left:auto;">

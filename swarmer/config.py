@@ -19,10 +19,6 @@ class Settings(BaseSettings):
     agent_image_pull_secret: str = ""
     agent_image_pull_policy: str = "IfNotPresent"
     k8s_namespace: str = ""
-    # Externally reachable base URL of swarmer (e.g. https://swarmer.apps.example.com).
-    # Used to construct the Atlassian OAuth redirect URI.
-    # When blank, falls back to deriving from request.base_url at runtime.
-    swarmer_public_url: str = ""
 
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8", "extra": "ignore"}
 

@@ -71,7 +71,6 @@ def build_session_pod(
     has_gemini: bool = False,
     privileged: bool = False,
     agent_tool: str = "opencode",
-    has_atlassian_oauth: bool = False,
 ):  # -> client.V1Pod
     """Build a V1Pod spec for the given session.
 
@@ -236,7 +235,7 @@ def build_session_pod(
         model = tool.get_default_model(has_adc, has_gemini)
 
     model_setup = tool.build_model_setup_cmd(model)
-    share_setup = tool.build_share_setup_cmd(has_atlassian_oauth=has_atlassian_oauth)
+    share_setup = tool.build_share_setup_cmd()
     agent_md_setup = ""
     if session.instruction_prompt and session.mode in ("tui", "server"):
         agent_md_setup = "printf '%s' \"${SWARMER_AGENT_MD}\" > /workspace/AGENTS.md && "
@@ -283,15 +282,6 @@ def build_session_pod(
 
     # ---------- envFrom ----------
     env_from = tool.get_env_from_sources()
-    if has_atlassian_oauth:
-        env_from.append(
-            client.V1EnvFromSource(
-                secret_ref=client.V1SecretEnvSource(
-                    name=f"atlassian-oauth-{session.id}",
-                    optional=False,
-                )
-            )
-        )
 
     # ---------- container ----------
     # Non-privileged sessions omit runAsUser so OpenShift can assign a UID from

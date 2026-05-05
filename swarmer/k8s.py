@@ -390,31 +390,6 @@ def delete_pull_secret(namespace: str) -> None:
     _delete_secret(namespace, PULL_SECRET_NAME)
 
 
-# ---------- Atlassian OAuth ephemeral secrets ----------
-
-def apply_atlassian_oauth_secret(
-    namespace: str,
-    session_id: int,
-    *,
-    access_token: str,
-) -> None:
-    """Create or replace the ephemeral Atlassian OAuth K8s Secret for a session.
-
-    The secret contains only the access token; the MCP server URL is static
-    and lives in the opencode ConfigMap rather than here.
-    """
-    _apply_secret(
-        namespace,
-        f"atlassian-oauth-{session_id}",
-        {"ATLASSIAN_MCP_TOKEN": _b64(access_token)},
-    )
-
-
-def delete_atlassian_oauth_secret(namespace: str, session_id: int) -> None:
-    """Delete the ephemeral Atlassian OAuth K8s Secret. No-op if not found."""
-    _delete_secret(namespace, f"atlassian-oauth-{session_id}")
-
-
 async def check_image_reachable(image: str, namespace: str) -> bool:
     """Return True if the image manifest is accessible using the workspace pull secret."""
     import json

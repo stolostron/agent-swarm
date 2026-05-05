@@ -51,8 +51,6 @@ async def migrate_db() -> None:
         "ALTER TABLE sessions ADD COLUMN cron_schedule VARCHAR(128) NOT NULL DEFAULT ''",
         "ALTER TABLE sessions ADD COLUMN cron_next_run DATETIME",
         "ALTER TABLE github_pats ADD COLUMN github_org TEXT NOT NULL DEFAULT ''",
-        "ALTER TABLE atlassian_oauth_apps ADD COLUMN client_id VARCHAR(256) NOT NULL DEFAULT ''",
-        "ALTER TABLE atlassian_oauth_apps ADD COLUMN client_secret_enc VARCHAR(1024) NOT NULL DEFAULT ''",
     ]
     async with _engine.begin() as conn:
         for stmt in migrations:

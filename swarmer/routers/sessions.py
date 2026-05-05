@@ -22,7 +22,6 @@ from swarmer.ansi import ansi_to_html
 from swarmer.flash import flash
 from swarmer.github import fetch_repo_info as _fetch_repo_info
 from swarmer.github import list_repos_for_pat as _list_repos_for_pat
-from swarmer.models.atlassian_oauth_app import AtlassianOAuthApp
 from swarmer.models.github_pat import GitHubPAT
 from swarmer.models.opencode_secret import OpencodeSecret
 from swarmer.models.session import CRON_PRESETS, Session
@@ -365,13 +364,6 @@ async def session_detail(
     pat_token = session.github_pat.pat if session.github_pat else None
     repo_info = await _fetch_repo_info(session.repos, pat_token)
 
-    # Atlassian OAuth context
-    atlassian_result = await db.execute(
-        select(AtlassianOAuthApp).where(AtlassianOAuthApp.workspace_id == ws_id)
-    )
-    atlassian_oauth_app = atlassian_result.scalar_one_or_none()
-    atlassian_connected = f"atlassian_oauth_{ws_id}" in request.session
-
     _tools = all_tools()
     _avail = await asyncio.gather(
         *[k8s.get_image_available(t.get_image(), ws.k8s_namespace) for t in _tools]
@@ -399,8 +391,6 @@ async def session_detail(
             "tool_image_available": dict(zip([t.name for t in _tools], _avail, strict=False)),
             "patch_filename": _patch_filename(session),
             "cron_presets": CRON_PRESETS,
-            "atlassian_oauth_app": atlassian_oauth_app,
-            "atlassian_connected": atlassian_connected,
         },
     )
 
@@ -504,19 +494,6 @@ async def _do_launch(
     has_adc = oc_secret.has_adc if oc_secret else False
     has_gemini = bool(oc_secret and oc_secret.google_api_key_enc)
 
-    # Atlassian OAuth — inject ephemeral K8s Secret when a token is present
-    has_atlassian_oauth = False
-    if request is not None:
-        token_data = request.session.get(f"atlassian_oauth_{session.workspace_id}")
-        if token_data and token_data.get("access_token"):
-            await asyncio.to_thread(
-                k8s.apply_atlassian_oauth_secret,
-                ws.k8s_namespace,
-                session.id,
-                access_token=token_data["access_token"],
-            )
-            has_atlassian_oauth = True
-
     pod_spec = k8s_sess.build_session_pod(
         session=session,
         namespace=ws.k8s_namespace,
@@ -527,7 +504,6 @@ async def _do_launch(
         has_gemini=has_gemini,
         privileged=session.privileged,
         agent_tool=session.agent_tool,
-        has_atlassian_oauth=has_atlassian_oauth,
     )
     from kubernetes import client as k8s_client
 
@@ -651,11 +627,6 @@ async def session_stop(
         except Exception as exc:
             flash(request, f"Pod deletion failed: {exc}", "warning")
 
-    # Clean up the ephemeral Atlassian OAuth secret (no-op if not present)
-    try:
-        await asyncio.to_thread(k8s.delete_atlassian_oauth_secret, ws.k8s_namespace, session.id)
-    except Exception as exc:
-        log.warning("Atlassian OAuth secret cleanup failed on stop for session %d: %s", sid, exc)
 
     if not session.persist and session.pvc_name:
         try:
@@ -863,12 +834,6 @@ async def session_delete(
             k8s_sess.delete_session_pvc(ws.k8s_namespace, session.pvc_name)
         except Exception as exc:
             flash(request, f"PVC deletion failed: {exc}", "warning")
-
-    # Clean up the ephemeral Atlassian OAuth secret (no-op if not present)
-    try:
-        await asyncio.to_thread(k8s.delete_atlassian_oauth_secret, ws.k8s_namespace, session.id)
-    except Exception as exc:
-        log.warning("Atlassian OAuth secret cleanup failed on delete for session %d: %s", sid, exc)
 
     await db.delete(session)
     await db.commit()

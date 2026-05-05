@@ -34,6 +34,13 @@ class OpenCodeStrategy(AgentToolStrategy):
                 "hostname": "0.0.0.0",
                 "port": 4096,
             },
+            "mcp": {
+                "atlassian-rovo": {
+                    "type": "remote",
+                    "url": "https://mcp.atlassian.com/v1/mcp",
+                    "enabled": True,
+                },
+            },
         }
 
         return {
@@ -59,8 +66,8 @@ class OpenCodeStrategy(AgentToolStrategy):
     def get_share_dir(self) -> str:
         return "/workspace/.local/share/opencode"
 
-    def build_share_setup_cmd(self, has_atlassian_oauth: bool = False) -> str:
-        cmd = (
+    def build_share_setup_cmd(self) -> str:
+        return (
             "mkdir -p /workspace/.opencode /workspace/.local/share && "
             "rm -rf /workspace/.local/share/opencode && "
             "ln -sf /workspace/.opencode /workspace/.local/share/opencode && "
@@ -69,25 +76,6 @@ class OpenCodeStrategy(AgentToolStrategy):
             "printf '{\"google\":{\"type\":\"api\",\"key\":\"%s\"}}' \"$GOOGLE_API_KEY\" "
             "> /workspace/.opencode/auth.json; "
         )
-        if has_atlassian_oauth:
-            # Inject the Atlassian MCP server config into opencode.json using the
-            # access token from the ephemeral K8s Secret (env var ATLASSIAN_MCP_TOKEN).
-            # This runs at pod startup, after config-ro is copied to the config path.
-            config_path = self.get_config_mount_path()
-            cmd += (
-                "python3 -c \""
-                "import json, os; "
-                f"p = '{config_path}/opencode.json'; "
-                "cfg = json.load(open(p)) if os.path.exists(p) else {}; "
-                "cfg.setdefault('mcpServers', {})['atlassian-rovo'] = {"
-                "'type': 'http', "
-                "'url': 'https://mcp.atlassian.com/v1/mcp/authv2', "
-                "'headers': {'Authorization': 'Bearer ' + os.environ['ATLASSIAN_MCP_TOKEN']}"
-                "}; "
-                "json.dump(cfg, open(p, 'w'), indent=2)"
-                "\" && "
-            )
-        return cmd
 
     def build_model_setup_cmd(self, model: str) -> str:
         if "/" not in model:
