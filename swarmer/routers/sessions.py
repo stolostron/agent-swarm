@@ -1433,10 +1433,14 @@ _atlassian_auth_state: dict[int, dict] = {}
 _MCP_AUTH_JSON_PATH = "/workspace/.opencode/mcp-auth.json"
 _MCP_AUTH_DEST_PATH = "/workspace/.opencode/mcp-auth.json"
 
-# Resolve opencode binary at import time; fall back to known npm-global location.
+# Resolve opencode binary at import time.
+# Try PATH first, then the npm-global wrapper, then the native ELF binary
+# (the wrapper is a node script and needs node on PATH; the ELF binary is
+# self-contained and works regardless of PATH).
 _OPENCODE_BIN: str = (
     shutil.which("opencode")
-    or "/usr/local/share/npm-global/bin/opencode"
+    or shutil.which("opencode", path="/usr/local/share/npm-global/bin")
+    or "/usr/local/share/npm-global/lib/node_modules/opencode-ai/node_modules/opencode-linux-x64/bin/opencode"
 )
 
 
