@@ -3,6 +3,7 @@ import hashlib
 import logging
 import secrets
 from datetime import datetime, timedelta
+from urllib.parse import parse_qs, urlparse
 
 import httpx
 from fastapi import APIRouter, Depends, Form, Request
@@ -24,12 +25,13 @@ router = APIRouter()
 templates = Jinja2Templates(directory="swarmer/templates")
 
 OAUTH_CALLBACK_PATH = "/mcp-servers/oauth/callback"
+# Atlassian only allows localhost redirect URIs for dynamic client registrations.
+# Nothing actually runs on this port; after OAuth the user copies the failed URL.
+_LOCALHOST_CALLBACK = f"http://localhost:18080{OAUTH_CALLBACK_PATH}"
 
 
-def _get_redirect_uri(request: Request) -> str:
-    from swarmer.config import settings
-    base_url = settings.redirect_base_url or str(request.base_url).rstrip("/")
-    return f"{base_url}{OAUTH_CALLBACK_PATH}"
+def _get_redirect_uri(request: Request) -> str:  # noqa: ARG001
+    return _LOCALHOST_CALLBACK
 
 
 async def _get_workspace(ws_id: int, db: AsyncSession) -> Workspace | None:
@@ -213,48 +215,73 @@ async def mcp_server_oauth_callback(
         flash(request, "MCP server not found.", "danger")
         return RedirectResponse(url=f"/workspaces/{ws_id}/mcp-servers", status_code=302)
 
-    # Exchange authorization code for tokens
-    redirect_uri = _get_redirect_uri(request)
-
-    token_data = {
-        "grant_type": "authorization_code",
-        "code": code,
-        "redirect_uri": redirect_uri,
-        "client_id": server.oauth_client_id,
-        "code_verifier": oauth_state["code_verifier"],
-    }
-
-    headers = {}
-    if server.oauth_client_secret:
-        credentials = base64.b64encode(
-            f"{server.oauth_client_id}:{server.oauth_client_secret}".encode()
-        ).decode()
-        headers["Authorization"] = f"Basic {credentials}"
-
     try:
-        async with httpx.AsyncClient(timeout=30) as client:
-            resp = await client.post(
-                server.token_endpoint,
-                data=token_data,
-                headers=headers,
-            )
-            resp.raise_for_status()
-            token_response = resp.json()
+        token_response = await _do_token_exchange(
+            server, code, _LOCALHOST_CALLBACK, oauth_state["code_verifier"]
+        )
     except Exception as exc:
         log.error("Token exchange failed for MCP server %s: %s", server.slug, exc)
         flash(request, f"Token exchange failed: {exc}", "danger")
         return RedirectResponse(url=f"/workspaces/{ws_id}/mcp-servers", status_code=302)
 
-    server.access_token = token_response.get("access_token", "")
-    if token_response.get("refresh_token"):
-        server.refresh_token = token_response["refresh_token"]
+    _apply_token_response(server, token_response)
+    await db.commit()
 
-    expires_in = token_response.get("expires_in")
-    if expires_in:
-        server.token_expires_at = datetime.utcnow() + timedelta(seconds=int(expires_in))
-    else:
-        server.token_expires_at = None
+    await _sync_mcp_to_k8s(ws_id, db, request)
+    flash(request, f"Successfully connected to {server.display_name}!", "success")
+    return RedirectResponse(url=f"/workspaces/{ws_id}/mcp-servers", status_code=302)
 
+
+# ============================================================
+# OAuth: Complete via pasted callback URL (localhost redirect hack)
+# ============================================================
+
+@router.post(
+    "/workspaces/{ws_id}/mcp-servers/{server_id}/oauth-complete",
+    dependencies=[Depends(require_auth)],
+)
+async def mcp_server_oauth_complete(
+    ws_id: int,
+    server_id: int,
+    request: Request,
+    callback_url: str = Form(...),
+    db: AsyncSession = Depends(get_db),
+):
+    parsed = urlparse(callback_url)
+    qs = parse_qs(parsed.query)
+    code = qs.get("code", [""])[0]
+    state = qs.get("state", [""])[0]
+    error = qs.get("error", [""])[0]
+
+    if error:
+        flash(request, f"OAuth authorization failed: {error}", "danger")
+        return RedirectResponse(url=f"/workspaces/{ws_id}/mcp-servers", status_code=302)
+
+    if not code or not state:
+        flash(request, "Could not extract code/state from the pasted URL. Please try connecting again.", "danger")
+        return RedirectResponse(url=f"/workspaces/{ws_id}/mcp-servers", status_code=302)
+
+    session_key = f"mcp_oauth_{state}"
+    oauth_state = request.session.pop(session_key, None)
+    if not oauth_state:
+        flash(request, "OAuth session expired or invalid state. Please try connecting again.", "danger")
+        return RedirectResponse(url=f"/workspaces/{ws_id}/mcp-servers", status_code=302)
+
+    server = await db.get(McpServer, oauth_state["server_id"])
+    if server is None or server.workspace_id != ws_id:
+        flash(request, "MCP server not found.", "danger")
+        return RedirectResponse(url=f"/workspaces/{ws_id}/mcp-servers", status_code=302)
+
+    try:
+        token_response = await _do_token_exchange(
+            server, code, _LOCALHOST_CALLBACK, oauth_state["code_verifier"]
+        )
+    except Exception as exc:
+        log.error("Token exchange failed for MCP server %s: %s", server.slug, exc)
+        flash(request, f"Token exchange failed: {exc}", "danger")
+        return RedirectResponse(url=f"/workspaces/{ws_id}/mcp-servers", status_code=302)
+
+    _apply_token_response(server, token_response)
     await db.commit()
 
     await _sync_mcp_to_k8s(ws_id, db, request)
@@ -327,11 +354,7 @@ async def mcp_server_refresh_token(
 
     try:
         async with httpx.AsyncClient(timeout=30) as client:
-            resp = await client.post(
-                server.token_endpoint,
-                data=token_data,
-                headers=headers,
-            )
+            resp = await client.post(server.token_endpoint, data=token_data, headers=headers)
             resp.raise_for_status()
             token_response = resp.json()
     except Exception as exc:
@@ -342,7 +365,6 @@ async def mcp_server_refresh_token(
     server.access_token = token_response.get("access_token", "")
     if token_response.get("refresh_token"):
         server.refresh_token = token_response["refresh_token"]
-
     expires_in = token_response.get("expires_in")
     if expires_in:
         server.token_expires_at = datetime.utcnow() + timedelta(seconds=int(expires_in))
@@ -410,6 +432,46 @@ async def mcp_server_delete(
 # ============================================================
 # Helpers
 # ============================================================
+
+async def _do_token_exchange(
+    server: McpServer,
+    code: str,
+    redirect_uri: str,
+    code_verifier: str,
+) -> dict:
+    """Exchange an authorization code for tokens and return the raw token response."""
+    token_data = {
+        "grant_type": "authorization_code",
+        "code": code,
+        "redirect_uri": redirect_uri,
+        "client_id": server.oauth_client_id,
+        "code_verifier": code_verifier,
+    }
+
+    headers = {}
+    if server.oauth_client_secret:
+        credentials = base64.b64encode(
+            f"{server.oauth_client_id}:{server.oauth_client_secret}".encode()
+        ).decode()
+        headers["Authorization"] = f"Basic {credentials}"
+
+    async with httpx.AsyncClient(timeout=30) as client:
+        resp = await client.post(server.token_endpoint, data=token_data, headers=headers)
+        resp.raise_for_status()
+        return resp.json()
+
+
+def _apply_token_response(server: McpServer, token_response: dict) -> None:
+    """Write access/refresh tokens and expiry from a token response onto a McpServer."""
+    server.access_token = token_response.get("access_token", "")
+    if token_response.get("refresh_token"):
+        server.refresh_token = token_response["refresh_token"]
+    expires_in = token_response.get("expires_in")
+    if expires_in:
+        server.token_expires_at = datetime.utcnow() + timedelta(seconds=int(expires_in))
+    else:
+        server.token_expires_at = None
+
 
 async def _dynamic_register(registration_endpoint: str, redirect_uri: str) -> tuple[str, str]:
     """Perform OAuth 2.0 Dynamic Client Registration (RFC 7591)."""

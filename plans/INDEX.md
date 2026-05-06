@@ -71,6 +71,15 @@ Parent epic: [ACM-32892](https://redhat.atlassian.net/browse/ACM-32892) — Impl
   pr: "https://github.com/stolostron/agent-swarm/pull/50"
   summary: "Added `_derive_small_model()` to crush.py: Opus→Sonnet, Sonnet→Haiku (vertexai/anthropic), Gemini Pro→Flash; CrushStrategy now injects models.small into the Crush config when derivable"
 
+# ──────────────────────────────────────────────────────────
+- date: "2026-05-06"
+  title: "Switch Jira MCP from Atlassian OAuth to token-based binary MCP (mcp-atlassian)"
+  jira: "ACM-33664"
+  jira_url: "https://redhat.atlassian.net/browse/ACM-33664"
+  status: "Closed"
+  pr: "https://github.com/stolostron/agent-swarm/pull/52"
+  summary: "Localhost OAuth redirect hack: Connect opens in new tab with localhost:18080 callback; MCP card shows paste input so user can submit the failed callback URL to complete token exchange via new /oauth-complete route"
+
 ## Foundation & Feature Plans
 
 | Plan | Summary | Jira | PR |
