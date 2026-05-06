@@ -67,8 +67,8 @@ Parent epic: [ACM-32892](https://redhat.atlassian.net/browse/ACM-32892) — Impl
   title: "Switch Jira MCP from Atlassian OAuth to token-based binary MCP (mcp-atlassian)"
   jira: "ACM-33664"
   jira_url: "https://redhat.atlassian.net/browse/ACM-33664"
-  status: "Done"
-  pr: ~
+  status: "Closed"
+  pr: "https://github.com/stolostron/agent-swarm/pull/52"
   summary: "Localhost OAuth redirect hack: Connect opens in new tab with localhost:18080 callback; MCP card shows paste input so user can submit the failed callback URL to complete token exchange via new /oauth-complete route"
 
 ## Foundation & Feature Plans
