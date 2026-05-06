@@ -73,35 +73,55 @@
           {% endif %}
         </dl>
       </div>
-      <div class="pf-v6-c-card__footer" style="display:flex; gap:var(--pf-t--global--spacer--xs); flex-wrap:wrap;">
-        {% if not s.is_authenticated %}
-        <form method="post" action="/workspaces/{{ ws.id }}/mcp-servers/{{ s.id }}/connect" style="display:inline;">
-          <button type="submit" class="pf-v6-c-button pf-m-primary pf-m-small">Connect via OAuth</button>
-        </form>
-        {% else %}
-          {% if s.is_expired and s.refresh_token_enc %}
-          <form method="post" action="/workspaces/{{ ws.id }}/mcp-servers/{{ s.id }}/refresh" style="display:inline;">
-            <button type="submit" class="pf-v6-c-button pf-m-secondary pf-m-small">Refresh Token</button>
+      <div class="pf-v6-c-card__footer" style="display:flex; gap:var(--pf-t--global--spacer--xs); flex-wrap:wrap; align-items:flex-start; flex-direction:column;">
+        <div style="display:flex; gap:var(--pf-t--global--spacer--xs); flex-wrap:wrap;">
+          {% if not s.is_authenticated %}
+          <form method="post" action="/workspaces/{{ ws.id }}/mcp-servers/{{ s.id }}/connect"
+                target="_blank" onsubmit="showPasteSection({{ s.id }})">
+            <button type="submit" class="pf-v6-c-button pf-m-primary pf-m-small">Connect via OAuth</button>
           </form>
-          {% elif s.is_expired %}
-          <form method="post" action="/workspaces/{{ ws.id }}/mcp-servers/{{ s.id }}/connect" style="display:inline;">
-            <button type="submit" class="pf-v6-c-button pf-m-primary pf-m-small">Reconnect</button>
-          </form>
+          {% else %}
+            {% if s.is_expired and s.refresh_token_enc %}
+            <form method="post" action="/workspaces/{{ ws.id }}/mcp-servers/{{ s.id }}/refresh" style="display:inline;">
+              <button type="submit" class="pf-v6-c-button pf-m-secondary pf-m-small">Refresh Token</button>
+            </form>
+            {% elif s.is_expired %}
+            <form method="post" action="/workspaces/{{ ws.id }}/mcp-servers/{{ s.id }}/connect"
+                  target="_blank" onsubmit="showPasteSection({{ s.id }})">
+              <button type="submit" class="pf-v6-c-button pf-m-primary pf-m-small">Reconnect</button>
+            </form>
+            {% endif %}
+            <form method="post" action="/workspaces/{{ ws.id }}/mcp-servers/{{ s.id }}/disconnect" style="display:inline;">
+              <button type="submit" class="pf-v6-c-button pf-m-secondary pf-m-small">Disconnect</button>
+            </form>
           {% endif %}
-          <form method="post" action="/workspaces/{{ ws.id }}/mcp-servers/{{ s.id }}/disconnect" style="display:inline;">
-            <button type="submit" class="pf-v6-c-button pf-m-secondary pf-m-small">Disconnect</button>
+          <form method="post" action="/workspaces/{{ ws.id }}/mcp-servers/{{ s.id }}/toggle" style="display:inline;">
+            <button type="submit" class="pf-v6-c-button pf-m-tertiary pf-m-small">
+              {{ 'Disable' if s.enabled else 'Enable' }}
+            </button>
           </form>
-        {% endif %}
-        <form method="post" action="/workspaces/{{ ws.id }}/mcp-servers/{{ s.id }}/toggle" style="display:inline;">
-          <button type="submit" class="pf-v6-c-button pf-m-tertiary pf-m-small">
-            {{ 'Disable' if s.enabled else 'Enable' }}
-          </button>
-        </form>
-        <form method="post" action="/workspaces/{{ ws.id }}/mcp-servers/{{ s.id }}/delete"
-              style="display:inline;"
-              onsubmit="return confirm('Remove {{ s.display_name }}? OAuth tokens will be deleted.')">
-          <button type="submit" class="pf-v6-c-button pf-m-danger pf-m-small">Remove</button>
-        </form>
+          <form method="post" action="/workspaces/{{ ws.id }}/mcp-servers/{{ s.id }}/delete"
+                style="display:inline;"
+                onsubmit="return confirm('Remove {{ s.display_name }}? OAuth tokens will be deleted.')">
+            <button type="submit" class="pf-v6-c-button pf-m-danger pf-m-small">Remove</button>
+          </form>
+        </div>
+
+        {# Paste-back section — shown after clicking Connect via OAuth #}
+        <div id="paste-section-{{ s.id }}" style="display:none; width:100%; margin-top:var(--pf-t--global--spacer--xs);">
+          <p style="font-size:var(--pf-t--global--font--size--sm); color:var(--pf-t--global--text--color--subtle); margin:0 0 var(--pf-t--global--spacer--xs) 0;">
+            Complete OAuth in the new tab, then copy the URL of the failed page and paste it here.
+          </p>
+          <form method="post" action="/workspaces/{{ ws.id }}/mcp-servers/{{ s.id }}/oauth-complete"
+                style="display:flex; gap:var(--pf-t--global--spacer--xs);">
+            <input type="text" name="callback_url"
+                   class="pf-v6-c-form-control"
+                   placeholder="http://localhost:18080/mcp-servers/oauth/callback?code=..."
+                   style="flex:1; font-size:var(--pf-t--global--font--size--sm);"
+                   required>
+            <button type="submit" class="pf-v6-c-button pf-m-primary pf-m-small">Submit</button>
+          </form>
+        </div>
       </div>
     </div>
   </div>
@@ -153,4 +173,9 @@
 </div>
 {% endif %}
 
+<script>
+function showPasteSection(serverId) {
+  document.getElementById('paste-section-' + serverId).style.display = 'block';
+}
+</script>
 {% endblock %}

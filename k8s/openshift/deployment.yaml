@@ -18,6 +18,8 @@ spec:
         app: swarmer
     spec:
       serviceAccountName: swarmer
+      securityContext:
+        fsGroup: 1001
 
       containers:
         - name: swarmer

@@ -62,6 +62,33 @@ Parent epic: [ACM-32892](https://redhat.atlassian.net/browse/ACM-32892) — Impl
   pr: "https://github.com/stolostron/agent-swarm/pull/45"
   summary: "Reduced default workspace PVC size from 10Gi to 5Gi by updating the storage default in ensure_session_pvc() in swarmer/k8s_session.py."
 
+# ──────────────────────────────────────────────────────────
+- date: "2026-05-05"
+  title: "Add Crush support for small and large models"
+  jira: "ACM-33630"
+  jira_url: "https://redhat.atlassian.net/browse/ACM-33630"
+  status: "Closed"
+  pr: "https://github.com/stolostron/agent-swarm/pull/50"
+  summary: "Added `_derive_small_model()` to crush.py: Opus→Sonnet, Sonnet→Haiku (vertexai/anthropic), Gemini Pro→Flash; CrushStrategy now injects models.small into the Crush config when derivable"
+
+# ──────────────────────────────────────────────────────────
+- date: "2026-05-06"
+  title: "Switch Jira MCP from Atlassian OAuth to token-based binary MCP (mcp-atlassian)"
+  jira: "ACM-33664"
+  jira_url: "https://redhat.atlassian.net/browse/ACM-33664"
+  status: "Closed"
+  pr: "https://github.com/stolostron/agent-swarm/pull/52"
+  summary: "Localhost OAuth redirect hack: Connect opens in new tab with localhost:18080 callback; MCP card shows paste input so user can submit the failed callback URL to complete token exchange via new /oauth-complete route"
+
+# ──────────────────────────────────────────────────────────
+- date: "2026-05-06"
+  title: "Sync crush image tag into agent-swarm from agent-containers build"
+  jira: "ACM-33677"
+  jira_url: "https://redhat.atlassian.net/browse/ACM-33677"
+  status: "Done"
+  pr: "https://github.com/stolostron/agent-swarm/pull/53"
+  summary: "Extended sync-images to also write AGENT_IMAGE_CRUSH=$(REGISTRY)/crush:$(TAG) into .env from agent-containers/.push-defaults, replacing the hardcoded ghcr.io/gurnben/crush-container:latest"
+
 ## Foundation & Feature Plans
 
 | Plan | Summary | Jira | PR |

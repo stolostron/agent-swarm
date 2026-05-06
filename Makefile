@@ -54,9 +54,10 @@ sync-images:  ## Sync AGENT_IMAGE / AGENT_IMAGE_OPENCODE / AGENT_IMAGE_PYTHON in
 	@test -f $(AC_DEFAULTS) || (echo "$(AC_DEFAULTS) not found — run 'make publish' in ../agent-containers first" && exit 1)
 	$(eval AC_REGISTRY := $(shell grep '^REGISTRY=' $(AC_DEFAULTS) | cut -d= -f2-))
 	$(eval AC_TAG      := $(shell grep '^IMAGE_TAG=' $(AC_DEFAULTS) | cut -d= -f2-))
-	@echo "Syncing agent images → $(AC_REGISTRY)/opencode:$(AC_TAG)"
+	@echo "Syncing agent images → $(AC_REGISTRY)/{opencode,crush}:$(AC_TAG)"
 	@sed -i "s|^AGENT_IMAGE=.*|AGENT_IMAGE=$(AC_REGISTRY)/opencode:$(AC_TAG)|" .env
 	@sed -i "s|^AGENT_IMAGE_OPENCODE=.*|AGENT_IMAGE_OPENCODE=$(AC_REGISTRY)/opencode:$(AC_TAG)|" .env
+	@sed -i "s|^AGENT_IMAGE_CRUSH=.*|AGENT_IMAGE_CRUSH=$(AC_REGISTRY)/crush:$(AC_TAG)|" .env
 	@echo "Updated .env"
 
 setup-secret:  ## Generate a new SWARMER_SECRET_KEY and save to auth/secret.key

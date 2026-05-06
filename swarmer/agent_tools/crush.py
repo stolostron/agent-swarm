@@ -17,6 +17,27 @@ def _mcp_token_env_var(slug: str) -> str:
     return f"MCP_TOKEN_{clean}"
 
 
+_HAIKU_BY_PROVIDER = {
+    "vertexai": "claude-haiku-4-5-20251001",
+    "anthropic": "claude-haiku-3.5",
+}
+
+
+def _derive_small_model(model: str) -> str | None:
+    if "/" not in model:
+        return None
+    provider_id, model_id = model.split("/", 1)
+
+    if provider_id in {"vertexai", "anthropic"} and "opus" in model_id:
+        return f"{provider_id}/claude-sonnet-4-6"
+    if provider_id in {"vertexai", "anthropic"} and "sonnet" in model_id:
+        haiku_id = _HAIKU_BY_PROVIDER.get(provider_id)
+        return f"{provider_id}/{haiku_id}" if haiku_id else None
+    if provider_id in {"vertexai", "gemini"} and "gemini" in model_id and "pro" in model_id:
+        return f"{provider_id}/{model_id.replace('pro', 'flash')}"
+    return None
+
+
 class CrushStrategy(AgentToolStrategy):
 
     @property
@@ -101,8 +122,15 @@ class CrushStrategy(AgentToolStrategy):
             provider_id, model_id = model.split("/", 1)
         else:
             provider_id, model_id = "", model
-        selected = {"model": model_id, "provider": provider_id}
-        config_data = json.dumps({"models": {"large": selected}})
+        large = {"model": model_id, "provider": provider_id}
+        models_cfg: dict = {"large": large}
+
+        small = _derive_small_model(model)
+        if small:
+            sp, sm = small.split("/", 1)
+            models_cfg["small"] = {"model": sm, "provider": sp}
+
+        config_data = json.dumps({"models": models_cfg})
         return (
             "mkdir -p $HOME/.local/share/crush && "
             f"printf '%s' {shlex.quote(config_data)} "
@@ -131,7 +159,7 @@ class CrushStrategy(AgentToolStrategy):
         return [client.V1ContainerPort(container_port=port, name="crush")]
 
     def is_valid_model(self, model: str) -> bool:
-        return model.startswith("vertexai/")
+        return model.startswith(("vertexai/", "anthropic/", "gemini/", "openai/"))
 
     def get_model_options(self, secret=None) -> list[dict]:
         options = []
