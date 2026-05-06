@@ -5,6 +5,7 @@ import shlex
 import uuid
 from datetime import datetime
 
+import httpx
 from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
