@@ -28,12 +28,12 @@ def _derive_small_model(model: str) -> str | None:
         return None
     provider_id, model_id = model.split("/", 1)
 
-    if "opus" in model_id:
+    if provider_id in {"vertexai", "anthropic"} and "opus" in model_id:
         return f"{provider_id}/claude-sonnet-4-6"
-    if "sonnet" in model_id:
+    if provider_id in {"vertexai", "anthropic"} and "sonnet" in model_id:
         haiku_id = _HAIKU_BY_PROVIDER.get(provider_id)
         return f"{provider_id}/{haiku_id}" if haiku_id else None
-    if "gemini" in model_id and "pro" in model_id:
+    if provider_id in {"vertexai", "gemini"} and "gemini" in model_id and "pro" in model_id:
         return f"{provider_id}/{model_id.replace('pro', 'flash')}"
     return None
 
@@ -159,7 +159,7 @@ class CrushStrategy(AgentToolStrategy):
         return [client.V1ContainerPort(container_port=port, name="crush")]
 
     def is_valid_model(self, model: str) -> bool:
-        return model.startswith("vertexai/")
+        return model.startswith(("vertexai/", "anthropic/", "gemini/", "openai/"))
 
     def get_model_options(self, secret=None) -> list[dict]:
         options = []

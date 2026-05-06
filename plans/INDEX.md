@@ -69,7 +69,7 @@ Parent epic: [ACM-32892](https://redhat.atlassian.net/browse/ACM-32892) — Impl
   jira_url: "https://redhat.atlassian.net/browse/ACM-33630"
   status: "Closed"
   pr: "https://github.com/stolostron/agent-swarm/pull/50"
-  summary: "Added _derive_small_model() to crush.py: Opus→Sonnet, Sonnet→Haiku (vertexai/anthropic), Gemini Pro→Flash; CrushStrategy now injects models.small into the Crush config when derivable"
+  summary: "Added `_derive_small_model()` to crush.py: Opus→Sonnet, Sonnet→Haiku (vertexai/anthropic), Gemini Pro→Flash; CrushStrategy now injects models.small into the Crush config when derivable"
 
 ## Foundation & Feature Plans
 
