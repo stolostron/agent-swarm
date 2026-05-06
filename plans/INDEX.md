@@ -85,9 +85,9 @@ Parent epic: [ACM-32892](https://redhat.atlassian.net/browse/ACM-32892) — Impl
   title: "Sync crush image tag into agent-swarm from agent-containers build"
   jira: "ACM-33677"
   jira_url: "https://redhat.atlassian.net/browse/ACM-33677"
-  status: "In Progress"
-  pr: ~
-  summary: "Update sync-images in agent-swarm Makefile to derive AGENT_IMAGE_CRUSH from agent-containers .push-defaults alongside AGENT_IMAGE_OPENCODE; PRs span both agent-swarm and agent-containers"
+  status: "Done"
+  pr: "https://github.com/stolostron/agent-swarm/pull/53"
+  summary: "Extended sync-images to also write AGENT_IMAGE_CRUSH=$(REGISTRY)/crush:$(TAG) into .env from agent-containers/.push-defaults, replacing the hardcoded ghcr.io/gurnben/crush-container:latest"
 
 ## Foundation & Feature Plans
 
