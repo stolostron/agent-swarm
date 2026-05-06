@@ -80,6 +80,15 @@ Parent epic: [ACM-32892](https://redhat.atlassian.net/browse/ACM-32892) — Impl
   pr: "https://github.com/stolostron/agent-swarm/pull/52"
   summary: "Localhost OAuth redirect hack: Connect opens in new tab with localhost:18080 callback; MCP card shows paste input so user can submit the failed callback URL to complete token exchange via new /oauth-complete route"
 
+# ──────────────────────────────────────────────────────────
+- date: "2026-05-06"
+  title: "Sync crush image tag into agent-swarm from agent-containers build"
+  jira: "ACM-33677"
+  jira_url: "https://redhat.atlassian.net/browse/ACM-33677"
+  status: "In Progress"
+  pr: ~
+  summary: "Update sync-images in agent-swarm Makefile to derive AGENT_IMAGE_CRUSH from agent-containers .push-defaults alongside AGENT_IMAGE_OPENCODE; PRs span both agent-swarm and agent-containers"
+
 ## Foundation & Feature Plans
 
 | Plan | Summary | Jira | PR |
