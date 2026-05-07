@@ -3,7 +3,7 @@ import json
 from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
 from fastapi.responses import RedirectResponse
 from fastapi.templating import Jinja2Templates
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -21,19 +21,52 @@ templates = Jinja2Templates(directory="swarmer/templates")
 _VALID_TABS = ("credentials", "pats", "pull-secret")
 
 
+def _current_user(request: Request) -> str:
+    """Return the K8s username from the session, or '' if not set."""
+    return request.session.get("username", "")
+
+
 async def _get_workspace(ws_id: int, db: AsyncSession) -> Workspace | None:
     return await db.get(Workspace, ws_id)
 
 
-async def _secrets_context(ws_id: int, ws, db: AsyncSession) -> dict:
-    """Fetch all data needed to render the tabbed secrets page."""
+async def _secrets_context(ws_id: int, ws, db: AsyncSession, user_id: str = "") -> dict:
+    """Fetch all data needed to render the tabbed secrets page.
+
+    Filters credentials by user_id: shows own credentials + shared + legacy (user_id='').
+    """
     result = await db.execute(
-        select(OpencodeSecret).where(OpencodeSecret.workspace_id == ws_id)
+        select(OpencodeSecret).where(
+            OpencodeSecret.workspace_id == ws_id,
+            or_(
+                OpencodeSecret.user_id == user_id,
+                OpencodeSecret.shared == True,  # noqa: E712
+                OpencodeSecret.user_id == "",
+            ),
+        ).order_by(
+            # Prefer own credentials, then legacy, then shared
+            OpencodeSecret.user_id == user_id if user_id else OpencodeSecret.id,
+        )
     )
-    opencode_secret = result.scalar_one_or_none()
+    all_secrets = result.scalars().all()
+    # Prefer own credentials; fall back to shared/legacy
+    opencode_secret = None
+    for s in all_secrets:
+        if s.user_id == user_id:
+            opencode_secret = s
+            break
+    if opencode_secret is None and all_secrets:
+        opencode_secret = all_secrets[0]
 
     pats_result = await db.execute(
-        select(GitHubPAT).where(GitHubPAT.workspace_id == ws_id).order_by(GitHubPAT.name)
+        select(GitHubPAT).where(
+            GitHubPAT.workspace_id == ws_id,
+            or_(
+                GitHubPAT.user_id == user_id,
+                GitHubPAT.shared == True,  # noqa: E712
+                GitHubPAT.user_id == "",
+            ),
+        ).order_by(GitHubPAT.name)
     )
     pats = pats_result.scalars().all()
 
@@ -64,11 +97,11 @@ async def secrets_tabs(
     if tab not in _VALID_TABS:
         tab = "credentials"
 
-    ctx = await _secrets_context(ws_id, ws, db)
+    ctx = await _secrets_context(ws_id, ws, db, user_id=_current_user(request))
     return templates.TemplateResponse(
         request,
         "secrets/tabs.html",
-        {"ws": ws, "tab": tab, **ctx},
+        {"ws": ws, "tab": tab, "current_user": _current_user(request), **ctx},
     )
 
 
@@ -99,6 +132,7 @@ async def opencode_secret_save(
     google_api_key: str = Form(""),
     anthropic_api_key: str = Form(""),
     openai_api_key: str = Form(""),
+    shared: str = Form(""),
     adc_file: UploadFile | None = File(None),
     db: AsyncSession = Depends(get_db),
 ):
@@ -107,15 +141,31 @@ async def opencode_secret_save(
         return RedirectResponse(url="/workspaces", status_code=302)
 
     result = await db.execute(
-        select(OpencodeSecret).where(OpencodeSecret.workspace_id == ws_id)
+        select(OpencodeSecret).where(
+            OpencodeSecret.workspace_id == ws_id,
+            or_(
+                OpencodeSecret.user_id == _current_user(request),
+                OpencodeSecret.user_id == "",
+            ),
+        )
     )
-    secret = result.scalar_one_or_none()
+    all_matches = result.scalars().all()
+    secret = None
+    for s in all_matches:
+        if s.user_id == _current_user(request):
+            secret = s
+            break
+    if secret is None and all_matches:
+        secret = all_matches[0]
     if secret is None:
-        secret = OpencodeSecret(workspace_id=ws_id)
+        secret = OpencodeSecret(workspace_id=ws_id, user_id=_current_user(request))
         db.add(secret)
+    elif not secret.user_id:
+        secret.user_id = _current_user(request)
 
     secret.google_cloud_project = google_cloud_project.strip()
     secret.vertex_location = vertex_location.strip()
+    secret.shared = bool(shared)
 
     if google_api_key.strip():
         secret.google_api_key = google_api_key.strip()
@@ -129,7 +179,7 @@ async def opencode_secret_save(
         try:
             json.loads(content)
         except json.JSONDecodeError:
-            ctx = await _secrets_context(ws_id, ws, db)
+            ctx = await _secrets_context(ws_id, ws, db, user_id=_current_user(request))
             ctx["secret"] = secret  # show in-progress values
             return templates.TemplateResponse(
                 request,
@@ -147,14 +197,13 @@ async def opencode_secret_save(
     await db.commit()
 
     try:
-        k8s.sync_all_agent_secrets(ws.k8s_namespace, secret)
         from swarmer.agent_tools.registry import all_tools
         from swarmer.routers.mcp_servers import get_enabled_mcp_servers
-        mcp_servers = await get_enabled_mcp_servers(ws_id, db)
+        mcp_servers = await get_enabled_mcp_servers(ws_id, db, user_id=_current_user(request))
         for tool in all_tools():
             k8s.apply_agent_config(ws.k8s_namespace, secret=secret, agent_tool=tool.name, mcp_servers=mcp_servers)
     except Exception as exc:
-        flash(request, f"Saved, but K8s sync failed: {exc}", "warning")
+        flash(request, f"Saved, but K8s config sync failed: {exc}", "warning")
 
     return RedirectResponse(url=f"/workspaces/{ws_id}/secrets?tab=credentials", status_code=302)
 
@@ -192,6 +241,7 @@ async def github_pat_create(
     github_org: str = Form(""),
     pat_value: str = Form(...),
     description: str = Form(""),
+    shared: str = Form(""),
     db: AsyncSession = Depends(get_db),
 ):
     ws = await _get_workspace(ws_id, db)
@@ -204,6 +254,8 @@ async def github_pat_create(
         github_username=github_username.strip(),
         github_org=github_org.strip(),
         description=description.strip(),
+        user_id=_current_user(request),
+        shared=bool(shared),
     )
     pat.pat = pat_value.strip()
     db.add(pat)
@@ -223,11 +275,6 @@ async def github_pat_create(
             },
             status_code=422,
         )
-
-    try:
-        k8s.apply_github_pat_secret(ws.k8s_namespace, pat)
-    except Exception as exc:
-        flash(request, f"PAT saved, but K8s sync failed: {exc}", "warning")
 
     return RedirectResponse(url=f"/workspaces/{ws_id}/secrets?tab=pats", status_code=302)
 
@@ -263,6 +310,7 @@ async def github_pat_update(
     github_org: str = Form(""),
     pat_value: str = Form(""),
     description: str = Form(""),
+    shared: str = Form(""),
     db: AsyncSession = Depends(get_db),
 ):
     ws = await _get_workspace(ws_id, db)
@@ -274,6 +322,7 @@ async def github_pat_update(
     pat.github_username = github_username.strip()
     pat.github_org = github_org.strip()
     pat.description = description.strip()
+    pat.shared = bool(shared)
     if pat_value.strip():
         pat.pat = pat_value.strip()
 
@@ -285,11 +334,6 @@ async def github_pat_update(
         return RedirectResponse(
             url=f"/workspaces/{ws_id}/secrets/pats/{pat_id}/edit", status_code=302
         )
-
-    try:
-        k8s.apply_github_pat_secret(ws.k8s_namespace, pat)
-    except Exception as exc:
-        flash(request, f"PAT saved, but K8s sync failed: {exc}", "warning")
 
     return RedirectResponse(url=f"/workspaces/{ws_id}/secrets?tab=pats", status_code=302)
 
@@ -308,11 +352,6 @@ async def github_pat_delete(
     pat = await db.get(GitHubPAT, pat_id)
     if ws is None or pat is None or pat.workspace_id != ws_id:
         return RedirectResponse(url=f"/workspaces/{ws_id}/secrets?tab=pats", status_code=302)
-
-    try:
-        k8s.delete_github_pat_secret(ws.k8s_namespace, pat)
-    except Exception as exc:
-        flash(request, f"K8s secret deletion failed: {exc}", "warning")
 
     await db.delete(pat)
     await db.commit()

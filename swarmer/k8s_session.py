@@ -72,6 +72,9 @@ def build_session_pod(
     privileged: bool = False,
     agent_tool: str = "opencode",
     mcp_servers=None,
+    agent_secret_name: str = "",
+    pat_secret_name: str = "",
+    mcp_secret_name: str = "",
 ):  # -> client.V1Pod
     """Build a V1Pod spec for the given session.
 
@@ -92,13 +95,14 @@ def build_session_pod(
         client.V1EnvVar(name="NODE_OPTIONS", value="--max-old-space-size=1536"),
     ]
     env.extend(tool.get_extra_env(has_adc))
-    if pat:
+    _pat_k8s_name = pat_secret_name or (pat.k8s_secret_name if pat else "")
+    if pat and _pat_k8s_name:
         env.append(
             client.V1EnvVar(
                 name="GITHUB_PAT",
                 value_from=client.V1EnvVarSource(
                     secret_key_ref=client.V1SecretKeySelector(
-                        name=pat.k8s_secret_name,
+                        name=_pat_k8s_name,
                         key="GITHUB_PAT",
                         optional=True,
                     )
@@ -110,7 +114,7 @@ def build_session_pod(
                 name="GH_TOKEN",
                 value_from=client.V1EnvVarSource(
                     secret_key_ref=client.V1SecretKeySelector(
-                        name=pat.k8s_secret_name,
+                        name=_pat_k8s_name,
                         key="GITHUB_PAT",
                         optional=True,
                     )
@@ -122,7 +126,7 @@ def build_session_pod(
                 name="GITHUB_USERNAME",
                 value_from=client.V1EnvVarSource(
                     secret_key_ref=client.V1SecretKeySelector(
-                        name=pat.k8s_secret_name,
+                        name=_pat_k8s_name,
                         key="GITHUB_USERNAME",
                         optional=True,
                     )
@@ -148,7 +152,7 @@ def build_session_pod(
             ),
         ),
     ]
-    volumes.extend(tool.get_extra_volumes(has_adc))
+    volumes.extend(tool.get_extra_volumes(has_adc, secret_name=agent_secret_name))
 
     volume_mounts = [
         client.V1VolumeMount(
@@ -185,13 +189,13 @@ def build_session_pod(
         full_cmd = credential_setup + " && " + " && ".join(clone_cmds)
 
         git_env = [client.V1EnvVar(name="HOME", value="/workspace")]
-        if pat:
+        if pat and _pat_k8s_name:
             git_env.append(
                 client.V1EnvVar(
                     name="GITHUB_PAT",
                     value_from=client.V1EnvVarSource(
                         secret_key_ref=client.V1SecretKeySelector(
-                            name=pat.k8s_secret_name,
+                            name=_pat_k8s_name,
                             key="GITHUB_PAT",
                             optional=True,
                         )
@@ -203,7 +207,7 @@ def build_session_pod(
                     name="GITHUB_USERNAME",
                     value_from=client.V1EnvVarSource(
                         secret_key_ref=client.V1SecretKeySelector(
-                            name=pat.k8s_secret_name,
+                            name=_pat_k8s_name,
                             key="GITHUB_USERNAME",
                             optional=True,
                         )
@@ -288,15 +292,15 @@ def build_session_pod(
     command = ["sh", "-c", config_setup + mcp_config_setup + safe_dir_setup + git_setup + share_setup + agent_md_setup + model_setup + branch_setup + main_cmd]
 
     # ---------- envFrom ----------
-    env_from = tool.get_env_from_sources()
+    env_from = tool.get_env_from_sources(secret_name=agent_secret_name)
 
-    # Inject MCP server credentials from the shared K8s secret
+    # Inject MCP server credentials from the session-scoped K8s secret
     if mcp_servers:
         from swarmer.k8s import MCP_SECRET_NAME
         env_from.append(
             client.V1EnvFromSource(
                 secret_ref=client.V1SecretEnvSource(
-                    name=MCP_SECRET_NAME, optional=True
+                    name=mcp_secret_name or MCP_SECRET_NAME, optional=True
                 )
             )
         )

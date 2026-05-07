@@ -114,6 +114,15 @@ Parent epic: [ACM-32892](https://redhat.atlassian.net/browse/ACM-32892) — Impl
   pr: "https://github.com/stolostron/agent-swarm/pull/57"
   summary: "Downgraded missing-pull-secret warnings to debug for public images; added Opus 4.6 back to model lists so existing sessions match"
 
+# ──────────────────────────────────────────────────────────
+- date: "2026-05-07"
+  title: "Improve secrets security: session-scoped K8s secrets, per-user credential isolation, and cleanup lifecycle"
+  jira: "ACM-33880"
+  jira_url: "https://redhat.atlassian.net/browse/ACM-33880"
+  status: "Done"
+  pr: "https://github.com/stolostron/agent-swarm/pull/59"
+  summary: "Session-scoped K8s secrets created at launch and cleaned up on stop; per-user credential isolation with shared flag; purge/audit plan for orphaned secrets"
+
 ## Foundation & Feature Plans
 
 | Plan | Summary | Jira | PR |

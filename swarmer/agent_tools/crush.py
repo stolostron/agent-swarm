@@ -204,12 +204,12 @@ class CrushStrategy(AgentToolStrategy):
     def exec_model_update(self, pod_name: str, namespace: str, model: str) -> None:
         pass
 
-    def get_env_from_sources(self) -> list:
+    def get_env_from_sources(self, secret_name: str = "") -> list:
         from kubernetes import client
         return [
             client.V1EnvFromSource(
                 secret_ref=client.V1SecretEnvSource(
-                    name="crush-secret", optional=True
+                    name=secret_name or "crush-secret", optional=True
                 )
             )
         ]
@@ -224,7 +224,7 @@ class CrushStrategy(AgentToolStrategy):
             ))
         return env
 
-    def get_extra_volumes(self, has_adc: bool) -> list:
+    def get_extra_volumes(self, has_adc: bool, secret_name: str = "") -> list:
         from kubernetes import client
         volumes = []
         if has_adc:
@@ -232,7 +232,7 @@ class CrushStrategy(AgentToolStrategy):
                 client.V1Volume(
                     name="gcloud-creds",
                     secret=client.V1SecretVolumeSource(
-                        secret_name="crush-secret",
+                        secret_name=secret_name or "crush-secret",
                         items=[
                             client.V1KeyToPath(
                                 key="application_default_credentials.json",

@@ -181,12 +181,12 @@ class OpenCodeStrategy(AgentToolStrategy):
             stderr=True, stdin=False, stdout=True, tty=False,
         )
 
-    def get_env_from_sources(self) -> list:
+    def get_env_from_sources(self, secret_name: str = "") -> list:
         from kubernetes import client
         return [
             client.V1EnvFromSource(
                 secret_ref=client.V1SecretEnvSource(
-                    name="opencode-secret", optional=True
+                    name=secret_name or "opencode-secret", optional=True
                 )
             )
         ]
@@ -201,7 +201,7 @@ class OpenCodeStrategy(AgentToolStrategy):
             ))
         return env
 
-    def get_extra_volumes(self, has_adc: bool) -> list:
+    def get_extra_volumes(self, has_adc: bool, secret_name: str = "") -> list:
         from kubernetes import client
         volumes = []
         if has_adc:
@@ -209,7 +209,7 @@ class OpenCodeStrategy(AgentToolStrategy):
                 client.V1Volume(
                     name="gcloud-creds",
                     secret=client.V1SecretVolumeSource(
-                        secret_name="opencode-secret",
+                        secret_name=secret_name or "opencode-secret",
                         items=[
                             client.V1KeyToPath(
                                 key="application_default_credentials.json",
