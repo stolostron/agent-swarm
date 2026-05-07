@@ -114,6 +114,15 @@ Parent epic: [ACM-32892](https://redhat.atlassian.net/browse/ACM-32892) — Impl
   pr: "https://github.com/stolostron/agent-swarm/pull/57"
   summary: "Downgraded missing-pull-secret warnings to debug for public images; added Opus 4.6 back to model lists so existing sessions match"
 
+# ──────────────────────────────────────────────────────────
+- date: "2026-05-07"
+  title: "Move .push-defaults to agent-swarm as source of truth for REGISTRY and IMAGE_TAG"
+  jira: "ACM-33878"
+  jira_url: "https://redhat.atlassian.net/browse/ACM-33878"
+  status: "Done"
+  pr: ~
+  summary: "Moved REGISTRY + IMAGE_TAG source of truth to agent-swarm/.push-defaults (checked in); updated agent-containers Makefile and all 6 scripts to resolve from ../agent-swarm first with local fallback for machine-specific fields"
+
 ## Foundation & Feature Plans
 
 | Plan | Summary | Jira | PR |

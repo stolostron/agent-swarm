@@ -32,8 +32,8 @@ KIND_CLUSTER         ?= swarmer
 OPENSHIFT_OAUTH_URL  ?=
 SWARMER_HOST         ?=
 
-# agent-containers build defaults (registry + image tag shared with sibling repo)
-AC_DEFAULTS ?= ../agent-containers/.push-defaults
+# agent-containers build defaults (registry + image tag — checked in)
+AC_DEFAULTS ?= .push-defaults
 
 # ──────────────────────────────────────────────────────────────
 #  Phony targets
@@ -50,7 +50,7 @@ AC_DEFAULTS ?= ../agent-containers/.push-defaults
 #  Developer tooling
 # ──────────────────────────────────────────────────────────────
 
-sync-images:  ## Sync AGENT_IMAGE / AGENT_IMAGE_OPENCODE / AGENT_IMAGE_PYTHON in .env from ../agent-containers/.push-defaults
+sync-images:  ## Sync AGENT_IMAGE / AGENT_IMAGE_OPENCODE / AGENT_IMAGE_CRUSH in .env from .push-defaults
 	@test -f $(AC_DEFAULTS) || (echo "$(AC_DEFAULTS) not found — run 'make publish' in ../agent-containers first" && exit 1)
 	$(eval AC_REGISTRY := $(shell grep '^REGISTRY=' $(AC_DEFAULTS) | cut -d= -f2-))
 	$(eval AC_TAG      := $(shell grep '^IMAGE_TAG=' $(AC_DEFAULTS) | cut -d= -f2-))
