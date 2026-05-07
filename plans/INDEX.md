@@ -97,6 +97,14 @@ Parent epic: [ACM-32892](https://redhat.atlassian.net/browse/ACM-32892) — Impl
   status: "Done"
   pr: "https://github.com/stolostron/agent-swarm/pull/54"
   summary: "Replaced entire OAuth flow with API token form (server URL, token, email); added Jira API probe validation + 60s auto-refresh; expired tokens greyed out in session views; cleaned up all OAuth model columns, properties, and legacy HTTP branches"
+# ──────────────────────────────────────────────────────────
+- date: "2026-05-07"
+  title: "Upgrade Opus model from claude-opus-4-6 to claude-opus-4-7 in Crush and OpenCode tools"
+  jira: "ACM-33695"
+  jira_url: "https://redhat.atlassian.net/browse/ACM-33695"
+  status: "Done"
+  pr: "https://github.com/stolostron/agent-swarm/pull/55"
+  summary: "Replace all claude-opus-4-6 model IDs with claude-opus-4-7 in swarmer/agent_tools/crush.py and opencode.py"
 
 ## Foundation & Feature Plans
 
