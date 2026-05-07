@@ -95,7 +95,7 @@ Parent epic: [ACM-32892](https://redhat.atlassian.net/browse/ACM-32892) — Impl
   jira: "ACM-33691"
   jira_url: "https://redhat.atlassian.net/browse/ACM-33691"
   status: "Done"
-  pr: ~
+  pr: "https://github.com/stolostron/agent-swarm/pull/54"
   summary: "Replaced entire OAuth flow with API token form (server URL, token, email); added Jira API probe validation + 60s auto-refresh; expired tokens greyed out in session views; cleaned up all OAuth model columns, properties, and legacy HTTP branches"
 
 ## Foundation & Feature Plans
