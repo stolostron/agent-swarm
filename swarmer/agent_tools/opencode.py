@@ -135,6 +135,7 @@ class OpenCodeStrategy(AgentToolStrategy):
         _CLAUDE_MODELS = [
             ("google-vertex-anthropic/claude-haiku-4-5@20251001", "Claude Haiku 4.5 (fast)"),
             ("google-vertex-anthropic/claude-sonnet-4-6@default", "Claude Sonnet 4.6 (balanced)"),
+            ("google-vertex-anthropic/claude-opus-4-6@default", "Claude Opus 4.6"),
             ("google-vertex-anthropic/claude-opus-4-7@default", "Claude Opus 4.7 (most capable)"),
         ]
         options = []

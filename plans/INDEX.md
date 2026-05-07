@@ -105,6 +105,14 @@ Parent epic: [ACM-32892](https://redhat.atlassian.net/browse/ACM-32892) — Impl
   status: "Done"
   pr: "https://github.com/stolostron/agent-swarm/pull/55"
   summary: "Replace all claude-opus-4-6 model IDs with claude-opus-4-7 in swarmer/agent_tools/crush.py and opencode.py"
+# ──────────────────────────────────────────────────────────
+- date: "2026-05-07"
+  title: "Clean up image reachability check logs for public images"
+  jira: "ACM-33706"
+  jira_url: "https://redhat.atlassian.net/browse/ACM-33706"
+  status: "In Progress"
+  pr: ~
+  summary: "Downgrade missing-pull-secret warnings to debug in check_image_reachable since agent images are now public"
 
 ## Foundation & Feature Plans
 

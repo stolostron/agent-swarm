@@ -409,7 +409,7 @@ def delete_pull_secret(namespace: str) -> None:
 
 
 async def check_image_reachable(image: str, namespace: str) -> bool:
-    """Return True if the image manifest is accessible using the workspace pull secret."""
+    """Return True if the image manifest is accessible (with or without a pull secret)."""
     import json
     import httpx
     from kubernetes import client as k8s_client
@@ -454,8 +454,15 @@ async def check_image_reachable(image: str, namespace: str) -> bool:
         if auth_b64:
             log.debug("check_image_reachable: pull secret found, auth present for registry=%s", registry)
         else:
-            log.warning("check_image_reachable: pull secret found in %s but no auth entry for registry=%s (auths keys=%s)",
-                        namespace, registry, list(auths.keys()))
+            log.debug("check_image_reachable: pull secret in %s has no auth entry for registry=%s (auths keys=%s)",
+                      namespace, registry, list(auths.keys()))
+    except k8s_client.exceptions.ApiException as exc:
+        if exc.status == 404:
+            log.debug("check_image_reachable: no pull secret %s/%s — will try anonymous access",
+                      namespace, PULL_SECRET_NAME)
+        else:
+            log.warning("check_image_reachable: could not read pull secret %s/%s: %s",
+                        namespace, PULL_SECRET_NAME, exc)
     except Exception as exc:
         log.warning("check_image_reachable: could not read pull secret %s/%s: %s",
                     namespace, PULL_SECRET_NAME, exc)
