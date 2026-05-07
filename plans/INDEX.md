@@ -110,9 +110,9 @@ Parent epic: [ACM-32892](https://redhat.atlassian.net/browse/ACM-32892) — Impl
   title: "Clean up image reachability check logs for public images"
   jira: "ACM-33706"
   jira_url: "https://redhat.atlassian.net/browse/ACM-33706"
-  status: "In Progress"
-  pr: ~
-  summary: "Downgrade missing-pull-secret warnings to debug in check_image_reachable since agent images are now public"
+  status: "Done"
+  pr: "https://github.com/stolostron/agent-swarm/pull/57"
+  summary: "Downgraded missing-pull-secret warnings to debug for public images; added Opus 4.6 back to model lists so existing sessions match"
 
 ## Foundation & Feature Plans
 
