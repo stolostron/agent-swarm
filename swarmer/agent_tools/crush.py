@@ -42,6 +42,12 @@ class CrushStrategy(AgentToolStrategy):
         return "Crush"
 
     def get_image(self) -> str:
+        if not settings.agent_image_crush:
+            raise ValueError(
+                "AGENT_IMAGE_CRUSH is not set. "
+                "Set it in .env or as an environment variable to the Crush container image "
+                "(e.g. quay.io/jpacker/crush:0.2.1)."
+            )
         return settings.agent_image_crush
 
     def get_config_map_name(self) -> str:
