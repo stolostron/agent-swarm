@@ -51,7 +51,7 @@ AC_DEFAULTS ?= .push-defaults
 # ──────────────────────────────────────────────────────────────
 
 sync-images:  ## Sync AGENT_IMAGE / AGENT_IMAGE_OPENCODE / AGENT_IMAGE_CRUSH in .env from .push-defaults
-	@test -f $(AC_DEFAULTS) || (echo "$(AC_DEFAULTS) not found — run 'make publish' in ../agent-containers first" && exit 1)
+	@test -f $(AC_DEFAULTS) || (echo "$(AC_DEFAULTS) not found — create/update .push-defaults first" && exit 1)
 	$(eval AC_REGISTRY := $(shell grep '^REGISTRY=' $(AC_DEFAULTS) | cut -d= -f2-))
 	$(eval AC_TAG      := $(shell grep '^IMAGE_TAG=' $(AC_DEFAULTS) | cut -d= -f2-))
 	@echo "Syncing agent images → $(AC_REGISTRY)/{opencode,crush}:$(AC_TAG)"
