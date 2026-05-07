@@ -527,7 +527,7 @@ async def _do_launch(session: Session, ws: Workspace, db: AsyncSession) -> None:
         mcp_servers = ws_mcp_servers
 
     # Sync MCP server tokens to K8s secret and update agent config
-    if mcp_servers is not None:
+    if mcp_servers:
         from swarmer import k8s as _k8s2
         try:
             await asyncio.to_thread(_k8s2.sync_mcp_server_secret, ws.k8s_namespace, mcp_servers)

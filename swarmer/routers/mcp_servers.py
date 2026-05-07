@@ -1,4 +1,6 @@
+import ipaddress
 import logging
+from urllib.parse import urlparse
 
 import httpx
 from fastapi import APIRouter, Depends, Form, Request
@@ -135,7 +137,11 @@ async def mcp_server_save_config(
 
     probe_token = jira_access_token or server.jira_access_token
     valid = await _probe_jira_token(jira_server_url, jira_email, probe_token)
-    server.token_expires_at = None
+    if valid:
+        server.token_expires_at = None
+    else:
+        from datetime import datetime
+        server.token_expires_at = datetime.utcnow()
     await db.commit()
     await _sync_mcp_to_k8s(ws_id, db, request)
 
@@ -247,8 +253,30 @@ async def mcp_server_delete(
 # Helpers
 # ============================================================
 
+def _is_safe_url(url: str) -> bool:
+    """Reject non-HTTPS URLs and those targeting localhost/private/link-local addresses."""
+    parsed = urlparse(url)
+    if parsed.scheme != "https":
+        return False
+    hostname = parsed.hostname
+    if not hostname:
+        return False
+    try:
+        addr = ipaddress.ip_address(hostname)
+        if addr.is_private or addr.is_loopback or addr.is_link_local or addr.is_reserved:
+            return False
+    except ValueError:
+        # hostname is a DNS name — block obvious localhost aliases
+        if hostname in ("localhost", "localhost.localdomain"):
+            return False
+    return True
+
+
 async def _probe_jira_token(server_url: str, email: str, token: str) -> bool:
     """Validate a Jira API token by calling GET /rest/api/3/myself."""
+    if not _is_safe_url(server_url):
+        log.warning("Rejected probe to disallowed URL: %s", server_url)
+        return False
     try:
         async with httpx.AsyncClient(timeout=15) as client:
             resp = await client.get(
@@ -261,12 +289,18 @@ async def _probe_jira_token(server_url: str, email: str, token: str) -> bool:
 
 
 async def get_enabled_mcp_servers(workspace_id: int, db: AsyncSession) -> list[McpServer]:
-    """Return all enabled & authenticated MCP servers for a workspace (including expired)."""
+    """Return all enabled & authenticated MCP servers for a workspace (excluding expired)."""
+    from sqlalchemy import or_
+    from datetime import datetime
     result = await db.execute(
         select(McpServer).where(
             McpServer.workspace_id == workspace_id,
             McpServer.enabled == True,  # noqa: E712
             McpServer.jira_access_token_enc != "",
+            or_(
+                McpServer.token_expires_at == None,  # noqa: E711
+                McpServer.token_expires_at > datetime.utcnow(),
+            ),
         )
     )
     return list(result.scalars().all())
