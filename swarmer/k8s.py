@@ -266,6 +266,59 @@ def sync_mcp_server_secret(namespace: str, mcp_servers) -> None:
         _delete_secret(namespace, MCP_SECRET_NAME)
 
 
+# ---------- Session-scoped secret helpers ----------
+
+def create_session_agent_secret(
+    namespace: str, secret_name: str, secret, agent_tool: str = "opencode"
+) -> None:
+    """Create a session-scoped K8s Secret for the agent tool's credentials."""
+    from swarmer.agent_tools.registry import get as get_tool
+
+    tool = get_tool(agent_tool)
+    data = tool.build_k8s_secret_data(secret)
+    if data:
+        _apply_secret(namespace, secret_name, data)
+
+
+def create_session_pat_secret(
+    namespace: str, secret_name: str, pat
+) -> None:
+    """Create a session-scoped K8s Secret for a GitHub PAT."""
+    _apply_secret(
+        namespace,
+        secret_name,
+        {
+            "GITHUB_PAT": _b64(pat.pat),
+            "GITHUB_USERNAME": _b64(pat.github_username),
+        },
+    )
+
+
+def create_session_mcp_secret(
+    namespace: str, secret_name: str, mcp_servers
+) -> None:
+    """Create a session-scoped K8s Secret for MCP server credentials."""
+    data = {}
+    for srv in mcp_servers:
+        if srv.jira_access_token_enc:
+            data["JIRA_SERVER_URL"] = _b64(srv.jira_server_url)
+            data["JIRA_ACCESS_TOKEN"] = _b64(srv.jira_access_token)
+            data["JIRA_EMAIL"] = _b64(srv.jira_email)
+    if data:
+        _apply_secret(namespace, secret_name, data)
+
+
+def cleanup_session_secrets(namespace: str, session) -> None:
+    """Delete all K8s Secrets associated with a session."""
+    if not session.k8s_secret_names:
+        return
+    for name in session.k8s_secret_names.split(","):
+        name = name.strip()
+        if name:
+            _delete_secret(namespace, name)
+    session.k8s_secret_names = ""
+
+
 # ---------- Pod / PVC helpers (used by sessions) ----------
 
 # Maps the coarse K8s pod phase to our internal phase vocabulary

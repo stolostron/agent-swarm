@@ -12,7 +12,11 @@ class OpencodeSecret(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     workspace_id: Mapped[int] = mapped_column(
-        Integer, ForeignKey("workspaces.id"), unique=True, nullable=False
+        Integer, ForeignKey("workspaces.id"), nullable=False
+    )
+    user_id: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
+    shared: Mapped[bool] = mapped_column(
+        nullable=False, default=False, server_default="0"
     )
     google_cloud_project: Mapped[str] = mapped_column(Text, nullable=False, default="")
     vertex_location: Mapped[str] = mapped_column(Text, nullable=False, default="")

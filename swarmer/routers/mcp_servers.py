@@ -6,7 +6,7 @@ import httpx
 from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -42,7 +42,14 @@ async def mcp_servers_list(
         return RedirectResponse(url="/workspaces", status_code=302)
 
     result = await db.execute(
-        select(McpServer).where(McpServer.workspace_id == ws_id).order_by(McpServer.display_name)
+        select(McpServer).where(
+            McpServer.workspace_id == ws_id,
+            or_(
+                McpServer.user_id == request.session.get("username", ""),
+                McpServer.shared == True,  # noqa: E712
+                McpServer.user_id == "",
+            ),
+        ).order_by(McpServer.display_name)
     )
     servers = result.scalars().all()
 
@@ -83,6 +90,7 @@ async def mcp_server_add_from_catalog(
         server_url=entry.get("server_url", ""),
         server_type=entry.get("server_type", "http"),
         jira_server_url=entry.get("default_jira_server_url", ""),
+        user_id=request.session.get("username", ""),
     )
     db.add(server)
     try:
@@ -288,21 +296,32 @@ async def _probe_jira_token(server_url: str, email: str, token: str) -> bool:
         return False
 
 
-async def get_enabled_mcp_servers(workspace_id: int, db: AsyncSession) -> list[McpServer]:
-    """Return all enabled & authenticated MCP servers for a workspace (excluding expired)."""
+async def get_enabled_mcp_servers(workspace_id: int, db: AsyncSession, user_id: str = "") -> list[McpServer]:
+    """Return all enabled & authenticated MCP servers for a workspace (excluding expired).
+
+    When *user_id* is provided, only servers owned by that user, shared servers,
+    and legacy servers (user_id='') are returned.
+    """
     from sqlalchemy import or_
     from datetime import datetime
-    result = await db.execute(
-        select(McpServer).where(
-            McpServer.workspace_id == workspace_id,
-            McpServer.enabled == True,  # noqa: E712
-            McpServer.jira_access_token_enc != "",
+    filters = [
+        McpServer.workspace_id == workspace_id,
+        McpServer.enabled == True,  # noqa: E712
+        McpServer.jira_access_token_enc != "",
+        or_(
+            McpServer.token_expires_at == None,  # noqa: E711
+            McpServer.token_expires_at > datetime.utcnow(),
+        ),
+    ]
+    if user_id:
+        filters.append(
             or_(
-                McpServer.token_expires_at == None,  # noqa: E711
-                McpServer.token_expires_at > datetime.utcnow(),
-            ),
+                McpServer.user_id == user_id,
+                McpServer.shared == True,  # noqa: E712
+                McpServer.user_id == "",
+            )
         )
-    )
+    result = await db.execute(select(McpServer).where(*filters))
     return list(result.scalars().all())
 
 
@@ -316,7 +335,7 @@ async def _sync_mcp_to_k8s(ws_id: int, db: AsyncSession, request: Request) -> No
     if ws is None:
         return
 
-    mcp_servers = await get_enabled_mcp_servers(ws_id, db)
+    mcp_servers = await get_enabled_mcp_servers(ws_id, db, user_id=request.session.get("username", ""))
 
     oc_result = await db.execute(
         select(OpencodeSecret).where(OpencodeSecret.workspace_id == ws_id)
@@ -324,7 +343,6 @@ async def _sync_mcp_to_k8s(ws_id: int, db: AsyncSession, request: Request) -> No
     oc_secret = oc_result.scalar_one_or_none()
 
     try:
-        _k8s.sync_mcp_server_secret(ws.k8s_namespace, mcp_servers)
         for tool in all_tools():
             _k8s.apply_agent_config(
                 ws.k8s_namespace, secret=oc_secret,

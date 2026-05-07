@@ -15,6 +15,10 @@ class McpServer(Base):
     workspace_id: Mapped[int] = mapped_column(
         Integer, ForeignKey("workspaces.id"), nullable=False
     )
+    user_id: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
+    shared: Mapped[bool] = mapped_column(
+        nullable=False, default=False, server_default="0"
+    )
     slug: Mapped[str] = mapped_column(Text, nullable=False)
     display_name: Mapped[str] = mapped_column(Text, nullable=False)
     server_url: Mapped[str] = mapped_column(Text, nullable=False)

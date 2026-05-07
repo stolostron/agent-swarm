@@ -64,6 +64,8 @@ class Session(Base):
     cron_schedule: Mapped[str] = mapped_column(String(128), nullable=False, default="", server_default="")
     cron_next_run: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     mcp_server_ids: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
+    # Comma-separated list of K8s Secret names created for this session (for cleanup)
+    k8s_secret_names: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
     # Runtime state — managed by dashboard
     pod_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     pvc_name: Mapped[str | None] = mapped_column(String(255), nullable=True)

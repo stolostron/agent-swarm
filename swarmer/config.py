@@ -13,7 +13,6 @@ class Settings(BaseSettings):
     agent_image: str = ""
     agent_image_opencode: str = ""
     agent_image_crush: str = ""
-    crush_version: str = "0.57.0"
     default_agent_tool: str = "opencode"
     crush_server_port: int = 4096
     agent_image_pull_secret: str = ""

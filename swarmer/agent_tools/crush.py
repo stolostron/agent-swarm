@@ -42,6 +42,12 @@ class CrushStrategy(AgentToolStrategy):
         return "Crush"
 
     def get_image(self) -> str:
+        if not settings.agent_image_crush:
+            raise ValueError(
+                "AGENT_IMAGE_CRUSH is not set. "
+                "Set it in .env or as an environment variable to the Crush container image "
+                "(e.g. quay.io/jpacker/crush:0.2.1)."
+            )
         return settings.agent_image_crush
 
     def get_config_map_name(self) -> str:
@@ -93,20 +99,10 @@ class CrushStrategy(AgentToolStrategy):
         return "$HOME/.local/share/crush"
 
     def build_share_setup_cmd(self) -> str:
-        crush_version = getattr(settings, "crush_version", "0.57.0")
         return (
-            "mkdir -p /workspace/.crush $HOME/.local/share $HOME/.local/bin && "
+            "mkdir -p /workspace/.crush $HOME/.local/share && "
             "rm -rf $HOME/.local/share/crush && "
             "ln -sf /workspace/.crush $HOME/.local/share/crush && "
-            "export PATH=\"$HOME/.local/bin:$PATH\" && "
-            "if ! command -v crush >/dev/null 2>&1; then "
-            f"echo 'Downloading Crush v{crush_version}...' && "
-            f"curl -fsSL 'https://github.com/charmbracelet/crush/releases/download/v{crush_version}"
-            f"/crush_{crush_version}_Linux_x86_64.tar.gz' "
-            "| tar -xz --strip-components=1 -C $HOME/.local/bin "
-            f"crush_{crush_version}_Linux_x86_64/crush && "
-            "chmod +x $HOME/.local/bin/crush; "
-            "fi && "
         )
 
     def build_model_setup_cmd(self, model: str) -> str:
@@ -204,12 +200,12 @@ class CrushStrategy(AgentToolStrategy):
     def exec_model_update(self, pod_name: str, namespace: str, model: str) -> None:
         pass
 
-    def get_env_from_sources(self) -> list:
+    def get_env_from_sources(self, secret_name: str = "") -> list:
         from kubernetes import client
         return [
             client.V1EnvFromSource(
                 secret_ref=client.V1SecretEnvSource(
-                    name="crush-secret", optional=True
+                    name=secret_name or "crush-secret", optional=True
                 )
             )
         ]
@@ -224,7 +220,7 @@ class CrushStrategy(AgentToolStrategy):
             ))
         return env
 
-    def get_extra_volumes(self, has_adc: bool) -> list:
+    def get_extra_volumes(self, has_adc: bool, secret_name: str = "") -> list:
         from kubernetes import client
         volumes = []
         if has_adc:
@@ -232,7 +228,7 @@ class CrushStrategy(AgentToolStrategy):
                 client.V1Volume(
                     name="gcloud-creds",
                     secret=client.V1SecretVolumeSource(
-                        secret_name="crush-secret",
+                        secret_name=secret_name or "crush-secret",
                         items=[
                             client.V1KeyToPath(
                                 key="application_default_credentials.json",

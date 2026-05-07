@@ -15,6 +15,10 @@ class GitHubPAT(Base):
     workspace_id: Mapped[int] = mapped_column(
         Integer, ForeignKey("workspaces.id"), nullable=False
     )
+    user_id: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
+    shared: Mapped[bool] = mapped_column(
+        nullable=False, default=False, server_default="0"
+    )
     name: Mapped[str] = mapped_column(Text, nullable=False)
     github_username: Mapped[str] = mapped_column(Text, nullable=False)
     github_org: Mapped[str] = mapped_column(Text, nullable=False, default="")

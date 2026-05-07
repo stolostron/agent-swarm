@@ -10,7 +10,7 @@ import httpx
 from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -63,6 +63,28 @@ async def _get_model_options(
 router = APIRouter()
 templates = Jinja2Templates(directory="swarmer/templates")
 templates.env.filters['ansi_to_html'] = ansi_to_html
+
+
+def _current_user(request: Request) -> str:
+    """Return the K8s username from the session, or '' if not set."""
+    return request.session.get("username", "")
+
+
+async def _visible_pats(ws_id: int, db: AsyncSession, user_id: str = "") -> list:
+    """Return PATs visible to the given user (own + shared + legacy)."""
+    filters = [GitHubPAT.workspace_id == ws_id]
+    if user_id:
+        filters.append(
+            or_(
+                GitHubPAT.user_id == user_id,
+                GitHubPAT.shared == True,  # noqa: E712
+                GitHubPAT.user_id == "",
+            )
+        )
+    result = await db.execute(
+        select(GitHubPAT).where(*filters).order_by(GitHubPAT.name)
+    )
+    return list(result.scalars().all())
 
 
 async def _get_workspace(ws_id: int, db: AsyncSession) -> Workspace | None:
@@ -202,10 +224,7 @@ async def session_new(
     ws = await _get_workspace(ws_id, db)
     if ws is None:
         return RedirectResponse(url="/workspaces", status_code=302)
-    pats_result = await db.execute(
-        select(GitHubPAT).where(GitHubPAT.workspace_id == ws_id).order_by(GitHubPAT.name)
-    )
-    pats = pats_result.scalars().all()
+    pats = await _visible_pats(ws_id, db, user_id=_current_user(request))
     _tools = all_tools()
     try:
         default_agent_tool = get_tool(settings.default_agent_tool).name
@@ -216,7 +235,7 @@ async def session_new(
         *[k8s.get_image_available(t.get_image(), ws.k8s_namespace) for t in _tools]
     )
     from swarmer.routers.mcp_servers import get_enabled_mcp_servers
-    mcp_servers = await get_enabled_mcp_servers(ws_id, db)
+    mcp_servers = await get_enabled_mcp_servers(ws_id, db, user_id=_current_user(request))
     return templates.TemplateResponse(
         request,
         "sessions/new.html",
@@ -299,10 +318,7 @@ async def session_create(
             await db.commit()
     except IntegrityError:
         await db.rollback()
-        pats_result = await db.execute(
-            select(GitHubPAT).where(GitHubPAT.workspace_id == ws_id)
-        )
-        pats = pats_result.scalars().all()
+        pats = await _visible_pats(ws_id, db, user_id=_current_user(request))
         _tools = all_tools()
         try:
             default_agent_tool = get_tool(settings.default_agent_tool).name
@@ -351,10 +367,7 @@ async def session_detail(
     if ws is None or session is None or session.workspace_id != ws_id:
         return RedirectResponse(url=f"/workspaces/{ws_id}/sessions", status_code=302)
 
-    pats_result = await db.execute(
-        select(GitHubPAT).where(GitHubPAT.workspace_id == ws_id).order_by(GitHubPAT.name)
-    )
-    pats = pats_result.scalars().all()
+    pats = await _visible_pats(ws_id, db, user_id=_current_user(request))
 
     # Fetch live K8s detail for the initial page render and sync phase
     status_detail = ""
@@ -385,7 +398,7 @@ async def session_detail(
     except ValueError:
         canonical_agent_tool = session.agent_tool
     from swarmer.routers.mcp_servers import get_enabled_mcp_servers
-    mcp_servers = await get_enabled_mcp_servers(ws_id, db)
+    mcp_servers = await get_enabled_mcp_servers(ws_id, db, user_id=_current_user(request))
     return templates.TemplateResponse(
         request,
         "sessions/detail.html",
@@ -482,7 +495,7 @@ async def session_edit(
 # Launch / Stop
 # ============================================================
 
-async def _do_launch(session: Session, ws: Workspace, db: AsyncSession) -> None:
+async def _do_launch(session: Session, ws: Workspace, db: AsyncSession, user_id: str = "") -> None:
     """Core launch logic shared by the HTTP endpoint and the background scheduler."""
     import secrets as _secrets
     session.last_output = ""
@@ -499,16 +512,33 @@ async def _do_launch(session: Session, ws: Workspace, db: AsyncSession) -> None:
     await asyncio.to_thread(_k8s._grant_anyuid_scc, ws.k8s_namespace)
 
     from swarmer.models.opencode_secret import OpencodeSecret
+    _user_filter = [OpencodeSecret.workspace_id == session.workspace_id]
+    if user_id:
+        _user_filter.append(
+            or_(
+                OpencodeSecret.user_id == user_id,
+                OpencodeSecret.shared == True,  # noqa: E712
+                OpencodeSecret.user_id == "",
+            )
+        )
     oc_result = await db.execute(
-        select(OpencodeSecret).where(OpencodeSecret.workspace_id == session.workspace_id)
+        select(OpencodeSecret).where(*_user_filter)
     )
-    oc_secret = oc_result.scalar_one_or_none()
+    _oc_all = oc_result.scalars().all()
+    oc_secret = None
+    if user_id:
+        for s in _oc_all:
+            if s.user_id == user_id:
+                oc_secret = s
+                break
+    if oc_secret is None and _oc_all:
+        oc_secret = _oc_all[0]
     has_adc = oc_secret.has_adc if oc_secret else False
     has_gemini = bool(oc_secret and oc_secret.google_api_key_enc)
 
     # Fetch enabled & authenticated MCP servers for this workspace
     from swarmer.routers.mcp_servers import get_enabled_mcp_servers
-    all_ws_mcp = await get_enabled_mcp_servers(session.workspace_id, db)
+    all_ws_mcp = await get_enabled_mcp_servers(session.workspace_id, db, user_id=user_id)
     ws_mcp_servers = [s for s in all_ws_mcp if s.auth_status != "expired"]
 
     # Filter to only the MCP servers enabled for this specific session
@@ -530,14 +560,68 @@ async def _do_launch(session: Session, ws: Workspace, db: AsyncSession) -> None:
     if mcp_servers:
         from swarmer import k8s as _k8s2
         try:
-            await asyncio.to_thread(_k8s2.sync_mcp_server_secret, ws.k8s_namespace, mcp_servers)
             await asyncio.to_thread(
                 _k8s2.apply_agent_config, ws.k8s_namespace,
                 secret=oc_secret, agent_tool=session.agent_tool, mcp_servers=mcp_servers,
             )
         except Exception:
-            log.warning("MCP server sync failed, continuing launch without MCP", exc_info=True)
+            log.warning("MCP config sync failed, continuing launch without MCP", exc_info=True)
             mcp_servers = []
+
+    # ---------- Create session-scoped K8s Secrets ----------
+    secret_names = []
+    _agent_secret_name = ""
+    _pat_secret_name = ""
+    _mcp_secret_name = ""
+
+    # Determine suffix: CronJob sessions use a fixed suffix for secret persistence
+    if session.cron_schedule:
+        secret_suffix = f"s{session.id}-cron"
+    else:
+        secret_suffix = f"s{session.id}-{suffix}"
+
+    # 1. Agent tool secret (AI credentials)
+    if oc_secret:
+        from swarmer.agent_tools.registry import get as _get_tool
+        _tool = _get_tool(session.agent_tool)
+        _agent_secret_name = f"{_tool.get_secret_name()}-{secret_suffix}"
+        try:
+            await asyncio.to_thread(
+                k8s.create_session_agent_secret,
+                ws.k8s_namespace, _agent_secret_name, oc_secret, session.agent_tool,
+            )
+            secret_names.append(_agent_secret_name)
+        except Exception:
+            log.warning("Session agent secret creation failed", exc_info=True)
+            _agent_secret_name = ""
+
+    # 2. GitHub PAT secret
+    if session.github_pat:
+        _pat_secret_name = f"{session.github_pat.k8s_secret_name}-{secret_suffix}"
+        try:
+            await asyncio.to_thread(
+                k8s.create_session_pat_secret,
+                ws.k8s_namespace, _pat_secret_name, session.github_pat,
+            )
+            secret_names.append(_pat_secret_name)
+        except Exception:
+            log.warning("Session PAT secret creation failed", exc_info=True)
+            _pat_secret_name = ""
+
+    # 3. MCP server tokens
+    if mcp_servers:
+        _mcp_secret_name = f"{k8s.MCP_SECRET_NAME}-{secret_suffix}"
+        try:
+            await asyncio.to_thread(
+                k8s.create_session_mcp_secret,
+                ws.k8s_namespace, _mcp_secret_name, mcp_servers,
+            )
+            secret_names.append(_mcp_secret_name)
+        except Exception:
+            log.warning("Session MCP secret creation failed", exc_info=True)
+            _mcp_secret_name = ""
+
+    session.k8s_secret_names = ",".join(secret_names)
 
     pod_spec = k8s_sess.build_session_pod(
         session=session,
@@ -550,6 +634,9 @@ async def _do_launch(session: Session, ws: Workspace, db: AsyncSession) -> None:
         privileged=session.privileged,
         agent_tool=session.agent_tool,
         mcp_servers=mcp_servers,
+        agent_secret_name=_agent_secret_name,
+        pat_secret_name=_pat_secret_name,
+        mcp_secret_name=_mcp_secret_name,
     )
     from kubernetes import client as k8s_client
 
@@ -634,7 +721,7 @@ async def session_launch(
             pass
 
     try:
-        await _do_launch(session, ws, db)
+        await _do_launch(session, ws, db, user_id=request.session.get("username", ""))
     except Exception as exc:
         log.error("session_launch failed for session %d: %s", sid, exc, exc_info=True)
         flash(request, f"Launch failed: {exc}", "danger")
@@ -679,6 +766,13 @@ async def session_stop(
             session.pvc_name = None
         except Exception as exc:
             flash(request, f"PVC deletion failed: {exc}", "warning")
+
+    # Clean up session-scoped K8s Secrets (skip for scheduled sessions — they reuse secrets)
+    if not session.cron_schedule:
+        try:
+            k8s.cleanup_session_secrets(ws.k8s_namespace, session)
+        except Exception as exc:
+            flash(request, f"Secret cleanup failed: {exc}", "warning")
 
     session.run_completed_at = datetime.utcnow()
     session.phase = "stopped"
@@ -751,6 +845,14 @@ async def session_unschedule(
 
     session.cron_schedule = ""
     session.cron_next_run = None
+
+    # Clean up CronJob-persistent secrets when schedule is removed
+    if session.k8s_secret_names:
+        try:
+            k8s.cleanup_session_secrets(ws.k8s_namespace, session)
+        except Exception:
+            log.warning("Failed to clean up cron secrets for session %d", sid, exc_info=True)
+
     await db.commit()
 
     flash(request, "Schedule cancelled.", "success")
@@ -879,6 +981,12 @@ async def session_delete(
             k8s_sess.delete_session_pvc(ws.k8s_namespace, session.pvc_name)
         except Exception as exc:
             flash(request, f"PVC deletion failed: {exc}", "warning")
+
+    # Clean up any remaining session-scoped K8s Secrets
+    try:
+        k8s.cleanup_session_secrets(ws.k8s_namespace, session)
+    except Exception as exc:
+        flash(request, f"Secret cleanup failed: {exc}", "warning")
 
     await db.delete(session)
     await db.commit()

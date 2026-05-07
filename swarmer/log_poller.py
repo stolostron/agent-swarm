@@ -85,6 +85,13 @@ async def _auto_cleanup_pod(session_id: int, pod_name: str, namespace: str) -> N
                         session.pvc_name = None
                     except Exception:
                         log.exception("log_poller: PVC auto-deletion failed for session %d", session_id)
+                # Clean up session-scoped K8s Secrets (skip for scheduled sessions)
+                if not session.cron_schedule and session.k8s_secret_names:
+                    try:
+                        await asyncio.to_thread(k8s.cleanup_session_secrets, namespace, session)
+                        log.info("log_poller: auto-deleted secrets for session %d", session_id)
+                    except Exception:
+                        log.exception("log_poller: secret auto-deletion failed for session %d", session_id)
                 await db.commit()
             break
     except Exception:

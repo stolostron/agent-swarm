@@ -82,7 +82,7 @@ class AgentToolStrategy(ABC):
         ...
 
     @abstractmethod
-    def get_env_from_sources(self) -> list:
+    def get_env_from_sources(self, secret_name: str = "") -> list:
         ...
 
     @abstractmethod
@@ -90,7 +90,7 @@ class AgentToolStrategy(ABC):
         ...
 
     @abstractmethod
-    def get_extra_volumes(self, has_adc: bool) -> list:
+    def get_extra_volumes(self, has_adc: bool, secret_name: str = "") -> list:
         ...
 
     @abstractmethod
