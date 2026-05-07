@@ -52,6 +52,9 @@ async def migrate_db() -> None:
         "ALTER TABLE sessions ADD COLUMN cron_next_run DATETIME",
         "ALTER TABLE github_pats ADD COLUMN github_org TEXT NOT NULL DEFAULT ''",
         "ALTER TABLE sessions ADD COLUMN mcp_server_ids TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE mcp_servers ADD COLUMN jira_server_url TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE mcp_servers ADD COLUMN jira_access_token_enc TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE mcp_servers ADD COLUMN jira_email TEXT NOT NULL DEFAULT ''",
     ]
     async with _engine.begin() as conn:
         for stmt in migrations:

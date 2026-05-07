@@ -89,6 +89,15 @@ Parent epic: [ACM-32892](https://redhat.atlassian.net/browse/ACM-32892) — Impl
   pr: "https://github.com/stolostron/agent-swarm/pull/53"
   summary: "Extended sync-images to also write AGENT_IMAGE_CRUSH=$(REGISTRY)/crush:$(TAG) into .env from agent-containers/.push-defaults, replacing the hardcoded ghcr.io/gurnben/crush-container:latest"
 
+# ──────────────────────────────────────────────────────────
+- date: "2026-05-06"
+  title: "Add Jira API token auth to replace OAuth flow for jira-mcp-server binary"
+  jira: "ACM-33691"
+  jira_url: "https://redhat.atlassian.net/browse/ACM-33691"
+  status: "Done"
+  pr: ~
+  summary: "Replaced entire OAuth flow with API token form (server URL, token, email); added Jira API probe validation + 60s auto-refresh; expired tokens greyed out in session views; cleaned up all OAuth model columns, properties, and legacy HTTP branches"
+
 ## Foundation & Feature Plans
 
 | Plan | Summary | Jira | PR |

@@ -195,12 +195,23 @@
           <div class="pf-v6-c-check" style="margin-bottom:var(--pf-t--global--spacer--xs);">
             <input class="pf-v6-c-check__input" type="checkbox"
                    name="mcp_server_ids" value="{{ srv.id }}"
-                   id="mcp-{{ srv.id }}" checked>
+                   id="mcp-{{ srv.id }}"
+                   {{ 'checked' if srv.auth_status != 'expired' }}
+                   {{ 'disabled' if srv.auth_status == 'expired' }}>
             <label class="pf-v6-c-check__label" for="mcp-{{ srv.id }}">
               {{ srv.display_name }}
+              {% if srv.auth_status == "expired" %}
+              <a href="/workspaces/{{ ws.id }}/mcp-servers" class="pf-v6-c-label pf-m-gold" style="margin-left:var(--pf-t--global--spacer--xs); text-decoration:none;">
+                <span class="pf-v6-c-label__content">Token expired</span>
+              </a>
+              {% elif srv.auth_status == "active" %}
+              <a href="/workspaces/{{ ws.id }}/mcp-servers" class="pf-v6-c-label pf-m-green" style="margin-left:var(--pf-t--global--spacer--xs); text-decoration:none;">
+                <span class="pf-v6-c-label__content">Connected</span>
+              </a>
+              {% endif %}
             </label>
             <span class="pf-v6-c-check__description" style="font-size:var(--pf-t--global--font--size--sm);">
-              <code>{{ srv.server_url }}</code>
+              <code>{{ srv.jira_server_url or srv.server_url or srv.slug }}</code>
             </span>
           </div>
           {% endfor %}

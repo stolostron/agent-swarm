@@ -290,7 +290,7 @@ def build_session_pod(
     # ---------- envFrom ----------
     env_from = tool.get_env_from_sources()
 
-    # Inject MCP server OAuth tokens from the shared K8s secret
+    # Inject MCP server credentials from the shared K8s secret
     if mcp_servers:
         from swarmer.k8s import MCP_SECRET_NAME
         env_from.append(

@@ -252,20 +252,13 @@ MCP_SECRET_NAME = "mcp-server-tokens"
 
 
 def sync_mcp_server_secret(namespace: str, mcp_servers) -> None:
-    """Create or update the K8s Secret containing MCP server OAuth tokens.
-
-    Each enabled & authenticated MCP server gets an entry keyed by its
-    environment variable name (e.g. MCP_TOKEN_ATLASSIAN_JIRA).
-    """
-    import re
-
+    """Create or update the K8s Secret containing MCP server credentials."""
     data = {}
     for srv in mcp_servers:
-        if not srv.access_token_enc:
-            continue
-        clean = re.sub(r"[^a-zA-Z0-9]+", "_", srv.slug).strip("_").upper()
-        env_key = f"MCP_TOKEN_{clean}"
-        data[env_key] = _b64(srv.access_token)
+        if srv.jira_access_token_enc:
+            data["JIRA_SERVER_URL"] = _b64(srv.jira_server_url)
+            data["JIRA_ACCESS_TOKEN"] = _b64(srv.jira_access_token)
+            data["JIRA_EMAIL"] = _b64(srv.jira_email)
 
     if data:
         _apply_secret(namespace, MCP_SECRET_NAME, data)

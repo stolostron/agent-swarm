@@ -10,13 +10,6 @@ def _b64(value: str) -> str:
     return base64.b64encode(value.encode()).decode()
 
 
-def _mcp_token_env_var(slug: str) -> str:
-    """Derive an env var name from an MCP server slug, e.g. 'atlassian-jira' -> 'MCP_TOKEN_ATLASSIAN_JIRA'."""
-    import re
-    clean = re.sub(r"[^a-zA-Z0-9]+", "_", slug).strip("_").upper()
-    return f"MCP_TOKEN_{clean}"
-
-
 _HAIKU_BY_PROVIDER = {
     "vertexai": "claude-haiku-4-5-20251001",
     "anthropic": "claude-haiku-3.5",
@@ -67,12 +60,13 @@ class CrushStrategy(AgentToolStrategy):
         if mcp_servers:
             mcp_config = {}
             for srv in mcp_servers:
-                env_var_name = _mcp_token_env_var(srv.slug)
                 mcp_config[srv.slug] = {
-                    "type": srv.server_type or "http",
-                    "url": srv.server_url,
-                    "headers": {
-                        "Authorization": f"Bearer ${env_var_name}",
+                    "type": "stdio",
+                    "command": "jira-mcp-server",
+                    "env": {
+                        "JIRA_SERVER_URL": "$JIRA_SERVER_URL",
+                        "JIRA_ACCESS_TOKEN": "$JIRA_ACCESS_TOKEN",
+                        "JIRA_EMAIL": "$JIRA_EMAIL",
                     },
                 }
             if mcp_config:
@@ -290,12 +284,13 @@ class CrushStrategy(AgentToolStrategy):
         if mcp_servers:
             mcp_config = {}
             for srv in mcp_servers:
-                env_var_name = _mcp_token_env_var(srv.slug)
                 mcp_config[srv.slug] = {
-                    "type": srv.server_type or "http",
-                    "url": srv.server_url,
-                    "headers": {
-                        "Authorization": f"Bearer ${env_var_name}",
+                    "type": "stdio",
+                    "command": "jira-mcp-server",
+                    "env": {
+                        "JIRA_SERVER_URL": "$JIRA_SERVER_URL",
+                        "JIRA_ACCESS_TOKEN": "$JIRA_ACCESS_TOKEN",
+                        "JIRA_EMAIL": "$JIRA_EMAIL",
                     },
                 }
             config["mcp"] = mcp_config

@@ -25,32 +25,16 @@ class McpServer(Base):
         nullable=False, default=True, server_default="1"
     )
 
-    # OAuth fields — encrypted at rest
-    oauth_client_id: Mapped[str] = mapped_column(
-        Text, nullable=False, default="", server_default=""
-    )
-    oauth_client_secret_enc: Mapped[str] = mapped_column(
-        Text, nullable=False, default="", server_default=""
-    )
-    access_token_enc: Mapped[str] = mapped_column(
-        Text, nullable=False, default="", server_default=""
-    )
-    refresh_token_enc: Mapped[str] = mapped_column(
-        Text, nullable=False, default="", server_default=""
-    )
     token_expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
-    # OAuth discovery / endpoint overrides
-    authorization_endpoint: Mapped[str] = mapped_column(
+    # Jira API token fields
+    jira_server_url: Mapped[str] = mapped_column(
         Text, nullable=False, default="", server_default=""
     )
-    token_endpoint: Mapped[str] = mapped_column(
+    jira_access_token_enc: Mapped[str] = mapped_column(
         Text, nullable=False, default="", server_default=""
     )
-    registration_endpoint: Mapped[str] = mapped_column(
-        Text, nullable=False, default="", server_default=""
-    )
-    scopes: Mapped[str] = mapped_column(
+    jira_email: Mapped[str] = mapped_column(
         Text, nullable=False, default="", server_default=""
     )
 
@@ -68,54 +52,26 @@ class McpServer(Base):
     # ---------- transparent encrypt/decrypt accessors ----------
 
     @property
-    def oauth_client_secret(self) -> str:
-        if not self.oauth_client_secret_enc:
+    def jira_access_token(self) -> str:
+        if not self.jira_access_token_enc:
             return ""
-        return crypto.decrypt(self.oauth_client_secret_enc)
+        return crypto.decrypt(self.jira_access_token_enc)
 
-    @oauth_client_secret.setter
-    def oauth_client_secret(self, value: str) -> None:
-        self.oauth_client_secret_enc = crypto.encrypt(value) if value else ""
-
-    @property
-    def access_token(self) -> str:
-        if not self.access_token_enc:
-            return ""
-        return crypto.decrypt(self.access_token_enc)
-
-    @access_token.setter
-    def access_token(self, value: str) -> None:
-        self.access_token_enc = crypto.encrypt(value) if value else ""
-
-    @property
-    def refresh_token(self) -> str:
-        if not self.refresh_token_enc:
-            return ""
-        return crypto.decrypt(self.refresh_token_enc)
-
-    @refresh_token.setter
-    def refresh_token(self, value: str) -> None:
-        self.refresh_token_enc = crypto.encrypt(value) if value else ""
+    @jira_access_token.setter
+    def jira_access_token(self, value: str) -> None:
+        self.jira_access_token_enc = crypto.encrypt(value) if value else ""
 
     # ---------- display helpers ----------
 
     @property
     def is_authenticated(self) -> bool:
-        return bool(self.access_token_enc)
-
-    @property
-    def is_expired(self) -> bool:
-        if not self.token_expires_at:
-            return False
-        return datetime.utcnow() >= self.token_expires_at
+        return bool(self.jira_access_token_enc)
 
     @property
     def auth_status(self) -> str:
         if not self.is_authenticated:
             return "not_configured"
-        if self.is_expired:
-            return "expired"
-        return "active"
+        return "expired" if self.token_expires_at else "active"
 
     @property
     def auth_status_label(self) -> str:

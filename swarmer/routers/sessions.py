@@ -508,13 +508,14 @@ async def _do_launch(session: Session, ws: Workspace, db: AsyncSession) -> None:
 
     # Fetch enabled & authenticated MCP servers for this workspace
     from swarmer.routers.mcp_servers import get_enabled_mcp_servers
-    ws_mcp_servers = await get_enabled_mcp_servers(session.workspace_id, db)
+    all_ws_mcp = await get_enabled_mcp_servers(session.workspace_id, db)
+    ws_mcp_servers = [s for s in all_ws_mcp if s.auth_status != "expired"]
 
     # Filter to only the MCP servers enabled for this specific session
     # mcp_servers=None  → no MCP configured in workspace (skip override)
     # mcp_servers=[]    → user explicitly disabled all (override with clean config)
     # mcp_servers=[...] → user selected specific servers
-    if not ws_mcp_servers:
+    if not all_ws_mcp:
         mcp_servers = None
     elif session.mcp_server_ids == "none":
         mcp_servers = []
@@ -526,7 +527,7 @@ async def _do_launch(session: Session, ws: Workspace, db: AsyncSession) -> None:
         mcp_servers = ws_mcp_servers
 
     # Sync MCP server tokens to K8s secret and update agent config
-    if mcp_servers:
+    if mcp_servers is not None:
         from swarmer import k8s as _k8s2
         try:
             await asyncio.to_thread(_k8s2.sync_mcp_server_secret, ws.k8s_namespace, mcp_servers)

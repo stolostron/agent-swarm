@@ -23,8 +23,8 @@
 <h1 class="pf-v6-c-title pf-m-2xl" style="margin-bottom:var(--pf-t--global--spacer--xs);">MCP Servers</h1>
 <p style="color:var(--pf-t--global--text--color--subtle); margin-bottom:var(--pf-t--global--spacer--lg);">
   Connect external tool servers via the Model Context Protocol (MCP).
-  Authenticated servers are available to all sessions in this workspace.
-  OAuth tokens are encrypted at rest.
+  Configured servers are available to all sessions in this workspace.
+  API tokens are encrypted at rest.
 </p>
 
 {# ── Configured servers ── #}
@@ -39,10 +39,103 @@
         <h3 class="pf-v6-c-card__header-main" style="font-weight:var(--pf-t--global--font--weight--heading--bold);">
           {{ s.display_name }}
         </h3>
-        <span class="pf-v6-c-label pf-m-{{ s.auth_status_color }}">
+        <span id="status-badge-{{ s.id }}" class="pf-v6-c-label pf-m-{{ s.auth_status_color }}">
           <span class="pf-v6-c-label__content">{{ s.auth_status_label }}</span>
         </span>
       </div>
+
+      {% if s.server_type == "stdio" %}
+      {# ════════ STDIO SERVER: view / edit modes ════════ #}
+
+      {# ── View mode (shown when configured) ── #}
+      <div id="view-{{ s.id }}" style="{{ 'display:none;' if not s.is_authenticated else '' }}">
+        <div class="pf-v6-c-card__body">
+          {% if s.auth_status == "expired" %}
+          <div id="expired-alert-{{ s.id }}" class="pf-v6-c-alert pf-m-warning pf-m-inline pf-m-plain" style="margin-bottom:var(--pf-t--global--spacer--sm);">
+            <div class="pf-v6-c-alert__icon"><i class="fas fa-exclamation-triangle"></i></div>
+            <p class="pf-v6-c-alert__title">Token is no longer valid. Click Edit to update your API token.</p>
+          </div>
+          {% endif %}
+          <dl style="margin:0;">
+            <div style="display:flex; gap:var(--pf-t--global--spacer--sm); margin-bottom:var(--pf-t--global--spacer--xs);">
+              <dt style="font-weight:bold; min-width:60px;">Server:</dt>
+              <dd style="margin:0;"><code style="font-size:var(--pf-t--global--font--size--sm);">{{ s.jira_server_url }}</code></dd>
+            </div>
+            <div style="display:flex; gap:var(--pf-t--global--spacer--sm); margin-bottom:var(--pf-t--global--spacer--xs);">
+              <dt style="font-weight:bold; min-width:60px;">Email:</dt>
+              <dd style="margin:0; font-size:var(--pf-t--global--font--size--sm);">{{ s.jira_email }}</dd>
+            </div>
+            <div style="display:flex; gap:var(--pf-t--global--spacer--sm);">
+              <dt style="font-weight:bold; min-width:60px;">Token:</dt>
+              <dd style="margin:0; font-size:var(--pf-t--global--font--size--sm); color:var(--pf-t--global--text--color--subtle);">configured</dd>
+            </div>
+          </dl>
+        </div>
+        <div class="pf-v6-c-card__footer" style="display:flex; gap:var(--pf-t--global--spacer--xs); flex-wrap:wrap; align-items:center;">
+          <button type="button" class="pf-v6-c-button pf-m-secondary pf-m-small" onclick="showEdit({{ s.id }})">Edit</button>
+          <form method="post" action="/workspaces/{{ ws.id }}/mcp-servers/{{ s.id }}/toggle" style="display:inline;">
+            <button type="submit" class="pf-v6-c-button pf-m-tertiary pf-m-small">
+              {{ 'Disable' if s.enabled else 'Enable' }}
+            </button>
+          </form>
+          <form method="post" action="/workspaces/{{ ws.id }}/mcp-servers/{{ s.id }}/delete"
+                style="display:inline;"
+                onsubmit="return confirm('Remove {{ s.display_name }}? Stored credentials will be deleted.')">
+            <button type="submit" class="pf-v6-c-button pf-m-danger pf-m-small">Remove</button>
+          </form>
+        </div>
+      </div>
+
+      {# ── Edit mode (shown when not configured, or user clicks Edit) ── #}
+      <div id="edit-{{ s.id }}" style="{{ 'display:none;' if s.is_authenticated else '' }}">
+        <div class="pf-v6-c-card__body">
+          <form method="post" action="/workspaces/{{ ws.id }}/mcp-servers/{{ s.id }}/save" id="form-{{ s.id }}">
+            <div class="pf-v6-c-form__group" style="margin-bottom:var(--pf-t--global--spacer--sm);">
+              <label class="pf-v6-c-form__label" for="jira-url-{{ s.id }}">
+                <span class="pf-v6-c-form__label-text" style="font-weight:bold;">Jira Server URL</span>
+              </label>
+              <input type="text" id="jira-url-{{ s.id }}" name="jira_server_url"
+                     class="pf-v6-c-form-control"
+                     value="{{ s.jira_server_url or 'https://redhat.atlassian.net/' }}"
+                     placeholder="https://your-instance.atlassian.net/"
+                     required>
+            </div>
+            <div class="pf-v6-c-form__group" style="margin-bottom:var(--pf-t--global--spacer--sm);">
+              <label class="pf-v6-c-form__label" for="jira-token-{{ s.id }}">
+                <span class="pf-v6-c-form__label-text" style="font-weight:bold;">API Token</span>
+              </label>
+              <input type="password" id="jira-token-{{ s.id }}" name="jira_access_token"
+                     class="pf-v6-c-form-control"
+                     placeholder="{{ '••••••••  (leave blank to keep current)' if s.jira_access_token_enc else 'Paste your Jira API token' }}"
+                     {{ 'required' if not s.jira_access_token_enc else '' }}>
+              <p style="font-size:var(--pf-t--global--font--size--xs); color:var(--pf-t--global--text--color--subtle); margin:var(--pf-t--global--spacer--xs) 0 0 0;">
+                <a href="https://id.atlassian.com/manage-profile/security/api-tokens" target="_blank" rel="noopener">
+                  Create an API token
+                </a> from your Atlassian account.
+              </p>
+            </div>
+            <div class="pf-v6-c-form__group" style="margin-bottom:var(--pf-t--global--spacer--sm);">
+              <label class="pf-v6-c-form__label" for="jira-email-{{ s.id }}">
+                <span class="pf-v6-c-form__label-text" style="font-weight:bold;">Email</span>
+              </label>
+              <input type="email" id="jira-email-{{ s.id }}" name="jira_email"
+                     class="pf-v6-c-form-control"
+                     value="{{ s.jira_email }}"
+                     placeholder="your.email@redhat.com"
+                     required>
+            </div>
+          </form>
+        </div>
+        <div class="pf-v6-c-card__footer" style="display:flex; gap:var(--pf-t--global--spacer--xs); align-items:center;">
+          <button type="submit" form="form-{{ s.id }}" class="pf-v6-c-button pf-m-primary pf-m-small">Save</button>
+          {% if s.is_authenticated %}
+          <button type="button" class="pf-v6-c-button pf-m-link pf-m-small" onclick="showView({{ s.id }})">Cancel</button>
+          {% endif %}
+        </div>
+      </div>
+
+      {% else %}
+      {# ════════ Legacy HTTP server ════════ #}
       <div class="pf-v6-c-card__body">
         <dl style="margin:0;">
           <div style="display:flex; gap:var(--pf-t--global--spacer--sm); margin-bottom:var(--pf-t--global--spacer--xs);">
@@ -53,76 +146,10 @@
             <dt style="font-weight:bold; min-width:60px;">Type:</dt>
             <dd style="margin:0;">{{ s.server_type | upper }}</dd>
           </div>
-          <div style="display:flex; gap:var(--pf-t--global--spacer--sm); margin-bottom:var(--pf-t--global--spacer--xs);">
-            <dt style="font-weight:bold; min-width:60px;">Status:</dt>
-            <dd style="margin:0;">
-              {% if s.enabled %}
-                <span style="color:var(--pf-t--global--color--status--success--default);">Enabled</span>
-              {% else %}
-                <span style="color:var(--pf-t--global--text--color--subtle);">Disabled</span>
-              {% endif %}
-            </dd>
-          </div>
-          {% if s.token_expires_at %}
-          <div style="display:flex; gap:var(--pf-t--global--spacer--sm); margin-bottom:var(--pf-t--global--spacer--xs);">
-            <dt style="font-weight:bold; min-width:60px;">Expires:</dt>
-            <dd style="margin:0; font-size:var(--pf-t--global--font--size--sm); color:var(--pf-t--global--text--color--subtle);">
-              {{ s.token_expires_at.strftime('%Y-%m-%d %H:%M UTC') }}
-            </dd>
-          </div>
-          {% endif %}
         </dl>
       </div>
-      <div class="pf-v6-c-card__footer" style="display:flex; gap:var(--pf-t--global--spacer--xs); flex-wrap:wrap; align-items:flex-start; flex-direction:column;">
-        <div style="display:flex; gap:var(--pf-t--global--spacer--xs); flex-wrap:wrap;">
-          {% if not s.is_authenticated %}
-          <form method="post" action="/workspaces/{{ ws.id }}/mcp-servers/{{ s.id }}/connect"
-                target="_blank" onsubmit="showPasteSection({{ s.id }})">
-            <button type="submit" class="pf-v6-c-button pf-m-primary pf-m-small">Connect via OAuth</button>
-          </form>
-          {% else %}
-            {% if s.is_expired and s.refresh_token_enc %}
-            <form method="post" action="/workspaces/{{ ws.id }}/mcp-servers/{{ s.id }}/refresh" style="display:inline;">
-              <button type="submit" class="pf-v6-c-button pf-m-secondary pf-m-small">Refresh Token</button>
-            </form>
-            {% elif s.is_expired %}
-            <form method="post" action="/workspaces/{{ ws.id }}/mcp-servers/{{ s.id }}/connect"
-                  target="_blank" onsubmit="showPasteSection({{ s.id }})">
-              <button type="submit" class="pf-v6-c-button pf-m-primary pf-m-small">Reconnect</button>
-            </form>
-            {% endif %}
-            <form method="post" action="/workspaces/{{ ws.id }}/mcp-servers/{{ s.id }}/disconnect" style="display:inline;">
-              <button type="submit" class="pf-v6-c-button pf-m-secondary pf-m-small">Disconnect</button>
-            </form>
-          {% endif %}
-          <form method="post" action="/workspaces/{{ ws.id }}/mcp-servers/{{ s.id }}/toggle" style="display:inline;">
-            <button type="submit" class="pf-v6-c-button pf-m-tertiary pf-m-small">
-              {{ 'Disable' if s.enabled else 'Enable' }}
-            </button>
-          </form>
-          <form method="post" action="/workspaces/{{ ws.id }}/mcp-servers/{{ s.id }}/delete"
-                style="display:inline;"
-                onsubmit="return confirm('Remove {{ s.display_name }}? OAuth tokens will be deleted.')">
-            <button type="submit" class="pf-v6-c-button pf-m-danger pf-m-small">Remove</button>
-          </form>
-        </div>
+      {% endif %}
 
-        {# Paste-back section — shown after clicking Connect via OAuth #}
-        <div id="paste-section-{{ s.id }}" style="display:none; width:100%; margin-top:var(--pf-t--global--spacer--xs);">
-          <p style="font-size:var(--pf-t--global--font--size--sm); color:var(--pf-t--global--text--color--subtle); margin:0 0 var(--pf-t--global--spacer--xs) 0;">
-            Complete OAuth in the new tab, then copy the URL of the failed page and paste it here.
-          </p>
-          <form method="post" action="/workspaces/{{ ws.id }}/mcp-servers/{{ s.id }}/oauth-complete"
-                style="display:flex; gap:var(--pf-t--global--spacer--xs);">
-            <input type="text" name="callback_url"
-                   class="pf-v6-c-form-control"
-                   placeholder="http://localhost:18080/mcp-servers/oauth/callback?code=..."
-                   style="flex:1; font-size:var(--pf-t--global--font--size--sm);"
-                   required>
-            <button type="submit" class="pf-v6-c-button pf-m-primary pf-m-small">Submit</button>
-          </form>
-        </div>
-      </div>
     </div>
   </div>
 {% endfor %}
@@ -141,7 +168,7 @@
 {% if available_entries %}
 <h2 class="pf-v6-c-title pf-m-lg" style="margin-bottom:var(--pf-t--global--spacer--md);">Available MCP Servers</h2>
 <p style="color:var(--pf-t--global--text--color--subtle); margin-bottom:var(--pf-t--global--spacer--md);">
-  Add a pre-configured MCP server to this workspace, then connect via OAuth to authenticate.
+  Add an MCP server to this workspace, then configure your API token.
 </p>
 
 <div class="pf-v6-l-grid pf-m-gutter" style="--pf-v6-l-grid--m-gutter--GridGap:var(--pf-t--global--spacer--md);">
@@ -154,12 +181,9 @@
         </h3>
       </div>
       <div class="pf-v6-c-card__body">
-        <p style="color:var(--pf-t--global--text--color--subtle); font-size:var(--pf-t--global--font--size--sm); margin:0 0 var(--pf-t--global--spacer--sm) 0;">
+        <p style="color:var(--pf-t--global--text--color--subtle); font-size:var(--pf-t--global--font--size--sm); margin:0;">
           {{ entry.description }}
         </p>
-        <div style="font-size:var(--pf-t--global--font--size--sm);">
-          <code>{{ entry.server_url }}</code>
-        </div>
       </div>
       <div class="pf-v6-c-card__footer">
         <form method="post" action="/workspaces/{{ ws.id }}/mcp-servers/add">
@@ -173,9 +197,38 @@
 </div>
 {% endif %}
 
+{% if servers %}
 <script>
-function showPasteSection(serverId) {
-  document.getElementById('paste-section-' + serverId).style.display = 'block';
+function showEdit(id) {
+  document.getElementById('view-' + id).style.display = 'none';
+  document.getElementById('edit-' + id).style.display = '';
 }
+function showView(id) {
+  document.getElementById('edit-' + id).style.display = 'none';
+  document.getElementById('view-' + id).style.display = '';
+}
+(function() {
+  var wsId = {{ ws.id }};
+  function refreshStatuses() {
+    fetch('/workspaces/' + wsId + '/mcp-servers/check')
+      .then(function(r) { return r.ok ? r.json() : null; })
+      .then(function(data) {
+        if (!data) return;
+        for (var id in data) {
+          var badge = document.getElementById('status-badge-' + id);
+          if (!badge) continue;
+          var info = data[id];
+          badge.className = 'pf-v6-c-label pf-m-' + info.color;
+          badge.querySelector('.pf-v6-c-label__content').textContent = info.label;
+          var alert = document.getElementById('expired-alert-' + id);
+          if (alert) alert.style.display = info.status === 'expired' ? '' : 'none';
+        }
+      })
+      .catch(function() {});
+  }
+  refreshStatuses();
+  setInterval(refreshStatuses, 60000);
+})();
 </script>
+{% endif %}
 {% endblock %}

@@ -10,13 +10,6 @@ def _b64(value: str) -> str:
     return base64.b64encode(value.encode()).decode()
 
 
-def _mcp_token_env_var(slug: str) -> str:
-    """Derive an env var name from an MCP server slug."""
-    import re
-    clean = re.sub(r"[^a-zA-Z0-9]+", "_", slug).strip("_").upper()
-    return f"MCP_TOKEN_{clean}"
-
-
 class OpenCodeStrategy(AgentToolStrategy):
 
     @property
@@ -46,13 +39,14 @@ class OpenCodeStrategy(AgentToolStrategy):
         if mcp_servers:
             mcp_config = {}
             for srv in mcp_servers:
-                env_var_name = _mcp_token_env_var(srv.slug)
                 mcp_config[srv.slug] = {
-                    "type": "remote",
-                    "url": srv.server_url,
-                    "oauth": False,
-                    "headers": {
-                        "Authorization": f"Bearer {{env:{env_var_name}}}",
+                    "type": "local",
+                    "command": ["jira-mcp-server"],
+                    "enabled": True,
+                    "environment": {
+                        "JIRA_SERVER_URL": "{env:JIRA_SERVER_URL}",
+                        "JIRA_ACCESS_TOKEN": "{env:JIRA_ACCESS_TOKEN}",
+                        "JIRA_EMAIL": "{env:JIRA_EMAIL}",
                     },
                 }
             if mcp_config:
@@ -263,13 +257,14 @@ class OpenCodeStrategy(AgentToolStrategy):
         if mcp_servers:
             mcp_config = {}
             for srv in mcp_servers:
-                env_var_name = _mcp_token_env_var(srv.slug)
                 mcp_config[srv.slug] = {
-                    "type": "remote",
-                    "url": srv.server_url,
-                    "oauth": False,
-                    "headers": {
-                        "Authorization": f"Bearer {{env:{env_var_name}}}",
+                    "type": "local",
+                    "command": ["jira-mcp-server"],
+                    "enabled": True,
+                    "environment": {
+                        "JIRA_SERVER_URL": "{env:JIRA_SERVER_URL}",
+                        "JIRA_ACCESS_TOKEN": "{env:JIRA_ACCESS_TOKEN}",
+                        "JIRA_EMAIL": "{env:JIRA_EMAIL}",
                     },
                 }
             config["mcp"] = mcp_config

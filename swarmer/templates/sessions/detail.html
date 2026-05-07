@@ -297,10 +297,19 @@
                   <input class="pf-v6-c-check__input" type="checkbox"
                          name="mcp_server_ids" value="{{ srv.id }}"
                          id="mcp-detail-{{ srv.id }}"
-                         {{ 'checked' if srv.id in session.enabled_mcp_ids or not session.mcp_server_ids }}
-                         {% if session.is_active %}disabled{% endif %}>
+                         {{ 'checked' if srv.auth_status != 'expired' and (srv.id in session.enabled_mcp_ids or not session.mcp_server_ids) }}
+                         {{ 'disabled' if srv.auth_status == 'expired' or session.is_active }}>
                   <label class="pf-v6-c-check__label" for="mcp-detail-{{ srv.id }}" style="font-size:var(--pf-t--global--font--size--sm);">
                     {{ srv.display_name }}
+                    {% if srv.auth_status == "expired" %}
+                    <a href="/workspaces/{{ ws.id }}/mcp-servers" class="pf-v6-c-label pf-m-gold" style="margin-left:var(--pf-t--global--spacer--xs); text-decoration:none;">
+                      <span class="pf-v6-c-label__content">Token expired</span>
+                    </a>
+                    {% elif srv.auth_status == "active" %}
+                    <a href="/workspaces/{{ ws.id }}/mcp-servers" class="pf-v6-c-label pf-m-green" style="margin-left:var(--pf-t--global--spacer--xs); text-decoration:none;">
+                      <span class="pf-v6-c-label__content">Connected</span>
+                    </a>
+                    {% endif %}
                   </label>
                 </div>
                 {% endfor %}
