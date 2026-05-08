@@ -131,6 +131,15 @@ Parent epic: [ACM-32892](https://redhat.atlassian.net/browse/ACM-32892) — Impl
   pr: "https://github.com/stolostron/agent-swarm/pull/59"
   summary: "Session-scoped K8s secrets created at launch and cleaned up on stop; per-user credential isolation with shared flag; purge/audit plan for orphaned secrets"
 
+# ──────────────────────────────────────────────────────────
+- date: "2026-05-08"
+  title: "Investigate VertexAI model listing by credential and remove unavailable Opus 4.7 choice"
+  jira: "ACM-33890"
+  jira_url: "https://redhat.atlassian.net/browse/ACM-33890"
+  status: "Done"
+  pr: "https://github.com/stolostron/agent-swarm/pull/62"
+  summary: "VertexAI model listing API does not filter by credential; removed claude-opus-4-7 from all model choice lists in crush.py and opencode.py, promoted opus-4-6 to most capable"
+
 ## Foundation & Feature Plans
 
 | Plan | Summary | Jira | PR |

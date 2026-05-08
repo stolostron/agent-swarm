@@ -156,8 +156,7 @@ class CrushStrategy(AgentToolStrategy):
         if secret and secret.has_adc:
             options.extend([
                 {"value": "vertexai/claude-sonnet-4-6", "label": "Claude Sonnet 4.6 (balanced)", "group": "Vertex AI — Claude"},
-                {"value": "vertexai/claude-opus-4-6", "label": "Claude Opus 4.6", "group": "Vertex AI — Claude"},
-                {"value": "vertexai/claude-opus-4-7", "label": "Claude Opus 4.7 (most capable)", "group": "Vertex AI — Claude"},
+                {"value": "vertexai/claude-opus-4-6", "label": "Claude Opus 4.6 (most capable)", "group": "Vertex AI — Claude"},
                 {"value": "vertexai/claude-haiku-4-5-20251001", "label": "Claude Haiku 4.5 (fast)", "group": "Vertex AI — Claude"},
                 {"value": "vertexai/gemini-3-pro", "label": "Gemini 3 Pro", "group": "Vertex AI — Gemini"},
                 {"value": "vertexai/gemini-3-flash", "label": "Gemini 3 Flash (fast)", "group": "Vertex AI — Gemini"},
@@ -165,8 +164,7 @@ class CrushStrategy(AgentToolStrategy):
         elif secret and getattr(secret, "has_vertex", False):
             options.extend([
                 {"value": "vertexai/claude-sonnet-4-6", "label": "Claude Sonnet 4.6 (balanced)", "group": "Vertex AI — Claude"},
-                {"value": "vertexai/claude-opus-4-6", "label": "Claude Opus 4.6", "group": "Vertex AI — Claude"},
-                {"value": "vertexai/claude-opus-4-7", "label": "Claude Opus 4.7 (most capable)", "group": "Vertex AI — Claude"},
+                {"value": "vertexai/claude-opus-4-6", "label": "Claude Opus 4.6 (most capable)", "group": "Vertex AI — Claude"},
                 {"value": "vertexai/claude-haiku-4-5-20251001", "label": "Claude Haiku 4.5 (fast)", "group": "Vertex AI — Claude"},
                 {"value": "vertexai/gemini-3-pro", "label": "Gemini 3 Pro", "group": "Vertex AI — Gemini"},
                 {"value": "vertexai/gemini-3-flash", "label": "Gemini 3 Flash (fast)", "group": "Vertex AI — Gemini"},
@@ -174,8 +172,7 @@ class CrushStrategy(AgentToolStrategy):
         if secret and getattr(secret, "anthropic_api_key_enc", ""):
             options.extend([
                 {"value": "anthropic/claude-sonnet-4-6", "label": "Claude Sonnet 4.6", "group": "Anthropic (direct)"},
-                {"value": "anthropic/claude-opus-4-6", "label": "Claude Opus 4.6", "group": "Anthropic (direct)"},
-                {"value": "anthropic/claude-opus-4-7", "label": "Claude Opus 4.7 (most capable)", "group": "Anthropic (direct)"},
+                {"value": "anthropic/claude-opus-4-6", "label": "Claude Opus 4.6 (most capable)", "group": "Anthropic (direct)"},
                 {"value": "anthropic/claude-haiku-3.5", "label": "Claude Haiku 3.5 (fast)", "group": "Anthropic (direct)"},
             ])
         if secret and getattr(secret, "openai_api_key_enc", ""):
