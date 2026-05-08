@@ -11,7 +11,7 @@ pydantic-settings==2.14.0
 kubernetes==35.0.0
 pyyaml==6.0.3
 httpx==0.28.1
-google-auth==2.51.0
+google-auth==2.52.0
 websockets==16.0
 itsdangerous==2.2.0
 croniter==6.2.2
