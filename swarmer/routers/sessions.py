@@ -1311,7 +1311,7 @@ async def _llm_commit_msg_vertex(patch: str, oc: OpencodeSecret) -> str:
         "messages": [{"role": "user", "content": _COMMIT_MSG_PROMPT + patch}],
     }
 
-    async with httpx.AsyncClient(timeout=30) as client:
+    async with httpx.AsyncClient(timeout=settings.llm_api_timeout) as client:
         resp = await client.post(url, json=body, headers={
             "Authorization": f"Bearer {token}",
             "Content-Type": "application/json",
@@ -1328,7 +1328,7 @@ async def _llm_commit_msg_anthropic(patch: str, api_key: str) -> str:
         "max_tokens": 300,
         "messages": [{"role": "user", "content": _COMMIT_MSG_PROMPT + patch}],
     }
-    async with httpx.AsyncClient(timeout=30) as client:
+    async with httpx.AsyncClient(timeout=settings.llm_api_timeout) as client:
         resp = await client.post(
             "https://api.anthropic.com/v1/messages",
             json=body,
@@ -1347,7 +1347,7 @@ async def _llm_commit_msg_gemini(patch: str, api_key: str) -> str:
     """Call Google Gemini API."""
     url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={api_key}"
     body = {"contents": [{"parts": [{"text": _COMMIT_MSG_PROMPT + patch}]}]}
-    async with httpx.AsyncClient(timeout=30) as client:
+    async with httpx.AsyncClient(timeout=settings.llm_api_timeout) as client:
         resp = await client.post(url, json=body)
         resp.raise_for_status()
         data = resp.json()

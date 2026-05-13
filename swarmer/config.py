@@ -18,6 +18,16 @@ class Settings(BaseSettings):
     agent_image_pull_secret: str = ""
     agent_image_pull_policy: str = "IfNotPresent"
     k8s_namespace: str = ""
+    
+    # Chat proxy timeout settings (seconds)
+    chat_proxy_timeout_connect: int = 30
+    chat_proxy_timeout_read: int = 300    # 5 minutes for thinking operations
+    chat_proxy_timeout_write: int = 30
+    chat_proxy_timeout_pool: int = 30
+    chat_proxy_timeout_standard: int = 120  # 2 minutes for standard requests
+    
+    # LLM API timeout for commit message generation (seconds)
+    llm_api_timeout: int = 60
 
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8", "extra": "ignore"}
 

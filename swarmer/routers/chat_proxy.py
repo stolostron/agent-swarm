@@ -16,6 +16,7 @@ from fastapi.responses import RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from swarmer.config import settings
 from swarmer.database import get_db
 from swarmer.deps import require_auth
 from swarmer.models.session import Session
@@ -163,8 +164,15 @@ async def _chat_http_proxy(
     is_sse = "text/event-stream" in accept or "/events" in path
 
     if is_sse:
-        # Stream SSE responses — long-lived connection, no timeout buffering
-        client = httpx.AsyncClient(timeout=httpx.Timeout(connect=10, read=None, write=10, pool=10))
+        # Stream SSE responses — long-lived connection, no read timeout for thinking operations
+        client = httpx.AsyncClient(
+            timeout=httpx.Timeout(
+                connect=settings.chat_proxy_timeout_connect,
+                read=None,  # No read timeout for SSE streams (thinking can take a long time)
+                write=settings.chat_proxy_timeout_write,
+                pool=settings.chat_proxy_timeout_pool,
+            )
+        )
 
         async def sse_generator():
             try:
@@ -195,7 +203,7 @@ async def _chat_http_proxy(
                 headers=fwd_headers,
                 content=await request.body(),
                 follow_redirects=False,
-                timeout=30.0,
+                timeout=settings.chat_proxy_timeout_standard,
             )
     except httpx.ConnectError as exc:
         return Response(f"Could not connect to session: {exc}", status_code=503, media_type="text/plain")
