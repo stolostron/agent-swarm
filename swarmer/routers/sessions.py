@@ -24,6 +24,7 @@ from swarmer.ansi import ansi_to_html
 from swarmer.flash import flash
 from swarmer.github import fetch_repo_info as _fetch_repo_info
 from swarmer.github import list_repos_for_pat as _list_repos_for_pat
+from swarmer.github_url_validator import GitHubURLError, validate_github_url
 from swarmer.models.github_pat import GitHubPAT
 from swarmer.models.opencode_secret import OpencodeSecret
 from swarmer.models.session import CRON_PRESETS, Session
@@ -1228,6 +1229,17 @@ async def repo_add(
         return HTMLResponse("")
     if session.is_active:
         return HTMLResponse("", status_code=409)
+
+    try:
+        validate_github_url(repo_url.strip())
+    except GitHubURLError as exc:
+        log.warning(
+            "repo_add: rejected URL with embedded token for session %s: %s",
+            sid,
+            exc.redacted_url,
+        )
+        flash(request, f"Repository URL rejected: {exc.reason}", "danger")
+        return HTMLResponse("", status_code=422, headers={"HX-Trigger": "repoAddError"})
 
     if not local_path:
         local_path = repo_url.rstrip("/").split("/")[-1].removesuffix(".git")

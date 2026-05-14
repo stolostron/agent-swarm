@@ -6,10 +6,15 @@ can be unit-tested without standing up the full application stack.
 
 import asyncio
 import base64
+import logging
 import re
 from urllib.parse import urlparse
 
 import httpx
+
+from swarmer.github_url_validator import GitHubURLError, validate_github_url
+
+log = logging.getLogger(__name__)
 
 
 def github_slug(url: str) -> str | None:
@@ -19,7 +24,16 @@ def github_slug(url: str) -> str | None:
     (git@github.com:owner/repo) formats.  Only the exact host ``github.com``
     (or ``www.github.com``) is accepted to prevent false matches on hosts like
     ``notgithub.com``.
+
+    Raises :class:`~swarmer.github_url_validator.GitHubURLError` if the URL
+    contains an embedded authentication token.
     """
+    try:
+        validate_github_url(url)
+    except GitHubURLError as exc:
+        log.warning("Rejected GitHub URL with embedded token: %s", exc.redacted_url)
+        raise
+
     # SSH format: git@github.com:owner/repo[.git]
     ssh_match = re.match(r"^git@github\.com:(?P<slug>[^/]+/[^/]+?)(?:\.git)?$", url)
     if ssh_match:

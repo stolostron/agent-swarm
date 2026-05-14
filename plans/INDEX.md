@@ -195,6 +195,15 @@ Parent epic: [ACM-32892](https://redhat.atlassian.net/browse/ACM-32892) — Impl
   pr: "https://github.com/stolostron/agent-swarm/pull/84"
   summary: "Created docs/USER_GUIDE.md with unified documentation covering all deployment options, configuration, session modes, agent tools, and Makefile reference; slimmed README.md to link to user guide"
 
+# ──────────────────────────────────────────────────────────
+- date: "2026-05-14"
+  title: "Implement GitHub URL token validation and rejection in agent-swarm"
+  jira: "ACM-34103"
+  jira_url: "https://redhat.atlassian.net/browse/ACM-34103"
+  status: "Done"
+  pr: "https://github.com/stolostron/agent-swarm/pull/68"
+  summary: "Added validate_github_url() rejecting userinfo credentials, denylisted query params, token-shaped query values, and path segments; hooked into github_slug() and repo_add; 52 new unit tests, all 60 pass"
+
 ## Foundation & Feature Plans
 
 | Plan | Summary | Jira | PR |
