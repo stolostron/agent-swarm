@@ -163,9 +163,9 @@ Parent epic: [ACM-32892](https://redhat.atlassian.net/browse/ACM-32892) — Impl
   title: "Workspace prompt library: named prompts, URL-based prompt sources, and per-session prompt picker"
   jira: "ACM-34123"
   jira_url: "https://redhat.atlassian.net/browse/ACM-34123"
-  status: "In Progress"
-  pr: ~
-  summary: "Implement a workspace-level prompt library (Option 2) with git-backed folders, caching, and per-session prompt picker."
+  status: "Done"
+  pr: "https://github.com/stolostron/agent-swarm/pull/72"
+  summary: "Implemented a workspace-level prompt library with git-backed folders, recursive .md file caching, and an HTMX-powered per-session prompt picker with live preview."
 
 ## Foundation & Feature Plans
 
