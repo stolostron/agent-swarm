@@ -256,7 +256,7 @@ def build_session_pod(
     else:
         restart_policy = "Never"
 
-    main_cmd = tool.build_main_cmd(session, model)
+    main_cmd = tool.build_main_cmd(session, model, resolved_prompt=resolved_prompt)
     config_path = tool.get_config_mount_path()
     config_setup = (
         f'mkdir -p {config_path} && '
