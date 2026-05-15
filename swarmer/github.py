@@ -196,24 +196,27 @@ async def fetch_folder_prompts(
             if r.status_code != 200:
                 return f"Failed to fetch tree: {r.status_code}"
             
-            tree_data = r.json().get("tree", [])
+            tree_resp = r.json()
+            if tree_resp.get("truncated"):
+                return "Repository tree too large (truncated by GitHub). Use a more specific folder path."
+
+            tree_data = tree_resp.get("tree", [])
             prefix = folder_path.strip("/")
             if prefix == ".":
                 prefix = ""
             if prefix and not prefix.endswith("/"):
                 prefix += "/"
-            
+
             # Filter for .md files inside the folder_path
             md_files = [
                 item for item in tree_data
-                if item["type"] == "blob" 
+                if item["type"] == "blob"
                 and item["path"].endswith(".md")
                 and (not prefix or item["path"].startswith(prefix))
             ]
 
-            # Limit to 100 files as a risk mitigation
             if len(md_files) > 100:
-                md_files = md_files[:100]
+                return f"Too many .md files ({len(md_files)}). Use a more specific folder path (max 100)."
 
             results = []
             for item in md_files:
