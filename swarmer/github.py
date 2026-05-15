@@ -135,9 +135,9 @@ async def list_folder_contents(
     if pat:
         headers["Authorization"] = f"token {pat}"
 
-    # githubapi recursive listing: if path is empty, we must not have a trailing slash
-    # contents api expects path without leading/trailing slashes
     clean_path = path.strip("/")
+    if clean_path == ".":
+        clean_path = ""
     url = f"https://api.github.com/repos/{owner}/{repo}/contents/{clean_path}"
     
     try:
@@ -198,6 +198,8 @@ async def fetch_folder_prompts(
             
             tree_data = r.json().get("tree", [])
             prefix = folder_path.strip("/")
+            if prefix == ".":
+                prefix = ""
             if prefix and not prefix.endswith("/"):
                 prefix += "/"
             
