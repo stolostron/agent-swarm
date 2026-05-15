@@ -140,6 +140,15 @@ Parent epic: [ACM-32892](https://redhat.atlassian.net/browse/ACM-32892) — Impl
   pr: "https://github.com/stolostron/agent-swarm/pull/62"
   summary: "VertexAI model listing API does not filter by credential; removed claude-opus-4-7 from all model choice lists in crush.py and opencode.py, promoted opus-4-6 to most capable"
 
+# ──────────────────────────────────────────────────────────
+- date: "2026-05-15"
+  title: "Increase Agent pod memory limit from 4Gi to 8Gi"
+  jira: "ACM-34126"
+  jira_url: "https://redhat.atlassian.net/browse/ACM-34126"
+  status: "Done"
+  pr: "https://github.com/stolostron/agent-swarm/pull/69"
+  summary: "Raised agent container memory limit from 4Gi to 8Gi in k8s_session.py to support larger codebases and extended context windows"
+
 ## Foundation & Feature Plans
 
 | Plan | Summary | Jira | PR |
