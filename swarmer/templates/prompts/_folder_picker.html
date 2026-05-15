@@ -7,14 +7,13 @@
               style="padding:0; height:auto;">root</button>
     </li>
     {% set parts = current_path.split('/') if current_path and current_path != '.' else [] %}
-    {% set cumulative = [] %}
     {% for part in parts %}
       {% if part %}
-        {% do cumulative.append(part) %}
+        {% set crumb_path = parts[:loop.index] | join('/') %}
         <li class="pf-v6-c-breadcrumb__item">
           <span class="pf-v6-c-breadcrumb__item-divider">/</span>
-          <button class="pf-v6-c-button pf-m-link" 
-                  hx-get="/workspaces/{{ ws_id }}/prompts/browse-folder?repo_url={{ repo_url | urlencode }}&branch={{ branch | urlencode }}&path={{ cumulative | join('/') | urlencode }}&github_pat_id={{ github_pat_id }}"
+          <button class="pf-v6-c-button pf-m-link"
+                  hx-get="/workspaces/{{ ws_id }}/prompts/browse-folder?repo_url={{ repo_url | urlencode }}&branch={{ branch | urlencode }}&path={{ crumb_path | urlencode }}&github_pat_id={{ github_pat_id }}"
                   hx-target="#folder-picker-modal-body"
                   style="padding:0; height:auto;">{{ part }}</button>
         </li>
