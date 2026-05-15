@@ -75,6 +75,7 @@ def build_session_pod(
     agent_secret_name: str = "",
     pat_secret_name: str = "",
     mcp_secret_name: str = "",
+    resolved_prompt: str = "",
 ):  # -> client.V1Pod
     """Build a V1Pod spec for the given session.
 
@@ -134,8 +135,8 @@ def build_session_pod(
             )
         )
 
-    if session.instruction_prompt and session.mode in ("tui", "server"):
-        env.append(client.V1EnvVar(name="SWARMER_AGENT_MD", value=session.instruction_prompt))
+    if resolved_prompt and session.mode in ("tui", "server"):
+        env.append(client.V1EnvVar(name="SWARMER_AGENT_MD", value=resolved_prompt))
 
     # ---------- volumes ----------
     volumes = [
@@ -242,7 +243,7 @@ def build_session_pod(
     model_setup = tool.build_model_setup_cmd(model)
     share_setup = tool.build_share_setup_cmd()
     agent_md_setup = ""
-    if session.instruction_prompt and session.mode in ("tui", "server"):
+    if resolved_prompt and session.mode in ("tui", "server"):
         agent_md_setup = "printf '%s' \"${SWARMER_AGENT_MD}\" > /workspace/AGENTS.md && "
 
     # ---------- main container command ----------

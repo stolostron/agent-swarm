@@ -102,13 +102,13 @@ class OpenCodeStrategy(AgentToolStrategy):
             "> /workspace/.local/state/opencode/model.json && "
         )
 
-    def build_main_cmd(self, session, model: str) -> str:
+    def build_main_cmd(self, session, model: str, resolved_prompt: str = "") -> str:
         if session.mode == "server":
             return "opencode serve --hostname 0.0.0.0 --port 4096"
         elif session.mode == "tui":
             return "sleep infinity"
         else:
-            prompt_text = session.instruction_prompt or ""
+            prompt_text = resolved_prompt or session.instruction_prompt or ""
             if hasattr(session, "repos") and session.repos:
                 repo_lines = ["\n\nContext Repositories"]
                 for repo in session.repos:

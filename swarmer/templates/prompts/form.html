@@ -1,0 +1,166 @@
+{% extends "base.html" %}
+{% block title %}{{ 'Edit' if source else 'New' }} Prompt Source — {{ ws.display_name }}{% endblock %}
+
+{% block content %}
+<nav class="pf-v6-c-breadcrumb" aria-label="breadcrumb" style="margin-bottom:var(--pf-t--global--spacer--sm);">
+  <ol class="pf-v6-c-breadcrumb__list">
+    <li class="pf-v6-c-breadcrumb__item">
+      <span class="pf-v6-c-breadcrumb__item-divider">/</span>
+      <a href="/workspaces" class="pf-v6-c-breadcrumb__link">Workspaces</a>
+    </li>
+    <li class="pf-v6-c-breadcrumb__item">
+      <span class="pf-v6-c-breadcrumb__item-divider">/</span>
+      <a href="/workspaces/{{ ws.id }}" class="pf-v6-c-breadcrumb__link">{{ ws.display_name }}</a>
+    </li>
+    <li class="pf-v6-c-breadcrumb__item">
+      <span class="pf-v6-c-breadcrumb__item-divider">/</span>
+      <a href="/workspaces/{{ ws.id }}/prompts" class="pf-v6-c-breadcrumb__link">Prompts</a>
+    </li>
+    <li class="pf-v6-c-breadcrumb__item">
+      <span class="pf-v6-c-breadcrumb__item-divider">/</span>
+      <span class="pf-v6-c-breadcrumb__link pf-m-current">{{ 'Edit' if source else 'New' }} Source</span>
+    </li>
+  </ol>
+</nav>
+
+<h1 class="pf-v6-c-title pf-m-2xl" style="margin-bottom:var(--pf-t--global--spacer--lg);">
+  {{ 'Edit' if source else 'Add' }} Prompt Source
+</h1>
+
+<div class="pf-v6-c-card">
+  <div class="pf-v6-c-card__body">
+    <form method="post" action="/workspaces/{{ ws.id }}/prompts{{ '/' + (source.id | string) + '/edit' if source else '' }}" class="pf-v6-c-form">
+      
+      <div class="pf-v6-c-form__group">
+        <div class="pf-v6-c-form__group-label">
+          <label class="pf-v6-c-form__label" for="name">
+            <span class="pf-v6-c-form__label-text">Name</span>
+            <span class="pf-v6-c-form__label-required" aria-hidden="true">*</span>
+          </label>
+        </div>
+        <div class="pf-v6-c-form__group-control">
+          <input class="pf-v6-c-form-control" type="text" id="name" name="name" value="{{ source.name if source else '' }}" required placeholder="e.g. CVE Prompts" />
+        </div>
+      </div>
+
+      <div class="pf-v6-c-form__group">
+        <div class="pf-v6-c-form__group-label">
+          <label class="pf-v6-c-form__label" for="github_pat_id">
+            <span class="pf-v6-c-form__label-text">GitHub PAT</span>
+          </label>
+        </div>
+        <div class="pf-v6-c-form__group-control">
+          <select class="pf-v6-c-form-control" id="github_pat_id" name="github_pat_id"
+                  hx-get="/workspaces/{{ ws.id }}/prompts/browse-repo"
+                  hx-target="#repo-picker-container"
+                  hx-trigger="change">
+            <option value="">(none — public repo)</option>
+            {% for pat in pats %}
+            <option value="{{ pat.id }}" {{ 'selected' if source and source.github_pat_id == pat.id else '' }}>{{ pat.name }}</option>
+            {% endfor %}
+          </select>
+          <div class="pf-v6-c-form__helper-text" style="margin-top:4px;">
+            Required for private repositories.
+          </div>
+        </div>
+      </div>
+
+      <div class="pf-v6-c-form__group">
+        <div class="pf-v6-c-form__group-label">
+          <label class="pf-v6-c-form__label" for="repo_url">
+            <span class="pf-v6-c-form__label-text">Repository URL</span>
+            <span class="pf-v6-c-form__label-required" aria-hidden="true">*</span>
+          </label>
+        </div>
+        <div class="pf-v6-c-form__group-control">
+          <div id="repo-picker-container">
+            {# Reusing the same logic as session repo picker #}
+            <input class="pf-v6-c-form-control" type="text" id="repo_url" name="repo_url" value="{{ source.repo_url if source else '' }}" required placeholder="https://github.com/org/repo.git" />
+          </div>
+        </div>
+      </div>
+
+      <div class="pf-v6-c-form__group">
+        <div class="pf-v6-c-form__group-label">
+          <label class="pf-v6-c-form__label" for="branch">
+            <span class="pf-v6-c-form__label-text">Branch</span>
+          </label>
+        </div>
+        <div class="pf-v6-c-form__group-control">
+          <input class="pf-v6-c-form-control" type="text" id="branch" name="branch" value="{{ source.branch if source else 'main' }}" placeholder="main" />
+        </div>
+      </div>
+
+      <div class="pf-v6-c-form__group">
+        <div class="pf-v6-c-form__group-label">
+          <label class="pf-v6-c-form__label" for="folder_path">
+            <span class="pf-v6-c-form__label-text">Folder Path</span>
+          </label>
+        </div>
+        <div class="pf-v6-c-form__group-control" style="display:flex; gap:var(--pf-t--global--spacer--sm);">
+          <input class="pf-v6-c-form-control" type="text" id="folder_path" name="folder_path" value="{{ source.folder_path if source else '.' }}" placeholder="prompts/cve" style="flex:1;" />
+          <button type="button" class="pf-v6-c-button pf-m-secondary"
+                  hx-get="/workspaces/{{ ws.id }}/prompts/browse-folder"
+                  hx-target="#folder-picker-modal-body"
+                  hx-include="#repo_url, #branch, #github_pat_id"
+                  onclick="document.getElementById('folder-picker-modal').style.display='block'">
+            Browse
+          </button>
+        </div>
+        <div class="pf-v6-c-form__helper-text" style="margin-top:4px;">
+          Path within the repository containing .md files. Use "." for root.
+        </div>
+      </div>
+
+      <div class="pf-v6-c-form__actions" style="margin-top:var(--pf-t--global--spacer--xl);">
+        <button class="pf-v6-c-button pf-m-primary" type="submit">Save</button>
+        <a href="/workspaces/{{ ws.id }}/prompts" class="pf-v6-c-button pf-m-link">Cancel</a>
+      </div>
+    </form>
+  </div>
+</div>
+
+{# ── Folder Picker Modal ── #}
+<div id="folder-picker-modal" class="pf-v6-c-backdrop" style="display:none; position:fixed; inset:0; z-index:9999; background:rgba(0,0,0,0.5);">
+  <div class="pf-v6-c-bullseye">
+    <div class="pf-v6-c-modal-box pf-m-md" role="dialog" aria-modal="true">
+      <div class="pf-v6-c-modal-box__header">
+        <h2 class="pf-v6-c-modal-box__title">Select Folder</h2>
+      </div>
+      <div class="pf-v6-c-modal-box__body" id="folder-picker-modal-body" style="min-height:300px; max-height:60vh; overflow-y:auto;">
+        <div class="pf-v6-c-spinner pf-m-lg" role="progressbar" aria-label="Loading contents">
+          <span class="pf-v6-c-spinner__clipper"></span>
+          <span class="pf-v6-c-spinner__lead-ball"></span>
+          <span class="pf-v6-c-spinner__tail-ball"></span>
+        </div>
+      </div>
+      <div class="pf-v6-c-modal-box__footer">
+        <button class="pf-v6-c-button pf-m-link" type="button" onclick="document.getElementById('folder-picker-modal').style.display='none'">Cancel</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+  // Handle folder selection from the modal
+  document.addEventListener('folderSelected', function(e) {
+    document.getElementById('folder_path').value = e.detail.path;
+    document.getElementById('folder-picker-modal').style.display = 'none';
+  });
+  
+  // Repo picker selection integration
+  document.addEventListener('htmx:afterOnLoad', function(e) {
+    if (e.detail.target.id === 'repo-picker-container') {
+       // Listen for repo clicks if the partial includes them
+       const repos = e.detail.target.querySelectorAll('.repo-item');
+       repos.forEach(r => {
+         r.addEventListener('click', function() {
+           const url = this.getAttribute('data-url');
+           document.getElementById('repo_url').value = url;
+           // If it has a default branch, we could set it too
+         });
+       });
+    }
+  });
+</script>
+{% endblock %}

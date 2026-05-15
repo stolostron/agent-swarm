@@ -5,6 +5,7 @@ can be unit-tested without standing up the full application stack.
 """
 
 import asyncio
+import base64
 import re
 from urllib.parse import urlparse
 
@@ -119,3 +120,122 @@ async def list_repos_for_pat(pat) -> list[dict] | str:
         return f"Failed to contact GitHub API: {exc}"
 
     return repos
+
+
+async def list_folder_contents(
+    owner: str, repo: str, path: str, branch: str, pat: str | None
+) -> list[dict] | str:
+    """List contents of a folder in a GitHub repo.
+
+    Returns a list of dicts with keys: name, path, type ('file' or 'dir'), size, sha.
+    Returns a string error message on failure.
+    Uses the GitHub Contents API: GET /repos/{owner}/{repo}/contents/{path}?ref={branch}
+    """
+    headers = {"Accept": "application/vnd.github+json"}
+    if pat:
+        headers["Authorization"] = f"token {pat}"
+
+    # githubapi recursive listing: if path is empty, we must not have a trailing slash
+    # contents api expects path without leading/trailing slashes
+    clean_path = path.strip("/")
+    url = f"https://api.github.com/repos/{owner}/{repo}/contents/{clean_path}"
+    
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            r = await client.get(url, headers=headers, params={"ref": branch})
+            if r.status_code != 200:
+                ct = r.headers.get("content-type", "")
+                msg = (
+                    r.json().get("message", "unknown error")
+                    if ct.startswith("application/json")
+                    else r.text
+                )
+                return f"GitHub API error {r.status_code}: {msg}"
+            return r.json()
+    except Exception as exc:
+        return f"Failed to contact GitHub API: {exc}"
+
+
+async def fetch_folder_prompts(
+    owner: str, repo: str, folder_path: str, branch: str, pat: str | None
+) -> list[dict] | str:
+    """Recursively fetch all .md files from a folder and sub-folders.
+
+    Uses the Git Trees API (GET /repos/{owner}/{repo}/git/trees/{sha}?recursive=1)
+    for efficient recursive listing, then fetches content for each .md file
+    via the Contents API.
+
+    Returns a list of dicts: {filename: str, content: str, sha: str}
+    or a string error message on failure.
+    """
+    headers = {"Accept": "application/vnd.github+json"}
+    if pat:
+        headers["Authorization"] = f"token {pat}"
+
+    try:
+        async with httpx.AsyncClient(timeout=20) as client:
+            # 1. Resolve branch to a SHA (required for Trees API)
+            r = await client.get(
+                f"https://api.github.com/repos/{owner}/{repo}/branches/{branch}",
+                headers=headers,
+            )
+            if r.status_code != 200:
+                return f"Failed to resolve branch {branch}: {r.status_code}"
+            head_sha = r.json()["commit"]["sha"]
+
+            # 2. Get recursive tree
+            r = await client.get(
+                f"https://api.github.com/repos/{owner}/{repo}/git/trees/{head_sha}?recursive=1",
+                headers=headers,
+            )
+            if r.status_code != 200:
+                return f"Failed to fetch tree: {r.status_code}"
+            
+            tree_data = r.json().get("tree", [])
+            prefix = folder_path.strip("/")
+            if prefix and not prefix.endswith("/"):
+                prefix += "/"
+            
+            # Filter for .md files inside the folder_path
+            md_files = [
+                item for item in tree_data
+                if item["type"] == "blob" 
+                and item["path"].endswith(".md")
+                and (not prefix or item["path"].startswith(prefix))
+            ]
+
+            # Limit to 100 files as a risk mitigation
+            if len(md_files) > 100:
+                md_files = md_files[:100]
+
+            results = []
+            for item in md_files:
+                # Fetch content for each file
+                # Use contents API to get base64 encoded content
+                r = await client.get(
+                    f"https://api.github.com/repos/{owner}/{repo}/contents/{item['path']}?ref={head_sha}",
+                    headers=headers,
+                )
+                if r.status_code == 200:
+                    data = r.json()
+                    content_b64 = data.get("content", "")
+                    try:
+                        content = base64.b64decode(content_b64).decode("utf-8")
+                    except Exception:
+                        content = "(Error decoding content)"
+                    
+                    # Store filename relative to folder_path
+                    rel_path = item["path"]
+                    if prefix and rel_path.startswith(prefix):
+                        rel_path = rel_path[len(prefix):]
+                    
+                    results.append({
+                        "filename": rel_path,
+                        "content": content,
+                        "sha": item["sha"]
+                    })
+            
+            return results
+
+    except Exception as exc:
+        return f"Failed to fetch prompts: {exc}"

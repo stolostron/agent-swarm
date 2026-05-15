@@ -54,7 +54,7 @@ class AgentToolStrategy(ABC):
         ...
 
     @abstractmethod
-    def build_main_cmd(self, session, model: str) -> str:
+    def build_main_cmd(self, session, model: str, resolved_prompt: str = "") -> str:
         ...
 
     @abstractmethod

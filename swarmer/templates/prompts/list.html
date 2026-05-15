@@ -1,0 +1,127 @@
+{% extends "base.html" %}
+{% block title %}Prompts — {{ ws.display_name }}{% endblock %}
+
+{% block content %}
+<nav class="pf-v6-c-breadcrumb" aria-label="breadcrumb" style="margin-bottom:var(--pf-t--global--spacer--sm);">
+  <ol class="pf-v6-c-breadcrumb__list">
+    <li class="pf-v6-c-breadcrumb__item">
+      <span class="pf-v6-c-breadcrumb__item-divider">/</span>
+      <a href="/workspaces" class="pf-v6-c-breadcrumb__link">Workspaces</a>
+    </li>
+    <li class="pf-v6-c-breadcrumb__item">
+      <span class="pf-v6-c-breadcrumb__item-divider">/</span>
+      <a href="/workspaces/{{ ws.id }}" class="pf-v6-c-breadcrumb__link">{{ ws.display_name }}</a>
+    </li>
+    <li class="pf-v6-c-breadcrumb__item">
+      <span class="pf-v6-c-breadcrumb__item-divider">/</span>
+      <span class="pf-v6-c-breadcrumb__link pf-m-current">Prompts</span>
+    </li>
+  </ol>
+</nav>
+
+<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:var(--pf-t--global--spacer--lg);">
+  <h1 class="pf-v6-c-title pf-m-2xl">Prompt Sources</h1>
+  <a href="/workspaces/{{ ws.id }}/prompts/new" class="pf-v6-c-button pf-m-primary">+ Add Prompt Source</a>
+</div>
+
+{% if sources %}
+<table class="pf-v6-c-table pf-m-grid-md" role="grid">
+  <thead class="pf-v6-c-table__thead">
+    <tr class="pf-v6-c-table__tr" role="row">
+      <th class="pf-v6-c-table__th" role="columnheader">Name</th>
+      <th class="pf-v6-c-table__th" role="columnheader">Repository</th>
+      <th class="pf-v6-c-table__th" role="columnheader">Folder</th>
+      <th class="pf-v6-c-table__th" role="columnheader">Prompts</th>
+      <th class="pf-v6-c-table__th" role="columnheader">Last Synced</th>
+      <th class="pf-v6-c-table__th" role="columnheader">Status</th>
+      <th class="pf-v6-c-table__th" role="columnheader" style="text-align:right;">Actions</th>
+    </tr>
+  </thead>
+  <tbody class="pf-v6-c-table__tbody" role="rowgroup">
+  {% for s in sources %}
+    <tr class="pf-v6-c-table__tr" role="row">
+      <td class="pf-v6-c-table__td" role="cell" data-label="Name">
+        <div style="font-weight:bold;">{{ s.name }}</div>
+        {% if s.github_pat %}
+          <div style="font-size:var(--pf-t--global--font--size--xs); color:var(--pf-t--global--text--color--subtle);">
+            Auth: {{ s.github_pat.name }}
+          </div>
+        {% endif %}
+      </td>
+      <td class="pf-v6-c-table__td" role="cell" data-label="Repository" style="font-family:var(--pf-t--global--font--family--mono); font-size:var(--pf-t--global--font--size--sm);">
+        {{ s.repo_url }}
+        <div style="font-size:var(--pf-t--global--font--size--xs); color:var(--pf-t--global--text--color--subtle);">
+          Branch: {{ s.branch }}
+        </div>
+      </td>
+      <td class="pf-v6-c-table__td" role="cell" data-label="Folder" style="font-family:var(--pf-t--global--font--family--mono); font-size:var(--pf-t--global--font--size--sm);">
+        {{ s.folder_path }}
+      </td>
+      <td class="pf-v6-c-table__td" role="cell" data-label="Prompts">
+        <span class="pf-v6-c-badge pf-m-read">{{ s.prompts | length }}</span>
+      </td>
+      <td class="pf-v6-c-table__td" role="cell" data-label="Last Synced" style="font-size:var(--pf-t--global--font--size--sm);">
+        {{ s.last_synced_at.strftime('%Y-%m-%d %H:%M') if s.last_synced_at else 'Never' }}
+      </td>
+      <td class="pf-v6-c-table__td" role="cell" data-label="Status">
+        {% if s.sync_error %}
+          <span class="pf-v6-c-label pf-m-red">
+            <span class="pf-v6-c-label__content">Error</span>
+          </span>
+          <div style="font-size:var(--pf-t--global--font--size--xs); color:var(--pf-t--global--color--status--danger--default); margin-top:4px;">
+            {{ s.sync_error }}
+          </div>
+        {% elif s.last_synced_at %}
+          <span class="pf-v6-c-label pf-m-green">
+            <span class="pf-v6-c-label__content">OK</span>
+          </span>
+        {% else %}
+          <span class="pf-v6-c-label pf-m-grey">
+            <span class="pf-v6-c-label__content">Pending</span>
+          </span>
+        {% endif %}
+      </td>
+      <td class="pf-v6-c-table__td" role="cell" style="text-align:right; white-space:nowrap;">
+        <form method="post" action="/workspaces/{{ ws.id }}/prompts/{{ s.id }}/refresh" style="display:inline;">
+          <button type="submit" class="pf-v6-c-button pf-m-secondary pf-m-small" title="Refresh prompts">
+             ↻ Refresh
+          </button>
+        </form>
+        <a href="/workspaces/{{ ws.id }}/prompts/{{ s.id }}/edit" class="pf-v6-c-button pf-m-secondary pf-m-small">Edit</a>
+        <form method="post" action="/workspaces/{{ ws.id }}/prompts/{{ s.id }}/delete" style="display:inline;" onsubmit="return confirm('Delete this prompt source and all its cached prompts?')">
+          <button type="submit" class="pf-v6-c-button pf-m-danger pf-m-small">Delete</button>
+        </form>
+      </td>
+    </tr>
+    {% if s.prompts %}
+    <tr class="pf-v6-c-table__tr pf-m-expandable">
+      <td class="pf-v6-c-table__td" colspan="7">
+        <div style="padding:var(--pf-t--global--spacer--sm) var(--pf-t--global--spacer--lg); font-size:var(--pf-t--global--font--size--sm);">
+          <ul style="column-count:3; list-style:none; margin:0; padding:0;">
+          {% for p in s.prompts %}
+            <li style="margin-bottom:4px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">
+              <span style="color:var(--pf-t--global--text--color--subtle);">📄</span> {{ p.display_name }}
+            </li>
+          {% endfor %}
+          </ul>
+        </div>
+      </td>
+    </tr>
+    {% endif %}
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<div class="pf-v6-c-empty-state">
+  <div class="pf-v6-c-empty-state__content">
+    <h2 class="pf-v6-c-empty-state__title-text">No prompt sources configured.</h2>
+    <p class="pf-v6-c-empty-state__body">
+      Connect a GitHub repository folder to use its markdown files as named prompts in your sessions.
+    </p>
+    <div class="pf-v6-c-empty-state__actions">
+      <a href="/workspaces/{{ ws.id }}/prompts/new" class="pf-v6-c-button pf-m-primary">Add Prompt Source</a>
+    </div>
+  </div>
+</div>
+{% endif %}
+{% endblock %}

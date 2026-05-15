@@ -32,6 +32,9 @@ class Workspace(Base):
     mcp_servers: Mapped[list["McpServer"]] = relationship(  # noqa: F821
         back_populates="workspace", cascade="all, delete-orphan"
     )
+    prompt_sources: Mapped[list["WorkspacePromptSource"]] = relationship(  # noqa: F821
+        "WorkspacePromptSource", back_populates="workspace", cascade="all, delete-orphan"
+    )
 
     @property
     def k8s_namespace(self) -> str:

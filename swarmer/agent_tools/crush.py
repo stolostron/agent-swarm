@@ -132,7 +132,7 @@ class CrushStrategy(AgentToolStrategy):
             "> $HOME/.local/share/crush/crush.json && "
         )
 
-    def build_main_cmd(self, session, model: str) -> str:
+    def build_main_cmd(self, session, model: str, resolved_prompt: str = "") -> str:
         if session.mode == "server":
             port = settings.crush_server_port
             return f"crush server --host tcp://0.0.0.0:{port}"
@@ -144,8 +144,10 @@ class CrushStrategy(AgentToolStrategy):
                 cmd_parts.extend(["--model", model])
             if session.resume:
                 cmd_parts.append("--continue")
-            if session.instruction_prompt:
-                cmd_parts.append(session.instruction_prompt)
+            
+            prompt_text = resolved_prompt or session.instruction_prompt
+            if prompt_text:
+                cmd_parts.append(prompt_text)
             return " ".join(shlex.quote(p) for p in cmd_parts)
 
     def get_server_mode_ports(self) -> list:

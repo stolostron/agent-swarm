@@ -62,6 +62,7 @@ async def migrate_db() -> None:
         "ALTER TABLE github_pats ADD COLUMN shared BOOLEAN NOT NULL DEFAULT 1",
         "ALTER TABLE mcp_servers ADD COLUMN user_id VARCHAR(255) NOT NULL DEFAULT ''",
         "ALTER TABLE mcp_servers ADD COLUMN shared BOOLEAN NOT NULL DEFAULT 1",
+        "ALTER TABLE sessions ADD COLUMN prompt_id INTEGER REFERENCES workspace_prompts(id)",
     ]
     async with _engine.begin() as conn:
         for stmt in migrations:

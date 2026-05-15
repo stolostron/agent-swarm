@@ -125,20 +125,21 @@
 <button id="prompt-compact" type="button" onclick="togglePrompt()"
         class="pf-v6-c-button pf-m-link"
         style="display:inline-flex; align-items:center; gap:var(--pf-t--global--spacer--xs); margin-bottom:var(--pf-t--global--spacer--md); padding:0; text-decoration:none;">
-  <span id="prompt-arrow" style="font-size:var(--pf-t--global--font--size--sm); line-height:1;">{% if session.instruction_prompt %}▶{% else %}▼{% endif %}</span>
+  <span id="prompt-arrow" style="font-size:var(--pf-t--global--font--size--sm); line-height:1;">{% if session.instruction_prompt or session.prompt_id %}▶{% else %}▼{% endif %}</span>
   <span style="font-size:var(--pf-t--global--font--size--lg); font-weight:var(--pf-t--global--font--weight--heading--bold);">Prompt</span>
   {% if session.mode in ('tui', 'server') %}
   <span style="font-size:var(--pf-t--global--font--size--sm); color:var(--pf-t--global--text--color--subtle); font-weight:normal; margin-left:var(--pf-t--global--spacer--xs);">— written as AGENTS.md at launch</span>
   {% endif %}
 </button>
 {# Full prompt card — visible when no value exists, or after expand #}
-<div id="prompt-card" class="pf-v6-c-card" style="display:{% if session.instruction_prompt %}none{% else %}block{% endif %}; margin-bottom:var(--pf-t--global--spacer--md);">
+<div id="prompt-card" class="pf-v6-c-card" style="display:{% if session.instruction_prompt or session.prompt_id %}none{% else %}block{% endif %}; margin-bottom:var(--pf-t--global--spacer--md);">
   <div class="pf-v6-c-card__body">
-    <textarea id="instruction-prompt-input" class="pf-v6-c-form-control"
-              aria-labelledby="instruction-prompt-label"
-              form="cfg-edit-form" name="instruction_prompt"
-              rows="4" placeholder="{% if session.mode in ('tui', 'server') %}Agent instructions written as AGENTS.md to /workspace at launch…{% else %}Describe the task for the agent to run…{% endif %}"
-              {% if session.is_active %}disabled{% endif %}>{{ session.instruction_prompt }}</textarea>
+    {% include "sessions/_prompt_picker.html" with context %}
+    {# Add form binding for the prompt_id select inside the partial #}
+    <script>
+      document.getElementById('prompt_id').setAttribute('form', 'cfg-edit-form');
+      document.getElementById('instruction_prompt').setAttribute('form', 'cfg-edit-form');
+    </script>
   </div>
 </div>
 
@@ -756,20 +757,18 @@ function copyCommitMsg(btn) { _copyBlock('commit-msg', btn); }
   }
 })();
 
-function togglePrompt() {
-  const card = document.getElementById('prompt-card');
-  const arrow = document.getElementById('prompt-arrow');
-  const ta = document.getElementById('instruction-prompt-input');
-  const isExpanded = card.style.display !== 'none';
-  if (isExpanded) {
-    if (ta && !ta.value.trim()) return;
-    card.style.display = 'none';
-    arrow.textContent = '▶';
-  } else {
-    card.style.display = '';
-    arrow.textContent = '▼';
-    if (ta) ta.focus();
-  }
+    function togglePrompt() {
+      const card = document.getElementById('prompt-card');
+      const arrow = document.getElementById('prompt-arrow');
+      if (card.style.display === 'none') {
+        card.style.display = 'block';
+        arrow.textContent = '▼';
+      } else {
+        card.style.display = 'none';
+        arrow.textContent = '▶';
+      }
+    }
+
 }
 
 // Wire auto-save for the instruction prompt textarea
@@ -830,7 +829,9 @@ document.addEventListener('htmx:afterSwap', function () {
       el.disabled = isBlocked;
     });
   }
-  const instrTA = document.getElementById('instruction-prompt-input');
+  const promptId = document.getElementById('prompt_id');
+  if (promptId) promptId.disabled = isBlocked;
+  const instrTA = document.getElementById('instruction_prompt');
   if (instrTA) instrTA.disabled = isBlocked;
   const patSelect = document.getElementById('cfg-pat-select');
   if (patSelect) patSelect.disabled = isBlocked;
@@ -859,6 +860,14 @@ document.addEventListener('htmx:afterSwap', function () {
   const _launchBtn = document.getElementById('launch-btn');
   const _launchSelect = document.getElementById('launch-tool-select');
   if (_launchSelect) _launchSelect.disabled = isBlocked;
+  
+  // Sync prompt visibility after HTMX swap
+  const pId = document.getElementById('prompt_id');
+  if (pId) {
+    const group = document.getElementById('instruction_prompt_group');
+    if (group) group.style.display = (pId.value === "") ? 'block' : 'none';
+  }
+
   if (_launchBtn) {
     const availMap = _launchSelect ? JSON.parse(_launchSelect.dataset.availability || '{}') : {};
     const selectedTool = _launchSelect ? _launchSelect.value : '';

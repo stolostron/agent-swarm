@@ -94,20 +94,7 @@
       </div>
 
       <div id="prompt-row">
-        <div class="pf-v6-c-form__group">
-          <label class="pf-v6-c-form__label">
-            <span class="pf-v6-c-form__label-text" style="font-weight:var(--pf-t--global--font--weight--heading--bold);">Instruction Prompt</span>
-          </label>
-          <div class="pf-v6-c-form__group-control">
-            <textarea class="pf-v6-c-form-control" name="instruction_prompt" rows="4"
-                      placeholder="Describe the task for the agent to perform…">{{ form.instruction_prompt if form else '' }}</textarea>
-            <div class="pf-v6-c-form__helper-text">
-              <div class="pf-v6-c-helper-text__item">
-                <span class="pf-v6-c-helper-text__item-text">The prompt passed to the agent in prompt mode.</span>
-              </div>
-            </div>
-          </div>
-        </div>
+        {% include "sessions/_prompt_picker.html" with context %}
       </div>
 
       {% include "sessions/_model_select.html" with context %}

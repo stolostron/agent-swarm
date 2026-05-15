@@ -1,0 +1,57 @@
+<div class="pf-v6-c-breadcrumb" style="margin-bottom:var(--pf-t--global--spacer--md);">
+  <ol class="pf-v6-c-breadcrumb__list">
+    <li class="pf-v6-c-breadcrumb__item">
+      <button class="pf-v6-c-button pf-m-link" 
+              hx-get="/workspaces/{{ ws_id }}/prompts/browse-folder?repo_url={{ repo_url | urlencode }}&branch={{ branch | urlencode }}&path=.&github_pat_id={{ github_pat_id }}"
+              hx-target="#folder-picker-modal-body"
+              style="padding:0; height:auto;">root</button>
+    </li>
+    {% set parts = current_path.split('/') if current_path and current_path != '.' else [] %}
+    {% set cumulative = [] %}
+    {% for part in parts %}
+      {% if part %}
+        {% do cumulative.append(part) %}
+        <li class="pf-v6-c-breadcrumb__item">
+          <span class="pf-v6-c-breadcrumb__item-divider">/</span>
+          <button class="pf-v6-c-button pf-m-link" 
+                  hx-get="/workspaces/{{ ws_id }}/prompts/browse-folder?repo_url={{ repo_url | urlencode }}&branch={{ branch | urlencode }}&path={{ cumulative | join('/') | urlencode }}&github_pat_id={{ github_pat_id }}"
+                  hx-target="#folder-picker-modal-body"
+                  style="padding:0; height:auto;">{{ part }}</button>
+        </li>
+      {% endif %}
+    {% endfor %}
+  </ol>
+</div>
+
+<div class="pf-v6-c-data-list" role="list">
+  {% if dirs %}
+    {% for d in dirs %}
+    <div class="pf-v6-c-data-list__item">
+      <div class="pf-v6-c-data-list__item-row">
+        <div class="pf-v6-c-data-list__item-content">
+          <div class="pf-v6-c-data-list__cell">
+            <button class="pf-v6-c-button pf-m-link" 
+                    hx-get="/workspaces/{{ ws_id }}/prompts/browse-folder?repo_url={{ repo_url | urlencode }}&branch={{ branch | urlencode }}&path={{ d.path | urlencode }}&github_pat_id={{ github_pat_id }}"
+                    hx-target="#folder-picker-modal-body"
+                    style="padding:0; height:auto; display:flex; align-items:center; gap:8px;">
+              <span style="color:var(--pf-t--global--color--status--info--default);">📁</span>
+              {{ d.name }}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+    {% endfor %}
+  {% else %}
+    <div style="padding:var(--pf-t--global--spacer--md); color:var(--pf-t--global--text--color--subtle); text-align:center;">
+      No sub-folders found.
+    </div>
+  {% endif %}
+</div>
+
+<div style="margin-top:var(--pf-t--global--spacer--lg); text-align:right;">
+  <button class="pf-v6-c-button pf-m-primary" type="button" 
+          onclick="document.dispatchEvent(new CustomEvent('folderSelected', { detail: { path: '{{ current_path or '.' }}' } }))">
+    Select "{{ current_path or 'root' }}"
+  </button>
+</div>

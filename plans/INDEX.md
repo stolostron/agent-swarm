@@ -158,6 +158,15 @@ Parent epic: [ACM-32892](https://redhat.atlassian.net/browse/ACM-32892) — Impl
   pr: ~
   summary: "Added lsp: true to OpenCode and auto_lsp + explicit gopls/pyright entries to Crush in both build_config_data() and build_mcp_config_cmd(), fixing runtime config overwriting static LSP settings"
 
+# ──────────────────────────────────────────────────────────
+- date: "2026-05-15"
+  title: "Workspace prompt library: named prompts, URL-based prompt sources, and per-session prompt picker"
+  jira: "ACM-34123"
+  jira_url: "https://redhat.atlassian.net/browse/ACM-34123"
+  status: "In Progress"
+  pr: ~
+  summary: "Implement a workspace-level prompt library (Option 2) with git-backed folders, caching, and per-session prompt picker."
+
 ## Foundation & Feature Plans
 
 | Plan | Summary | Jira | PR |

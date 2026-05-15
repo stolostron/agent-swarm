@@ -1,0 +1,58 @@
+<div class="pf-v6-c-form__group">
+  <div class="pf-v6-c-form__group-label">
+    <label class="pf-v6-c-form__label" for="prompt_id">
+      <span class="pf-v6-c-form__label-text">Prompt</span>
+    </label>
+  </div>
+  <div class="pf-v6-c-form__group-control">
+    <select class="pf-v6-c-form-control" id="prompt_id" name="prompt_id"
+            hx-get="/workspaces/{{ ws.id }}/sessions/prompt-preview"
+            hx-target="#prompt-preview-container"
+            hx-trigger="change">
+      <option value="">(custom / free-text)</option>
+      {% for source in prompt_sources %}
+        {% if source.prompts %}
+        <optgroup label="{{ source.name }}">
+          {% for p in source.prompts %}
+          <option value="{{ p.id }}" {{ 'selected' if session and session.prompt_id == p.id else '' }}>{{ p.display_name }}</option>
+          {% endfor %}
+        </optgroup>
+        {% endif %}
+      {% endfor %}
+    </select>
+  </div>
+</div>
+
+<div id="prompt-preview-container">
+  {% if session and session.prompt %}
+    <div style="margin-top:var(--pf-t--global--spacer--sm); padding:var(--pf-t--global--spacer--sm); background:var(--pf-t--global--background--color--secondary--default); border-radius:var(--pf-t--global--border-radius--sm); border:1px solid var(--pf-t--global--border--color--default);">
+      <div style="font-size:var(--pf-t--global--font--size--xs); color:var(--pf-t--global--text--color--subtle); margin-bottom:4px; text-transform:uppercase;">Preview</div>
+      <pre style="font-size:var(--pf-t--global--font--size--sm); white-space:pre-wrap; margin:0; max-height:200px; overflow-y:auto;">{{ session.prompt.content }}</pre>
+    </div>
+    {# Hide the custom textarea when a named prompt is selected #}
+    <style>#instruction_prompt_group { display: none; }</style>
+  {% endif %}
+</div>
+
+<div class="pf-v6-c-form__group" id="instruction_prompt_group">
+  <div class="pf-v6-c-form__group-label">
+    <label class="pf-v6-c-form__label" for="instruction_prompt">
+      <span class="pf-v6-c-form__label-text">Custom Instruction Prompt</span>
+    </label>
+  </div>
+  <div class="pf-v6-c-form__group-control">
+    <textarea class="pf-v6-c-form-control" id="instruction_prompt" name="instruction_prompt" 
+              style="min-height:200px; resize:vertical;">{{ session.instruction_prompt if session else '' }}</textarea>
+  </div>
+</div>
+
+<script>
+  document.getElementById('prompt_id').addEventListener('change', function() {
+    const group = document.getElementById('instruction_prompt_group');
+    if (this.value === "") {
+      group.style.display = 'block';
+    } else {
+      group.style.display = 'none';
+    }
+  });
+</script>

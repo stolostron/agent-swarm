@@ -46,6 +46,9 @@ class Session(Base):
     github_pat_id: Mapped[int | None] = mapped_column(
         Integer, ForeignKey("github_pats.id"), nullable=True
     )
+    prompt_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("workspace_prompts.id"), nullable=True
+    )
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     mode: Mapped[str] = mapped_column(
         String(16), nullable=False, default="prompt", server_default="prompt"
@@ -89,6 +92,9 @@ class Session(Base):
     )
     repos: Mapped[list["SessionRepo"]] = relationship(  # noqa: F821
         back_populates="session", cascade="all, delete-orphan"
+    )
+    prompt: Mapped["WorkspacePrompt | None"] = relationship(  # noqa: F821
+        back_populates="sessions"
     )
 
     @property
