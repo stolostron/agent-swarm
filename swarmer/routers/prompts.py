@@ -352,16 +352,21 @@ async def prompt_preview(
 ):
     if not prompt_id:
         return HTMLResponse("")
-    
+
     try:
         pid = int(prompt_id)
     except ValueError:
-        return HTMLResponse("Invalid prompt_id", status_code=400)
+        return HTMLResponse("")
 
-    prompt = await db.get(WorkspacePrompt, pid)
+    result = await db.execute(
+        select(WorkspacePrompt)
+        .join(WorkspacePromptSource)
+        .where(WorkspacePrompt.id == pid, WorkspacePromptSource.workspace_id == ws_id)
+    )
+    prompt = result.scalar_one_or_none()
     if not prompt:
         return HTMLResponse("")
-    
+
     escaped_content = html.escape(prompt.content)
     return HTMLResponse(f"""
         <div style="margin-top:var(--pf-t--global--spacer--sm); padding:var(--pf-t--global--spacer--sm); background:var(--pf-t--global--background--color--secondary--default); border-radius:var(--pf-t--global--border-radius--sm); border:1px solid var(--pf-t--global--border--color--default);">
