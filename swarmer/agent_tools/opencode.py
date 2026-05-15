@@ -30,6 +30,7 @@ class OpenCodeStrategy(AgentToolStrategy):
         config: dict = {
             "$schema": "https://opencode.ai/config.json",
             "disabled_providers": ["opencode"],
+            "lsp": True,
             "server": {
                 "hostname": "0.0.0.0",
                 "port": 4096,
@@ -249,6 +250,7 @@ class OpenCodeStrategy(AgentToolStrategy):
         config: dict = {
             "$schema": "https://opencode.ai/config.json",
             "disabled_providers": ["opencode"],
+            "lsp": True,
             "server": {
                 "hostname": "0.0.0.0",
                 "port": 4096,

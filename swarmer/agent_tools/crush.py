@@ -60,6 +60,11 @@ class CrushStrategy(AgentToolStrategy):
                 "disable_metrics": True,
                 "disable_notifications": True,
                 "data_directory": ".crush",
+                "auto_lsp": True,
+            },
+            "lsp": {
+                "go": {"command": "gopls"},
+                "python": {"command": "pyright-langserver", "args": ["--stdio"]},
             },
         }
 
@@ -275,6 +280,11 @@ class CrushStrategy(AgentToolStrategy):
                 "disable_metrics": True,
                 "disable_notifications": True,
                 "data_directory": ".crush",
+                "auto_lsp": True,
+            },
+            "lsp": {
+                "go": {"command": "gopls"},
+                "python": {"command": "pyright-langserver", "args": ["--stdio"]},
             },
         }
         if mcp_servers:

@@ -149,6 +149,15 @@ Parent epic: [ACM-32892](https://redhat.atlassian.net/browse/ACM-32892) — Impl
   pr: "https://github.com/stolostron/agent-swarm/pull/69"
   summary: "Raised agent container memory limit from 4Gi to 8Gi in k8s_session.py to support larger codebases and extended context windows"
 
+# ──────────────────────────────────────────────────────────
+- date: "2026-05-15"
+  title: "Enable LSPs in dynamic OpenCode and Crush configs"
+  jira: "ACM-34104"
+  jira_url: "https://redhat.atlassian.net/browse/ACM-34104"
+  status: "Done"
+  pr: ~
+  summary: "Added lsp: true to OpenCode and auto_lsp + explicit gopls/pyright entries to Crush in both build_config_data() and build_mcp_config_cmd(), fixing runtime config overwriting static LSP settings"
+
 ## Foundation & Feature Plans
 
 | Plan | Summary | Jira | PR |
