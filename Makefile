@@ -39,7 +39,7 @@ AC_DEFAULTS ?= .push-defaults
 #  Phony targets
 # ──────────────────────────────────────────────────────────────
 .PHONY: setup-secret k8s-secret user-token grant-workspace \
-        install dev lint db-reset \
+        install dev lint test db-reset \
         image-build image-push image-build-crush \
         k8s-deploy k8s-delete k8s-connect \
         openshift-deploy \
@@ -108,6 +108,9 @@ dev:  ## Run development server with auto-reload (uses local kubeconfig)
 
 lint:  ## Run ruff linter
 	ruff check swarmer/
+
+test:  ## Run unit tests (excludes Playwright browser tests)
+	python3 -m pytest tests/ -q --ignore=tests/test_ui_patternfly.py
 
 db-reset:  ## Delete the SQLite database (forces fresh schema on next start)
 	@rm -f data/swarmer.db && echo "Database deleted."
