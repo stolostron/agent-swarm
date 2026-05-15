@@ -68,7 +68,10 @@ async def prompt_source_list(
     result = await db.execute(
         select(WorkspacePromptSource)
         .where(WorkspacePromptSource.workspace_id == ws_id)
-        .options(selectinload(WorkspacePromptSource.prompts))
+        .options(
+            selectinload(WorkspacePromptSource.prompts),
+            selectinload(WorkspacePromptSource.github_pat),
+        )
         .order_by(WorkspacePromptSource.name)
     )
     sources = result.scalars().all()
