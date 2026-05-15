@@ -1,0 +1,68 @@
+{# HTMX partial — repo picker for prompt sources #}
+
+{% if repos %}
+  <div style="margin-bottom:var(--pf-t--global--spacer--sm);">
+    <input type="text" class="pf-v6-c-form-control pf-m-sm"
+           id="prompt-repo-filter"
+           placeholder="Filter repositories…"
+           oninput="(function(val){
+             val = val.toLowerCase();
+             document.querySelectorAll('.prompt-repo-row').forEach(function(row){
+               row.style.display = row.dataset.name.toLowerCase().includes(val) ? '' : 'none';
+             });
+           })(this.value)"
+           autofocus
+           style="width:100%;">
+  </div>
+
+  <div style="max-height:200px; overflow-y:auto;
+              border:1px solid var(--pf-t--global--border--color--default);
+              border-radius:var(--pf-t--global--border--radius--small);">
+    {% for repo in repos %}
+    <div class="prompt-repo-row"
+         data-name="{{ repo.full_name | e }}"
+         data-clone-url="https://github.com/{{ repo.full_name | e }}.git"
+         data-default-branch="{{ repo.default_branch | default('main') | e }}"
+         style="display:flex; justify-content:space-between; align-items:center;
+                padding:var(--pf-t--global--spacer--xs) var(--pf-t--global--spacer--sm);
+                border-bottom:1px solid var(--pf-t--global--border--color--default);
+                cursor:pointer;"
+         onmouseenter="this.style.background='var(--pf-t--global--background--color--secondary--default)'"
+         onmouseleave="this.style.background=''"
+         onclick="document.getElementById('repo_url').value=this.dataset.cloneUrl;
+                  document.getElementById('branch').value=this.dataset.defaultBranch||'main';
+                  document.getElementById('prompt-repo-picker-wrap').innerHTML='';">
+      <div style="min-width:0; flex:1;">
+        <div style="font-size:var(--pf-t--global--font--size--sm); font-weight:var(--pf-t--global--font--weight--body--bold);">
+          {{ repo.full_name | e }}
+        </div>
+        {% if repo.description %}
+        <div style="font-size:var(--pf-t--global--font--size--xs);
+                    color:var(--pf-t--global--text--color--subtle);
+                    white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">
+          {{ repo.description | e }}
+        </div>
+        {% endif %}
+      </div>
+      <div style="flex-shrink:0; margin-left:var(--pf-t--global--spacer--sm);
+                  font-size:var(--pf-t--global--font--size--xs);">
+        {% if repo.private %}
+        <span class="pf-v6-c-label pf-m-grey pf-m-outline" style="vertical-align:middle;">
+          <span class="pf-v6-c-label__content">Private</span>
+        </span>
+        {% else %}
+        <span class="pf-v6-c-label pf-m-green pf-m-outline" style="vertical-align:middle;">
+          <span class="pf-v6-c-label__content">Public</span>
+        </span>
+        {% endif %}
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+{% else %}
+  <div style="padding:var(--pf-t--global--spacer--sm); text-align:center;
+              color:var(--pf-t--global--text--color--subtle);
+              font-size:var(--pf-t--global--font--size--sm);">
+    No repositories found for this PAT.
+  </div>
+{% endif %}

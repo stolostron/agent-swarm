@@ -52,7 +52,7 @@
         <div class="pf-v6-c-form__group-control">
           <select class="pf-v6-c-form-control" id="github_pat_id" name="github_pat_id"
                   hx-get="/workspaces/{{ ws.id }}/prompts/browse-repo"
-                  hx-target="#repo-picker-container"
+                  hx-target="#prompt-repo-picker-wrap"
                   hx-trigger="change">
             <option value="">(none — public repo)</option>
             {% for pat in pats %}
@@ -73,10 +73,8 @@
           </label>
         </div>
         <div class="pf-v6-c-form__group-control">
-          <div id="repo-picker-container">
-            {# Reusing the same logic as session repo picker #}
-            <input class="pf-v6-c-form-control" type="text" id="repo_url" name="repo_url" value="{{ source.repo_url if source else '' }}" required placeholder="https://github.com/org/repo.git" />
-          </div>
+          <input class="pf-v6-c-form-control" type="text" id="repo_url" name="repo_url" value="{{ source.repo_url if source else '' }}" required placeholder="https://github.com/org/repo.git" />
+          <div id="prompt-repo-picker-wrap" style="margin-top:var(--pf-t--global--spacer--sm);"></div>
         </div>
       </div>
 
@@ -142,25 +140,9 @@
 </div>
 
 <script>
-  // Handle folder selection from the modal
   document.addEventListener('folderSelected', function(e) {
     document.getElementById('folder_path').value = e.detail.path;
     document.getElementById('folder-picker-modal').style.display = 'none';
-  });
-  
-  // Repo picker selection integration
-  document.addEventListener('htmx:afterOnLoad', function(e) {
-    if (e.detail.target.id === 'repo-picker-container') {
-       // Listen for repo clicks if the partial includes them
-       const repos = e.detail.target.querySelectorAll('.repo-item');
-       repos.forEach(r => {
-         r.addEventListener('click', function() {
-           const url = this.getAttribute('data-url');
-           document.getElementById('repo_url').value = url;
-           // If it has a default branch, we could set it too
-         });
-       });
-    }
   });
 </script>
 {% endblock %}

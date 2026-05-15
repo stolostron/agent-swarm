@@ -301,7 +301,7 @@ async def browse_repo(
     
     return templates.TemplateResponse(
         request,
-        "sessions/_repo_picker.html",
+        "prompts/_repo_picker.html",
         {"repos": repos},
     )
 
