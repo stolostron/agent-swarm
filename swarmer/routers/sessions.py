@@ -297,7 +297,7 @@ async def session_create(
             if not prompt:
                 flash(request, "Selected prompt not found.", "danger")
                 return RedirectResponse(url=f"/workspaces/{ws_id}/sessions/new", status_code=302)
-            
+
             # WorkspacePrompt -> WorkspacePromptSource -> Workspace
             # We need to load the source to check workspace_id
             result = await db.execute(
@@ -498,7 +498,7 @@ async def session_edit(
 
     session.name = name.strip()
     session.github_pat_id = int(github_pat_id) if github_pat_id else None
-    
+
     if prompt_id:
         try:
             pid = int(prompt_id)
@@ -507,7 +507,7 @@ async def session_edit(
             if not prompt:
                 flash(request, "Selected prompt not found.", "danger")
                 return RedirectResponse(url=f"/workspaces/{ws_id}/sessions/{sid}", status_code=302)
-            
+
             result = await db.execute(
                 select(WorkspacePromptSource).where(WorkspacePromptSource.id == prompt.source_id)
             )
