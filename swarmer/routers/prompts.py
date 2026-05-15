@@ -41,6 +41,22 @@ async def _visible_pats(ws_id: int, db: AsyncSession, user_id: str = "") -> list
     return await _pats(ws_id, db, user_id)
 
 
+async def _authorized_pat_id(
+    pat_id_str: str, ws_id: int, db: AsyncSession, user_id: str = ""
+) -> int | None:
+    """Parse and authorize a PAT ID, returning the int ID if valid and visible, else None."""
+    if not pat_id_str:
+        return None
+    try:
+        pat_id = int(pat_id_str)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid github_pat_id")
+    visible = await _visible_pats(ws_id, db, user_id)
+    if not any(p.id == pat_id for p in visible):
+        raise HTTPException(status_code=403, detail="GitHub PAT not accessible")
+    return pat_id
+
+
 @router.get("/workspaces/{ws_id}/prompts", dependencies=[Depends(require_auth)])
 async def prompt_source_list(
     ws_id: int, request: Request, db: AsyncSession = Depends(get_db)
@@ -95,11 +111,8 @@ async def prompt_source_create(
     if ws is None:
         return RedirectResponse(url="/workspaces", status_code=302)
 
-    try:
-        pat_id = int(github_pat_id) if github_pat_id else None
-    except ValueError:
-        raise HTTPException(status_code=400, detail="Invalid github_pat_id")
-    
+    pat_id = await _authorized_pat_id(github_pat_id, ws_id, db, _current_user(request))
+
     source = WorkspacePromptSource(
         workspace_id=ws_id,
         name=name.strip(),
@@ -158,10 +171,7 @@ async def prompt_source_update(
         return RedirectResponse(url=f"/workspaces/{ws_id}/prompts", status_code=302)
 
     source.name = name.strip()
-    try:
-        source.github_pat_id = int(github_pat_id) if github_pat_id else None
-    except ValueError:
-        raise HTTPException(status_code=400, detail="Invalid github_pat_id")
+    source.github_pat_id = await _authorized_pat_id(github_pat_id, ws_id, db, _current_user(request))
     source.repo_url = repo_url.strip()
     source.branch = branch.strip() or "main"
     source.folder_path = folder_path.strip() or "."
@@ -279,11 +289,8 @@ async def _refresh_source_logic(source: WorkspacePromptSource, db: AsyncSession)
 async def browse_repo(
     ws_id: int, request: Request, github_pat_id: str = "", db: AsyncSession = Depends(get_db)
 ):
-    try:
-        pat_id = int(github_pat_id) if github_pat_id else None
-    except ValueError:
-        return HTMLResponse("Invalid github_pat_id", status_code=400)
-    
+    pat_id = await _authorized_pat_id(github_pat_id, ws_id, db, _current_user(request))
+
     repos = []
     if pat_id:
         pat = await db.get(GitHubPAT, pat_id)
@@ -315,12 +322,11 @@ async def browse_folder(
 
     pat_token = None
     if github_pat_id:
-        try:
-            pat = await db.get(GitHubPAT, int(github_pat_id))
+        pat_id = await _authorized_pat_id(github_pat_id, ws_id, db, _current_user(request))
+        if pat_id:
+            pat = await db.get(GitHubPAT, pat_id)
             if pat:
                 pat_token = pat.pat
-        except ValueError:
-            return HTMLResponse("Invalid github_pat_id", status_code=400)
 
     owner, repo = slug.split("/", 1)
     contents = await list_folder_contents(owner, repo, path, branch, pat_token)
