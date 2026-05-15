@@ -181,7 +181,12 @@ async def fetch_folder_prompts(
             )
             if r.status_code != 200:
                 return f"Failed to resolve branch {branch}: {r.status_code}"
-            head_sha = r.json()["commit"]["sha"]
+            
+            data = r.json()
+            if not isinstance(data, dict) or "commit" not in data or "sha" not in data["commit"]:
+                return f"Failed to resolve branch {branch}: unexpected response"
+                
+            head_sha = data["commit"]["sha"]
 
             # 2. Get recursive tree
             r = await client.get(

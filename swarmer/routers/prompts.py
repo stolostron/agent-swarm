@@ -1,6 +1,7 @@
+import html
 import logging
 
-from fastapi import APIRouter, Depends, Form, Request
+from fastapi import APIRouter, Depends, Form, Request, HTTPException
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import func, select
@@ -94,7 +95,10 @@ async def prompt_source_create(
     if ws is None:
         return RedirectResponse(url="/workspaces", status_code=302)
 
-    pat_id = int(github_pat_id) if github_pat_id else None
+    try:
+        pat_id = int(github_pat_id) if github_pat_id else None
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid github_pat_id")
     
     source = WorkspacePromptSource(
         workspace_id=ws_id,
@@ -154,7 +158,10 @@ async def prompt_source_update(
         return RedirectResponse(url=f"/workspaces/{ws_id}/prompts", status_code=302)
 
     source.name = name.strip()
-    source.github_pat_id = int(github_pat_id) if github_pat_id else None
+    try:
+        source.github_pat_id = int(github_pat_id) if github_pat_id else None
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid github_pat_id")
     source.repo_url = repo_url.strip()
     source.branch = branch.strip() or "main"
     source.folder_path = folder_path.strip() or "."
@@ -204,7 +211,7 @@ async def prompt_source_refresh(
 
 async def _refresh_source_logic(source: WorkspacePromptSource, db: AsyncSession):
     slug = github_slug(source.repo_url)
-    if not slug:
+    if not slug or slug.count("/") != 1:
         source.sync_error = "Invalid GitHub URL"
         return
 
@@ -268,11 +275,15 @@ async def _refresh_source_logic(source: WorkspacePromptSource, db: AsyncSession)
 # HTMX Partials for browsing
 # ============================================================
 
-@router.get("/workspaces/{ws_id}/prompts/browse-repo", response_class=HTMLResponse)
+@router.get("/workspaces/{ws_id}/prompts/browse-repo", response_class=HTMLResponse, dependencies=[Depends(require_auth)])
 async def browse_repo(
     ws_id: int, request: Request, github_pat_id: str = "", db: AsyncSession = Depends(get_db)
 ):
-    pat_id = int(github_pat_id) if github_pat_id else None
+    try:
+        pat_id = int(github_pat_id) if github_pat_id else None
+    except ValueError:
+        return HTMLResponse("Invalid github_pat_id", status_code=400)
+    
     repos = []
     if pat_id:
         pat = await db.get(GitHubPAT, pat_id)
@@ -288,7 +299,7 @@ async def browse_repo(
     )
 
 
-@router.get("/workspaces/{ws_id}/prompts/browse-folder", response_class=HTMLResponse)
+@router.get("/workspaces/{ws_id}/prompts/browse-folder", response_class=HTMLResponse, dependencies=[Depends(require_auth)])
 async def browse_folder(
     ws_id: int,
     request: Request,
@@ -299,20 +310,24 @@ async def browse_folder(
     db: AsyncSession = Depends(get_db),
 ):
     slug = github_slug(repo_url)
-    if not slug:
+    if not slug or slug.count("/") != 1:
         return HTMLResponse("Invalid GitHub URL")
 
     pat_token = None
     if github_pat_id:
-        pat = await db.get(GitHubPAT, int(github_pat_id))
-        if pat:
-            pat_token = pat.pat
+        try:
+            pat = await db.get(GitHubPAT, int(github_pat_id))
+            if pat:
+                pat_token = pat.pat
+        except ValueError:
+            return HTMLResponse("Invalid github_pat_id", status_code=400)
 
     owner, repo = slug.split("/", 1)
     contents = await list_folder_contents(owner, repo, path, branch, pat_token)
     
     if isinstance(contents, str):
-        return HTMLResponse(f"Error: {contents}")
+        log.error("browse_folder error: %s", contents)
+        return HTMLResponse("An error occurred while listing folder contents")
 
     # Filter for directories
     dirs = [c for c in contents if c["type"] == "dir"]
@@ -331,20 +346,26 @@ async def browse_folder(
     )
 
 
-@router.get("/workspaces/{ws_id}/sessions/prompt-preview", response_class=HTMLResponse)
+@router.get("/workspaces/{ws_id}/sessions/prompt-preview", response_class=HTMLResponse, dependencies=[Depends(require_auth)])
 async def prompt_preview(
     ws_id: int, request: Request, prompt_id: str = "", db: AsyncSession = Depends(get_db)
 ):
     if not prompt_id:
         return HTMLResponse("")
     
-    prompt = await db.get(WorkspacePrompt, int(prompt_id))
+    try:
+        pid = int(prompt_id)
+    except ValueError:
+        return HTMLResponse("Invalid prompt_id", status_code=400)
+
+    prompt = await db.get(WorkspacePrompt, pid)
     if not prompt:
         return HTMLResponse("")
     
+    escaped_content = html.escape(prompt.content)
     return HTMLResponse(f"""
         <div style="margin-top:var(--pf-t--global--spacer--sm); padding:var(--pf-t--global--spacer--sm); background:var(--pf-t--global--background--color--secondary--default); border-radius:var(--pf-t--global--border-radius--sm); border:1px solid var(--pf-t--global--border--color--default);">
           <div style="font-size:var(--pf-t--global--font--size--xs); color:var(--pf-t--global--text--color--subtle); margin-bottom:4px; text-transform:uppercase;">Preview</div>
-          <pre style="font-size:var(--pf-t--global--font--size--sm); white-space:pre-wrap; margin:0; max-height:200px; overflow-y:auto;">{prompt.content}</pre>
+          <pre style="font-size:var(--pf-t--global--font--size--sm); white-space:pre-wrap; margin:0; max-height:200px; overflow-y:auto;">{escaped_content}</pre>
         </div>
     """)

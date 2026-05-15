@@ -57,35 +57,35 @@ async def test_fetch_folder_prompts_recursive():
     owner, repo, folder_path, branch = "octocat", "hello-world", "prompts", "main"
     pat = "ghp_test"
     
-    # 1. Mock branch resolution to get HEAD SHA
-    respx.get(f"https://api.github.com/repos/{owner}/{repo}/branches/{branch}").mock(
-        return_value=httpx.Response(200, json={"commit": {"sha": "head_sha"}})
-    )
-    
-    # 2. Mock recursive tree fetch
-    mock_tree = {
-        "tree": [
-            {"path": "prompts/cve-analysis.md", "type": "blob", "sha": "sha1"},
-            {"path": "prompts/sub/deep.md", "type": "blob", "sha": "sha2"},
-            {"path": "prompts/README.txt", "type": "blob", "sha": "sha3"}, # Ignored (not .md)
-            {"path": "other/ignore.md", "type": "blob", "sha": "sha4"},    # Ignored (wrong path)
-        ]
-    }
-    respx.get(f"https://api.github.com/repos/{owner}/{repo}/git/trees/head_sha?recursive=1").mock(
-        return_value=httpx.Response(200, json=mock_tree)
-    )
-    
-    # 3. Mock content fetch for each .md file
-    content1 = base64.b64encode(b"Content 1").decode()
-    respx.get(f"https://api.github.com/repos/{owner}/{repo}/contents/prompts/cve-analysis.md?ref=head_sha").mock(
-        return_value=httpx.Response(200, json={"content": content1, "encoding": "base64"})
-    )
-    content2 = base64.b64encode(b"Content 2").decode()
-    respx.get(f"https://api.github.com/repos/{owner}/{repo}/contents/prompts/sub/deep.md?ref=head_sha").mock(
-        return_value=httpx.Response(200, json={"content": content2, "encoding": "base64"})
-    )
-
     with respx.mock:
+        # 1. Mock branch resolution to get HEAD SHA
+        respx.get(f"https://api.github.com/repos/{owner}/{repo}/branches/{branch}").mock(
+            return_value=httpx.Response(200, json={"commit": {"sha": "head_sha"}})
+        )
+        
+        # 2. Mock recursive tree fetch
+        mock_tree = {
+            "tree": [
+                {"path": "prompts/cve-analysis.md", "type": "blob", "sha": "sha1"},
+                {"path": "prompts/sub/deep.md", "type": "blob", "sha": "sha2"},
+                {"path": "prompts/README.txt", "type": "blob", "sha": "sha3"}, # Ignored (not .md)
+                {"path": "other/ignore.md", "type": "blob", "sha": "sha4"},    # Ignored (wrong path)
+            ]
+        }
+        respx.get(f"https://api.github.com/repos/{owner}/{repo}/git/trees/head_sha?recursive=1").mock(
+            return_value=httpx.Response(200, json=mock_tree)
+        )
+        
+        # 3. Mock content fetch for each .md file
+        content1 = base64.b64encode(b"Content 1").decode()
+        respx.get(f"https://api.github.com/repos/{owner}/{repo}/contents/prompts/cve-analysis.md?ref=head_sha").mock(
+            return_value=httpx.Response(200, json={"content": content1, "encoding": "base64"})
+        )
+        content2 = base64.b64encode(b"Content 2").decode()
+        respx.get(f"https://api.github.com/repos/{owner}/{repo}/contents/prompts/sub/deep.md?ref=head_sha").mock(
+            return_value=httpx.Response(200, json={"content": content2, "encoding": "base64"})
+        )
+
         result = await fetch_folder_prompts(owner, repo, folder_path, branch, pat)
 
     assert isinstance(result, list)

@@ -287,7 +287,30 @@ async def session_create(
         return RedirectResponse(url="/workspaces", status_code=302)
 
     pat_id = int(github_pat_id) if github_pat_id else None
-    pid = int(prompt_id) if prompt_id else None
+    pid = None
+    if prompt_id:
+        try:
+            pid = int(prompt_id)
+            # Verify prompt ownership
+            from swarmer.models.workspace_prompt import WorkspacePrompt, WorkspacePromptSource
+            prompt = await db.get(WorkspacePrompt, pid)
+            if not prompt:
+                flash(request, "Selected prompt not found.", "danger")
+                return RedirectResponse(url=f"/workspaces/{ws_id}/sessions/new", status_code=302)
+            
+            # WorkspacePrompt -> WorkspacePromptSource -> Workspace
+            # We need to load the source to check workspace_id
+            result = await db.execute(
+                select(WorkspacePromptSource).where(WorkspacePromptSource.id == prompt.source_id)
+            )
+            source = result.scalar_one_or_none()
+            if not source or source.workspace_id != ws_id:
+                flash(request, "Selected prompt does not belong to this workspace.", "danger")
+                return RedirectResponse(url=f"/workspaces/{ws_id}/sessions/new", status_code=302)
+        except ValueError:
+            flash(request, "Invalid prompt selection.", "danger")
+            return RedirectResponse(url=f"/workspaces/{ws_id}/sessions/new", status_code=302)
+
     if mode not in ("tui", "server", "prompt"):
         mode = "prompt"
 
@@ -475,7 +498,30 @@ async def session_edit(
 
     session.name = name.strip()
     session.github_pat_id = int(github_pat_id) if github_pat_id else None
-    session.prompt_id = int(prompt_id) if prompt_id else None
+    
+    if prompt_id:
+        try:
+            pid = int(prompt_id)
+            from swarmer.models.workspace_prompt import WorkspacePrompt, WorkspacePromptSource
+            prompt = await db.get(WorkspacePrompt, pid)
+            if not prompt:
+                flash(request, "Selected prompt not found.", "danger")
+                return RedirectResponse(url=f"/workspaces/{ws_id}/sessions/{sid}", status_code=302)
+            
+            result = await db.execute(
+                select(WorkspacePromptSource).where(WorkspacePromptSource.id == prompt.source_id)
+            )
+            source = result.scalar_one_or_none()
+            if not source or source.workspace_id != ws_id:
+                flash(request, "Selected prompt does not belong to this workspace.", "danger")
+                return RedirectResponse(url=f"/workspaces/{ws_id}/sessions/{sid}", status_code=302)
+            session.prompt_id = pid
+        except ValueError:
+            flash(request, "Invalid prompt selection.", "danger")
+            return RedirectResponse(url=f"/workspaces/{ws_id}/sessions/{sid}", status_code=302)
+    else:
+        session.prompt_id = None
+
     session.instruction_prompt = instruction_prompt.strip()
     session.persist = persist
     session.resume = resume

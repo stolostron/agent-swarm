@@ -50,7 +50,21 @@
 
 <div style="margin-top:var(--pf-t--global--spacer--lg); text-align:right;">
   <button class="pf-v6-c-button pf-m-primary" type="button" 
-          onclick="document.dispatchEvent(new CustomEvent('folderSelected', { detail: { path: '{{ current_path or '.' }}' } }))">
+          id="select-folder-btn"
+          data-path="{{ current_path or '.' }}">
     Select "{{ current_path or 'root' }}"
   </button>
 </div>
+
+<script>
+(function() {
+  const btn = document.getElementById('select-folder-btn');
+  if (btn) {
+    btn.addEventListener('click', function() {
+      document.dispatchEvent(new CustomEvent('folderSelected', { 
+        detail: { path: this.getAttribute('data-path') } 
+      }));
+    });
+  }
+})();
+</script>
