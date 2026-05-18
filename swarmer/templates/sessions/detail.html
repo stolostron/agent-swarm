@@ -769,9 +769,12 @@ function copyCommitMsg(btn) { _copyBlock('commit-msg', btn); }
       }
     }
 
-// Wire auto-save for the instruction prompt textarea
+// Wire auto-save for the instruction prompt textarea.
+// It lives outside the cfg-edit-form DOM tree (associated via the HTML form=""
+// attribute), so the form.querySelectorAll() auto-save above doesn't find it.
+// The prompt_id <select> auto-save is handled inside _prompt_picker.html.
 (function () {
-  const instrTA = document.getElementById('instruction-prompt-input');
+  const instrTA = document.getElementById('instruction_prompt');
   if (!instrTA) return;
   let pending = false;
   instrTA.addEventListener('input', () => { pending = true; });

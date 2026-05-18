@@ -402,7 +402,11 @@ async def session_detail(
     session = await db.get(
         Session,
         sid,
-        options=[selectinload(Session.github_pat), selectinload(Session.repos)],
+        options=[
+            selectinload(Session.github_pat),
+            selectinload(Session.repos),
+            selectinload(Session.prompt),
+        ],
     )
     if ws is None or session is None or session.workspace_id != ws_id:
         return RedirectResponse(url=f"/workspaces/{ws_id}/sessions", status_code=302)
@@ -754,6 +758,7 @@ async def session_launch(
     save_config: str = Form(""),
     name: str = Form(""),
     github_pat_id: str = Form(""),
+    prompt_id: str = Form(""),
     instruction_prompt: str = Form(""),
     persist: bool = Form(False),
     resume: bool = Form(False),
@@ -778,6 +783,26 @@ async def session_launch(
         if name.strip():
             session.name = name.strip()
         session.github_pat_id = int(github_pat_id) if github_pat_id else None
+        # Persist prompt_id selection
+        if prompt_id:
+            try:
+                pid = int(prompt_id)
+                p = await db.get(WorkspacePrompt, pid)
+                if p:
+                    result = await db.execute(
+                        select(WorkspacePromptSource).where(WorkspacePromptSource.id == p.source_id)
+                    )
+                    source = result.scalar_one_or_none()
+                    if source and source.workspace_id == ws_id:
+                        session.prompt_id = pid
+                    else:
+                        session.prompt_id = None
+                else:
+                    session.prompt_id = None
+            except ValueError:
+                session.prompt_id = None
+        else:
+            session.prompt_id = None
         session.instruction_prompt = instruction_prompt.strip()
         session.persist = persist
         session.resume = resume
