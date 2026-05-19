@@ -54,5 +54,7 @@
     } else {
       group.style.display = 'none';
     }
+    // Trigger auto-save so prompt_id is persisted to the session record
+    if (window._cfgSave) window._cfgSave();
   });
 </script>
