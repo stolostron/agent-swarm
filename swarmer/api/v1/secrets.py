@@ -185,9 +185,21 @@ async def update_pat(
     body: PATUpdate,
     ws: Workspace = Depends(get_workspace_or_404),
     db: AsyncSession = Depends(get_db),
+    user: str = Depends(get_current_user),
 ):
-    pat = await db.get(GitHubPAT, pat_id)
-    if pat is None or pat.workspace_id != ws_id:
+    result = await db.execute(
+        select(GitHubPAT).where(
+            GitHubPAT.id == pat_id,
+            GitHubPAT.workspace_id == ws_id,
+            or_(
+                GitHubPAT.user_id == user,
+                GitHubPAT.shared == True,  # noqa: E712
+                GitHubPAT.user_id == "",
+            ),
+        )
+    )
+    pat = result.scalar_one_or_none()
+    if pat is None:
         raise HTTPException(status_code=404, detail="PAT not found")
 
     if body.name is not None:
@@ -219,9 +231,21 @@ async def delete_pat(
     pat_id: int,
     ws: Workspace = Depends(get_workspace_or_404),
     db: AsyncSession = Depends(get_db),
+    user: str = Depends(get_current_user),
 ):
-    pat = await db.get(GitHubPAT, pat_id)
-    if pat is None or pat.workspace_id != ws_id:
+    result = await db.execute(
+        select(GitHubPAT).where(
+            GitHubPAT.id == pat_id,
+            GitHubPAT.workspace_id == ws_id,
+            or_(
+                GitHubPAT.user_id == user,
+                GitHubPAT.shared == True,  # noqa: E712
+                GitHubPAT.user_id == "",
+            ),
+        )
+    )
+    pat = result.scalar_one_or_none()
+    if pat is None:
         raise HTTPException(status_code=404, detail="PAT not found")
 
     await db.delete(pat)

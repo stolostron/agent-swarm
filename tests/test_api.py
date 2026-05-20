@@ -48,6 +48,7 @@ async def _setup_db():
 
     # Set k8s_namespace so K8s namespace create/delete is skipped in tests
     from swarmer.config import settings
+    orig_ns = settings.k8s_namespace
     settings.k8s_namespace = "test-ns"
 
     import swarmer.models  # noqa: F401 — register models on Base.metadata
@@ -57,6 +58,7 @@ async def _setup_db():
     yield
     async with _engine.begin() as conn:
         await conn.run_sync(Base.metadata.drop_all)
+    settings.k8s_namespace = orig_ns
 
 
 @pytest_asyncio.fixture
@@ -121,7 +123,8 @@ class TestWorkspaces:
         assert resp.status_code == 200
         ws_list = resp.json()
         assert len(ws_list) == 2
-        assert ws_list[0]["display_name"] == "Alpha"
+        names = {ws["display_name"] for ws in ws_list}
+        assert names == {"Alpha", "Beta"}
 
     @pytest.mark.asyncio
     async def test_get_workspace(self, client):
@@ -286,6 +289,35 @@ class TestSessions:
         assert resp.status_code == 200
 
     @pytest.mark.asyncio
+    async def test_create_session_invalid_mode(self, client):
+        ws = await _create_workspace(client)
+        resp = await client.post(
+            f"/api/v1/workspaces/{ws['id']}/sessions",
+            json={"name": "bad-mode", "mode": "invalid"},
+        )
+        assert resp.status_code == 422
+
+    @pytest.mark.asyncio
+    async def test_update_session_invalid_mode(self, client):
+        ws = await _create_workspace(client)
+        s = await _create_session(client, ws["id"])
+        resp = await client.put(
+            f"/api/v1/workspaces/{ws['id']}/sessions/{s['id']}",
+            json={"mode": "invalid"},
+        )
+        assert resp.status_code == 422
+
+    @pytest.mark.asyncio
+    async def test_update_session_empty_name(self, client):
+        ws = await _create_workspace(client)
+        s = await _create_session(client, ws["id"])
+        resp = await client.put(
+            f"/api/v1/workspaces/{ws['id']}/sessions/{s['id']}",
+            json={"name": ""},
+        )
+        assert resp.status_code == 422
+
+    @pytest.mark.asyncio
     async def test_schedule_non_prompt_fails(self, client):
         ws = await _create_workspace(client)
         s = await _create_session(client, ws["id"])
@@ -372,6 +404,26 @@ class TestRepos:
         )
         assert resp.status_code == 201
         assert resp.json()["local_path"] == "custom-dir"
+
+    @pytest.mark.asyncio
+    async def test_add_repo_path_traversal_rejected(self, client):
+        ws = await _create_workspace(client)
+        s = await _create_session(client, ws["id"])
+        resp = await client.post(
+            f"/api/v1/workspaces/{ws['id']}/sessions/{s['id']}/repos",
+            json={"repo_url": "https://github.com/org/repo.git", "local_path": "../etc"},
+        )
+        assert resp.status_code == 422
+
+    @pytest.mark.asyncio
+    async def test_add_repo_absolute_path_rejected(self, client):
+        ws = await _create_workspace(client)
+        s = await _create_session(client, ws["id"])
+        resp = await client.post(
+            f"/api/v1/workspaces/{ws['id']}/sessions/{s['id']}/repos",
+            json={"repo_url": "https://github.com/org/repo.git", "local_path": "/tmp/evil"},
+        )
+        assert resp.status_code == 422
 
 
 # ===========================================================================

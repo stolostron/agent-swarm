@@ -5,13 +5,13 @@ from __future__ import annotations
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from swarmer.database import get_db
-from swarmer.api.deps import get_workspace_or_404, require_api_auth
+from swarmer.api.deps import get_current_user, get_workspace_or_404, require_api_auth
 from swarmer.api.schemas import (
     MessageOut,
     PromptOut,
@@ -214,9 +214,21 @@ async def browse_repos(
     github_pat_id: int,
     ws: Workspace = Depends(get_workspace_or_404),
     db: AsyncSession = Depends(get_db),
+    user: str = Depends(get_current_user),
 ):
-    pat = await db.get(GitHubPAT, github_pat_id)
-    if pat is None or pat.workspace_id != ws_id:
+    result = await db.execute(
+        select(GitHubPAT).where(
+            GitHubPAT.id == github_pat_id,
+            GitHubPAT.workspace_id == ws_id,
+            or_(
+                GitHubPAT.user_id == user,
+                GitHubPAT.shared == True,  # noqa: E712
+                GitHubPAT.user_id == "",
+            ),
+        )
+    )
+    pat = result.scalar_one_or_none()
+    if pat is None:
         raise HTTPException(status_code=404, detail="PAT not found")
 
     result = await list_repos_for_pat(pat)
@@ -234,6 +246,7 @@ async def browse_folders(
     github_pat_id: int | None = None,
     ws: Workspace = Depends(get_workspace_or_404),
     db: AsyncSession = Depends(get_db),
+    user: str = Depends(get_current_user),
 ):
     slug = github_slug(repo_url)
     if not slug or slug.count("/") != 1:
@@ -241,8 +254,19 @@ async def browse_folders(
 
     pat_token = None
     if github_pat_id:
-        pat = await db.get(GitHubPAT, github_pat_id)
-        if pat and pat.workspace_id == ws_id:
+        result = await db.execute(
+            select(GitHubPAT).where(
+                GitHubPAT.id == github_pat_id,
+                GitHubPAT.workspace_id == ws_id,
+                or_(
+                    GitHubPAT.user_id == user,
+                    GitHubPAT.shared == True,  # noqa: E712
+                    GitHubPAT.user_id == "",
+                ),
+            )
+        )
+        pat = result.scalar_one_or_none()
+        if pat:
             pat_token = pat.pat
 
     owner, repo = slug.split("/", 1)

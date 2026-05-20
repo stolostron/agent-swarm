@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import re
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -15,6 +16,8 @@ from swarmer.database import get_db
 from swarmer.api.deps import get_workspace_or_404, require_api_auth
 from swarmer.api.schemas import MessageOut, WorkspaceCreate, WorkspaceOut, WorkspaceUpdate
 from swarmer.models.workspace import Workspace
+
+log = logging.getLogger(__name__)
 
 router = APIRouter(
     prefix="/workspaces",
@@ -100,17 +103,18 @@ async def delete_workspace(
     ws: Workspace = Depends(get_workspace_or_404),
     db: AsyncSession = Depends(get_db),
 ):
-    # Delete K8s namespace
-    try:
-        if not settings.k8s_namespace:
-            k8s.delete_namespace(ws.k8s_namespace)
-    except Exception as exc:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Kubernetes error: {exc}",
-        )
-
     name = ws.display_name
+    k8s_ns = ws.k8s_namespace
+
+    # Delete DB row first to avoid orphaned rows if K8s cleanup fails
     await db.delete(ws)
     await db.commit()
+
+    # Best-effort K8s namespace cleanup
+    try:
+        if not settings.k8s_namespace:
+            k8s.delete_namespace(k8s_ns)
+    except Exception:
+        log.warning("Failed to delete K8s namespace %s for workspace '%s'", k8s_ns, name)
+
     return MessageOut(detail=f"Workspace '{name}' deleted.")

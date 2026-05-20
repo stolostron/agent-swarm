@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import PurePosixPath
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -53,6 +55,10 @@ async def add_repo(
     local_path = body.local_path.strip()
     if not local_path:
         local_path = body.repo_url.rstrip("/").split("/")[-1].removesuffix(".git")
+
+    path = PurePosixPath(local_path)
+    if path.is_absolute() or ".." in path.parts:
+        raise HTTPException(status_code=422, detail="local_path must be a relative path without '..' segments")
 
     repo = SessionRepo(
         session_id=sid,

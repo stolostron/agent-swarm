@@ -40,7 +40,7 @@ class WorkspaceOut(BaseModel):
 
 class SessionCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=255)
-    mode: str = "prompt"
+    mode: str = Field("prompt", pattern=r"^(tui|server|prompt)$")
     model: str = ""
     agent_tool: str = "opencode"
     instruction_prompt: str = ""
@@ -53,8 +53,8 @@ class SessionCreate(BaseModel):
 
 
 class SessionUpdate(BaseModel):
-    name: str | None = None
-    mode: str | None = None
+    name: str | None = Field(None, min_length=1, max_length=255)
+    mode: str | None = Field(None, pattern=r"^(tui|server|prompt)$")
     model: str | None = None
     agent_tool: str | None = None
     instruction_prompt: str | None = None

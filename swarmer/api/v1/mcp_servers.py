@@ -31,6 +31,34 @@ router = APIRouter(
 )
 
 
+def _visible_servers_filter(ws_id: int, user: str):
+    """Return the WHERE clause for MCP servers visible to the given user."""
+    return (
+        McpServer.workspace_id == ws_id,
+        or_(
+            McpServer.user_id == user,
+            McpServer.shared == True,  # noqa: E712
+            McpServer.user_id == "",
+        ),
+    )
+
+
+async def _get_visible_server_or_404(
+    ws_id: int, server_id: int, user: str, db: AsyncSession,
+) -> McpServer:
+    """Load a single MCP server by ID, enforcing user visibility."""
+    result = await db.execute(
+        select(McpServer).where(
+            McpServer.id == server_id,
+            *_visible_servers_filter(ws_id, user),
+        )
+    )
+    server = result.scalar_one_or_none()
+    if server is None:
+        raise HTTPException(status_code=404, detail="MCP server not found")
+    return server
+
+
 @router.get("", response_model=list[McpServerOut])
 async def list_mcp_servers(
     ws_id: int,
@@ -40,12 +68,7 @@ async def list_mcp_servers(
 ):
     result = await db.execute(
         select(McpServer).where(
-            McpServer.workspace_id == ws_id,
-            or_(
-                McpServer.user_id == user,
-                McpServer.shared == True,  # noqa: E712
-                McpServer.user_id == "",
-            ),
+            *_visible_servers_filter(ws_id, user),
         ).order_by(McpServer.display_name)
     )
     return result.scalars().all()
@@ -93,10 +116,9 @@ async def save_config(
     body: McpServerSaveConfig,
     ws: Workspace = Depends(get_workspace_or_404),
     db: AsyncSession = Depends(get_db),
+    user: str = Depends(get_current_user),
 ):
-    server = await db.get(McpServer, server_id)
-    if server is None or server.workspace_id != ws_id:
-        raise HTTPException(status_code=404, detail="MCP server not found")
+    server = await _get_visible_server_or_404(ws_id, server_id, user, db)
 
     jira_server_url = body.jira_server_url.strip().rstrip("/")
     jira_access_token = body.jira_access_token.strip()
@@ -131,9 +153,10 @@ async def check_health(
     ws_id: int,
     ws: Workspace = Depends(get_workspace_or_404),
     db: AsyncSession = Depends(get_db),
+    user: str = Depends(get_current_user),
 ):
     result = await db.execute(
-        select(McpServer).where(McpServer.workspace_id == ws_id)
+        select(McpServer).where(*_visible_servers_filter(ws_id, user))
     )
     servers = result.scalars().all()
 
@@ -166,10 +189,9 @@ async def toggle_server(
     server_id: int,
     ws: Workspace = Depends(get_workspace_or_404),
     db: AsyncSession = Depends(get_db),
+    user: str = Depends(get_current_user),
 ):
-    server = await db.get(McpServer, server_id)
-    if server is None or server.workspace_id != ws_id:
-        raise HTTPException(status_code=404, detail="MCP server not found")
+    server = await _get_visible_server_or_404(ws_id, server_id, user, db)
 
     server.enabled = not server.enabled
     await db.commit()
@@ -183,10 +205,9 @@ async def delete_mcp_server(
     server_id: int,
     ws: Workspace = Depends(get_workspace_or_404),
     db: AsyncSession = Depends(get_db),
+    user: str = Depends(get_current_user),
 ):
-    server = await db.get(McpServer, server_id)
-    if server is None or server.workspace_id != ws_id:
-        raise HTTPException(status_code=404, detail="MCP server not found")
+    server = await _get_visible_server_or_404(ws_id, server_id, user, db)
 
     name = server.display_name
     await db.delete(server)

@@ -354,16 +354,21 @@ async def set_model(
     db: AsyncSession = Depends(get_db),
 ):
     session = await _get_session_or_404(ws_id, sid, db)
-    session.model = body.model.strip()
-    await db.commit()
+    new_model = body.model.strip()
 
     if session.is_active and session.pod_name:
         try:
             tool = get_tool(session.agent_tool)
-            tool.exec_model_update(session.pod_name, ws.k8s_namespace, session.model)
-        except Exception:
-            pass
+            tool.exec_model_update(session.pod_name, ws.k8s_namespace, new_model)
+        except Exception as exc:
+            log.warning("exec_model_update failed for session %d: %s", sid, exc)
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to update model on running pod: {exc}",
+            )
 
+    session.model = new_model
+    await db.commit()
     await db.refresh(session)
     return session
 
@@ -489,6 +494,9 @@ async def generate_patch(
         combined_diff += diff
 
     if not combined_diff.strip():
+        session.patch_output = ""
+        session.commit_msg = ""
+        await db.commit()
         return PatchResult(patch="", commit_msg="No changes detected.", filename=_patch_filename(session))
 
     commit_msg = await _build_commit_msg(combined_diff, session.workspace_id, db)
