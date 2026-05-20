@@ -172,9 +172,9 @@ Parent epic: [ACM-32892](https://redhat.atlassian.net/browse/ACM-32892) — Impl
   title: "Add REST API server to agent-swarm alongside existing Console"
   jira: "ACM-34254"
   jira_url: "https://redhat.atlassian.net/browse/ACM-34254"
-  status: "In Progress"
-  pr: ~
-  summary: "Add a versioned REST API server under /api/v1/ alongside the existing HTMX Console"
+  status: "Done"
+  pr: "https://github.com/stolostron/agent-swarm/pull/75"
+  summary: "Added 51 REST API endpoints under /api/v1/ with K8s bearer token auth, Pydantic schemas, and 32 unit tests alongside the existing HTMX Console"
 
 ## Foundation & Feature Plans
 
