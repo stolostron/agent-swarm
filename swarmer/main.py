@@ -11,6 +11,7 @@ from swarmer.config import settings
 from swarmer.crypto import derive_session_secret, init_crypto
 from swarmer.database import create_tables, migrate_db, init_db
 from swarmer.deps import NotAuthenticated
+from swarmer.api.v1 import router as api_v1_router
 from swarmer.routers import auth as auth_router
 from swarmer.routers import chat_proxy as chat_proxy_router
 from swarmer.routers import env_vars as env_vars_router
@@ -92,6 +93,9 @@ app.include_router(prompts_router.router)
 app.include_router(sessions_router.router)
 app.include_router(chat_proxy_router.router)
 app.include_router(tui_router.router)
+
+# REST API — mounted under /api/v1/
+app.include_router(api_v1_router)
 
 templates = Jinja2Templates(directory="swarmer/templates")
 

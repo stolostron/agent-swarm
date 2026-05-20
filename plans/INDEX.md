@@ -165,7 +165,16 @@ Parent epic: [ACM-32892](https://redhat.atlassian.net/browse/ACM-32892) — Impl
   jira_url: "https://redhat.atlassian.net/browse/ACM-34123"
   status: "Done"
   pr: "https://github.com/stolostron/agent-swarm/pull/72"
-  summary: "Implemented a workspace-level prompt library with git-backed folders, recursive .md file caching, and an HTMX-powered per-session prompt picker with live preview."
+   summary: "Implemented a workspace-level prompt library with git-backed folders, recursive .md file caching, and an HTMX-powered per-session prompt picker with live preview."
+
+# ──────────────────────────────────────────────────────────
+- date: "2026-05-20"
+  title: "Add REST API server to agent-swarm alongside existing Console"
+  jira: "ACM-34254"
+  jira_url: "https://redhat.atlassian.net/browse/ACM-34254"
+  status: "In Progress"
+  pr: ~
+  summary: "Add a versioned REST API server under /api/v1/ alongside the existing HTMX Console"
 
 ## Foundation & Feature Plans
 
