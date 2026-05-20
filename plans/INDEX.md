@@ -167,6 +167,15 @@ Parent epic: [ACM-32892](https://redhat.atlassian.net/browse/ACM-32892) — Impl
   pr: "https://github.com/stolostron/agent-swarm/pull/72"
   summary: "Implemented a workspace-level prompt library with git-backed folders, recursive .md file caching, and an HTMX-powered per-session prompt picker with live preview."
 
+# ──────────────────────────────────────────────────────────
+- date: "2026-05-20"
+  title: "Update Gemini model IDs from gemini-3-flash/pro to gemini-3.5-flash/pro in Crush and OpenCode tools"
+  jira: "ACM-34288"
+  jira_url: "https://redhat.atlassian.net/browse/ACM-34288"
+  status: "Done"
+  pr: "https://github.com/stolostron/agent-swarm/pull/77"
+  summary: "Updated all Gemini model IDs from gemini-3-flash/pro to gemini-3.5-flash/pro in opencode.py and crush.py, fixed preivew typo and mismatched 2.5 labels"
+
 ## Foundation & Feature Plans
 
 | Plan | Summary | Jira | PR |

@@ -130,8 +130,8 @@ class OpenCodeStrategy(AgentToolStrategy):
 
     def get_model_options(self, secret=None) -> list[dict]:
         _GEMINI_MODELS = [
-            ("google/gemini-3-flash-preview", "Gemini 3 Flash (fast)"),
-            ("google/gemini-3-pro-preivew", "Gemini 3 Pro"),
+            ("google/gemini-3.5-flash-preview", "Gemini 3.5 Flash (fast)"),
+            ("google/gemini-3.5-pro-preview", "Gemini 3.5 Pro"),
         ]
         _CLAUDE_MODELS = [
             ("google-vertex-anthropic/claude-haiku-4-5@20251001", "Claude Haiku 4.5 (fast)"),
@@ -151,9 +151,9 @@ class OpenCodeStrategy(AgentToolStrategy):
         if has_adc:
             return "google-vertex-anthropic/claude-sonnet-4-6@default"
         elif has_gemini:
-            return "google/gemini-3-flash-preview"
+            return "google/gemini-3.5-flash-preview"
         else:
-            return "google/gemini-3-flash-preview"
+            return "google/gemini-3.5-flash-preview"
 
     def exec_model_update(self, pod_name: str, namespace: str, model: str) -> None:
         if "/" not in model:

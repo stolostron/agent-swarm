@@ -165,16 +165,16 @@ class CrushStrategy(AgentToolStrategy):
                 {"value": "vertexai/claude-sonnet-4-6", "label": "Claude Sonnet 4.6 (balanced)", "group": "Vertex AI — Claude"},
                 {"value": "vertexai/claude-opus-4-6", "label": "Claude Opus 4.6 (most capable)", "group": "Vertex AI — Claude"},
                 {"value": "vertexai/claude-haiku-4-5-20251001", "label": "Claude Haiku 4.5 (fast)", "group": "Vertex AI — Claude"},
-                {"value": "vertexai/gemini-3-pro", "label": "Gemini 3 Pro", "group": "Vertex AI — Gemini"},
-                {"value": "vertexai/gemini-3-flash", "label": "Gemini 3 Flash (fast)", "group": "Vertex AI — Gemini"},
+                {"value": "vertexai/gemini-3.5-pro", "label": "Gemini 3.5 Pro", "group": "Vertex AI — Gemini"},
+                {"value": "vertexai/gemini-3.5-flash", "label": "Gemini 3.5 Flash (fast)", "group": "Vertex AI — Gemini"},
             ])
         elif secret and getattr(secret, "has_vertex", False):
             options.extend([
                 {"value": "vertexai/claude-sonnet-4-6", "label": "Claude Sonnet 4.6 (balanced)", "group": "Vertex AI — Claude"},
                 {"value": "vertexai/claude-opus-4-6", "label": "Claude Opus 4.6 (most capable)", "group": "Vertex AI — Claude"},
                 {"value": "vertexai/claude-haiku-4-5-20251001", "label": "Claude Haiku 4.5 (fast)", "group": "Vertex AI — Claude"},
-                {"value": "vertexai/gemini-3-pro", "label": "Gemini 3 Pro", "group": "Vertex AI — Gemini"},
-                {"value": "vertexai/gemini-3-flash", "label": "Gemini 3 Flash (fast)", "group": "Vertex AI — Gemini"},
+                {"value": "vertexai/gemini-3.5-pro", "label": "Gemini 3.5 Pro", "group": "Vertex AI — Gemini"},
+                {"value": "vertexai/gemini-3.5-flash", "label": "Gemini 3.5 Flash (fast)", "group": "Vertex AI — Gemini"},
             ])
         if secret and getattr(secret, "anthropic_api_key_enc", ""):
             options.extend([
@@ -189,8 +189,8 @@ class CrushStrategy(AgentToolStrategy):
             ])
         if secret and getattr(secret, "google_api_key_enc", ""):
             options.extend([
-                {"value": "gemini/gemini-3-flash", "label": "Gemini 2.5 Flash", "group": "Gemini (AI Studio)"},
-                {"value": "gemini/gemini-3-pro", "label": "Gemini 2.5 Pro", "group": "Gemini (AI Studio)"},
+                {"value": "gemini/gemini-3.5-flash", "label": "Gemini 3.5 Flash (fast)", "group": "Gemini (AI Studio)"},
+                {"value": "gemini/gemini-3.5-pro", "label": "Gemini 3.5 Pro", "group": "Gemini (AI Studio)"},
             ])
         return options
 
@@ -198,7 +198,7 @@ class CrushStrategy(AgentToolStrategy):
         if has_adc:
             return "vertexai/claude-sonnet-4-6"
         if has_gemini:
-            return "gemini/gemini-3-flash"
+            return "gemini/gemini-3.5-flash"
         return ""
 
     def exec_model_update(self, pod_name: str, namespace: str, model: str) -> None:
