@@ -181,9 +181,9 @@ Parent epic: [ACM-32892](https://redhat.atlassian.net/browse/ACM-32892) — Impl
   title: "Refactor Console routes to consume REST API instead of direct DB/K8s access"
   jira: "ACM-34269"
   jira_url: "https://redhat.atlassian.net/browse/ACM-34269"
-  status: "In Progress"
-  pr: ~
-  summary: "Refactor all Console route handlers to call /api/v1/ endpoints via an internal API client instead of direct ORM/K8s access"
+  status: "Done"
+  pr: "https://github.com/stolostron/agent-swarm/pull/76"
+  summary: "Refactored 6 Console route handlers (workspaces, env_vars, secrets, mcp_servers, prompts, auth) to call /api/v1/ via internal API client with httpx ASGI transport, DotDict template compat, and 27 new unit tests"
 
 ## Foundation & Feature Plans
 
