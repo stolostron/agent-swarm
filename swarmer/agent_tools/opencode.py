@@ -109,11 +109,6 @@ class OpenCodeStrategy(AgentToolStrategy):
             return "sleep infinity"
         else:
             prompt_text = resolved_prompt or session.instruction_prompt or ""
-            if hasattr(session, "repos") and session.repos:
-                repo_lines = ["\n\nContext Repositories"]
-                for repo in session.repos:
-                    repo_lines.append(f"- {repo.repo_url} ({repo.branch}) /workspace/{repo.local_path}")
-                prompt_text = prompt_text + "\n".join(repo_lines)
             cmd_parts = ["opencode", "run", "--model", model]
             if session.resume:
                 cmd_parts.append("--continue")

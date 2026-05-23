@@ -194,6 +194,14 @@ Parent epic: [ACM-32892](https://redhat.atlassian.net/browse/ACM-32892) — Impl
   pr: "https://github.com/stolostron/agent-swarm/pull/77"
   summary: "Updated all Gemini model IDs from gemini-3-flash/pro to gemini-3.5-flash/pro in opencode.py and crush.py, fixed preivew typo and mismatched 2.5 labels"
 
+# ──────────────────────────────────────────────────────────
+- date: "2026-05-23"
+  title: "Inject dynamic repository context into AGENTS.md and prompt text for all session modes"
+  jira: "ACM-34355"
+  jira_url: "https://redhat.atlassian.net/browse/ACM-34355"
+  pr: "https://github.com/stolostron/agent-swarm/pull/79"
+  summary: "Centralize repo context generation in k8s_session.py and inject structured markdown table into AGENTS.md (TUI/server) and prompt text (prompt mode), extending ACM-32956 to all session modes"
+
 ## Foundation & Feature Plans
 
 | Plan | Summary | Jira | PR |

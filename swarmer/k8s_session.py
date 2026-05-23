@@ -9,6 +9,32 @@ from swarmer.config import settings
 
 log = logging.getLogger(__name__)
 
+
+def _build_repo_context(repos) -> str:
+    """Build a markdown section listing workspace repositories.
+
+    Returns an empty string when *repos* is empty so callers can
+    unconditionally concatenate the result.
+    """
+    if not repos:
+        return ""
+    lines = [
+        "\n\n## Workspace Repositories\n",
+        "The following Git repositories are available in this workspace:\n",
+        "| Repository | Branch | Path |",
+        "|---|---|---|",
+    ]
+    for repo in repos:
+        # Extract org/repo from URL (e.g. "stolostron/agent-swarm")
+        org_repo = repo.repo_url.rstrip("/").removesuffix(".git")
+        org_repo = "/".join(org_repo.split("/")[-2:])
+        lines.append(
+            f"| `{org_repo}` | `{repo.branch}` "
+            f"| `/workspace/{repo.local_path}` |"
+        )
+    return "\n".join(lines) + "\n"
+
+
 def ensure_session_pvc(
     namespace: str,
     session_id: int,
@@ -134,6 +160,12 @@ def build_session_pod(
                 ),
             )
         )
+
+    # Append structured repo context so the LLM knows which repos
+    # are available and where they live under /workspace/.
+    repo_context = _build_repo_context(session.repos) if session.repos else ""
+    if repo_context:
+        resolved_prompt = (resolved_prompt or "") + repo_context
 
     if resolved_prompt and session.mode in ("tui", "server"):
         env.append(client.V1EnvVar(name="SWARMER_AGENT_MD", value=resolved_prompt))
