@@ -192,7 +192,7 @@ Parent epic: [ACM-32892](https://redhat.atlassian.net/browse/ACM-32892) — Impl
   title: "Repurpose instruction_prompt as \"Additional Instructions\" with layered prompt composition"
   jira: "ACM-34365"
   jira_url: "https://redhat.atlassian.net/browse/ACM-34365"
-  pr: ~
+  pr: "https://github.com/stolostron/agent-swarm/pull/81"
   summary: "Repurposed instruction_prompt from a mutually-exclusive free-text alternative into a composable additional instructions layer always prepended to base git-referenced prompts."
 
 ## Foundation & Feature Plans
