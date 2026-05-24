@@ -190,7 +190,7 @@ class CrushStrategy(AgentToolStrategy):
         if secret and getattr(secret, "google_api_key_enc", ""):
             options.extend([
                 {"value": "gemini/gemini-3.5-flash", "label": "Gemini 3.5 Flash (fast)", "group": "Gemini (AI Studio)"},
-                {"value": "gemini/gemini-3.5-pro", "label": "Gemini 3.5 Pro", "group": "Gemini (AI Studio)"},
+                {"value": "gemini/gemini-3-pro-preview", "label": "Gemini 3 Pro", "group": "Gemini (AI Studio)"},
             ])
         return options
 

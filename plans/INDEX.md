@@ -9,7 +9,6 @@ Parent epic: [ACM-32892](https://redhat.atlassian.net/browse/ACM-32892) — Impl
   title: "Switch swarmer base image from python:3.12-slim to UBI9"
   jira: "ACM-33416"
   jira_url: "https://redhat.atlassian.net/browse/ACM-33416"
-  status: "Done"
   pr: "https://github.com/stolostron/agent-swarm/pull/33"
   summary: "Switched to ubi9/python-312-minimal:latest (62.5 MB, non-root uid 1001); dropped apt-get block; added USER 0/1001 sandwich for group-0-writable PVC mount points"
 # ──────────────────────────────────────────────────────────
@@ -17,7 +16,6 @@ Parent epic: [ACM-32892](https://redhat.atlassian.net/browse/ACM-32892) — Impl
   title: "Reuse agent image for git-init init container"
   jira: "ACM-33416"
   jira_url: "https://redhat.atlassian.net/browse/ACM-33416"
-  status: "Done"
   pr: "https://github.com/stolostron/agent-swarm/pull/34"
   summary: "Replaced alpine/git:latest (Docker Hub) with tool.get_image() so the git-init init container reuses the same agent image (OpenCode has git + gh; Crush has git); eliminates Docker Hub dependency"
 # ──────────────────────────────────────────────────────────
@@ -25,7 +23,6 @@ Parent epic: [ACM-32892](https://redhat.atlassian.net/browse/ACM-32892) — Impl
   title: "Move Launch/Stop controls from Configuration card to status bar"
   jira: "ACM-33539"
   jira_url: "https://redhat.atlassian.net/browse/ACM-33539"
-  status: "Done"
   pr: "https://github.com/stolostron/agent-swarm/pull/39"
   summary: "Relocated Launch/Stop controls to status bar; moved Prompt above tabs with collapse/expand toggle; removed Last Output from Details tab; auto-focus Output/Terminal tab after Launch; auto-clear output on launch; removed Clean Up button in prompt mode; re-enabled Launch after completion in prompt mode"
 # ──────────────────────────────────────────────────────────
@@ -33,7 +30,6 @@ Parent epic: [ACM-32892](https://redhat.atlassian.net/browse/ACM-32892) — Impl
   title: "Sessions detail: Git Repos + Schedule to Details tab, fix Prompt toggle and Output marker"
   jira: "ACM-33548"
   jira_url: "https://redhat.atlassian.net/browse/ACM-33548"
-  status: "Closed"
   pr: "https://github.com/stolostron/agent-swarm/pull/40"
   summary: "Failed-state relaunch; removed Clean Up concept; prompt textarea visible in all modes (AGENTS.md injection for TUI/server); TUI 4s reload delay + window.load auto-connect fix; breadcrumb layout fixed across all 11 templates (correct PF v6 divider placement, flex layout, leading slash, 1.125rem font)"
 # ──────────────────────────────────────────────────────────
@@ -41,7 +37,6 @@ Parent epic: [ACM-32892](https://redhat.atlassian.net/browse/ACM-32892) — Impl
   title: "Bridge OSC 52 clipboard sequences from pod to browser xterm.js terminal"
   jira: "ACM-33551"
   jira_url: "https://redhat.atlassian.net/browse/ACM-33551"
-  status: "Closed"
   pr: "https://github.com/stolostron/agent-swarm/pull/41"
   summary: "Add OSC 52 handler to xterm.js so TUI clipboard copies in the pod reach the user's browser clipboard"
 # ──────────────────────────────────────────────────────────
@@ -49,7 +44,6 @@ Parent epic: [ACM-32892](https://redhat.atlassian.net/browse/ACM-32892) — Impl
   title: "Investigate and fix PVC lifecycle between session runs: persistence and cleanup"
   jira: "ACM-33566"
   jira_url: "https://redhat.atlassian.net/browse/ACM-33566"
-  status: "Done"
   pr: "https://github.com/stolostron/agent-swarm/pull/44"
   summary: "Fixed orphaned PVCs on prompt-mode completion: _auto_cleanup_pod now deletes the PVC when persist is disabled, matching the existing Stop button behaviour"
 
@@ -58,7 +52,6 @@ Parent epic: [ACM-32892](https://redhat.atlassian.net/browse/ACM-32892) — Impl
   title: "Reduce default workspace PVC size from 10Gi to 5Gi"
   jira: "ACM-33570"
   jira_url: "https://redhat.atlassian.net/browse/ACM-33570"
-  status: "Closed"
   pr: "https://github.com/stolostron/agent-swarm/pull/45"
   summary: "Reduced default workspace PVC size from 10Gi to 5Gi by updating the storage default in ensure_session_pvc() in swarmer/k8s_session.py."
 
@@ -67,7 +60,6 @@ Parent epic: [ACM-32892](https://redhat.atlassian.net/browse/ACM-32892) — Impl
   title: "Add Crush support for small and large models"
   jira: "ACM-33630"
   jira_url: "https://redhat.atlassian.net/browse/ACM-33630"
-  status: "Closed"
   pr: "https://github.com/stolostron/agent-swarm/pull/50"
   summary: "Added `_derive_small_model()` to crush.py: Opus→Sonnet, Sonnet→Haiku (vertexai/anthropic), Gemini Pro→Flash; CrushStrategy now injects models.small into the Crush config when derivable"
 
@@ -76,7 +68,6 @@ Parent epic: [ACM-32892](https://redhat.atlassian.net/browse/ACM-32892) — Impl
   title: "Switch Jira MCP from Atlassian OAuth to token-based binary MCP (mcp-atlassian)"
   jira: "ACM-33664"
   jira_url: "https://redhat.atlassian.net/browse/ACM-33664"
-  status: "Closed"
   pr: "https://github.com/stolostron/agent-swarm/pull/52"
   summary: "Localhost OAuth redirect hack: Connect opens in new tab with localhost:18080 callback; MCP card shows paste input so user can submit the failed callback URL to complete token exchange via new /oauth-complete route"
 
@@ -85,7 +76,6 @@ Parent epic: [ACM-32892](https://redhat.atlassian.net/browse/ACM-32892) — Impl
   title: "Sync crush image tag into agent-swarm from agent-containers build"
   jira: "ACM-33677"
   jira_url: "https://redhat.atlassian.net/browse/ACM-33677"
-  status: "Done"
   pr: "https://github.com/stolostron/agent-swarm/pull/53"
   summary: "Extended sync-images to also write AGENT_IMAGE_CRUSH=$(REGISTRY)/crush:$(TAG) into .env from agent-containers/.push-defaults, replacing the hardcoded ghcr.io/gurnben/crush-container:latest"
 
@@ -94,7 +84,6 @@ Parent epic: [ACM-32892](https://redhat.atlassian.net/browse/ACM-32892) — Impl
   title: "Add Jira API token auth to replace OAuth flow for jira-mcp-server binary"
   jira: "ACM-33691"
   jira_url: "https://redhat.atlassian.net/browse/ACM-33691"
-  status: "Done"
   pr: "https://github.com/stolostron/agent-swarm/pull/54"
   summary: "Replaced entire OAuth flow with API token form (server URL, token, email); added Jira API probe validation + 60s auto-refresh; expired tokens greyed out in session views; cleaned up all OAuth model columns, properties, and legacy HTTP branches"
 # ──────────────────────────────────────────────────────────
@@ -102,7 +91,6 @@ Parent epic: [ACM-32892](https://redhat.atlassian.net/browse/ACM-32892) — Impl
   title: "Upgrade Opus model from claude-opus-4-6 to claude-opus-4-7 in Crush and OpenCode tools"
   jira: "ACM-33695"
   jira_url: "https://redhat.atlassian.net/browse/ACM-33695"
-  status: "Done"
   pr: "https://github.com/stolostron/agent-swarm/pull/55"
   summary: "Replace all claude-opus-4-6 model IDs with claude-opus-4-7 in swarmer/agent_tools/crush.py and opencode.py"
 # ──────────────────────────────────────────────────────────
@@ -110,7 +98,6 @@ Parent epic: [ACM-32892](https://redhat.atlassian.net/browse/ACM-32892) — Impl
   title: "Clean up image reachability check logs for public images"
   jira: "ACM-33706"
   jira_url: "https://redhat.atlassian.net/browse/ACM-33706"
-  status: "Done"
   pr: "https://github.com/stolostron/agent-swarm/pull/57"
   summary: "Downgraded missing-pull-secret warnings to debug for public images; added Opus 4.6 back to model lists so existing sessions match"
 
@@ -119,7 +106,6 @@ Parent epic: [ACM-32892](https://redhat.atlassian.net/browse/ACM-32892) — Impl
   title: "Move .push-defaults to agent-swarm as source of truth for REGISTRY and IMAGE_TAG"
   jira: "ACM-33878"
   jira_url: "https://redhat.atlassian.net/browse/ACM-33878"
-  status: "Done"
   pr: "https://github.com/stolostron/agent-swarm/pull/61"
   summary: "Moved REGISTRY + IMAGE_TAG source of truth to agent-swarm/.push-defaults (checked in); updated agent-containers Makefile and all 6 scripts to resolve from ../agent-swarm first with local fallback for machine-specific fields"
   
@@ -127,7 +113,6 @@ Parent epic: [ACM-32892](https://redhat.atlassian.net/browse/ACM-32892) — Impl
   title: "Improve secrets security: session-scoped K8s secrets, per-user credential isolation, and cleanup lifecycle"
   jira: "ACM-33880"
   jira_url: "https://redhat.atlassian.net/browse/ACM-33880"
-  status: "Done"
   pr: "https://github.com/stolostron/agent-swarm/pull/59"
   summary: "Session-scoped K8s secrets created at launch and cleaned up on stop; per-user credential isolation with shared flag; purge/audit plan for orphaned secrets"
 
@@ -136,7 +121,6 @@ Parent epic: [ACM-32892](https://redhat.atlassian.net/browse/ACM-32892) — Impl
   title: "Investigate VertexAI model listing by credential and remove unavailable Opus 4.7 choice"
   jira: "ACM-33890"
   jira_url: "https://redhat.atlassian.net/browse/ACM-33890"
-  status: "Done"
   pr: "https://github.com/stolostron/agent-swarm/pull/62"
   summary: "VertexAI model listing API does not filter by credential; removed claude-opus-4-7 from all model choice lists in crush.py and opencode.py, promoted opus-4-6 to most capable"
 
@@ -145,7 +129,6 @@ Parent epic: [ACM-32892](https://redhat.atlassian.net/browse/ACM-32892) — Impl
   title: "Increase Agent pod memory limit from 4Gi to 8Gi"
   jira: "ACM-34126"
   jira_url: "https://redhat.atlassian.net/browse/ACM-34126"
-  status: "Done"
   pr: "https://github.com/stolostron/agent-swarm/pull/69"
   summary: "Raised agent container memory limit from 4Gi to 8Gi in k8s_session.py to support larger codebases and extended context windows"
 
@@ -154,7 +137,6 @@ Parent epic: [ACM-32892](https://redhat.atlassian.net/browse/ACM-32892) — Impl
   title: "Enable LSPs in dynamic OpenCode and Crush configs"
   jira: "ACM-34104"
   jira_url: "https://redhat.atlassian.net/browse/ACM-34104"
-  status: "Done"
   pr: ~
   summary: "Added lsp: true to OpenCode and auto_lsp + explicit gopls/pyright entries to Crush in both build_config_data() and build_mcp_config_cmd(), fixing runtime config overwriting static LSP settings"
 
@@ -163,7 +145,6 @@ Parent epic: [ACM-32892](https://redhat.atlassian.net/browse/ACM-32892) — Impl
   title: "Workspace prompt library: named prompts, URL-based prompt sources, and per-session prompt picker"
   jira: "ACM-34123"
   jira_url: "https://redhat.atlassian.net/browse/ACM-34123"
-  status: "Done"
   pr: "https://github.com/stolostron/agent-swarm/pull/72"
    summary: "Implemented a workspace-level prompt library with git-backed folders, recursive .md file caching, and an HTMX-powered per-session prompt picker with live preview."
 
@@ -172,7 +153,6 @@ Parent epic: [ACM-32892](https://redhat.atlassian.net/browse/ACM-32892) — Impl
   title: "Add REST API server to agent-swarm alongside existing Console"
   jira: "ACM-34254"
   jira_url: "https://redhat.atlassian.net/browse/ACM-34254"
-  status: "Done"
   pr: "https://github.com/stolostron/agent-swarm/pull/75"
   summary: "Added 51 REST API endpoints under /api/v1/ with K8s bearer token auth, Pydantic schemas, and 32 unit tests alongside the existing HTMX Console"
 
@@ -181,7 +161,6 @@ Parent epic: [ACM-32892](https://redhat.atlassian.net/browse/ACM-32892) — Impl
   title: "Refactor Console routes to consume REST API instead of direct DB/K8s access"
   jira: "ACM-34269"
   jira_url: "https://redhat.atlassian.net/browse/ACM-34269"
-  status: "Done"
   pr: "https://github.com/stolostron/agent-swarm/pull/76"
   summary: "Refactored 6 Console route handlers (workspaces, env_vars, secrets, mcp_servers, prompts, auth) to call /api/v1/ via internal API client with httpx ASGI transport, DotDict template compat, and 27 new unit tests"
 
@@ -190,7 +169,6 @@ Parent epic: [ACM-32892](https://redhat.atlassian.net/browse/ACM-32892) — Impl
   title: "Update Gemini model IDs from gemini-3-flash/pro to gemini-3.5-flash/pro in Crush and OpenCode tools"
   jira: "ACM-34288"
   jira_url: "https://redhat.atlassian.net/browse/ACM-34288"
-  status: "Done"
   pr: "https://github.com/stolostron/agent-swarm/pull/77"
   summary: "Updated all Gemini model IDs from gemini-3-flash/pro to gemini-3.5-flash/pro in opencode.py and crush.py, fixed preivew typo and mismatched 2.5 labels"
 
@@ -206,9 +184,8 @@ Parent epic: [ACM-32892](https://redhat.atlassian.net/browse/ACM-32892) — Impl
   title: "Pod launch fails with 403 system:anonymous when Kubernetes credential loading fails silently"
   jira: "ACM-34359"
   jira_url: "https://redhat.atlassian.net/browse/ACM-34359"
-  status: "In Progress"
-  pr: ~
-  summary: "Fix init_k8s() to auto-detect in-cluster credentials when K8S_IN_CLUSTER is unset; falls back from load_kube_config() to load_incluster_config() instead of silently leaving the client uncredentialed"
+  pr: "https://github.com/stolostron/agent-swarm/pull/80"
+  summary: "Reverted kubernetes to 35.0.0; improved init_k8s() fallback; rejected username=unknown from token probe fallback to force re-login; guarded _do_launch against stale unknown user_id to prevent credential-less pod launches"
 
 ## Foundation & Feature Plans
 
