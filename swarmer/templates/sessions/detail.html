@@ -862,12 +862,7 @@ document.addEventListener('htmx:afterSwap', function () {
   const _launchSelect = document.getElementById('launch-tool-select');
   if (_launchSelect) _launchSelect.disabled = isBlocked;
   
-  // Sync prompt visibility after HTMX swap
-  const pId = document.getElementById('prompt_id');
-  if (pId) {
-    const group = document.getElementById('instruction_prompt_group');
-    if (group) group.style.display = (pId.value === "") ? 'block' : 'none';
-  }
+
 
   if (_launchBtn) {
     const availMap = _launchSelect ? JSON.parse(_launchSelect.dataset.availability || '{}') : {};

@@ -566,6 +566,29 @@ async def session_edit(
 # Launch / Stop
 # ============================================================
 
+async def _resolve_session_prompt(session: Session, db: AsyncSession) -> str:
+    """Resolve the session prompt using layered composition.
+    
+    Layers:
+    1. Additional Instructions (session.instruction_prompt)
+    2. Git-referenced prompt content (session.prompt_id)
+    """
+    base_prompt = ""
+    if session.prompt_id:
+        p = await db.get(WorkspacePrompt, session.prompt_id)
+        if p:
+            base_prompt = p.content
+
+    additional = session.instruction_prompt.strip() if session.instruction_prompt else ""
+    if additional and base_prompt:
+        resolved_prompt = additional + "\n\n" + base_prompt
+    elif additional:
+        resolved_prompt = additional
+    else:
+        resolved_prompt = base_prompt
+    return resolved_prompt
+
+
 async def _do_launch(session: Session, ws: Workspace, db: AsyncSession, user_id: str = "") -> None:
     """Core launch logic shared by the HTTP endpoint and the background scheduler."""
     if user_id == "unknown":
@@ -696,12 +719,8 @@ async def _do_launch(session: Session, ws: Workspace, db: AsyncSession, user_id:
 
     session.k8s_secret_names = ",".join(secret_names)
 
-    # Resolve prompt if prompt_id is set
-    resolved_prompt = session.instruction_prompt
-    if session.prompt_id:
-        p = await db.get(WorkspacePrompt, session.prompt_id)
-        if p:
-            resolved_prompt = p.content
+    # Resolve prompt using layered composition
+    resolved_prompt = await _resolve_session_prompt(session, db)
 
     pod_spec = k8s_sess.build_session_pod(
         session=session,

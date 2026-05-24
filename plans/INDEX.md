@@ -187,6 +187,14 @@ Parent epic: [ACM-32892](https://redhat.atlassian.net/browse/ACM-32892) — Impl
   pr: "https://github.com/stolostron/agent-swarm/pull/80"
   summary: "Reverted kubernetes to 35.0.0; improved init_k8s() fallback; rejected username=unknown from token probe fallback to force re-login; guarded _do_launch against stale unknown user_id to prevent credential-less pod launches"
 
+# ──────────────────────────────────────────────────────────
+- date: "2026-05-24"
+  title: "Repurpose instruction_prompt as \"Additional Instructions\" with layered prompt composition"
+  jira: "ACM-34365"
+  jira_url: "https://redhat.atlassian.net/browse/ACM-34365"
+  pr: ~
+  summary: "Repurposed instruction_prompt from a mutually-exclusive free-text alternative into a composable additional instructions layer always prepended to base git-referenced prompts."
+
 ## Foundation & Feature Plans
 
 | Plan | Summary | Jira | PR |
