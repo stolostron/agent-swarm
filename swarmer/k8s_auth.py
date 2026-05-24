@@ -73,11 +73,12 @@ async def _probe_with_user_token(token: str, api_url: str, in_cluster: bool) -> 
             core = k8s_client.CoreV1Api(api)
             try:
                 core.list_namespace(_request_timeout=5)
-                return TokenIdentity(username="unknown")
+                return None
             except ApiException as e:
                 if e.status == 403:
                     # 403 means authenticated but no list permission — token is valid
-                    return TokenIdentity(username="unknown")
+                    # but we cannot determine the username, so treat as auth failure
+                    return None
                 return None
 
     return await asyncio.to_thread(_do_probe)

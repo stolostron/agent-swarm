@@ -46,11 +46,16 @@ def init_k8s(in_cluster: bool) -> None:
 
         if in_cluster:
             k8s_config.load_incluster_config()
+            log.info("Kubernetes client initialised (in-cluster)")
         else:
-            k8s_config.load_kube_config()
-        log.info("Kubernetes client initialised (in_cluster=%s)", in_cluster)
+            try:
+                k8s_config.load_kube_config()
+                log.info("Kubernetes client initialised (kubeconfig)")
+            except k8s_config.ConfigException:
+                k8s_config.load_incluster_config()
+                log.info("Kubernetes client initialised (in-cluster fallback — set K8S_IN_CLUSTER=true to suppress this)")
     except Exception as exc:
-        log.warning("Kubernetes client not available: %s", exc)
+        log.error("Kubernetes client not available — all K8s calls will fail as system:anonymous: %s", exc)
 
 
 # ---------- Namespace helpers ----------

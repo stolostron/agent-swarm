@@ -201,6 +201,14 @@ Parent epic: [ACM-32892](https://redhat.atlassian.net/browse/ACM-32892) — Impl
   jira_url: "https://redhat.atlassian.net/browse/ACM-34355"
   pr: "https://github.com/stolostron/agent-swarm/pull/79"
   summary: "Centralize repo context generation in k8s_session.py and inject structured markdown table into AGENTS.md (TUI/server) and prompt text (prompt mode), extending ACM-32956 to all session modes"
+# ──────────────────────────────────────────────────────────
+- date: "2026-05-24"
+  title: "Pod launch fails with 403 system:anonymous when Kubernetes credential loading fails silently"
+  jira: "ACM-34359"
+  jira_url: "https://redhat.atlassian.net/browse/ACM-34359"
+  status: "In Progress"
+  pr: ~
+  summary: "Fix init_k8s() to auto-detect in-cluster credentials when K8S_IN_CLUSTER is unset; falls back from load_kube_config() to load_incluster_config() instead of silently leaving the client uncredentialed"
 
 ## Foundation & Feature Plans
 

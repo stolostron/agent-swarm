@@ -568,6 +568,8 @@ async def session_edit(
 
 async def _do_launch(session: Session, ws: Workspace, db: AsyncSession, user_id: str = "") -> None:
     """Core launch logic shared by the HTTP endpoint and the background scheduler."""
+    if user_id == "unknown":
+        raise ValueError("Session expired — please log in again")
     import secrets as _secrets
     session.last_output = ""
 
