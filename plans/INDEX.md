@@ -206,8 +206,8 @@ Parent epic: [ACM-32892](https://redhat.atlassian.net/browse/ACM-32892) — Impl
   title: "Expired bearer token returns 500 instead of redirecting to login"
   jira: "ACM-34396"
   jira_url: "https://redhat.atlassian.net/browse/ACM-34396"
-  pr: ~
-  summary: "Convert 401 APIError to NotAuthenticated in APIClient._request() so expired tokens redirect to /login instead of returning 500"
+  pr: "https://github.com/stolostron/agent-swarm/pull/89"
+  summary: "Raised NotAuthenticated on 401 in APIClient._request() so expired tokens redirect to /login via the existing handler; added 3 unit/integration tests covering the 401 path and console route redirect"
 
 # ──────────────────────────────────────────────────────────
 - date: "2026-05-14"
