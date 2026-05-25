@@ -194,6 +194,13 @@ Parent epic: [ACM-32892](https://redhat.atlassian.net/browse/ACM-32892) — Impl
   jira_url: "https://redhat.atlassian.net/browse/ACM-34383"
   pr: "https://github.com/stolostron/agent-swarm/pull/84"
   summary: "Created docs/USER_GUIDE.md with unified documentation covering all deployment options, configuration, session modes, agent tools, and Makefile reference; slimmed README.md to link to user guide"
+---
+- date: "2026-05-25"
+  title: "Remove --continue flag from prompt mode; restrict to TUI mode only"
+  jira: "ACM-34388"
+  jira_url: "https://redhat.atlassian.net/browse/ACM-34388"
+  pr: "https://github.com/stolostron/agent-swarm/pull/88"
+  summary: "Removed --continue and || fallback from prompt-mode build_main_cmd() in opencode.py and crush.py; added 14 unit tests in test_build_main_cmd.py covering all three modes for both agent tools"
 
 ## Foundation & Feature Plans
 
