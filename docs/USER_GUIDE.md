@@ -52,8 +52,8 @@ OPENSHIFT_OAUTH_URL="https://${OAUTH_HOST}"
 SWARMER_IMAGE="quay.io/jpacker/swarmer:$(cat VERSION)"
 
 # Agent tool images — update these to match your registry
-AGENT_IMAGE_OPENCODE="quay.io/jpacker/opencode:0.1.1"
-AGENT_IMAGE_CRUSH="ghcr.io/gurnben/crush-container:latest"
+AGENT_IMAGE_OPENCODE="quay.io/jpacker/opencode:0.2.8"
+AGENT_IMAGE_CRUSH="quay.io/jpacker/crush:0.2.8"
 
 echo "App domain:   ${APPS_DOMAIN}"
 echo "Swarmer URL:  https://${SWARMER_HOST}"
