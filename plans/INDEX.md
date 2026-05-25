@@ -185,7 +185,7 @@ Parent epic: [ACM-32892](https://redhat.atlassian.net/browse/ACM-32892) — Impl
   jira: "ACM-34382"
   jira_url: "https://redhat.atlassian.net/browse/ACM-34382"
   status: "In Progress"
-  pr: ~
+  pr: "https://github.com/stolostron/agent-swarm/pull/83"
   summary: "Always pass --continue on agent start for prompt/TUI modes with fresh-start fallback; remove resume column, checkbox, and API fields"
 ---
 - date: "2026-05-25"
