@@ -369,3 +369,83 @@ class TestErrorHandling:
         with pytest.raises(APIError) as exc_info:
             await api_client.create_workspace("Duplicate")
         assert exc_info.value.status_code == 409
+
+    @pytest.mark.asyncio
+    async def test_401_raises_not_authenticated(self):
+        """A 401 response raises NotAuthenticated, not APIError."""
+        import httpx
+        from unittest.mock import AsyncMock, MagicMock
+
+        from swarmer.deps import NotAuthenticated
+        from swarmer.routers.api_client import APIClient
+
+        mock_resp = MagicMock(spec=httpx.Response)
+        mock_resp.status_code = 401
+
+        async with APIClient(token="expired-token") as client:
+            client._client.request = AsyncMock(return_value=mock_resp)
+            with pytest.raises(NotAuthenticated):
+                await client._request("GET", "/api/v1/workspaces")
+
+    @pytest.mark.asyncio
+    async def test_non_401_4xx_raises_api_error(self):
+        """Non-401 4xx responses still raise APIError, not NotAuthenticated."""
+        import httpx
+        from unittest.mock import AsyncMock, MagicMock
+
+        from swarmer.routers.api_client import APIClient, APIError
+
+        mock_resp = MagicMock(spec=httpx.Response)
+        mock_resp.status_code = 403
+        mock_resp.json.return_value = {"detail": "Forbidden"}
+
+        async with APIClient(token="some-token") as client:
+            client._client.request = AsyncMock(return_value=mock_resp)
+            with pytest.raises(APIError) as exc_info:
+                await client._request("GET", "/api/v1/workspaces")
+        assert exc_info.value.status_code == 403
+
+
+# ===========================================================================
+# Console route: expired token redirects to /login
+# ===========================================================================
+
+
+class TestConsoleRouteUnauthorizedRedirect:
+    @pytest.mark.asyncio
+    async def test_workspace_list_redirects_to_login_on_expired_token(self):
+        """GET /workspaces redirects to /login when the API layer returns 401.
+
+        Simulates a user whose session cookie is valid but whose K8s bearer
+        token has expired.  The API returns 401, APIClient._request() raises
+        NotAuthenticated, and the global handler redirects to /login.
+        """
+        import httpx
+        from fastapi import HTTPException
+        from unittest.mock import patch
+
+        from swarmer.api.deps import get_current_user, require_api_auth
+        from swarmer.database import get_db
+        from swarmer.deps import require_auth
+        from swarmer.main import app
+
+        def _expired_api_auth():
+            raise HTTPException(status_code=401, detail="Invalid or expired bearer token")
+
+        app.dependency_overrides[get_db] = _override_get_db
+        app.dependency_overrides[require_api_auth] = _expired_api_auth
+        app.dependency_overrides[require_auth] = lambda: None
+        app.dependency_overrides[get_current_user] = _override_get_current_user
+
+        try:
+            with patch("swarmer.routers.api_client.get_user_token", return_value="fake-expired-token"):
+                transport = httpx.ASGITransport(app=app)
+                async with httpx.AsyncClient(
+                    transport=transport, base_url="http://test"
+                ) as http_client:
+                    resp = await http_client.get("/workspaces", follow_redirects=False)
+        finally:
+            app.dependency_overrides.clear()
+
+        assert resp.status_code == 302
+        assert resp.headers["location"] == "/login"

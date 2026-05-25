@@ -25,7 +25,7 @@ import httpx
 from fastapi import Request
 from httpx import ASGITransport
 
-from swarmer.deps import get_user_token
+from swarmer.deps import NotAuthenticated, get_user_token
 
 log = logging.getLogger(__name__)
 
@@ -151,6 +151,8 @@ class APIClient:
     ) -> Any:
         """Send an HTTP request and return parsed JSON or raw response."""
         resp = await self._client.request(method, path, json=json, params=params)
+        if resp.status_code == 401:
+            raise NotAuthenticated()
         if resp.status_code >= 400:
             detail = ""
             try:
