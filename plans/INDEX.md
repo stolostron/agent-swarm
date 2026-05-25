@@ -203,6 +203,14 @@ Parent epic: [ACM-32892](https://redhat.atlassian.net/browse/ACM-32892) — Impl
   pr: "https://github.com/stolostron/agent-swarm/pull/83"
   summary: "Always pass --continue for prompt/TUI launches in both OpenCode and Crush with shell || fallback for fresh workspaces; dropped resume column, checkbox, and all API fields"
 
+# ──────────────────────────────────────────────────────────────
+- date: "2026-05-25"
+  title: "Enable GitHub Actions CI workflows for lint and test"
+  jira: "ACM-34387"
+  jira_url: "https://redhat.atlassian.net/browse/ACM-34387"
+  pr: ~
+  summary: "Created .github/workflows/lint.yml (ruff check swarmer/) and test.yml (make test via pytest) as two independent GitHub Actions workflows triggered on push/PR to main"
+
 ## Foundation & Feature Plans
 
 | Plan | Summary | Jira | PR |
