@@ -63,6 +63,7 @@ async def migrate_db() -> None:
         "ALTER TABLE mcp_servers ADD COLUMN user_id VARCHAR(255) NOT NULL DEFAULT ''",
         "ALTER TABLE mcp_servers ADD COLUMN shared BOOLEAN NOT NULL DEFAULT 1",
         "ALTER TABLE sessions ADD COLUMN prompt_id INTEGER REFERENCES workspace_prompts(id) ON DELETE SET NULL",
+        "ALTER TABLE sessions DROP COLUMN resume",
     ]
     async with _engine.begin() as conn:
         for stmt in migrations:
@@ -70,7 +71,7 @@ async def migrate_db() -> None:
                 await conn.execute(text(stmt))
             except Exception as e:
                 msg = str(e).lower()
-                if "duplicate column" in msg or "already exists" in msg:
+                if "duplicate column" in msg or "already exists" in msg or "no such column" in msg:
                     continue
                 log.error("Migration failed for %r: %s", stmt, e)
                 raise

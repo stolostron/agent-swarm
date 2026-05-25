@@ -275,7 +275,6 @@ async def session_create(
     prompt_id: str = Form(""),
     instruction_prompt: str = Form(""),
     persist: bool = Form(False),
-    resume: bool = Form(False),
     mode: str = Form("prompt"),
     model: str = Form(""),
     agent_tool: str = Form("opencode"),
@@ -336,7 +335,6 @@ async def session_create(
         mode=mode,
         model=model.strip(),
         persist=persist,
-        resume=resume,
         instruction_prompt=instruction_prompt.strip(),
         agent_tool=agent_tool,
         working_branch=wb,
@@ -486,7 +484,6 @@ async def session_edit(
     prompt_id: str = Form(""),
     instruction_prompt: str = Form(""),
     persist: bool = Form(False),
-    resume: bool = Form(False),
     mode: str = Form("prompt"),
     model: str = Form(""),
     agent_tool: str = Form("opencode"),
@@ -528,7 +525,6 @@ async def session_edit(
 
     session.instruction_prompt = instruction_prompt.strip()
     session.persist = persist
-    session.resume = resume
     if mode in ("tui", "server", "prompt"):
         session.mode = mode
     session.model = model.strip()
@@ -782,7 +778,6 @@ async def session_launch(
     prompt_id: str = Form(""),
     instruction_prompt: str = Form(""),
     persist: bool = Form(False),
-    resume: bool = Form(False),
     mode: str = Form(""),
     model: str = Form(""),
     redirect_to: str = Form(""),
@@ -826,7 +821,6 @@ async def session_launch(
             session.prompt_id = None
         session.instruction_prompt = instruction_prompt.strip()
         session.persist = persist
-        session.resume = resume
         if mode in ("tui", "server", "prompt"):
             session.mode = mode
         if model.strip():

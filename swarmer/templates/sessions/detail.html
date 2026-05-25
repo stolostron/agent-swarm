@@ -228,20 +228,6 @@
                   <input type="checkbox" class="pf-v6-c-check__input" name="persist"
                          id="cfg_persist" value="true"
                          {{ 'checked' if session.persist }}
-                         {% if session.is_active %}disabled{% endif %}
-                         onchange="syncResume()">
-                </div>
-              </div>
-            </div>
-
-            <div id="cfg_resume_row"
-                 style="display:{% if session.persist %}flex{% else %}none{% endif %}; align-items:center; margin-bottom:var(--pf-t--global--spacer--md);">
-              <div style="flex:0 0 40%; color:var(--pf-t--global--text--color--subtle); font-size:var(--pf-t--global--font--size--sm);">Resume on relaunch</div>
-              <div style="flex:1;">
-                <div class="pf-v6-c-check">
-                  <input type="checkbox" class="pf-v6-c-check__input" name="resume"
-                         id="cfg_resume" value="true"
-                         {{ 'checked' if session.resume }}
                          {% if session.is_active %}disabled{% endif %}>
                 </div>
               </div>
@@ -789,18 +775,6 @@ function updateLaunchAvailPill(avail) {
   const pill = document.getElementById('launch-avail-pill');
   if (!pill) return;
   pill.textContent = avail ? '✅' : '❌';
-}
-
-function syncResume() {
-  const persist = document.getElementById('cfg_persist');
-  const row = document.getElementById('cfg_resume_row');
-  const resume = document.getElementById('cfg_resume');
-  if (!persist.checked) {
-    row.style.display = 'none';
-    resume.checked = false;
-  } else {
-    row.style.display = '';
-  }
 }
 
 function showRename() {

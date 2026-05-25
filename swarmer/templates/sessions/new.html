@@ -146,24 +146,13 @@
         <div class="pf-v6-c-card__body">
           <div class="pf-v6-c-check" style="margin-bottom:var(--pf-t--global--spacer--sm);">
             <input class="pf-v6-c-check__input" type="checkbox" name="persist"
-                   id="persist" value="true"
-                   onchange="document.getElementById('resume-row').style.display = this.checked ? '' : 'none'">
+                   id="persist" value="true">
             <label class="pf-v6-c-check__label" for="persist">
               <strong>Persist workspace</strong>
             </label>
             <span class="pf-v6-c-check__description">
               The PVC (git repos, files) survives when the session is stopped.
             </span>
-          </div>
-          <div id="resume-row" style="display:none; margin-left:var(--pf-t--global--spacer--lg); margin-top:var(--pf-t--global--spacer--xs);">
-            <div class="pf-v6-c-check">
-              <input class="pf-v6-c-check__input" type="checkbox" name="resume"
-                     id="resume" value="true">
-              <label class="pf-v6-c-check__label" for="resume">
-                Resume last session on re-launch
-              </label>
-              <span class="pf-v6-c-check__description">Passes <code>--continue</code> to the agent.</span>
-            </div>
           </div>
         </div>
       </div>

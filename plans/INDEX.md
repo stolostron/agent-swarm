@@ -195,6 +195,15 @@ Parent epic: [ACM-32892](https://redhat.atlassian.net/browse/ACM-32892) — Impl
   pr: "https://github.com/stolostron/agent-swarm/pull/81"
   summary: "Repurposed instruction_prompt from a mutually-exclusive free-text alternative into a composable additional instructions layer always prepended to base git-referenced prompts."
 
+# ──────────────────────────────────────────────────────────
+- date: "2026-05-25"
+  title: "Always resume session on agent container start; remove resume checkbox from UI"
+  jira: "ACM-34382"
+  jira_url: "https://redhat.atlassian.net/browse/ACM-34382"
+  status: "In Progress"
+  pr: ~
+  summary: "Always pass --continue on agent start for prompt/TUI modes with fresh-start fallback; remove resume column, checkbox, and API fields"
+
 ## Foundation & Feature Plans
 
 | Plan | Summary | Jira | PR |

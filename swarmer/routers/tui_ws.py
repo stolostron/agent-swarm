@@ -79,11 +79,10 @@ async def session_tui(
         tui_cmd_parts.extend(tool.get_tui_model_args(session.model))
     elif session.model and tool.name != "crush":
         tui_cmd_parts.extend(["--model", session.model])
-    if session.resume:
-        tui_cmd_parts.append("--continue")
+    cmd_base = " ".join(shlex.quote(p) for p in tui_cmd_parts)
     tui_shell = (
-        "export PATH=\"$HOME/.local/bin:$PATH\" && exec "
-        + " ".join(shlex.quote(p) for p in tui_cmd_parts)
+        f"export PATH=\"$HOME/.local/bin:$PATH\" && "
+        f"{{ {cmd_base} --continue || exec {cmd_base}; }}"
     )
 
     # ---------- Open kubernetes exec stream ----------

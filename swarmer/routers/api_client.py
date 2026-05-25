@@ -243,7 +243,6 @@ class APIClient:
         github_pat_id: int | None = None,
         prompt_id: int | None = None,
         persist: bool = False,
-        resume: bool = False,
         working_branch: str = "",
         mcp_server_ids: list[int] | None = None,
     ) -> dict:
@@ -254,7 +253,6 @@ class APIClient:
             "agent_tool": agent_tool,
             "instruction_prompt": instruction_prompt,
             "persist": persist,
-            "resume": resume,
             "working_branch": working_branch,
         }
         if github_pat_id is not None:

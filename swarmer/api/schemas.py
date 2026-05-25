@@ -47,7 +47,6 @@ class SessionCreate(BaseModel):
     github_pat_id: int | None = None
     prompt_id: int | None = None
     persist: bool = False
-    resume: bool = False
     working_branch: str = ""
     mcp_server_ids: list[int] = Field(default_factory=list)
 
@@ -61,7 +60,6 @@ class SessionUpdate(BaseModel):
     github_pat_id: int | None = None
     prompt_id: int | None = None
     persist: bool | None = None
-    resume: bool | None = None
     working_branch: str | None = None
     mcp_server_ids: list[int] | None = None
 
@@ -77,7 +75,6 @@ class SessionOut(BaseModel):
     github_pat_id: int | None
     prompt_id: int | None
     persist: bool
-    resume: bool
     privileged: bool
     working_branch: str
     phase: str

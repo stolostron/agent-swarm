@@ -109,12 +109,11 @@ class OpenCodeStrategy(AgentToolStrategy):
             return "sleep infinity"
         else:
             prompt_text = resolved_prompt or session.instruction_prompt or ""
-            cmd_parts = ["opencode", "run", "--model", model]
-            if session.resume:
-                cmd_parts.append("--continue")
-            if prompt_text:
-                cmd_parts.append(prompt_text)
-            return " ".join(shlex.quote(p) for p in cmd_parts)
+            base_parts = ["opencode", "run", "--model", model]
+            prompt_parts = [prompt_text] if prompt_text else []
+            cmd_with = " ".join(shlex.quote(p) for p in base_parts + ["--continue"] + prompt_parts)
+            cmd_without = " ".join(shlex.quote(p) for p in base_parts + prompt_parts)
+            return f"{cmd_with} || {cmd_without}"
 
     def get_server_mode_ports(self) -> list:
         from kubernetes import client

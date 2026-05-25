@@ -114,7 +114,6 @@ async def create_session(
         mode=body.mode,
         model=body.model.strip(),
         persist=body.persist,
-        resume=body.resume,
         instruction_prompt=body.instruction_prompt.strip(),
         agent_tool=agent_tool,
         working_branch=wb,
@@ -184,8 +183,6 @@ async def update_session(
         session.prompt_id = body.prompt_id
     if body.persist is not None:
         session.persist = body.persist
-    if body.resume is not None:
-        session.resume = body.resume
     if body.working_branch is not None:
         wb = body.working_branch.strip()
         if wb and not _is_valid_ref_name(wb):
