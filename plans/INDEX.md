@@ -25,177 +25,161 @@ Parent epic: [ACM-32892](https://redhat.atlassian.net/browse/ACM-32892) — Impl
   jira_url: "https://redhat.atlassian.net/browse/ACM-33539"
   pr: "https://github.com/stolostron/agent-swarm/pull/39"
   summary: "Relocated Launch/Stop controls to status bar; moved Prompt above tabs with collapse/expand toggle; removed Last Output from Details tab; auto-focus Output/Terminal tab after Launch; auto-clear output on launch; removed Clean Up button in prompt mode; re-enabled Launch after completion in prompt mode"
-# ──────────────────────────────────────────────────────────
+---
 - date: "2026-05-01"
   title: "Sessions detail: Git Repos + Schedule to Details tab, fix Prompt toggle and Output marker"
   jira: "ACM-33548"
   jira_url: "https://redhat.atlassian.net/browse/ACM-33548"
   pr: "https://github.com/stolostron/agent-swarm/pull/40"
   summary: "Failed-state relaunch; removed Clean Up concept; prompt textarea visible in all modes (AGENTS.md injection for TUI/server); TUI 4s reload delay + window.load auto-connect fix; breadcrumb layout fixed across all 11 templates (correct PF v6 divider placement, flex layout, leading slash, 1.125rem font)"
-# ──────────────────────────────────────────────────────────
+---
 - date: "2026-05-01"
   title: "Bridge OSC 52 clipboard sequences from pod to browser xterm.js terminal"
   jira: "ACM-33551"
   jira_url: "https://redhat.atlassian.net/browse/ACM-33551"
   pr: "https://github.com/stolostron/agent-swarm/pull/41"
   summary: "Add OSC 52 handler to xterm.js so TUI clipboard copies in the pod reach the user's browser clipboard"
-# ──────────────────────────────────────────────────────────
+---
 - date: "2026-05-04"
   title: "Investigate and fix PVC lifecycle between session runs: persistence and cleanup"
   jira: "ACM-33566"
   jira_url: "https://redhat.atlassian.net/browse/ACM-33566"
   pr: "https://github.com/stolostron/agent-swarm/pull/44"
   summary: "Fixed orphaned PVCs on prompt-mode completion: _auto_cleanup_pod now deletes the PVC when persist is disabled, matching the existing Stop button behaviour"
-
-# ──────────────────────────────────────────────────────────
+---
 - date: "2026-05-04"
   title: "Reduce default workspace PVC size from 10Gi to 5Gi"
   jira: "ACM-33570"
   jira_url: "https://redhat.atlassian.net/browse/ACM-33570"
   pr: "https://github.com/stolostron/agent-swarm/pull/45"
   summary: "Reduced default workspace PVC size from 10Gi to 5Gi by updating the storage default in ensure_session_pvc() in swarmer/k8s_session.py."
-
-# ──────────────────────────────────────────────────────────
+---
 - date: "2026-05-05"
   title: "Add Crush support for small and large models"
   jira: "ACM-33630"
   jira_url: "https://redhat.atlassian.net/browse/ACM-33630"
   pr: "https://github.com/stolostron/agent-swarm/pull/50"
   summary: "Added `_derive_small_model()` to crush.py: Opus→Sonnet, Sonnet→Haiku (vertexai/anthropic), Gemini Pro→Flash; CrushStrategy now injects models.small into the Crush config when derivable"
-
-# ──────────────────────────────────────────────────────────
+---
 - date: "2026-05-06"
   title: "Switch Jira MCP from Atlassian OAuth to token-based binary MCP (mcp-atlassian)"
   jira: "ACM-33664"
   jira_url: "https://redhat.atlassian.net/browse/ACM-33664"
   pr: "https://github.com/stolostron/agent-swarm/pull/52"
   summary: "Localhost OAuth redirect hack: Connect opens in new tab with localhost:18080 callback; MCP card shows paste input so user can submit the failed callback URL to complete token exchange via new /oauth-complete route"
-
-# ──────────────────────────────────────────────────────────
+---
 - date: "2026-05-06"
   title: "Sync crush image tag into agent-swarm from agent-containers build"
   jira: "ACM-33677"
   jira_url: "https://redhat.atlassian.net/browse/ACM-33677"
   pr: "https://github.com/stolostron/agent-swarm/pull/53"
   summary: "Extended sync-images to also write AGENT_IMAGE_CRUSH=$(REGISTRY)/crush:$(TAG) into .env from agent-containers/.push-defaults, replacing the hardcoded ghcr.io/gurnben/crush-container:latest"
-
-# ──────────────────────────────────────────────────────────
+---
 - date: "2026-05-06"
   title: "Add Jira API token auth to replace OAuth flow for jira-mcp-server binary"
   jira: "ACM-33691"
   jira_url: "https://redhat.atlassian.net/browse/ACM-33691"
   pr: "https://github.com/stolostron/agent-swarm/pull/54"
   summary: "Replaced entire OAuth flow with API token form (server URL, token, email); added Jira API probe validation + 60s auto-refresh; expired tokens greyed out in session views; cleaned up all OAuth model columns, properties, and legacy HTTP branches"
-# ──────────────────────────────────────────────────────────
+---
 - date: "2026-05-07"
   title: "Upgrade Opus model from claude-opus-4-6 to claude-opus-4-7 in Crush and OpenCode tools"
   jira: "ACM-33695"
   jira_url: "https://redhat.atlassian.net/browse/ACM-33695"
   pr: "https://github.com/stolostron/agent-swarm/pull/55"
   summary: "Replace all claude-opus-4-6 model IDs with claude-opus-4-7 in swarmer/agent_tools/crush.py and opencode.py"
-# ──────────────────────────────────────────────────────────
+---
 - date: "2026-05-07"
   title: "Clean up image reachability check logs for public images"
   jira: "ACM-33706"
   jira_url: "https://redhat.atlassian.net/browse/ACM-33706"
   pr: "https://github.com/stolostron/agent-swarm/pull/57"
   summary: "Downgraded missing-pull-secret warnings to debug for public images; added Opus 4.6 back to model lists so existing sessions match"
-
-# ──────────────────────────────────────────────────────────
+---
 - date: "2026-05-07"
   title: "Move .push-defaults to agent-swarm as source of truth for REGISTRY and IMAGE_TAG"
   jira: "ACM-33878"
   jira_url: "https://redhat.atlassian.net/browse/ACM-33878"
   pr: "https://github.com/stolostron/agent-swarm/pull/61"
   summary: "Moved REGISTRY + IMAGE_TAG source of truth to agent-swarm/.push-defaults (checked in); updated agent-containers Makefile and all 6 scripts to resolve from ../agent-swarm first with local fallback for machine-specific fields"
-  
+---
 - date: "2026-05-07"
   title: "Improve secrets security: session-scoped K8s secrets, per-user credential isolation, and cleanup lifecycle"
   jira: "ACM-33880"
   jira_url: "https://redhat.atlassian.net/browse/ACM-33880"
   pr: "https://github.com/stolostron/agent-swarm/pull/59"
   summary: "Session-scoped K8s secrets created at launch and cleaned up on stop; per-user credential isolation with shared flag; purge/audit plan for orphaned secrets"
-
-# ──────────────────────────────────────────────────────────
+---
 - date: "2026-05-08"
   title: "Investigate VertexAI model listing by credential and remove unavailable Opus 4.7 choice"
   jira: "ACM-33890"
   jira_url: "https://redhat.atlassian.net/browse/ACM-33890"
   pr: "https://github.com/stolostron/agent-swarm/pull/62"
   summary: "VertexAI model listing API does not filter by credential; removed claude-opus-4-7 from all model choice lists in crush.py and opencode.py, promoted opus-4-6 to most capable"
-
-# ──────────────────────────────────────────────────────────
+---
 - date: "2026-05-15"
   title: "Increase Agent pod memory limit from 4Gi to 8Gi"
   jira: "ACM-34126"
   jira_url: "https://redhat.atlassian.net/browse/ACM-34126"
   pr: "https://github.com/stolostron/agent-swarm/pull/69"
   summary: "Raised agent container memory limit from 4Gi to 8Gi in k8s_session.py to support larger codebases and extended context windows"
-
-# ──────────────────────────────────────────────────────────
+---
 - date: "2026-05-15"
   title: "Enable LSPs in dynamic OpenCode and Crush configs"
   jira: "ACM-34104"
   jira_url: "https://redhat.atlassian.net/browse/ACM-34104"
   pr: ~
   summary: "Added lsp: true to OpenCode and auto_lsp + explicit gopls/pyright entries to Crush in both build_config_data() and build_mcp_config_cmd(), fixing runtime config overwriting static LSP settings"
-
-# ──────────────────────────────────────────────────────────
+---
 - date: "2026-05-15"
   title: "Workspace prompt library: named prompts, URL-based prompt sources, and per-session prompt picker"
   jira: "ACM-34123"
   jira_url: "https://redhat.atlassian.net/browse/ACM-34123"
   pr: "https://github.com/stolostron/agent-swarm/pull/72"
    summary: "Implemented a workspace-level prompt library with git-backed folders, recursive .md file caching, and an HTMX-powered per-session prompt picker with live preview."
-
-# ──────────────────────────────────────────────────────────
+---
 - date: "2026-05-20"
   title: "Add REST API server to agent-swarm alongside existing Console"
   jira: "ACM-34254"
   jira_url: "https://redhat.atlassian.net/browse/ACM-34254"
   pr: "https://github.com/stolostron/agent-swarm/pull/75"
   summary: "Added 51 REST API endpoints under /api/v1/ with K8s bearer token auth, Pydantic schemas, and 32 unit tests alongside the existing HTMX Console"
-
-# ──────────────────────────────────────────────────────────
+---
 - date: "2026-05-20"
   title: "Refactor Console routes to consume REST API instead of direct DB/K8s access"
   jira: "ACM-34269"
   jira_url: "https://redhat.atlassian.net/browse/ACM-34269"
   pr: "https://github.com/stolostron/agent-swarm/pull/76"
   summary: "Refactored 6 Console route handlers (workspaces, env_vars, secrets, mcp_servers, prompts, auth) to call /api/v1/ via internal API client with httpx ASGI transport, DotDict template compat, and 27 new unit tests"
-
-# ──────────────────────────────────────────────────────────
+---
 - date: "2026-05-20"
   title: "Update Gemini model IDs from gemini-3-flash/pro to gemini-3.5-flash/pro in Crush and OpenCode tools"
   jira: "ACM-34288"
   jira_url: "https://redhat.atlassian.net/browse/ACM-34288"
   pr: "https://github.com/stolostron/agent-swarm/pull/77"
   summary: "Updated all Gemini model IDs from gemini-3-flash/pro to gemini-3.5-flash/pro in opencode.py and crush.py, fixed preivew typo and mismatched 2.5 labels"
-
-# ──────────────────────────────────────────────────────────
+---
 - date: "2026-05-23"
   title: "Inject dynamic repository context into AGENTS.md and prompt text for all session modes"
   jira: "ACM-34355"
   jira_url: "https://redhat.atlassian.net/browse/ACM-34355"
   pr: "https://github.com/stolostron/agent-swarm/pull/79"
   summary: "Centralize repo context generation in k8s_session.py and inject structured markdown table into AGENTS.md (TUI/server) and prompt text (prompt mode), extending ACM-32956 to all session modes"
-# ──────────────────────────────────────────────────────────
+---
 - date: "2026-05-24"
   title: "Pod launch fails with 403 system:anonymous when Kubernetes credential loading fails silently"
   jira: "ACM-34359"
   jira_url: "https://redhat.atlassian.net/browse/ACM-34359"
   pr: "https://github.com/stolostron/agent-swarm/pull/80"
   summary: "Reverted kubernetes to 35.0.0; improved init_k8s() fallback; rejected username=unknown from token probe fallback to force re-login; guarded _do_launch against stale unknown user_id to prevent credential-less pod launches"
-
-# ──────────────────────────────────────────────────────────
+---
 - date: "2026-05-24"
   title: "Repurpose instruction_prompt as \"Additional Instructions\" with layered prompt composition"
   jira: "ACM-34365"
   jira_url: "https://redhat.atlassian.net/browse/ACM-34365"
   pr: "https://github.com/stolostron/agent-swarm/pull/81"
   summary: "Repurposed instruction_prompt from a mutually-exclusive free-text alternative into a composable additional instructions layer always prepended to base git-referenced prompts."
-
-# ──────────────────────────────────────────────────────────
+---
 - date: "2026-05-25"
   title: "Always resume session on agent container start; remove resume checkbox from UI"
   jira: "ACM-34382"
@@ -203,8 +187,7 @@ Parent epic: [ACM-32892](https://redhat.atlassian.net/browse/ACM-32892) — Impl
   status: "In Progress"
   pr: ~
   summary: "Always pass --continue on agent start for prompt/TUI modes with fresh-start fallback; remove resume column, checkbox, and API fields"
-
-# ──────────────────────────────────────────────────────────
+---
 - date: "2026-05-25"
   title: "Write comprehensive Agent Swarm documentation covering Prepare, Install, Configure, and Usage"
   jira: "ACM-34383"
