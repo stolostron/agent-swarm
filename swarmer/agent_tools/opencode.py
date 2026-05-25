@@ -111,9 +111,7 @@ class OpenCodeStrategy(AgentToolStrategy):
             prompt_text = resolved_prompt or session.instruction_prompt or ""
             base_parts = ["opencode", "run", "--model", model]
             prompt_parts = [prompt_text] if prompt_text else []
-            cmd_with = " ".join(shlex.quote(p) for p in base_parts + ["--continue"] + prompt_parts)
-            cmd_without = " ".join(shlex.quote(p) for p in base_parts + prompt_parts)
-            return f"{cmd_with} || {cmd_without}"
+            return " ".join(shlex.quote(p) for p in base_parts + prompt_parts)
 
     def get_server_mode_ports(self) -> list:
         from kubernetes import client
