@@ -22,6 +22,6 @@ jobs:
 
       # pytest, pytest-asyncio, and httpx are used by the test suite but not
       # declared in requirements.txt (which lists production deps only).
-      - run: pip install pytest==8.4.1 pytest-asyncio==1.3.0 httpx==0.28.1
+      - run: pip install pytest==8.4.1 pytest-asyncio==1.3.0 httpx==0.28.1 respx==0.23.1
 
       - run: make test
