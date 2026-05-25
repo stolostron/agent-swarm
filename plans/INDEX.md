@@ -208,8 +208,8 @@ Parent epic: [ACM-32892](https://redhat.atlassian.net/browse/ACM-32892) — Impl
   title: "Enable GitHub Actions CI workflows for lint and test"
   jira: "ACM-34387"
   jira_url: "https://redhat.atlassian.net/browse/ACM-34387"
-  pr: ~
-  summary: "Created .github/workflows/lint.yml (ruff check swarmer/) and test.yml (make test via pytest) as two independent GitHub Actions workflows triggered on push/PR to main"
+  pr: "https://github.com/stolostron/agent-swarm/pull/85"
+  summary: "Created .github/workflows/lint.yml (ruff check swarmer/) and .github/workflows/test.yml (make test, 88 tests) as two independent GitHub Actions CI workflows triggered on push/PR to main"
 
 ## Foundation & Feature Plans
 
