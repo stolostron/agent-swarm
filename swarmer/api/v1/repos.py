@@ -11,6 +11,7 @@ from sqlalchemy.orm import selectinload
 from swarmer.database import get_db
 from swarmer.api.deps import get_workspace_or_404, require_api_auth
 from swarmer.api.schemas import MessageOut, RepoCreate, RepoOut
+from swarmer.github_url_validator import GitHubURLError, validate_github_url
 from swarmer.models.session import Session
 from swarmer.models.session_repo import SessionRepo
 from swarmer.models.workspace import Workspace
@@ -51,6 +52,11 @@ async def add_repo(
     session = await _get_session_or_404(ws_id, sid, db)
     if session.is_active:
         raise HTTPException(status_code=409, detail="Cannot modify repos on a running session")
+
+    try:
+        validate_github_url(body.repo_url.strip())
+    except GitHubURLError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     local_path = body.local_path.strip()
     if not local_path:

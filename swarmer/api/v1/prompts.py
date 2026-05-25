@@ -20,6 +20,7 @@ from swarmer.api.schemas import (
     PromptSourceUpdate,
 )
 from swarmer.github import github_slug, list_folder_contents, list_repos_for_pat
+from swarmer.github_url_validator import GitHubURLError
 from swarmer.models.github_pat import GitHubPAT
 from swarmer.models.workspace import Workspace
 from swarmer.models.workspace_prompt import WorkspacePrompt, WorkspacePromptSource
@@ -248,7 +249,10 @@ async def browse_folders(
     db: AsyncSession = Depends(get_db),
     user: str = Depends(get_current_user),
 ):
-    slug = github_slug(repo_url)
+    try:
+        slug = github_slug(repo_url)
+    except GitHubURLError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     if not slug or slug.count("/") != 1:
         raise HTTPException(status_code=400, detail="Invalid GitHub URL")
 

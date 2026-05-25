@@ -425,6 +425,21 @@ class TestRepos:
         )
         assert resp.status_code == 422
 
+    @pytest.mark.asyncio
+    async def test_add_repo_token_in_url_rejected(self, client):
+        ws = await _create_workspace(client)
+        s = await _create_session(client, ws["id"])
+        for bad_url in [
+            "https://user:ghp_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA@github.com/org/repo.git",
+            "https://github.com/org/repo.git?token=ghp_secret",
+            "https://github.com/ghp_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA/org/repo.git",
+        ]:
+            resp = await client.post(
+                f"/api/v1/workspaces/{ws['id']}/sessions/{s['id']}/repos",
+                json={"repo_url": bad_url},
+            )
+            assert resp.status_code == 422, f"Expected 422 for {bad_url!r}, got {resp.status_code}"
+
 
 # ===========================================================================
 # Secrets tests
@@ -573,3 +588,40 @@ class TestIntegration:
             f"/api/v1/workspaces/{ws['id']}/sessions/{s2['id']}/repos/{repo['id']}"
         )
         assert resp.status_code == 404
+
+
+# ===========================================================================
+# GitHub URL validation — integration (wiring checks)
+# ===========================================================================
+
+
+class TestGitHubURLValidation:
+    """Verify validate_github_url() is wired up at API entry points."""
+
+    @pytest.mark.asyncio
+    async def test_browse_folders_rejects_token_in_userinfo(self, client):
+        ws = await _create_workspace(client)
+        resp = await client.get(
+            f"/api/v1/workspaces/{ws['id']}/prompts/browse/folders",
+            params={"repo_url": "https://user:ghp_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA@github.com/org/repo"},
+        )
+        assert resp.status_code == 400
+
+    @pytest.mark.asyncio
+    async def test_browse_folders_rejects_token_in_query(self, client):
+        ws = await _create_workspace(client)
+        resp = await client.get(
+            f"/api/v1/workspaces/{ws['id']}/prompts/browse/folders",
+            params={"repo_url": "https://github.com/org/repo?token=ghp_secret"},
+        )
+        assert resp.status_code == 400
+
+    @pytest.mark.asyncio
+    async def test_browse_folders_accepts_clean_url(self, client):
+        ws = await _create_workspace(client)
+        # Will fail at GitHub API call (no network), but must not fail at URL validation.
+        resp = await client.get(
+            f"/api/v1/workspaces/{ws['id']}/prompts/browse/folders",
+            params={"repo_url": "https://github.com/org/repo"},
+        )
+        assert resp.status_code != 400
