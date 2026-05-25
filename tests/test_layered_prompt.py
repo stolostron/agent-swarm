@@ -12,7 +12,8 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from swarmer.database import Base
 from swarmer.models.session import Session
-from swarmer.models.workspace_prompt import WorkspacePrompt
+from swarmer.models.workspace import Workspace
+from swarmer.models.workspace_prompt import WorkspacePrompt, WorkspacePromptSource
 from swarmer.routers.sessions import _resolve_session_prompt
 
 _engine = create_async_engine("sqlite+aiosqlite://", echo=False)
@@ -31,6 +32,13 @@ async def _setup_db():
     import swarmer.models  # noqa: F401
     async with _engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+    async with _TestSession() as db:
+        db.add(Workspace(id=1, display_name="test-ws", namespace="test-ns"))
+        db.add(WorkspacePromptSource(
+            id=1, workspace_id=1, name="test-source",
+            repo_url="https://example.com/repo", branch="main", folder_path=".",
+        ))
+        await db.commit()
     yield
     async with _engine.begin() as conn:
         await conn.run_sync(Base.metadata.drop_all)
