@@ -200,9 +200,8 @@ Parent epic: [ACM-32892](https://redhat.atlassian.net/browse/ACM-32892) — Impl
   title: "Always resume session on agent container start; remove resume checkbox from UI"
   jira: "ACM-34382"
   jira_url: "https://redhat.atlassian.net/browse/ACM-34382"
-  status: "In Progress"
-  pr: ~
-  summary: "Always pass --continue on agent start for prompt/TUI modes with fresh-start fallback; remove resume column, checkbox, and API fields"
+  pr: "https://github.com/stolostron/agent-swarm/pull/83"
+  summary: "Always pass --continue for prompt/TUI launches in both OpenCode and Crush with shell || fallback for fresh workspaces; dropped resume column, checkbox, and all API fields"
 
 ## Foundation & Feature Plans
 
