@@ -204,6 +204,14 @@ Parent epic: [ACM-32892](https://redhat.atlassian.net/browse/ACM-32892) — Impl
   pr: ~
   summary: "Always pass --continue on agent start for prompt/TUI modes with fresh-start fallback; remove resume column, checkbox, and API fields"
 
+# ──────────────────────────────────────────────────────────
+- date: "2026-05-25"
+  title: "Write comprehensive Agent Swarm documentation covering Prepare, Install, Configure, and Usage"
+  jira: "ACM-34383"
+  jira_url: "https://redhat.atlassian.net/browse/ACM-34383"
+  pr: "https://github.com/stolostron/agent-swarm/pull/84"
+  summary: "Created docs/USER_GUIDE.md with unified documentation covering all deployment options, configuration, session modes, agent tools, and Makefile reference; slimmed README.md to link to user guide"
+
 ## Foundation & Feature Plans
 
 | Plan | Summary | Jira | PR |

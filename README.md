@@ -1,101 +1,36 @@
 # agent-swarm
 
-A FastAPI + HTMX dashboard for managing [opencode](https://opencode.ai) agent workloads on Kubernetes.
+A FastAPI + HTMX dashboard for managing AI coding agent workloads on Kubernetes.
+
+> **For full documentation, see [docs/USER_GUIDE.md](docs/USER_GUIDE.md).**
 
 ## Capabilities
 
 - **Workspaces** — each workspace maps 1:1 to a Kubernetes namespace; create, rename, and delete workspaces from the UI
-- **Secrets** — Fernet-encrypted storage for OpenCode credentials (GCP/Vertex AI, Gemini), GitHub PATs for HTTPS git auth, and OCI registry pull secrets; all auto-synced to Kubernetes Secret objects; optional unmanaged Secret `swarmer-agent-extra-env` per workspace injects extra agent env vars
+- **Secrets** — Fernet-encrypted storage for provider credentials (GCP/Vertex AI, Gemini, Anthropic, OpenAI), GitHub PATs for HTTPS git auth, and OCI registry pull secrets; all auto-synced to Kubernetes Secrets
 - **Session lifecycle** — create → launch → monitor → stop → delete sessions backed by Kubernetes Pods and PVCs
 - **Three session modes:**
   - **Prompt** — one-shot: run a prompt, stream output, pod exits when done
-  - **Server** — persistent opencode web API with in-dashboard chat link
+  - **Server** — persistent agent web API with in-dashboard chat link
   - **TUI** — full xterm.js browser terminal connected via WebSocket + `kubectl exec` PTY
 - **Git cloning** — init containers clone configured repos into the PVC-backed workspace before the agent starts
 - **Live UI** — HTMX polling for session status and output; no page reloads needed
+- **Multi-agent support** — OpenCode (Go) and Crush (Rust) coding agents
+- **MCP server integration** — Model Context Protocol servers per workspace (e.g., Atlassian Jira)
+- **Prompt library** — workspace-level prompt library with git-backed folders and per-session picker
+- **Cron scheduling** — recurring prompt-mode sessions on a cron schedule
+- **REST API** — full `/api/v1/` REST API alongside the HTMX Console
 
-## Prerequisites
-
-- Python 3.11+ and `pip`
-- `kubectl`
-- `kind` (for local cluster modes)
-- Docker or Podman (`CONTAINER_CMD=podman` to use Podman)
-- `opencode-golang:latest` container image available locally
-
-## Running
-
-### Option 1: kind cluster + `make dev` (hybrid — hot reload)
-
-Best for active Python development. FastAPI runs locally with auto-reload; session pods run inside kind.
+## Quick Start (Kind)
 
 ```sh
-make setup-auth          # set dashboard password
-make install             # pip install -r requirements.txt
-make kind-create         # create kind cluster (localhost:8080 → NodePort 30080)
-make kind-load-opencode  # load opencode agent image into kind
-make dev                 # uvicorn at http://localhost:8090, K8S_IN_CLUSTER=false
+make setup-secret    # generate encryption key
+make kind-deploy     # create cluster + build + deploy
 ```
 
-Dashboard: http://localhost:8090
+Dashboard: http://localhost:8080
 
-### Option 2: kind (fully containerized)
-
-Best for end-to-end local testing. One command builds the image, creates the cluster, and deploys everything.
-
-```sh
-make setup-auth    # set dashboard password
-make kind-deploy   # create cluster + build image + load + deploy (idempotent)
-```
-
-Dashboard: http://localhost:8080 (via NodePort — no port-forward needed)
-
-Teardown:
-```sh
-make kind-delete   # deletes the kind cluster and all data inside it
-```
-
-### Option 3: Real Kubernetes cluster
-
-Push the image to a registry and deploy to your current `kubectl` context.
-
-```sh
-make setup-secret
-make image-build image-push REGISTRY=your.registry.example.com
-make k8s-deploy    # applies namespace, RBAC, PVC, service, deployment
-make k8s-connect   # port-forward → http://localhost:8080
-```
-
-Teardown:
-```sh
-make k8s-delete    # removes all swarmer resources from the namespace
-```
-
-### Option 4: Kustomize
-
-Declarative deployment using Kustomize overlays instead of `make`. Two flavors:
-
-- **cluster-admin** — full multi-namespace deployment (Namespace, ClusterRole, OAuthClient). Equivalent to `make openshift-deploy`.
-- **namespace-scoped** — deploys into an existing namespace with no cluster-admin required. All workspaces share the target namespace.
-
-```sh
-# Build and push the image
-podman build -f Containerfile -t <registry>/<namespace>/swarmer:latest .
-podman push <registry>/<namespace>/swarmer:latest
-
-# Create the secret key
-oc create secret generic swarmer-secret \
-  --from-literal=SWARMER_SECRET_KEY=$(python3 -c "import os,base64; print(base64.urlsafe_b64encode(os.urandom(32)).decode())") \
-  -n <namespace>
-
-# Copy and configure an overlay
-cp -r kustomize/overlays/ephemeral kustomize/overlays/my-env
-# Edit kustomize/overlays/my-env/kustomization.yaml — set NAMESPACE and image
-
-# Deploy
-oc apply -k kustomize/overlays/my-env
-```
-
-See [`kustomize/README.md`](kustomize/README.md) for full documentation, flavor comparison, and teardown instructions.
+See the [User Guide](docs/USER_GUIDE.md) for OpenShift deployment, Kustomize overlays, and all other options.
 
 ## Configuration
 
@@ -110,10 +45,13 @@ Key variables:
 | Variable | Default | Description |
 |---|---|---|
 | `DATABASE_URL` | `sqlite+aiosqlite:///data/swarmer.db` | SQLite database path |
-| `AUTH_HASH_FILE` | `auth/password.hash` | Argon2 password hash (written by `make setup-auth`) |
 | `K8S_IN_CLUSTER` | `false` | Set to `true` when running inside a pod |
-| `AGENT_IMAGE` | `opencode-golang:latest` | Image used for session pods |
+| `AGENT_IMAGE` | _(empty)_ | Fallback image used for session pods |
+| `AGENT_IMAGE_OPENCODE` | _(empty)_ | OpenCode agent image |
+| `AGENT_IMAGE_CRUSH` | _(empty)_ | Crush agent image |
 | `AGENT_IMAGE_PULL_SECRET` | _(empty)_ | Pull secret name in the workspace namespace |
+
+See [docs/USER_GUIDE.md](docs/USER_GUIDE.md) for the full environment variable reference.
 
 ## Access Control
 
