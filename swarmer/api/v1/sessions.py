@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
@@ -290,7 +290,7 @@ async def stop_session(
         except Exception:
             pass
 
-    session.run_completed_at = datetime.utcnow()
+    session.run_completed_at = datetime.now(timezone.utc)
     session.phase = "stopped"
     session.pod_name = None
     await db.commit()
@@ -391,7 +391,7 @@ async def schedule_session(
         raise HTTPException(status_code=422, detail=f"Invalid cron expression: {body.cron_expr}")
 
     session.cron_schedule = body.cron_expr
-    session.cron_next_run = croniter(body.cron_expr, datetime.utcnow()).get_next(datetime)
+    session.cron_next_run = croniter(body.cron_expr, datetime.now(timezone.utc)).get_next(datetime)
     await db.commit()
     await db.refresh(session)
     return session

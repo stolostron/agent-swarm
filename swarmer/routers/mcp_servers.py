@@ -7,7 +7,7 @@ kept here for backward compatibility with API v1 routes that import them.
 
 import ipaddress
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from urllib.parse import urlparse
 
 import httpx
@@ -249,7 +249,7 @@ async def get_enabled_mcp_servers(
         McpServer.jira_access_token_enc != "",
         or_(
             McpServer.token_expires_at == None,  # noqa: E711
-            McpServer.token_expires_at > datetime.utcnow(),
+            McpServer.token_expires_at > datetime.now(timezone.utc),
         ),
     ]
     if user_id:
