@@ -57,6 +57,7 @@ For OpenShift users: just run `oc login` and the kubeconfig token is picked up a
 | `AGENT_SWARM_API_TOKEN` | No | K8s bearer token (overrides auto-detection) |
 | `AGENT_SWARM_WORKSPACE` | No | Default workspace name (informational) |
 | `AGENT_SWARM_VERIFY_SSL` | No | Set to `false` to skip SSL verification (self-signed certs) |
+| `AGENT_SWARM_SSL_CA_BUNDLE` | No | Path to a PEM CA bundle to trust for TLS (use instead of disabling verification) |
 
 ## Claude Code Setup
 

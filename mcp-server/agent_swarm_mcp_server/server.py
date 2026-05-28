@@ -274,6 +274,7 @@ class AgentSwarmMCPServer:
         timeout: int = 3600,
         ctx: Optional[Context] = None,
     ) -> dict:
+        poll = max(1, poll_interval)
         elapsed = 0
         while elapsed < timeout:
             s = await self.client.get_session(workspace_id, session_id)
@@ -296,8 +297,8 @@ class AgentSwarmMCPServer:
                     "output": output,
                 }
 
-            await asyncio.sleep(poll_interval)
-            elapsed += poll_interval
+            await asyncio.sleep(poll)
+            elapsed += poll
 
         return {
             "phase": "timeout",

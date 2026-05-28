@@ -59,7 +59,10 @@ class AgentSwarmClient:
         json: dict | list | None = None,
         params: dict | None = None,
     ) -> Any:
-        resp = await self._client.request(method, path, json=json, params=params)
+        try:
+            resp = await self._client.request(method, path, json=json, params=params)
+        except httpx.HTTPError as e:
+            raise AgentSwarmAPIError(0, f"Request failed: {e}") from e
         if resp.status_code == 401:
             raise AgentSwarmAPIError(
                 401,

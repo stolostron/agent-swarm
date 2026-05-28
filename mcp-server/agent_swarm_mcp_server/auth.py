@@ -49,7 +49,11 @@ def _from_env() -> Optional[str]:
 
 def _from_in_cluster() -> Optional[str]:
     if _IN_CLUSTER_TOKEN.exists():
-        token = _IN_CLUSTER_TOKEN.read_text().strip()
+        try:
+            token = _IN_CLUSTER_TOKEN.read_text().strip()
+        except OSError as e:
+            log.warning("auth: failed reading in-cluster token: %s", e)
+            return None
         if token:
             log.debug("auth: using in-cluster service account token")
             return token
@@ -67,19 +71,31 @@ def _from_kubeconfig() -> Optional[str]:
         log.warning("auth: failed to parse kubeconfig: %s", e)
         return None
 
+    if not isinstance(config, dict):
+        log.warning("auth: kubeconfig is empty or not a mapping")
+        return None
+
     current_context = config.get("current-context")
     if not current_context:
         log.warning("auth: kubeconfig has no current-context")
         return None
 
-    contexts = {c["name"]: c["context"] for c in (config.get("contexts") or [])}
+    contexts = {
+        c.get("name"): c.get("context", {})
+        for c in (config.get("contexts") or [])
+        if isinstance(c, dict) and c.get("name")
+    }
     ctx = contexts.get(current_context)
     if not ctx:
         log.warning("auth: current-context '%s' not found in kubeconfig", current_context)
         return None
 
     user_name = ctx.get("user", "")
-    users = {u["name"]: u.get("user", {}) for u in (config.get("users") or [])}
+    users = {
+        u.get("name"): u.get("user", {})
+        for u in (config.get("users") or [])
+        if isinstance(u, dict) and u.get("name")
+    }
     user = users.get(user_name, {})
 
     # Direct token field
