@@ -82,7 +82,7 @@ def test_output_is_valid_markdown_table():
     repos = [_FakeRepo("https://github.com/org/repo.git")]
     result = _build_repo_context(repos)
 
-    lines = [l for l in result.strip().split("\n") if l.startswith("|")]
+    lines = [line for line in result.strip().split("\n") if line.startswith("|")]
     # Header row + separator + at least one data row
     assert len(lines) >= 3
     # Header

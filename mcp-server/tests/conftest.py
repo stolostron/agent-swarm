@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import textwrap
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
@@ -10,7 +9,6 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from agent_swarm_mcp_server.client import AgentSwarmClient
-from agent_swarm_mcp_server.config import AgentSwarmConfig
 
 
 SAMPLE_KUBECONFIG = textwrap.dedent("""\

@@ -9,7 +9,7 @@ from urllib.parse import urlparse
 
 from fastmcp import Context, FastMCP
 
-from .client import AgentSwarmClient, AgentSwarmAPIError
+from .client import AgentSwarmClient
 from .config import AgentSwarmConfig
 
 log = logging.getLogger(__name__)
