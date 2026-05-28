@@ -111,6 +111,7 @@ lint:  ## Run ruff linter
 
 test:  ## Run unit tests (excludes Playwright browser tests)
 	python3 -m pytest tests/ -q --ignore=tests/test_ui_patternfly.py
+	python3 -m pytest mcp-server/tests/ -q --rootdir=mcp-server
 
 db-reset:  ## Delete the SQLite database (forces fresh schema on next start)
 	@rm -f data/swarmer.db && echo "Database deleted."

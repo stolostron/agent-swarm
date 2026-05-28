@@ -208,6 +208,14 @@ Parent epic: [ACM-32892](https://redhat.atlassian.net/browse/ACM-32892) — Impl
   jira_url: "https://redhat.atlassian.net/browse/ACM-34396"
   pr: "https://github.com/stolostron/agent-swarm/pull/89"
   summary: "Raised NotAuthenticated on 401 in APIClient._request() so expired tokens redirect to /login via the existing handler; added 3 unit/integration tests covering the 401 path and console route redirect"
+---
+- date: "2026-05-27"
+  title: "Implement MCP Server for AI-driven Agent Swarm session orchestration"
+  jira: "ACM-34491"
+  jira_url: "https://redhat.atlassian.net/browse/ACM-34491"
+  status: "In Progress"
+  pr: ~
+  summary: "Standalone Python MCP server in mcp-server/ exposing 12 MVP tools for session discovery, creation, configuration, launch, and output retrieval. Cascading K8s bearer token auth (env var > in-cluster SA > kubeconfig). Sub-task of ACM-34223."
 
 # ──────────────────────────────────────────────────────────
 - date: "2026-05-14"
