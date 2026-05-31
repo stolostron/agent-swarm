@@ -266,8 +266,8 @@ Parent epic: [ACM-32892](https://redhat.atlassian.net/browse/ACM-32892) — Impl
   title: "Fix ERR_TOO_MANY_REDIRECTS loop when K8s token expires in Agent Swarm"
   jira: "ACM-34643"
   jira_url: "https://redhat.atlassian.net/browse/ACM-34643"
-  pr: ~
-  summary: "Clear session in not_authenticated_handler before redirecting to /login so stale authenticated=True flag does not cause an infinite redirect loop when the K8s bearer token has expired"
+  pr: "https://github.com/stolostron/agent-swarm/pull/95"
+  summary: "Added request.session.clear() in not_authenticated_handler before redirecting to /login, eliminating ERR_TOO_MANY_REDIRECTS caused by stale authenticated=True session flag when K8s bearer token expires"
 
 ## Bug Fixes
 
