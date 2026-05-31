@@ -1,0 +1,6 @@
+---
+description: Swarmer system architecture, module layout, data flows, and how to add new features. Pull in when working on any structural or architectural change.
+alwaysApply: false
+---
+
+@docs/ARCHITECTURE.md

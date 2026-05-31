@@ -216,6 +216,13 @@ Parent epic: [ACM-32892](https://redhat.atlassian.net/browse/ACM-32892) — Impl
   status: "In Progress"
   pr: "https://github.com/stolostron/agent-swarm/pull/92"
   summary: "Standalone Python MCP server in mcp-server/ exposing 12 MVP tools for session discovery, creation, configuration, launch, and output retrieval. Cascading K8s bearer token auth (env var > in-cluster SA > kubeconfig). Sub-task of ACM-34223."
+---
+- date: "2026-05-31"
+  title: "Onboard agent-swarm repository to Fleet Engineering Agentic SDLC: improve AGENTS.md, extract ARCHITECTURE.md, add Fleet skills table, and wire Cursor rule"
+  jira: "ACM-34642"
+  jira_url: "https://redhat.atlassian.net/browse/ACM-34642"
+  pr: ~
+  summary: "Merge CLAUDE.md into AGENTS.md (symlinked), extract architecture to docs/ARCHITECTURE.md, add personal config lookup and Fleet Engineering skills table, create .cursor/rules/architecture.mdc."
 
 # ──────────────────────────────────────────────────────────
 - date: "2026-05-14"
