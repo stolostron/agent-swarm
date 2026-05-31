@@ -261,6 +261,14 @@ Parent epic: [ACM-32892](https://redhat.atlassian.net/browse/ACM-32892) — Impl
 | [2026-04-28-tui-patch-export.md](2026-04-28-tui-patch-export.md) | TUI patch export with AI-generated commit messages | [ACM-33411](https://redhat.atlassian.net/browse/ACM-33411) | [#32](https://github.com/stolostron/agent-swarm/pull/32) |
 | [2026-04-29-session-cron-scheduling.md](2026-04-29-session-cron-scheduling.md) | Cron scheduling for prompt-mode sessions | [ACM-33440](https://redhat.atlassian.net/browse/ACM-33440) | [#37](https://github.com/stolostron/agent-swarm/pull/37) |
 
+---
+- date: "2026-05-31"
+  title: "Fix ERR_TOO_MANY_REDIRECTS loop when K8s token expires in Agent Swarm"
+  jira: "ACM-34643"
+  jira_url: "https://redhat.atlassian.net/browse/ACM-34643"
+  pr: ~
+  summary: "Clear session in not_authenticated_handler before redirecting to /login so stale authenticated=True flag does not cause an infinite redirect loop when the K8s bearer token has expired"
+
 ## Bug Fixes
 
 | Plan | Summary | Jira | PR |
