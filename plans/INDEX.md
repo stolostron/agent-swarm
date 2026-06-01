@@ -221,8 +221,8 @@ Parent epic: [ACM-32892](https://redhat.atlassian.net/browse/ACM-32892) — Impl
   title: "Onboard agent-swarm repository to Fleet Engineering Agentic SDLC: improve AGENTS.md, extract ARCHITECTURE.md, add Fleet skills table, and wire Cursor rule"
   jira: "ACM-34642"
   jira_url: "https://redhat.atlassian.net/browse/ACM-34642"
-  pr: ~
-  summary: "Merge CLAUDE.md into AGENTS.md (symlinked), extract architecture to docs/ARCHITECTURE.md, add personal config lookup and Fleet Engineering skills table, create .cursor/rules/architecture.mdc."
+  pr: "https://github.com/stolostron/agent-swarm/pull/96"
+  summary: "Symlinked CLAUDE.md → AGENTS.md; extracted architecture and project structure to docs/ARCHITECTURE.md; added personal config lookup, Fleet Engineering skills table, and .cursor/rules/architecture.mdc."
 
 # ──────────────────────────────────────────────────────────
 - date: "2026-05-14"
