@@ -230,6 +230,13 @@ Parent epic: [ACM-32892](https://redhat.atlassian.net/browse/ACM-32892) — Impl
   jira_url: "https://redhat.atlassian.net/browse/ACM-34643"
   pr: "https://github.com/stolostron/agent-swarm/pull/95"
   summary: "Added request.session.clear() in not_authenticated_handler before redirecting to /login, eliminating ERR_TOO_MANY_REDIRECTS caused by stale authenticated=True session flag when K8s bearer token expires"
+---
+- date: "2026-06-01"
+  title: "Add .coderabbit.yaml with project-specific and prodsec review configuration"
+  jira: "ACM-34654"
+  jira_url: "https://redhat.atlassian.net/browse/ACM-34654"
+  pr: ~
+  summary: "Added .coderabbit.yaml inheriting from stolostron/coderabbit org config; project-specific path instructions for routers, api, models, agent_tools, templates, mcp-server, tests, k8s manifests; auto_approve and auto_review owned here; ruff enabled, pylint/flake8/golangci-lint disabled"
 
 # ──────────────────────────────────────────────────────────
 - date: "2026-05-14"

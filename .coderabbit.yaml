@@ -1,0 +1,105 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+#
+# Inherits org-wide config from stolostron/coderabbit.
+# Only project-specific overrides are defined here.
+
+inheritance: true
+
+reviews:
+  auto_approve: true
+
+  auto_review:
+    enabled: true
+    drafts: true
+    ignore_title_keywords:
+      - "WIP"
+      - "DO NOT MERGE"
+
+  path_filters:
+    - "!swarmer/static/**"
+    - "!plans/**"
+
+  path_instructions:
+    # ── Project-specific conventions (from AGENTS.md) ──────────────────────
+    - path: "swarmer/routers/**/*.py"
+      instructions: |
+        Console route handlers (server-rendered HTMX).
+        - Every route (except /login, /auth/callback) must use Depends(require_auth)
+        - POST routes must return RedirectResponse(status_code=302) (PRG pattern)
+        - DB access via Depends(get_db); flag direct engine usage
+        - Flag synchronous kubernetes client calls not wrapped in asyncio.to_thread()
+        - HTMX partials return HTMLResponse; full pages use templates.TemplateResponse
+
+    - path: "swarmer/api/**/*.py"
+      instructions: |
+        REST API v1 endpoints.
+        - All routes must use Depends(require_bearer) for K8s token auth
+        - Request/response models must use Pydantic schemas from api/schemas.py
+        - Flag any direct template rendering (API must return JSON only)
+        - Flag synchronous kubernetes calls not wrapped in asyncio.to_thread()
+
+    - path: "swarmer/models/**/*.py"
+      instructions: |
+        SQLAlchemy 2.x ORM models (async, SQLite backend).
+        - All columns must use Mapped[type] declarative style
+        - New columns on existing tables need a migration in database.py:migrate_db() with server_default
+        - Flag mutable default arguments
+        - Encrypted fields must use crypto.encrypt()/crypto.decrypt()
+
+    - path: "swarmer/agent_tools/**/*.py"
+      instructions: |
+        Agent tool strategies (OpenCode, Crush) implementing AgentToolStrategy ABC.
+        - Each strategy must implement all abstract methods from __init__.py
+        - Model ID formats differ: OpenCode uses provider/model@version, Crush uses provider/model
+        - Flag hardcoded image tags or registry URLs
+
+    - path: "swarmer/templates/**/*.html"
+      instructions: |
+        Jinja2 + HTMX + PatternFly 6 templates.
+        - HTMX partials are prefixed with _ (e.g., _status_badge.html)
+        - Check hx-get/hx-post/hx-target/hx-swap attribute correctness
+        - Forms must include CSRF protection
+        - Flag inline JavaScript that could use HTMX instead
+
+    - path: "mcp-server/**/*.py"
+      instructions: |
+        Standalone MCP server package (fastmcp).
+        - This is a separate installable package with its own pyproject.toml
+        - Auth uses K8s bearer tokens (env var > in-cluster SA > kubeconfig)
+        - Flag any imports from the swarmer package (these are separate packages)
+
+    - path: "tests/**/*.py"
+      instructions: |
+        Relaxed style rules for tests.
+        - Tests stub model objects with plain classes to avoid SQLAlchemy deps
+        - Flag tests that assert nothing meaningful
+        - async tests use pytest-asyncio; HTTP mocking uses respx
+
+    - path: "k8s/**/*.yaml"
+      instructions: |
+        Kubernetes manifests.
+        - deployment.yaml uses SED placeholders (SWARMER_IMAGE, AGENT_IMAGE_OPENCODE_VALUE, etc.) — do not replace with real values
+        - Flag any hardcoded secrets, registry URLs, or cluster-specific values
+
+    - path: "**/*.py"
+      instructions: |
+        General Python standards for this project.
+        - Python 3.12; use X | None union syntax, not Optional[X]
+        - Type hints on all public function signatures
+        - Flag hardcoded credentials, API keys, or secret values
+        - Flag subprocess calls with shell=True when user input is involved
+        - Kubernetes imports must be lazy (inside functions) to avoid import errors when K8s isn't configured
+
+  tools:
+    ruff:
+      enabled: true
+    pylint:
+      enabled: false
+    flake8:
+      enabled: false
+    golangci-lint:
+      enabled: false
+
+knowledge_base:
+  learnings:
+    scope: "local"
