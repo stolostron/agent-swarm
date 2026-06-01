@@ -223,6 +223,13 @@ Parent epic: [ACM-32892](https://redhat.atlassian.net/browse/ACM-32892) — Impl
   jira_url: "https://redhat.atlassian.net/browse/ACM-34642"
   pr: "https://github.com/stolostron/agent-swarm/pull/96"
   summary: "Symlinked CLAUDE.md → AGENTS.md; extracted architecture and project structure to docs/ARCHITECTURE.md; added personal config lookup, Fleet Engineering skills table, and .cursor/rules/architecture.mdc."
+---
+- date: "2026-05-31"
+  title: "Fix ERR_TOO_MANY_REDIRECTS loop when K8s token expires in Agent Swarm"
+  jira: "ACM-34643"
+  jira_url: "https://redhat.atlassian.net/browse/ACM-34643"
+  pr: "https://github.com/stolostron/agent-swarm/pull/95"
+  summary: "Added request.session.clear() in not_authenticated_handler before redirecting to /login, eliminating ERR_TOO_MANY_REDIRECTS caused by stale authenticated=True session flag when K8s bearer token expires"
 
 # ──────────────────────────────────────────────────────────
 - date: "2026-05-14"
@@ -260,14 +267,6 @@ Parent epic: [ACM-32892](https://redhat.atlassian.net/browse/ACM-32892) — Impl
 | [2026-04-27-sessions-list-launch-refresh.md](2026-04-27-sessions-list-launch-refresh.md) | Launch/Stop buttons, 3s refresh, elapsed time | [ACM-33311](https://redhat.atlassian.net/browse/ACM-33311) | [#29](https://github.com/stolostron/agent-swarm/pull/29) |
 | [2026-04-28-tui-patch-export.md](2026-04-28-tui-patch-export.md) | TUI patch export with AI-generated commit messages | [ACM-33411](https://redhat.atlassian.net/browse/ACM-33411) | [#32](https://github.com/stolostron/agent-swarm/pull/32) |
 | [2026-04-29-session-cron-scheduling.md](2026-04-29-session-cron-scheduling.md) | Cron scheduling for prompt-mode sessions | [ACM-33440](https://redhat.atlassian.net/browse/ACM-33440) | [#37](https://github.com/stolostron/agent-swarm/pull/37) |
-
----
-- date: "2026-05-31"
-  title: "Fix ERR_TOO_MANY_REDIRECTS loop when K8s token expires in Agent Swarm"
-  jira: "ACM-34643"
-  jira_url: "https://redhat.atlassian.net/browse/ACM-34643"
-  pr: "https://github.com/stolostron/agent-swarm/pull/95"
-  summary: "Added request.session.clear() in not_authenticated_handler before redirecting to /login, eliminating ERR_TOO_MANY_REDIRECTS caused by stale authenticated=True session flag when K8s bearer token expires"
 
 ## Bug Fixes
 

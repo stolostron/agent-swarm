@@ -79,7 +79,7 @@ app.mount("/static", StaticFiles(directory="swarmer/static"), name="static")
 
 # Exception handler: redirect to /login when not authenticated
 @app.exception_handler(NotAuthenticated)
-async def not_authenticated_handler(request: Request, exc: NotAuthenticated):
+async def not_authenticated_handler(request: Request, _exc: NotAuthenticated):
     request.session.clear()
     return RedirectResponse(url="/login", status_code=302)
 

@@ -48,7 +48,7 @@ def _make_test_app(clear_session_on_not_auth: bool) -> FastAPI:
     test_app = FastAPI()
     test_app.add_middleware(
         SessionMiddleware,
-        secret_key="test-secret-key-32bytes-padded!",
+        secret_key="swarmer-test-secret-key-32bytes!",  # exactly 32 chars
         session_cookie="swarmer_session",
         same_site="lax",
         https_only=False,
