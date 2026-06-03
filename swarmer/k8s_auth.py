@@ -1,10 +1,23 @@
 from __future__ import annotations
+import base64
+import json
 import logging
 from dataclasses import dataclass, field
 
 logger = logging.getLogger(__name__)
 
 INCLUSTER_CA = "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt"
+
+
+def _username_from_jwt(token: str) -> str:
+    """Decode the JWT payload and return the 'sub' claim (no signature verification)."""
+    try:
+        payload_b64 = token.split(".")[1]
+        payload_b64 += "=" * (-len(payload_b64) % 4)
+        payload = json.loads(base64.urlsafe_b64decode(payload_b64))
+        return payload.get("sub", "")
+    except Exception:
+        return ""
 
 @dataclass
 class TokenIdentity:
@@ -27,7 +40,7 @@ def _make_user_config(token: str, api_url: str, in_cluster: bool):
 
 
 async def validate_token(token: str, api_url: str, in_cluster: bool) -> TokenIdentity | None:
-    """Validate a bearer token via TokenReview. Falls back to namespace GET if 403."""
+    """Validate a bearer token via TokenReview. Falls back to direct probe on 401/403."""
     import asyncio
     from kubernetes import client as k8s_client
 
@@ -50,7 +63,10 @@ async def validate_token(token: str, api_url: str, in_cluster: bool) -> TokenIde
             )
         except ApiException as e:
             if e.status == 403:
-                logger.warning("swarmer SA cannot create tokenreviews (RBAC not applied); falling back to namespace probe")
+                logger.warning("swarmer SA cannot create tokenreviews (RBAC not applied); falling back to direct probe")
+                return "fallback"
+            if e.status == 401:
+                logger.warning("TokenReview got 401 — swarmer kubeconfig credentials may be expired; falling back to direct probe")
                 return "fallback"
             logger.error("TokenReview failed: %s", e)
             return None
@@ -73,12 +89,13 @@ async def _probe_with_user_token(token: str, api_url: str, in_cluster: bool) -> 
             core = k8s_client.CoreV1Api(api)
             try:
                 core.list_namespace(_request_timeout=5)
-                return None
+                # 200 — token is valid; extract username from JWT payload
+                return TokenIdentity(username=_username_from_jwt(token))
             except ApiException as e:
                 if e.status == 403:
-                    # 403 means authenticated but no list permission — token is valid
-                    # but we cannot determine the username, so treat as auth failure
-                    return None
+                    # Authenticated but no list-namespace permission — still valid
+                    return TokenIdentity(username=_username_from_jwt(token))
+                # 401 or other — token itself is invalid
                 return None
 
     return await asyncio.to_thread(_do_probe)
