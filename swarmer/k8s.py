@@ -441,7 +441,8 @@ def get_pod_logs(pod_name: str, namespace: str) -> str:
 
     try:
         v1 = client.CoreV1Api()
-        return v1.read_namespaced_pod_log(pod_name, namespace)
+        resp = v1.read_namespaced_pod_log(pod_name, namespace, _preload_content=False)
+        return resp.data.decode("utf-8", errors="replace")
     except Exception:
         return ""
 
