@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "MCP server for AI-driven Agent Swarm session orchestration"
 requires-python = ">=3.12"
 dependencies = [
-    "fastmcp>=3.3.1",
+    "fastmcp>=3.4.0",
     "httpx>=0.28.1",
     "pydantic>=2.13.4",
     "pydantic-settings>=2.14.1",
