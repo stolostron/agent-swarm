@@ -24,12 +24,14 @@ from swarmer.api.schemas import (
     SessionCreate,
     SessionOut,
     SessionOutput,
+    SessionRunOut,
     SessionUpdate,
     SetModeRequest,
     SetModelRequest,
     SetNameRequest,
 )
 from swarmer.models.session import Session
+from swarmer.models.session_run import SessionRun
 from swarmer.models.workspace import Workspace
 
 log = logging.getLogger(__name__)
@@ -297,12 +299,45 @@ async def stop_session(
         except Exception:
             pass
 
-    session.run_completed_at = datetime.now(timezone.utc)
+    from swarmer.session_runs import STOPPED_BY_USER_DETAIL, record_session_run
+
+    completed_at = datetime.now(timezone.utc)
+    if session.run_started_at and session.phase in ("pending", "running"):
+        await record_session_run(
+            db,
+            session,
+            phase="stopped",
+            status_detail=STOPPED_BY_USER_DETAIL,
+            last_output=session.last_output,
+            completed_at=completed_at,
+        )
+    session.run_completed_at = completed_at
     session.phase = "stopped"
+    session.status_detail = STOPPED_BY_USER_DETAIL
     session.pod_name = None
     await db.commit()
     await db.refresh(session)
     return session
+
+
+# ---------- Run history ----------
+
+
+@router.get("/{sid}/runs", response_model=list[SessionRunOut])
+async def list_session_runs(
+    ws_id: int,
+    sid: int,
+    ws: Workspace = Depends(get_workspace_or_404),
+    db: AsyncSession = Depends(get_db),
+) -> list[SessionRunOut]:
+    await _get_session_or_404(ws_id, sid, db)
+    result = await db.execute(
+        select(SessionRun)
+        .where(SessionRun.session_id == sid)
+        .order_by(SessionRun.completed_at.desc())
+        .limit(100)
+    )
+    return list(result.scalars().all())
 
 
 # ---------- Inline edits ----------

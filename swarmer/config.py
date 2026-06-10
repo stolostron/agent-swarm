@@ -19,6 +19,8 @@ class Settings(BaseSettings):
     agent_image_pull_policy: str = "IfNotPresent"
     k8s_namespace: str = ""
     max_concurrent_agents: int = 5
+    # Completed prompt-mode runs kept per session (includes logs). 0 = unlimited.
+    session_run_history_limit: int = 20
 
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8", "extra": "ignore"}
 

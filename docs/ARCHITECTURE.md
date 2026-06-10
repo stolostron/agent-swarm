@@ -159,6 +159,12 @@ Two background asyncio systems run during app lifespan:
 
 The sessions list shows a workspace-scoped capacity summary ("N active | N slots available | N queued") that refreshes every 3s via HTMX. Queued sessions show their global queue position ("Position N of M") on both the list and detail pages.
 
+### Session Run History
+
+Prompt-mode sessions record each completed execution (phase, timing, status detail, and pod logs) in the `session_runs` table. The History tab on the session detail page and `GET /api/v1/workspaces/{ws_id}/sessions/{sid}/runs` expose this data.
+
+`SESSION_RUN_HISTORY_LIMIT` (default 20) caps how many completed runs are retained per session. When a new run is recorded, the oldest entries beyond the limit are deleted. Set to `0` to disable pruning (unlimited history; may grow SQLite storage quickly on scheduled sessions).
+
 ## Chat Proxy
 
 `chat_proxy.py` handles server-mode session access:

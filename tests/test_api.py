@@ -4,6 +4,7 @@ Uses httpx AsyncClient with the FastAPI test client — no running server needed
 Overrides the auth dependency and uses an in-memory SQLite database.
 """
 
+import json
 import os
 import sys
 
@@ -282,6 +283,36 @@ class TestSessions:
         assert resp.json()["output"] == ""
 
     @pytest.mark.asyncio
+    async def test_list_session_runs(self, client):
+        from datetime import datetime
+
+        from swarmer.models.session import Session
+        from swarmer.session_runs import record_session_run
+
+        ws = await _create_workspace(client)
+        s = await _create_session(client, ws["id"])
+        async with _TestSession() as db:
+            session = await db.get(Session, s["id"])
+            session.run_started_at = datetime.utcnow()
+            await record_session_run(
+                db,
+                session,
+                phase="succeeded",
+                status_detail="Completed",
+                last_output="done",
+                completed_at=datetime.utcnow(),
+            )
+            await db.commit()
+
+        resp = await client.get(f"/api/v1/workspaces/{ws['id']}/sessions/{s['id']}/runs")
+        assert resp.status_code == 200
+        runs = resp.json()
+        assert len(runs) == 1
+        assert runs[0]["phase"] == "succeeded"
+        assert runs[0]["last_output"] == "done"
+        assert runs[0]["run_duration"]
+
+    @pytest.mark.asyncio
     async def test_clear_output(self, client):
         ws = await _create_workspace(client)
         s = await _create_session(client, ws["id"])
@@ -472,6 +503,27 @@ class TestSecrets:
         assert cred["has_anthropic"] is True
         assert cred["has_adc"] is False
         assert "sk-ant" not in cred.get("masked_anthropic_key", "")  # key should be masked
+
+    @pytest.mark.asyncio
+    async def test_save_adc_credentials(self, client):
+        ws = await _create_workspace(client)
+        adc = json.dumps({"type": "authorized_user", "client_id": "x", "client_secret": "y"})
+        resp = await client.post(
+            f"/api/v1/workspaces/{ws['id']}/secrets/credentials",
+            json={
+                "google_cloud_project": "my-project",
+                "vertex_location": "us-central1",
+                "application_default_credentials": adc,
+            },
+        )
+        assert resp.status_code == 200
+        assert resp.json()["has_adc"] is True
+
+        bad = await client.post(
+            f"/api/v1/workspaces/{ws['id']}/secrets/credentials",
+            json={"application_default_credentials": "not-json"},
+        )
+        assert bad.status_code == 422
 
     @pytest.mark.asyncio
     async def test_pat_crud(self, client):

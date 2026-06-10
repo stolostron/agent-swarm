@@ -3,14 +3,14 @@ import logging
 import re
 import shlex
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 
 import httpx
 
 from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
-from sqlalchemy import func, or_, select
+from sqlalchemy import desc, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -457,6 +457,17 @@ async def session_detail(
     if session.phase == "queued":
         queue_position = await _get_queue_position(session.id, db)
     capacity = await _get_capacity_summary(ws_id, db)
+    session_runs: list = []
+    if session.mode == "prompt":
+        from swarmer.models.session_run import SessionRun
+
+        runs_result = await db.execute(
+            select(SessionRun)
+            .where(SessionRun.session_id == sid)
+            .order_by(desc(SessionRun.completed_at))
+            .limit(100)
+        )
+        session_runs = list(runs_result.scalars().all())
     return templates.TemplateResponse(
         request,
         "sessions/detail.html",
@@ -464,6 +475,7 @@ async def session_detail(
             "ws": ws,
             "ws_id": ws_id,
             "session": session,
+            "session_runs": session_runs,
             "canonical_agent_tool": canonical_agent_tool,
             "pats": pats,
             "tui_token": tui_token,
@@ -829,7 +841,7 @@ async def _do_launch(session: Session, ws: Workspace, db: AsyncSession, user_id:
     pod = await asyncio.to_thread(v1.create_namespaced_pod, ws.k8s_namespace, pod_spec)
     session.pod_name = pod.metadata.name
     session.phase = "pending"
-    session.run_started_at = datetime.utcnow()
+    session.run_started_at = datetime.now(timezone.utc)
     session.run_completed_at = None
 
     if session.mode == "server":
@@ -982,8 +994,21 @@ async def session_stop(
         except Exception as exc:
             flash(request, f"Secret cleanup failed: {exc}", "warning")
 
-    session.run_completed_at = datetime.utcnow()
+    from swarmer.session_runs import STOPPED_BY_USER_DETAIL, record_session_run
+
+    completed_at = datetime.now(timezone.utc)
+    if session.run_started_at and session.phase in ("pending", "running"):
+        await record_session_run(
+            db,
+            session,
+            phase="stopped",
+            status_detail=STOPPED_BY_USER_DETAIL,
+            last_output=session.last_output,
+            completed_at=completed_at,
+        )
+    session.run_completed_at = completed_at
     session.phase = "stopped"
+    session.status_detail = STOPPED_BY_USER_DETAIL
     session.pod_name = None
     await db.commit()
     return RedirectResponse(url=f"/workspaces/{ws_id}/sessions/{sid}", status_code=302)

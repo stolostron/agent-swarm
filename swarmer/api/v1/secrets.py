@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
+import json
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import or_, select
 from sqlalchemy.exc import IntegrityError
@@ -106,6 +109,17 @@ async def save_credentials(
     if body.openai_api_key.strip():
         secret.openai_api_key = body.openai_api_key.strip()
 
+    adc = body.application_default_credentials.strip()
+    if adc:
+        try:
+            json.loads(adc)
+        except json.JSONDecodeError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="application_default_credentials must be valid JSON",
+            ) from exc
+        secret.application_default_credentials = adc
+
     await db.commit()
     await db.refresh(secret)
 
@@ -114,8 +128,15 @@ async def save_credentials(
         from swarmer.agent_tools.registry import all_tools
         from swarmer.routers.mcp_servers import get_enabled_mcp_servers
         mcp_servers = await get_enabled_mcp_servers(ws_id, db, user_id=user)
+        await asyncio.to_thread(k8s.sync_all_agent_secrets, ws.k8s_namespace, secret)
         for tool in all_tools():
-            k8s.apply_agent_config(ws.k8s_namespace, secret=secret, agent_tool=tool.name, mcp_servers=mcp_servers)
+            await asyncio.to_thread(
+                k8s.apply_agent_config,
+                ws.k8s_namespace,
+                secret=secret,
+                agent_tool=tool.name,
+                mcp_servers=mcp_servers,
+            )
     except Exception:
         pass
 

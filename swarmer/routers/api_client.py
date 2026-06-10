@@ -391,6 +391,7 @@ class APIClient:
         google_api_key: str = "",
         anthropic_api_key: str = "",
         openai_api_key: str = "",
+        application_default_credentials: str = "",
         shared: bool = False,
     ) -> dict:
         return await self._post(
@@ -401,6 +402,7 @@ class APIClient:
                 "google_api_key": google_api_key,
                 "anthropic_api_key": anthropic_api_key,
                 "openai_api_key": openai_api_key,
+                "application_default_credentials": application_default_credentials,
                 "shared": shared,
             },
         )

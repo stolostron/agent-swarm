@@ -327,6 +327,8 @@ cp .env.example .env
 | `AGENT_IMAGE_PULL_SECRET` | _(empty)_ | Pull secret name in the workspace namespace |
 | `AGENT_IMAGE_PULL_POLICY` | `IfNotPresent` | Image pull policy for session pods |
 | `K8S_NAMESPACE` | _(empty)_ | Force all workspaces into a single K8s namespace (namespace-scoped mode) |
+| `MAX_CONCURRENT_AGENTS` | `5` | Global cap on concurrent agent pods; `0` disables the limit |
+| `SESSION_RUN_HISTORY_LIMIT` | `20` | Completed prompt-mode runs kept per session in history (with logs); oldest pruned when exceeded; `0` = unlimited |
 
 ### Secret Key
 
