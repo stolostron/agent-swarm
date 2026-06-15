@@ -117,6 +117,14 @@ async def test_record_session_run_stopped_by_user_detail():
         assert run.status_detail == "Stopped by user"
 
 
+def test_session_run_duration_active_with_naive_start():
+    """Legacy naive run_started_at must not break live run_duration display."""
+    session = Session(workspace_id=1, name="active", mode="prompt", phase="running")
+    session.run_started_at = datetime.utcnow() - timedelta(minutes=1)
+    assert session.run_duration is not None
+    assert session.run_duration.endswith("s")
+
+
 @pytest.mark.asyncio
 async def test_record_session_run_normalizes_mixed_timezone_awareness():
     """Legacy naive run_started_at + aware completed_at must not break run_duration."""
