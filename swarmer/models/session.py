@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlalchemy import (
     Boolean,
@@ -92,9 +92,19 @@ class Session(Base):
     repos: Mapped[list["SessionRepo"]] = relationship(  # noqa: F821
         back_populates="session", cascade="all, delete-orphan"
     )
+    runs: Mapped[list["SessionRun"]] = relationship(  # noqa: F821
+        back_populates="session",
+        cascade="all, delete-orphan",
+    )
     prompt: Mapped["WorkspacePrompt | None"] = relationship(  # noqa: F821
         back_populates="sessions"
     )
+
+    @staticmethod
+    def _as_utc(dt: datetime) -> datetime:
+        if dt.tzinfo is None:
+            return dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(timezone.utc)
 
     @property
     def run_duration(self) -> str | None:
@@ -103,10 +113,12 @@ class Session(Base):
         if self.run_completed_at:
             end = self.run_completed_at
         elif self.is_active:
-            end = datetime.utcnow()
+            end = datetime.now(timezone.utc)
         else:
             return None
-        total_secs = int((end - self.run_started_at).total_seconds())
+        start = self._as_utc(self.run_started_at)
+        end = self._as_utc(end)
+        total_secs = int((end - start).total_seconds())
         mins, secs = divmod(max(total_secs, 0), 60)
         hours, mins = divmod(mins, 60)
         if hours:

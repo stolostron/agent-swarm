@@ -391,6 +391,7 @@ class APIClient:
         google_api_key: str = "",
         anthropic_api_key: str = "",
         openai_api_key: str = "",
+        application_default_credentials: str = "",
         shared: bool = False,
     ) -> dict:
         return await self._post(
@@ -401,12 +402,38 @@ class APIClient:
                 "google_api_key": google_api_key,
                 "anthropic_api_key": anthropic_api_key,
                 "openai_api_key": openai_api_key,
+                "application_default_credentials": application_default_credentials,
                 "shared": shared,
             },
         )
 
     async def list_pats(self, ws_id: int) -> list[dict]:
         return await self._get(f"/api/v1/workspaces/{ws_id}/secrets/pats")
+
+    async def get_github_app(self, ws_id: int) -> dict | None:
+        return await self._get(f"/api/v1/workspaces/{ws_id}/secrets/github-app")
+
+    async def save_github_app(
+        self,
+        ws_id: int,
+        *,
+        app_id: str,
+        installation_id: str,
+        private_key: str = "",
+        shared: bool = False,
+    ) -> dict:
+        return await self._put(
+            f"/api/v1/workspaces/{ws_id}/secrets/github-app",
+            json={
+                "app_id": app_id,
+                "installation_id": installation_id,
+                "private_key": private_key,
+                "shared": shared,
+            },
+        )
+
+    async def delete_github_app(self, ws_id: int) -> dict:
+        return await self._delete(f"/api/v1/workspaces/{ws_id}/secrets/github-app")
 
     async def create_pat(
         self,

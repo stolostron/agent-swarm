@@ -2,9 +2,15 @@
 Kubernetes utility functions used across the dashboard.
 All functions use the official kubernetes-client Python library.
 """
+from __future__ import annotations
+
 import base64
 import logging
 import time
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from swarmer.models.github_app import GitHubApp
 
 log = logging.getLogger(__name__)
 
@@ -342,6 +348,21 @@ def create_session_pat_secret(
         {
             "GITHUB_PAT": _b64(pat.pat),
             "GITHUB_USERNAME": _b64(pat.github_username),
+        },
+    )
+
+
+def create_session_github_app_secret(
+    namespace: str, secret_name: str, app: GitHubApp,
+) -> None:
+    """Create a session-scoped K8s Secret for GitHub App installation auth."""
+    _apply_secret(
+        namespace,
+        secret_name,
+        {
+            "client_id": _b64(app.app_id.strip()),
+            "installation_id": _b64(app.installation_id.strip()),
+            "private_key": _b64(app.private_key),
         },
     )
 

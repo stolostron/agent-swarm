@@ -4,6 +4,7 @@ Uses httpx AsyncClient with the FastAPI test client — no running server needed
 Overrides the auth dependency and uses an in-memory SQLite database.
 """
 
+import json
 import os
 import sys
 
@@ -282,6 +283,36 @@ class TestSessions:
         assert resp.json()["output"] == ""
 
     @pytest.mark.asyncio
+    async def test_list_session_runs(self, client):
+        from datetime import datetime
+
+        from swarmer.models.session import Session
+        from swarmer.session_runs import record_session_run
+
+        ws = await _create_workspace(client)
+        s = await _create_session(client, ws["id"])
+        async with _TestSession() as db:
+            session = await db.get(Session, s["id"])
+            session.run_started_at = datetime.utcnow()
+            await record_session_run(
+                db,
+                session,
+                phase="succeeded",
+                status_detail="Completed",
+                last_output="done",
+                completed_at=datetime.utcnow(),
+            )
+            await db.commit()
+
+        resp = await client.get(f"/api/v1/workspaces/{ws['id']}/sessions/{s['id']}/runs")
+        assert resp.status_code == 200
+        runs = resp.json()
+        assert len(runs) == 1
+        assert runs[0]["phase"] == "succeeded"
+        assert runs[0]["last_output"] == "done"
+        assert runs[0]["run_duration"]
+
+    @pytest.mark.asyncio
     async def test_clear_output(self, client):
         ws = await _create_workspace(client)
         s = await _create_session(client, ws["id"])
@@ -474,6 +505,27 @@ class TestSecrets:
         assert "sk-ant" not in cred.get("masked_anthropic_key", "")  # key should be masked
 
     @pytest.mark.asyncio
+    async def test_save_adc_credentials(self, client):
+        ws = await _create_workspace(client)
+        adc = json.dumps({"type": "authorized_user", "client_id": "x", "client_secret": "y"})
+        resp = await client.post(
+            f"/api/v1/workspaces/{ws['id']}/secrets/credentials",
+            json={
+                "google_cloud_project": "my-project",
+                "vertex_location": "us-central1",
+                "application_default_credentials": adc,
+            },
+        )
+        assert resp.status_code == 200
+        assert resp.json()["has_adc"] is True
+
+        bad = await client.post(
+            f"/api/v1/workspaces/{ws['id']}/secrets/credentials",
+            json={"application_default_credentials": "not-json"},
+        )
+        assert bad.status_code == 422
+
+    @pytest.mark.asyncio
     async def test_pat_crud(self, client):
         ws = await _create_workspace(client)
 
@@ -522,6 +574,248 @@ class TestSecrets:
             json={"name": "dup-pat", "github_username": "user", "pat_value": "ghp_2"},
         )
         assert resp.status_code == 409
+
+    @pytest.mark.asyncio
+    async def test_save_github_app_rejects_other_users_private_config(self, client):
+        from swarmer.models.github_app import GitHubApp
+
+        ws = await _create_workspace(client)
+        pem = "-----BEGIN RSA PRIVATE KEY-----\nseed\n-----END RSA PRIVATE KEY-----"
+
+        async with _TestSession() as db:
+            existing = GitHubApp(
+                workspace_id=ws["id"],
+                user_id="other-user",
+                app_id="111",
+                installation_id="222",
+            )
+            existing.private_key = pem
+            db.add(existing)
+            await db.commit()
+
+        resp = await client.put(
+            f"/api/v1/workspaces/{ws['id']}/secrets/github-app",
+            json={
+                "app_id": "999",
+                "installation_id": "888",
+                "private_key": pem,
+            },
+        )
+        assert resp.status_code == 403
+
+    @pytest.mark.asyncio
+    async def test_save_github_app_updates_shared_workspace_record(self, client):
+        """Shared workspace config can be updated without duplicate insert."""
+        from sqlalchemy import func, select
+
+        from swarmer.models.github_app import GitHubApp
+
+        ws = await _create_workspace(client)
+        pem = "-----BEGIN RSA PRIVATE KEY-----\nseed\n-----END RSA PRIVATE KEY-----"
+
+        async with _TestSession() as db:
+            existing = GitHubApp(
+                workspace_id=ws["id"],
+                user_id="other-user",
+                app_id="111",
+                installation_id="222",
+                shared=True,
+            )
+            existing.private_key = pem
+            db.add(existing)
+            await db.commit()
+
+        resp = await client.put(
+            f"/api/v1/workspaces/{ws['id']}/secrets/github-app",
+            json={
+                "app_id": "999",
+                "installation_id": "888",
+                "private_key": pem,
+                "shared": True,
+            },
+        )
+        assert resp.status_code == 200
+        assert resp.json()["app_id"] == "999"
+
+        async with _TestSession() as db:
+            count = await db.scalar(
+                select(func.count())
+                .select_from(GitHubApp)
+                .where(GitHubApp.workspace_id == ws["id"])
+            )
+            assert count == 1
+
+    @pytest.mark.asyncio
+    async def test_get_workspace_github_app_scheduler_finds_private_app(self):
+        """Background launch (empty user_id) must see the workspace GitHub App."""
+        from swarmer.github_app import get_workspace_github_app
+        from swarmer.models.github_app import GitHubApp
+        from swarmer.models.workspace import Workspace
+
+        pem = "-----BEGIN RSA PRIVATE KEY-----\nseed\n-----END RSA PRIVATE KEY-----"
+
+        async with _TestSession() as db:
+            ws = Workspace(display_name="w", namespace="sched-ns")
+            db.add(ws)
+            await db.flush()
+            app = GitHubApp(
+                workspace_id=ws.id,
+                user_id="alice",
+                shared=False,
+                app_id="111",
+                installation_id="222",
+            )
+            app.private_key = pem
+            db.add(app)
+            await db.commit()
+
+            found = await get_workspace_github_app(ws.id, db, user_id="")
+            assert found is not None
+            assert found.user_id == "alice"
+
+            blocked = await get_workspace_github_app(ws.id, db, user_id="bob")
+            assert blocked is None
+
+
+class TestLaunchGitHubAppAuth:
+    @staticmethod
+    async def _fake_to_thread(fn, *args, **kwargs):
+        from unittest.mock import MagicMock
+
+        from swarmer import k8s as k8s_mod
+        from swarmer import k8s_session as k8s_sess_mod
+
+        if fn == k8s_mod.create_session_github_app_secret:
+            raise RuntimeError("k8s fail")
+        if fn == k8s_sess_mod.ensure_session_pvc:
+            return "session-pvc"
+        if fn == k8s_mod.create_session_pat_secret:
+            return None
+        if getattr(fn, "__name__", None) == "create_namespaced_pod":
+            pod = MagicMock()
+            pod.metadata.name = "session-1-abc"
+            return pod
+        return None
+
+    @pytest.mark.asyncio
+    async def test_do_launch_fails_when_app_secret_unavailable_without_pat(self):
+        from unittest.mock import patch
+
+        from swarmer.config import settings
+        from swarmer.models.github_app import GitHubApp
+        from swarmer.models.session import Session
+        from swarmer.models.workspace import Workspace
+        from swarmer.routers.sessions import _do_launch
+
+        pem = "-----BEGIN RSA PRIVATE KEY-----\nseed\n-----END RSA PRIVATE KEY-----"
+        orig_max = settings.max_concurrent_agents
+        settings.max_concurrent_agents = 0
+
+        try:
+            async with _TestSession() as db:
+                ws = Workspace(display_name="w", namespace="app-only-ns")
+                db.add(ws)
+                await db.flush()
+                app = GitHubApp(
+                    workspace_id=ws.id,
+                    user_id="test-user",
+                    app_id="111",
+                    installation_id="222",
+                )
+                app.private_key = pem
+                db.add(app)
+                session = Session(
+                    workspace_id=ws.id,
+                    name="s1",
+                    mode="prompt",
+                    phase="idle",
+                )
+                db.add(session)
+                await db.commit()
+                await db.refresh(session)
+                await db.refresh(ws)
+
+                with patch(
+                    "swarmer.routers.sessions.asyncio.to_thread",
+                    side_effect=self._fake_to_thread,
+                ):
+                    with pytest.raises(RuntimeError, match="k8s fail"):
+                        await _do_launch(session, ws, db, user_id="test-user")
+
+                assert session.pod_name is None
+        finally:
+            settings.max_concurrent_agents = orig_max
+
+    @pytest.mark.asyncio
+    async def test_do_launch_continues_when_app_secret_fails_with_pat_fallback(self):
+        from unittest.mock import patch
+
+        from swarmer.config import settings
+        from swarmer.models.github_app import GitHubApp
+        from swarmer.models.github_pat import GitHubPAT
+        from swarmer.models.session import Session
+        from swarmer.models.workspace import Workspace
+        from swarmer.routers.sessions import _do_launch
+
+        pem = "-----BEGIN RSA PRIVATE KEY-----\nseed\n-----END RSA PRIVATE KEY-----"
+        orig_max = settings.max_concurrent_agents
+        settings.max_concurrent_agents = 0
+
+        try:
+            async with _TestSession() as db:
+                ws = Workspace(display_name="w", namespace="pat-fallback-ns")
+                db.add(ws)
+                await db.flush()
+                pat = GitHubPAT(
+                    workspace_id=ws.id,
+                    user_id="test-user",
+                    name="my-pat",
+                    github_username="alice",
+                )
+                pat.pat = "ghp_test"
+                db.add(pat)
+                await db.flush()
+                app = GitHubApp(
+                    workspace_id=ws.id,
+                    user_id="test-user",
+                    app_id="111",
+                    installation_id="222",
+                )
+                app.private_key = pem
+                db.add(app)
+                session = Session(
+                    workspace_id=ws.id,
+                    github_pat_id=pat.id,
+                    name="s1",
+                    mode="prompt",
+                    phase="idle",
+                )
+                db.add(session)
+                await db.commit()
+
+                from sqlalchemy import select
+                from sqlalchemy.orm import selectinload
+
+                result = await db.execute(
+                    select(Session)
+                    .where(Session.id == session.id)
+                    .options(
+                        selectinload(Session.github_pat),
+                        selectinload(Session.repos),
+                    )
+                )
+                session = result.scalar_one()
+
+                with patch(
+                    "swarmer.routers.sessions.asyncio.to_thread",
+                    side_effect=self._fake_to_thread,
+                ), patch("swarmer.log_poller.start_log_poller"):
+                    await _do_launch(session, ws, db, user_id="test-user")
+
+                assert session.pod_name == "session-1-abc"
+                assert session.phase == "pending"
+        finally:
+            settings.max_concurrent_agents = orig_max
 
 
 # ===========================================================================

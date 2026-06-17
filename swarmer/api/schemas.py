@@ -97,6 +97,19 @@ class SessionOutput(BaseModel):
     output: str
 
 
+class SessionRunOut(BaseModel):
+    id: int
+    session_id: int
+    phase: str
+    status_detail: str
+    started_at: datetime
+    completed_at: datetime
+    run_duration: str
+    last_output: str
+
+    model_config = {"from_attributes": True}
+
+
 class ScheduleRequest(BaseModel):
     cron_expr: str = Field(..., min_length=1, max_length=128)
 
@@ -152,6 +165,8 @@ class CredentialsSave(BaseModel):
     google_api_key: str = ""
     anthropic_api_key: str = ""
     openai_api_key: str = ""
+    # Raw JSON from gcloud application-default login (or service account key)
+    application_default_credentials: str = ""
     shared: bool = False
 
 
@@ -204,6 +219,31 @@ class PATOut(BaseModel):
     github_username: str
     github_org: str
     description: str
+    shared: bool
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+# ============================================================
+# GitHub App (workspace installation)
+# ============================================================
+
+
+class GitHubAppSave(BaseModel):
+    app_id: str = Field(..., min_length=1)
+    installation_id: str = Field(..., min_length=1)
+    private_key: str = ""
+    shared: bool = False
+
+
+class GitHubAppOut(BaseModel):
+    id: int
+    workspace_id: int
+    app_id: str
+    installation_id: str
+    has_private_key: bool
     shared: bool
     created_at: datetime
     updated_at: datetime

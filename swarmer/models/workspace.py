@@ -26,6 +26,9 @@ class Workspace(Base):
     github_pats: Mapped[list["GitHubPAT"]] = relationship(  # noqa: F821
         back_populates="workspace", cascade="all, delete-orphan"
     )
+    github_app: Mapped["GitHubApp | None"] = relationship(  # noqa: F821
+        back_populates="workspace", uselist=False, cascade="all, delete-orphan"
+    )
     sessions: Mapped[list["Session"]] = relationship(  # noqa: F821
         back_populates="workspace", cascade="all, delete-orphan"
     )

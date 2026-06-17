@@ -5,8 +5,10 @@ All data access goes through the REST API client (/api/v1/).
 
 from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
 from fastapi.responses import RedirectResponse
+from starlette.responses import Response
 from fastapi.templating import Jinja2Templates
 
+from swarmer.csrf import CSRFError, ensure_csrf_token, validate_csrf_token
 from swarmer.deps import require_auth
 from swarmer.flash import flash
 from swarmer.routers.api_client import APIError, get_api_client
@@ -14,12 +16,20 @@ from swarmer.routers.api_client import APIError, get_api_client
 router = APIRouter()
 templates = Jinja2Templates(directory="swarmer/templates")
 
-_VALID_TABS = ("credentials", "pats", "pull-secret")
+_VALID_TABS = ("credentials", "pats", "github-app", "pull-secret")
 
 
 def _current_user(request: Request) -> str:
     """Return the K8s username from the session, or '' if not set."""
     return request.session.get("username", "")
+
+
+def _csrf_redirect(ws_id: int, request: Request) -> RedirectResponse:
+    flash(request, "Invalid or missing CSRF token.", "danger")
+    return RedirectResponse(
+        url=f"/workspaces/{ws_id}/secrets?tab=github-app",
+        status_code=302,
+    )
 
 
 async def _secrets_context(api, ws_id: int) -> dict:
@@ -40,7 +50,17 @@ async def _secrets_context(api, ws_id: int) -> dict:
     except APIError:
         pull_secret_info = None
 
-    return {"secret": secret, "pats": pats, "pull_secret_info": pull_secret_info}
+    try:
+        github_app = await api.get_github_app(ws_id)
+    except APIError:
+        github_app = None
+
+    return {
+        "secret": secret,
+        "pats": pats,
+        "pull_secret_info": pull_secret_info,
+        "github_app": github_app,
+    }
 
 
 # ============================================================
@@ -68,7 +88,13 @@ async def secrets_tabs(
     return templates.TemplateResponse(
         request,
         "secrets/tabs.html",
-        {"ws": ws, "tab": tab, "current_user": _current_user(request), **ctx},
+        {
+            "ws": ws,
+            "tab": tab,
+            "current_user": _current_user(request),
+            "csrf_token": ensure_csrf_token(request),
+            **ctx,
+        },
     )
 
 
@@ -102,15 +128,15 @@ async def opencode_secret_save(
     shared: str = Form(""),
     adc_file: UploadFile | None = File(None),
 ):
-    # ADC file upload is not supported via the REST API -- validate locally
-    # and include in a future API enhancement. For now, skip ADC upload
-    # when going through the API client.
+    adc_json = ""
     if adc_file and adc_file.filename:
         import json
+
         content = await adc_file.read()
         try:
             json.loads(content)
-        except json.JSONDecodeError:
+            adc_json = content.decode("utf-8")
+        except (json.JSONDecodeError, UnicodeDecodeError):
             async with get_api_client(request) as api:
                 try:
                     ws = await api.get_workspace(ws_id)
@@ -129,9 +155,6 @@ async def opencode_secret_save(
                 },
                 status_code=422,
             )
-        # ADC file upload is not yet supported via API; fall through to
-        # save other fields. A future API enhancement will add ADC upload.
-
     async with get_api_client(request) as api:
         try:
             ws = await api.get_workspace(ws_id)
@@ -146,6 +169,7 @@ async def opencode_secret_save(
                 google_api_key=google_api_key,
                 anthropic_api_key=anthropic_api_key,
                 openai_api_key=openai_api_key,
+                application_default_credentials=adc_json,
                 shared=bool(shared),
             )
         except APIError as exc:
@@ -314,6 +338,89 @@ async def github_pat_delete(
             pass
 
     return RedirectResponse(url=f"/workspaces/{ws_id}/secrets?tab=pats", status_code=302)
+
+
+# ============================================================
+# GitHub App
+# ============================================================
+
+
+@router.post(
+    "/workspaces/{ws_id}/secrets/github-app",
+    dependencies=[Depends(require_auth)],
+)
+async def github_app_save(
+    ws_id: int,
+    request: Request,
+    app_id: str = Form(...),
+    installation_id: str = Form(...),
+    private_key: str = Form(""),
+    shared: str = Form(""),
+    csrf_token: str = Form(""),
+) -> Response:
+    try:
+        validate_csrf_token(request, csrf_token)
+    except CSRFError:
+        return _csrf_redirect(ws_id, request)
+
+    async with get_api_client(request) as api:
+        try:
+            await api.get_workspace(ws_id)
+        except APIError:
+            return RedirectResponse(url="/workspaces", status_code=302)
+
+        try:
+            await api.save_github_app(
+                ws_id,
+                app_id=app_id.strip(),
+                installation_id=installation_id.strip(),
+                private_key=private_key.strip(),
+                shared=bool(shared),
+            )
+        except APIError as exc:
+            ctx = await _secrets_context(api, ws_id)
+            try:
+                ws = await api.get_workspace(ws_id)
+            except APIError:
+                return RedirectResponse(url="/workspaces", status_code=302)
+            return templates.TemplateResponse(
+                request,
+                "secrets/tabs.html",
+                {
+                    "ws": ws,
+                    "tab": "github-app",
+                    "current_user": _current_user(request),
+                    "csrf_token": ensure_csrf_token(request),
+                    "github_app_error": exc.detail,
+                    **ctx,
+                },
+                status_code=422,
+            )
+
+    return RedirectResponse(url=f"/workspaces/{ws_id}/secrets?tab=github-app", status_code=302)
+
+
+@router.post(
+    "/workspaces/{ws_id}/secrets/github-app/delete",
+    dependencies=[Depends(require_auth)],
+)
+async def github_app_delete(
+    ws_id: int,
+    request: Request,
+    csrf_token: str = Form(""),
+) -> RedirectResponse:
+    try:
+        validate_csrf_token(request, csrf_token)
+    except CSRFError:
+        return _csrf_redirect(ws_id, request)
+
+    async with get_api_client(request) as api:
+        try:
+            await api.delete_github_app(ws_id)
+        except APIError:
+            pass
+
+    return RedirectResponse(url=f"/workspaces/{ws_id}/secrets?tab=github-app", status_code=302)
 
 
 # ============================================================

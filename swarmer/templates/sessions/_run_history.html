@@ -1,0 +1,55 @@
+<table class="pf-v6-c-table pf-m-grid-md" role="grid">
+  <thead class="pf-v6-c-table__thead">
+    <tr class="pf-v6-c-table__tr" role="row">
+      <th class="pf-v6-c-table__th" role="columnheader">Started</th>
+      <th class="pf-v6-c-table__th" role="columnheader">Completed</th>
+      <th class="pf-v6-c-table__th" role="columnheader">Duration</th>
+      <th class="pf-v6-c-table__th" role="columnheader">Status</th>
+      <th class="pf-v6-c-table__th" role="columnheader">Detail</th>
+      <th class="pf-v6-c-table__th pf-m-fit-content" role="columnheader">Output</th>
+    </tr>
+  </thead>
+  <tbody class="pf-v6-c-table__tbody" role="rowgroup">
+  {% for run in session_runs %}
+    <tr class="pf-v6-c-table__tr" role="row">
+      <td class="pf-v6-c-table__td" role="cell" data-label="Started">
+        {{ run.started_at.strftime('%b %d %Y %H:%M') }} UTC
+      </td>
+      <td class="pf-v6-c-table__td" role="cell" data-label="Completed">
+        {{ run.completed_at.strftime('%b %d %Y %H:%M') }} UTC
+      </td>
+      <td class="pf-v6-c-table__td" role="cell" data-label="Duration">
+        {{ run.run_duration }}
+      </td>
+      <td class="pf-v6-c-table__td" role="cell" data-label="Status">
+        {% if run.phase == 'succeeded' %}
+          <span class="pf-v6-c-label pf-m-blue"><span class="pf-v6-c-label__content">✓ Completed</span></span>
+        {% elif run.phase == 'failed' %}
+          <span class="pf-v6-c-label pf-m-red"><span class="pf-v6-c-label__content">✗ Failed</span></span>
+        {% elif run.phase == 'stopped' %}
+          <span class="pf-v6-c-label pf-m-grey"><span class="pf-v6-c-label__content">■ Stopped</span></span>
+        {% else %}
+          <span class="pf-v6-c-label pf-m-outline"><span class="pf-v6-c-label__content">{{ run.phase }}</span></span>
+        {% endif %}
+      </td>
+      <td class="pf-v6-c-table__td" role="cell" data-label="Detail">
+        {% if run.status_detail %}
+          <span style="font-size:var(--pf-t--global--font--size--sm); color:var(--pf-t--global--text--color--subtle);">{{ run.status_detail }}</span>
+        {% else %}
+          <span style="color:var(--pf-t--global--text--color--subtle);">—</span>
+        {% endif %}
+      </td>
+      <td class="pf-v6-c-table__td" role="cell" data-label="Output">
+        {% if run.last_output %}
+        <details>
+          <summary style="cursor:pointer; font-size:var(--pf-t--global--font--size--sm);">View logs</summary>
+          <pre class="last-output" style="margin-top:var(--pf-t--global--spacer--sm); padding:var(--pf-t--global--spacer--sm); max-height:300px; overflow:auto;">{{ run.last_output | ansi_to_html }}</pre>
+        </details>
+        {% else %}
+          <span style="color:var(--pf-t--global--text--color--subtle);">—</span>
+        {% endif %}
+      </td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>

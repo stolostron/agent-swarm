@@ -1,5 +1,6 @@
 import asyncio
 import logging
+from datetime import datetime, timezone
 
 log = logging.getLogger(__name__)
 
@@ -99,8 +100,6 @@ async def _auto_cleanup_pod(session_id: int, pod_name: str, namespace: str) -> N
 
 
 async def _save_to_db(session_id: int, phase: str, detail: str, logs: str) -> None:
-    from datetime import datetime
-
     from swarmer.database import get_db
     from swarmer.models.session import Session
 
@@ -110,7 +109,17 @@ async def _save_to_db(session_id: int, phase: str, detail: str, logs: str) -> No
             if session is None:
                 break
             if phase in _TERMINAL_PHASES and session.phase not in _TERMINAL_PHASES:
-                session.run_completed_at = datetime.utcnow()
+                session.run_completed_at = datetime.now(timezone.utc)
+                from swarmer.session_runs import record_session_run
+
+                await record_session_run(
+                    db,
+                    session,
+                    phase=phase,
+                    status_detail=detail,
+                    last_output=logs or session.last_output,
+                    completed_at=session.run_completed_at,
+                )
             session.phase = phase
             session.status_detail = detail
             if logs:

@@ -189,6 +189,13 @@
       </button>
     </li>
     {% endif %}
+    {% if session.mode == 'prompt' %}
+    <li class="pf-v6-c-tabs__item" id="tab-history">
+      <button class="pf-v6-c-tabs__link" role="tab" aria-selected="false" aria-controls="panel-history" tabindex="-1" onclick="switchTab('history')">
+        <span class="pf-v6-c-tabs__item-text">History{% if session_runs %} ({{ session_runs | length }}){% endif %}</span>
+      </button>
+    </li>
+    {% endif %}
     {% if session.repos %}
     <li class="pf-v6-c-tabs__item" id="tab-patch">
       <button class="pf-v6-c-tabs__link" role="tab" aria-selected="false" aria-controls="panel-patch" tabindex="-1" onclick="switchTab('patch')">
@@ -454,6 +461,32 @@
     </div>
     <div class="pf-v6-c-card__body" style="padding:0;">
       {% include "sessions/_last_output.html" with context %}
+    </div>
+  </div>
+</div>
+{% endif %}
+
+{# ════════════════════════════════════════════════════════════
+   Tab panel: History (prompt mode)
+   ════════════════════════════════════════════════════════════ #}
+{% if session.mode == 'prompt' %}
+<div id="panel-history" class="pf-v6-c-tab-content" role="tabpanel" aria-labelledby="tab-history" hidden style="margin-top:var(--pf-t--global--spacer--lg);">
+  <div class="pf-v6-c-card">
+    <div class="pf-v6-c-card__header">
+      <h3 class="pf-v6-c-card__header-main" style="font-weight:var(--pf-t--global--font--weight--heading--bold);">Run History</h3>
+    </div>
+    <div class="pf-v6-c-card__body">
+      {% if session_runs %}
+        {% include "sessions/_run_history.html" with context %}
+      {% else %}
+      <div class="pf-v6-c-empty-state">
+        <div class="pf-v6-c-empty-state__content">
+          <div class="pf-v6-c-empty-state__body">
+            No completed runs yet. Launch the session to record execution history here.
+          </div>
+        </div>
+      </div>
+      {% endif %}
     </div>
   </div>
 </div>
