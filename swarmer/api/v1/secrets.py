@@ -13,6 +13,8 @@ from swarmer.api.deps import get_current_user, get_workspace_or_404, require_api
 from swarmer.api.schemas import (
     CredentialsOut,
     CredentialsSave,
+    GitHubAppOut,
+    GitHubAppSave,
     MessageOut,
     PATCreate,
     PATOut,
@@ -20,6 +22,7 @@ from swarmer.api.schemas import (
     PullSecretCreate,
     PullSecretOut,
 )
+from swarmer.models.github_app import GitHubApp
 from swarmer.models.github_pat import GitHubPAT
 from swarmer.models.opencode_secret import OpencodeSecret
 from swarmer.models.workspace import Workspace
@@ -251,6 +254,123 @@ async def delete_pat(
     await db.delete(pat)
     await db.commit()
     return MessageOut(detail="PAT deleted.")
+
+
+# ============================================================
+# GitHub App (workspace installation)
+# ============================================================
+
+
+def _github_app_out(app: GitHubApp) -> GitHubAppOut:
+    return GitHubAppOut(
+        id=app.id,
+        workspace_id=app.workspace_id,
+        app_id=app.app_id,
+        installation_id=app.installation_id,
+        has_private_key=bool(app.private_key_enc),
+        shared=app.shared,
+        created_at=app.created_at,
+        updated_at=app.updated_at,
+    )
+
+
+@router.get("/github-app", response_model=GitHubAppOut | None)
+async def get_github_app(
+    ws_id: int,
+    ws: Workspace = Depends(get_workspace_or_404),
+    db: AsyncSession = Depends(get_db),
+    user: str = Depends(get_current_user),
+) -> GitHubAppOut | None:
+    result = await db.execute(
+        select(GitHubApp).where(
+            GitHubApp.workspace_id == ws_id,
+            or_(
+                GitHubApp.user_id == user,
+                GitHubApp.shared == True,  # noqa: E712
+                GitHubApp.user_id == "",
+            ),
+        )
+    )
+    apps = result.scalars().all()
+    app = None
+    for candidate in apps:
+        if candidate.user_id == user:
+            app = candidate
+            break
+    if app is None and apps:
+        app = apps[0]
+    if app is None or not app.is_configured:
+        return None
+    return _github_app_out(app)
+
+
+@router.put("/github-app", response_model=GitHubAppOut)
+async def save_github_app(
+    ws_id: int,
+    body: GitHubAppSave,
+    ws: Workspace = Depends(get_workspace_or_404),
+    db: AsyncSession = Depends(get_db),
+    user: str = Depends(get_current_user),
+) -> GitHubAppOut:
+    result = await db.execute(
+        select(GitHubApp).where(GitHubApp.workspace_id == ws_id)
+    )
+    app = result.scalar_one_or_none()
+    if app is None:
+        app = GitHubApp(workspace_id=ws_id, user_id=user)
+        db.add(app)
+    elif not app.user_id:
+        app.user_id = user
+    elif app.user_id != user and not app.shared:
+        raise HTTPException(status_code=403, detail="GitHub App is owned by another user")
+
+    app.app_id = body.app_id.strip()
+    app.installation_id = body.installation_id.strip()
+    app.shared = body.shared
+    if body.private_key.strip():
+        app.private_key = body.private_key.strip()
+    elif not app.private_key_enc:
+        raise HTTPException(status_code=400, detail="private_key is required")
+
+    if not app.is_configured:
+        raise HTTPException(status_code=400, detail="GitHub App credentials are incomplete")
+
+    try:
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="GitHub App already exists for this workspace",
+        )
+    await db.refresh(app)
+    return _github_app_out(app)
+
+
+@router.delete("/github-app", response_model=MessageOut)
+async def delete_github_app(
+    ws_id: int,
+    ws: Workspace = Depends(get_workspace_or_404),
+    db: AsyncSession = Depends(get_db),
+    user: str = Depends(get_current_user),
+) -> MessageOut:
+    result = await db.execute(
+        select(GitHubApp).where(
+            GitHubApp.workspace_id == ws_id,
+            or_(
+                GitHubApp.user_id == user,
+                GitHubApp.shared == True,  # noqa: E712
+                GitHubApp.user_id == "",
+            ),
+        )
+    )
+    app = result.scalar_one_or_none()
+    if app is None:
+        raise HTTPException(status_code=404, detail="GitHub App not configured")
+
+    await db.delete(app)
+    await db.commit()
+    return MessageOut(detail="GitHub App credentials deleted.")
 
 
 # ============================================================

@@ -6,6 +6,11 @@ import logging
 import shlex
 
 from swarmer.config import settings
+from swarmer.github_auth import (
+    build_git_credential_setup_shell,
+    build_git_user_setup_shell,
+    pat_injects_gh_token,
+)
 
 log = logging.getLogger(__name__)
 
@@ -100,6 +105,7 @@ def build_session_pod(
     mcp_servers=None,
     agent_secret_name: str = "",
     pat_secret_name: str = "",
+    github_app_secret_name: str = "",
     mcp_secret_name: str = "",
     resolved_prompt: str = "",
 ):  # -> client.V1Pod
@@ -115,6 +121,7 @@ def build_session_pod(
 
     pvc_name = session.pvc_name
     pat = session.github_pat  # may be None
+    has_github_app = bool(github_app_secret_name)
 
     # ---------- env ----------
     env = [
@@ -140,18 +147,19 @@ def build_session_pod(
                 ),
             )
         )
-        env.append(
-            client.V1EnvVar(
-                name="GH_TOKEN",
-                value_from=client.V1EnvVarSource(
-                    secret_key_ref=client.V1SecretKeySelector(
-                        name=_pat_k8s_name,
-                        key="GITHUB_PAT",
-                        optional=True,
-                    )
-                ),
+        if pat_injects_gh_token(has_github_app):
+            env.append(
+                client.V1EnvVar(
+                    name="GH_TOKEN",
+                    value_from=client.V1EnvVarSource(
+                        secret_key_ref=client.V1SecretKeySelector(
+                            name=_pat_k8s_name,
+                            key="GITHUB_PAT",
+                            optional=True,
+                        )
+                    ),
+                )
             )
-        )
         env.append(
             client.V1EnvVar(
                 name="GITHUB_USERNAME",
@@ -190,6 +198,21 @@ def build_session_pod(
         ),
     ]
     volumes.extend(tool.get_extra_volumes(has_adc, secret_name=agent_secret_name))
+    if has_github_app:
+        volumes.append(
+            client.V1Volume(
+                name="github-app",
+                secret=client.V1SecretVolumeSource(
+                    secret_name=github_app_secret_name,
+                    default_mode=0o400,
+                    items=[
+                        client.V1KeyToPath(key="client_id", path="client_id"),
+                        client.V1KeyToPath(key="installation_id", path="installation_id"),
+                        client.V1KeyToPath(key="private_key", path="private_key"),
+                    ],
+                ),
+            )
+        )
 
     volume_mounts = [
         client.V1VolumeMount(
@@ -203,6 +226,20 @@ def build_session_pod(
         ),
     ]
     volume_mounts.extend(tool.get_extra_volume_mounts(has_adc))
+    if has_github_app:
+        volume_mounts.append(
+            client.V1VolumeMount(
+                name="github-app",
+                mount_path="/etc/github-app",
+                read_only=True,
+            )
+        )
+
+    _github_app_mount = (
+        [client.V1VolumeMount(name="github-app", mount_path="/etc/github-app", read_only=True)]
+        if has_github_app
+        else []
+    )
 
     # ---------- init container (git clone) ----------
     init_containers = []
@@ -216,14 +253,8 @@ def build_session_pod(
                 f"/workspace/{lp}"
             )
 
-        credential_setup = (
-            "if [ -n \"${GITHUB_PAT}\" ]; then "
-            "git config --global credential.helper store && "
-            "echo \"https://${GITHUB_USERNAME}:${GITHUB_PAT}@github.com\" "
-            "> \"${HOME}/.git-credentials\"; "
-            "fi"
-        )
-        full_cmd = credential_setup + " && " + " && ".join(clone_cmds)
+        credential_setup = build_git_credential_setup_shell(has_github_app)
+        full_cmd = credential_setup + " && ".join(clone_cmds)
 
         git_env = [client.V1EnvVar(name="HOME", value="/workspace")]
         if pat and _pat_k8s_name:
@@ -261,7 +292,8 @@ def build_session_pod(
                 volume_mounts=[
                     client.V1VolumeMount(
                         name="session-workspace", mount_path="/workspace"
-                    )
+                    ),
+                    *_github_app_mount,
                 ],
                 resources=client.V1ResourceRequirements(
                     requests={"memory": "256Mi", "cpu": "100m"},
@@ -302,14 +334,8 @@ def build_session_pod(
     safe_dir_setup = ""
     if session.repos:
         safe_dir_setup = "git config --global --add safe.directory '*' && "
-    git_setup = (
-        'if [ -n "${GITHUB_PAT}" ] && command -v git >/dev/null 2>&1; then '
-        'git config --global credential.helper store && '
-        'echo "https://${GITHUB_USERNAME}:${GITHUB_PAT}@github.com" > "${HOME}/.git-credentials" && '
-        'git config --global user.name "${GITHUB_USERNAME}" && '
-        'git config --global user.email "${GITHUB_USERNAME}@users.noreply.github.com"; '
-        'fi && '
-    )
+    git_setup = build_git_credential_setup_shell(has_github_app)
+    git_setup += build_git_user_setup_shell(has_github_app)
     branch_setup = ""
     if session.repos and getattr(session, "working_branch", ""):
         branch = shlex.quote(session.working_branch)

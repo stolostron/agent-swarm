@@ -212,6 +212,31 @@ class PATOut(BaseModel):
 
 
 # ============================================================
+# GitHub App (workspace installation)
+# ============================================================
+
+
+class GitHubAppSave(BaseModel):
+    app_id: str = Field(..., min_length=1)
+    installation_id: str = Field(..., min_length=1)
+    private_key: str = ""
+    shared: bool = False
+
+
+class GitHubAppOut(BaseModel):
+    id: int
+    workspace_id: int
+    app_id: str
+    installation_id: str
+    has_private_key: bool
+    shared: bool
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+# ============================================================
 # Pull Secret
 # ============================================================
 

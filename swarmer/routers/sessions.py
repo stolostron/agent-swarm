@@ -785,6 +785,28 @@ async def _do_launch(session: Session, ws: Workspace, db: AsyncSession, user_id:
             log.warning("Session PAT secret creation failed", exc_info=True)
             _pat_secret_name = ""
 
+    # 2b. GitHub App installation (workspace-level, session-scoped secret)
+    _github_app_secret_name = ""
+    from swarmer.github_app import get_workspace_github_app
+
+    github_app = await get_workspace_github_app(session.workspace_id, db, user_id=user_id)
+    if github_app:
+        _github_app_secret_name = f"{github_app.k8s_secret_name}-{secret_suffix}"
+        try:
+            await asyncio.to_thread(
+                k8s.create_session_github_app_secret,
+                ws.k8s_namespace, _github_app_secret_name, github_app,
+            )
+            secret_names.append(_github_app_secret_name)
+        except Exception as exc:
+            log.warning(
+                "Session GitHub App secret creation failed: %s",
+                type(exc).__name__,
+            )
+            if not _pat_secret_name:
+                raise
+            _github_app_secret_name = ""
+
     # 3. MCP server tokens
     if mcp_servers:
         _mcp_secret_name = f"{k8s.MCP_SECRET_NAME}-{secret_suffix}"
@@ -816,6 +838,7 @@ async def _do_launch(session: Session, ws: Workspace, db: AsyncSession, user_id:
         mcp_servers=mcp_servers,
         agent_secret_name=_agent_secret_name,
         pat_secret_name=_pat_secret_name,
+        github_app_secret_name=_github_app_secret_name,
         mcp_secret_name=_mcp_secret_name,
         resolved_prompt=resolved_prompt,
     )

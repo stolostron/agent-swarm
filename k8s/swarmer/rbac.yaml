@@ -20,7 +20,7 @@ rules:
     resources: ["namespaces"]
     verbs: ["get", "list", "watch", "create", "delete"]
 
-  # Secret management (opencode-secret*, crush-secret*, github-pat-*, mcp-server-tokens*, swarmer-agent-extra-env, …)
+  # Secret management (opencode-secret*, crush-secret*, github-pat-*, github-app-*, mcp-server-tokens*, swarmer-agent-extra-env, …)
   - apiGroups: [""]
     resources: ["secrets"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
