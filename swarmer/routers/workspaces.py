@@ -7,8 +7,10 @@ from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
-from swarmer.deps import require_auth
+from swarmer.deps import get_user_token, require_auth
+from swarmer.config import settings
 from swarmer.flash import flash
+from swarmer.k8s_auth import can_create_namespaces
 from swarmer.routers.api_client import APIError, get_api_client
 
 router = APIRouter()
@@ -22,10 +24,17 @@ async def workspace_list(request: Request):
     async with get_api_client(request) as api:
         workspaces = await api.list_workspaces()
 
+    can_create = False
+    if not settings.k8s_namespace:
+        token = get_user_token(request)
+        can_create = await can_create_namespaces(
+            token, settings.k8s_api_url, settings.k8s_in_cluster
+        )
+
     return templates.TemplateResponse(
         request,
         "workspaces/list.html",
-        {"workspaces": workspaces},
+        {"workspaces": workspaces, "can_create_workspaces": can_create},
     )
 
 
@@ -48,6 +57,17 @@ async def preview_namespace(name: str = ""):
 
 @router.get("/workspaces/new", dependencies=[Depends(require_auth)])
 async def workspace_new(request: Request):
+    if settings.k8s_namespace:
+        flash(request, "Workspace creation is disabled in this deployment.", "error")
+        return RedirectResponse("/workspaces", status_code=302)
+
+    token = get_user_token(request)
+    if not await can_create_namespaces(
+        token, settings.k8s_api_url, settings.k8s_in_cluster
+    ):
+        flash(request, "You do not have permission to create workspaces.", "error")
+        return RedirectResponse("/workspaces", status_code=302)
+
     return templates.TemplateResponse(
         request,
         "workspaces/new.html",

@@ -101,7 +101,7 @@ Token-based auth via Kubernetes bearer tokens (not password-based):
 - Users paste a K8s ServiceAccount token into the login form
 - Token validated via TokenReview API (`k8s_auth.py`); falls back to namespace probe if RBAC for tokenreviews is missing
 - Validated token is Fernet-encrypted and stored in the session cookie (`deps.py:get_user_token()`)
-- Workspace access controlled by K8s RBAC: `get_accessible_namespaces()` checks which workspace namespaces the token can GET
+- Workspace access controlled by K8s RBAC: `get_accessible_namespaces()` checks pods `list` in each workspace namespace (via namespace-scoped `swarmer-user` RoleBinding), or cluster-scoped `namespaces` `get` for admin bindings
 - Optional OpenShift OAuth: implicit grant flow via `/auth/callback` (captures token from URL fragment client-side)
 - `swarmer/auth.py` is superseded — just contains a comment pointing to `k8s_auth.py`
 

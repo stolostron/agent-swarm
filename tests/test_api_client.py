@@ -39,13 +39,31 @@ def _override_get_current_user():
 
 
 @pytest_asyncio.fixture(autouse=True)
-async def _setup_db():
+async def _setup_db(monkeypatch):
     from swarmer.crypto import init_crypto
     init_crypto("auth/secret.key")
 
     from swarmer.config import settings
     orig_ns = settings.k8s_namespace
-    settings.k8s_namespace = "test-ns"
+    settings.k8s_namespace = ""
+
+    async def _all_accessible(token, namespaces, api_url, in_cluster):
+        return list(namespaces)
+
+    async def _can_create_namespaces(token, api_url, in_cluster):
+        return True
+
+    monkeypatch.setattr(
+        "swarmer.api.deps.get_accessible_namespaces", _all_accessible
+    )
+    monkeypatch.setattr(
+        "swarmer.api.v1.workspaces.can_create_namespaces", _can_create_namespaces
+    )
+    monkeypatch.setattr("swarmer.k8s.ensure_namespace", lambda namespace: None)
+    monkeypatch.setattr(
+        "swarmer.k8s.grant_swarmer_user_access", lambda namespace, username: None
+    )
+    monkeypatch.setattr("swarmer.k8s.delete_namespace", lambda namespace: None)
 
     import swarmer.models  # noqa: F401
 
@@ -57,16 +75,21 @@ async def _setup_db():
     settings.k8s_namespace = orig_ns
 
 
+def _override_get_bearer_token():
+    return "test-token"
+
+
 @pytest_asyncio.fixture
 async def api_client():
     """Provide an APIClient wired to the test app with auth overrides."""
-    from swarmer.api.deps import get_current_user, require_api_auth
+    from swarmer.api.deps import get_bearer_token, get_current_user, require_api_auth
     from swarmer.database import get_db
     from swarmer.main import app
 
     app.dependency_overrides[get_db] = _override_get_db
     app.dependency_overrides[require_api_auth] = _override_require_api_auth
     app.dependency_overrides[get_current_user] = _override_get_current_user
+    app.dependency_overrides[get_bearer_token] = _override_get_bearer_token
 
     from swarmer.routers.api_client import APIClient
     client = APIClient(app=app, token="fake-bearer-token")

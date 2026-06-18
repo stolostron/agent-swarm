@@ -101,49 +101,109 @@ async def _probe_with_user_token(token: str, api_url: str, in_cluster: bool) -> 
     return await asyncio.to_thread(_do_probe)
 
 
-async def get_accessible_namespaces(token: str, namespaces: list[str], api_url: str, in_cluster: bool) -> list[str]:
-    """Return the subset of namespaces the user token can GET."""
-    import asyncio
+def _self_subject_allowed(
+    token: str,
+    api_url: str,
+    in_cluster: bool,
+    *,
+    verb: str,
+    resource: str,
+    namespace: str = "",
+    name: str = "",
+) -> bool:
+    """Return True when *token* is allowed the given verb on *resource*."""
     from kubernetes import client as k8s_client
+    from kubernetes.client.rest import ApiException
+
+    attrs = k8s_client.V1ResourceAttributes(
+        verb=verb,
+        resource=resource,
+    )
+    if namespace:
+        attrs.namespace = namespace
+    if name:
+        attrs.name = name
+
+    cfg = _make_user_config(token, api_url, in_cluster)
+    with k8s_client.ApiClient(cfg) as api:
+        authz = k8s_client.AuthorizationV1Api(api)
+        sar = k8s_client.V1SelfSubjectAccessReview(
+            spec=k8s_client.V1SelfSubjectAccessReviewSpec(
+                resource_attributes=attrs,
+            )
+        )
+        try:
+            resp = authz.create_self_subject_access_review(sar, _request_timeout=5)
+            return bool(resp.status.allowed)
+        except ApiException:
+            return False
+
+
+def _namespace_grants_workspace_access(
+    token: str, namespace: str, api_url: str, in_cluster: bool
+) -> bool:
+    """True when *token* can access *namespace* as a swarmer workspace.
+
+    Namespace-scoped RoleBindings to ``swarmer-user`` only downscope
+    namespaced rules (pods get/list). Cluster-scoped namespace GET requires
+    a ClusterRoleBinding and is checked separately for admin identities.
+    """
+    if _self_subject_allowed(
+        token,
+        api_url,
+        in_cluster,
+        namespace=namespace,
+        verb="list",
+        resource="pods",
+    ):
+        return True
+    return _self_subject_allowed(
+        token,
+        api_url,
+        in_cluster,
+        verb="get",
+        resource="namespaces",
+        name=namespace,
+    )
+
+
+async def get_accessible_namespaces(token: str, namespaces: list[str], api_url: str, in_cluster: bool) -> list[str]:
+    """Return workspace namespaces the user token can access via RBAC."""
+    import asyncio
 
     def _check(ns: str) -> str | None:
-        from kubernetes.client.rest import ApiException
-        cfg = _make_user_config(token, api_url, in_cluster)
-        with k8s_client.ApiClient(cfg) as api:
-            core = k8s_client.CoreV1Api(api)
-            try:
-                core.read_namespace(ns, _request_timeout=5)
-                return ns
-            except ApiException:
-                return None
+        if _namespace_grants_workspace_access(token, ns, api_url, in_cluster):
+            return ns
+        return None
 
     results = await asyncio.gather(*[asyncio.to_thread(_check, ns) for ns in namespaces])
     return [ns for ns in results if ns is not None]
 
 
+async def can_create_namespaces(token: str, api_url: str, in_cluster: bool) -> bool:
+    """Check if the user token can create namespaces (cluster-scoped)."""
+    import asyncio
+
+    return await asyncio.to_thread(
+        _self_subject_allowed,
+        token,
+        api_url,
+        in_cluster,
+        verb="create",
+        resource="namespaces",
+    )
+
+
 async def can_create_pods(token: str, namespace: str, api_url: str, in_cluster: bool) -> bool:
     """Check if the user token can create pods in the given namespace via SelfSubjectAccessReview."""
     import asyncio
-    from kubernetes import client as k8s_client
 
-    def _do_check():
-        from kubernetes.client.rest import ApiException
-        cfg = _make_user_config(token, api_url, in_cluster)
-        with k8s_client.ApiClient(cfg) as api:
-            authz = k8s_client.AuthorizationV1Api(api)
-            sar = k8s_client.V1SelfSubjectAccessReview(
-                spec=k8s_client.V1SelfSubjectAccessReviewSpec(
-                    resource_attributes=k8s_client.V1ResourceAttributes(
-                        namespace=namespace,
-                        verb="create",
-                        resource="pods",
-                    )
-                )
-            )
-            try:
-                resp = authz.create_self_subject_access_review(sar)
-                return resp.status.allowed
-            except ApiException:
-                return False
-
-    return await asyncio.to_thread(_do_check)
+    return await asyncio.to_thread(
+        _self_subject_allowed,
+        token,
+        api_url,
+        in_cluster,
+        namespace=namespace,
+        verb="create",
+        resource="pods",
+    )

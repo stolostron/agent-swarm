@@ -41,16 +41,33 @@ def _override_get_current_user():
 
 
 @pytest_asyncio.fixture(autouse=True)
-async def _setup_db():
+async def _setup_db(monkeypatch):
     """Create tables before each test, drop after."""
     # Init crypto before anything else (model properties call decrypt)
     from swarmer.crypto import init_crypto
     init_crypto("auth/secret.key")
 
-    # Set k8s_namespace so K8s namespace create/delete is skipped in tests
     from swarmer.config import settings
     orig_ns = settings.k8s_namespace
-    settings.k8s_namespace = "test-ns"
+    settings.k8s_namespace = ""
+
+    async def _all_accessible(token, namespaces, api_url, in_cluster):
+        return list(namespaces)
+
+    async def _can_create_namespaces(token, api_url, in_cluster):
+        return True
+
+    monkeypatch.setattr(
+        "swarmer.api.deps.get_accessible_namespaces", _all_accessible
+    )
+    monkeypatch.setattr(
+        "swarmer.api.v1.workspaces.can_create_namespaces", _can_create_namespaces
+    )
+    monkeypatch.setattr("swarmer.k8s.ensure_namespace", lambda namespace: None)
+    monkeypatch.setattr(
+        "swarmer.k8s.grant_swarmer_user_access", lambda namespace, username: None
+    )
+    monkeypatch.setattr("swarmer.k8s.delete_namespace", lambda namespace: None)
 
     import swarmer.models  # noqa: F401 — register models on Base.metadata
 
@@ -62,16 +79,21 @@ async def _setup_db():
     settings.k8s_namespace = orig_ns
 
 
+def _override_get_bearer_token():
+    return "test-token"
+
+
 @pytest_asyncio.fixture
 async def client():
     """Provide an httpx AsyncClient wired to the FastAPI app with overrides."""
-    from swarmer.api.deps import get_current_user, require_api_auth
+    from swarmer.api.deps import get_bearer_token, get_current_user, require_api_auth
     from swarmer.database import get_db
     from swarmer.main import app
 
     app.dependency_overrides[get_db] = _override_get_db
     app.dependency_overrides[require_api_auth] = _override_require_api_auth
     app.dependency_overrides[get_current_user] = _override_get_current_user
+    app.dependency_overrides[get_bearer_token] = _override_get_bearer_token
 
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
@@ -165,6 +187,66 @@ class TestWorkspaces:
             json={"display_name": "---", "description": ""},
         )
         assert resp.status_code == 422
+
+
+class TestWorkspaceRbac:
+    @pytest.mark.asyncio
+    async def test_list_workspaces_filters_by_namespace_access(self, client, monkeypatch):
+        await _create_workspace(client, "Allowed")
+        await _create_workspace(client, "Denied")
+
+        async def _partial_access(token, namespaces, api_url, in_cluster):
+            return [ns for ns in namespaces if ns != "denied"]
+
+        monkeypatch.setattr(
+            "swarmer.api.deps.get_accessible_namespaces", _partial_access
+        )
+
+        resp = await client.get("/api/v1/workspaces")
+        assert resp.status_code == 200
+        names = {ws["display_name"] for ws in resp.json()}
+        assert names == {"Allowed"}
+
+    @pytest.mark.asyncio
+    async def test_get_workspace_denied_returns_404(self, client, monkeypatch):
+        ws = await _create_workspace(client, "Secret")
+
+        async def _no_access(token, namespaces, api_url, in_cluster):
+            return []
+
+        monkeypatch.setattr("swarmer.api.deps.get_accessible_namespaces", _no_access)
+
+        resp = await client.get(f"/api/v1/workspaces/{ws['id']}")
+        assert resp.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_create_workspace_requires_namespace_create(self, client, monkeypatch):
+        async def _deny_create(token, api_url, in_cluster):
+            return False
+
+        monkeypatch.setattr(
+            "swarmer.api.v1.workspaces.can_create_namespaces", _deny_create
+        )
+
+        resp = await client.post(
+            "/api/v1/workspaces",
+            json={"display_name": "Blocked", "description": ""},
+        )
+        assert resp.status_code == 403
+
+    @pytest.mark.asyncio
+    async def test_create_workspace_disabled_in_namespace_scoped_mode(self, client):
+        from swarmer.config import settings
+
+        settings.k8s_namespace = "shared-ns"
+        try:
+            resp = await client.post(
+                "/api/v1/workspaces",
+                json={"display_name": "Blocked", "description": ""},
+            )
+            assert resp.status_code == 403
+        finally:
+            settings.k8s_namespace = ""
 
 
 # ===========================================================================

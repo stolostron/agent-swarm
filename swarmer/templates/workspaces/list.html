@@ -2,9 +2,11 @@
 {% block title %}Workspaces — Swarmer{% endblock %}
 
 {% block content %}
+{% if can_create_workspaces %}
 <div style="display:flex; justify-content:flex-end; margin-bottom:var(--pf-t--global--spacer--md);">
   <a href="/workspaces/new" class="pf-v6-c-button pf-m-primary pf-m-small">+ New Workspace</a>
 </div>
+{% endif %}
 
 {% if workspaces %}
 <table class="pf-v6-c-table pf-m-grid-md" role="grid">
@@ -52,11 +54,17 @@
   <div class="pf-v6-c-empty-state__content">
     <h2 class="pf-v6-c-empty-state__title-text">No workspaces yet</h2>
     <div class="pf-v6-c-empty-state__body">
+      {% if can_create_workspaces %}
       Create a workspace to get started. Each workspace maps to a Kubernetes namespace.
+      {% else %}
+      You do not have access to any workspaces yet. Ask an administrator to grant access.
+      {% endif %}
     </div>
+    {% if can_create_workspaces %}
     <div class="pf-v6-c-empty-state__actions">
       <a href="/workspaces/new" class="pf-v6-c-button pf-m-primary">Create your first workspace</a>
     </div>
+    {% endif %}
   </div>
 </div>
 {% endif %}

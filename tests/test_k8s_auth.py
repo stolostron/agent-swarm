@@ -16,7 +16,13 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from swarmer.k8s_auth import TokenIdentity, _username_from_jwt, validate_token
+from swarmer.k8s_auth import (
+    TokenIdentity,
+    _namespace_grants_workspace_access,
+    _username_from_jwt,
+    get_accessible_namespaces,
+    validate_token,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -175,3 +181,45 @@ class TestValidateTokenFallback:
         assert result.username == "system:serviceaccount:swarmer:alice"
         assert result.uid == "uid-123"
         assert "system:serviceaccounts" in result.groups
+
+
+# ---------------------------------------------------------------------------
+# Workspace namespace access (RoleBinding vs cluster-scoped)
+# ---------------------------------------------------------------------------
+
+
+class TestNamespaceGrantsWorkspaceAccess:
+    def test_rolebinding_access_via_pods_list(self, monkeypatch):
+        def _allowed(token, api_url, in_cluster, *, verb, resource, namespace="", name=""):
+            return resource == "pods" and verb == "list" and namespace == "team-a"
+
+        monkeypatch.setattr("swarmer.k8s_auth._self_subject_allowed", _allowed)
+        assert _namespace_grants_workspace_access("token", "team-a", "https://k8s", False)
+
+    def test_admin_access_via_cluster_namespace_get(self, monkeypatch):
+        def _allowed(token, api_url, in_cluster, *, verb, resource, namespace="", name=""):
+            return resource == "namespaces" and verb == "get" and name == "team-a"
+
+        monkeypatch.setattr("swarmer.k8s_auth._self_subject_allowed", _allowed)
+        assert _namespace_grants_workspace_access("token", "team-a", "https://k8s", False)
+
+    def test_denied_when_neither_check_passes(self, monkeypatch):
+        monkeypatch.setattr(
+            "swarmer.k8s_auth._self_subject_allowed", lambda *a, **k: False
+        )
+        assert not _namespace_grants_workspace_access("token", "team-a", "https://k8s", False)
+
+    @pytest.mark.asyncio
+    async def test_get_accessible_namespaces_filters_by_ssar(self, monkeypatch):
+        allowed = {"team-a", "team-c"}
+
+        def _allowed(token, ns, api_url, in_cluster):
+            return ns in allowed
+
+        monkeypatch.setattr(
+            "swarmer.k8s_auth._namespace_grants_workspace_access", _allowed
+        )
+        result = await get_accessible_namespaces(
+            "token", ["team-a", "team-b", "team-c"], "https://k8s", False
+        )
+        assert result == ["team-a", "team-c"]

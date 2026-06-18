@@ -5,11 +5,14 @@ All functions use the official kubernetes-client Python library.
 from __future__ import annotations
 
 import base64
+import hashlib
 import logging
 import time
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from kubernetes.client import RbacV1Subject
+
     from swarmer.models.github_app import GitHubApp
 
 log = logging.getLogger(__name__)
@@ -91,6 +94,62 @@ def ensure_namespace(namespace: str) -> None:
     _grant_anyuid_scc(namespace)
 
 
+SWARMER_USER_CLUSTER_ROLE = "swarmer-user"
+
+
+def _rbac_subject(identity_username: str) -> RbacV1Subject:
+    """Build a RoleBinding subject for a K8s User or ServiceAccount identity."""
+    from kubernetes import client
+
+    prefix = "system:serviceaccount:"
+    if identity_username.startswith(prefix):
+        sa_ns, sa_name = identity_username[len(prefix):].split(":", 1)
+        return client.RbacV1Subject(
+            kind="ServiceAccount",
+            name=sa_name,
+            namespace=sa_ns,
+        )
+    return client.RbacV1Subject(kind="User", name=identity_username)
+
+
+def _swarmer_user_role_binding_name(identity_username: str) -> str:
+    """Return a stable, unique RoleBinding name for *identity_username*."""
+    import re
+
+    safe = re.sub(r"[^a-z0-9-]", "-", identity_username.lower()).strip("-")[:40]
+    suffix = hashlib.sha256(identity_username.encode()).hexdigest()[:8]
+    return f"swarmer-user-{safe or 'user'}-{suffix}"
+
+
+def grant_swarmer_user_access(namespace: str, identity_username: str) -> None:
+    """Grant swarmer-user ClusterRole in *namespace* to *identity_username*."""
+    from kubernetes import client
+
+    rb_name = _swarmer_user_role_binding_name(identity_username)
+
+    rbac = client.RbacAuthorizationV1Api()
+    rb = client.V1RoleBinding(
+        metadata=client.V1ObjectMeta(name=rb_name, namespace=namespace),
+        role_ref=client.V1RoleRef(
+            api_group="rbac.authorization.k8s.io",
+            kind="ClusterRole",
+            name=SWARMER_USER_CLUSTER_ROLE,
+        ),
+        subjects=[_rbac_subject(identity_username)],
+    )
+    try:
+        rbac.create_namespaced_role_binding(namespace, rb)
+    except client.exceptions.ApiException as exc:
+        if exc.status == 409:
+            return
+        log.warning(
+            "Failed to grant swarmer-user in %s: status=%s reason=%s",
+            namespace,
+            exc.status,
+            exc.reason,
+        )
+
+
 def _grant_anyuid_scc(namespace: str) -> None:
     """Grant the OpenShift anyuid SCC to the default SA in *namespace*.
 
@@ -123,7 +182,12 @@ def _grant_anyuid_scc(namespace: str) -> None:
             # anyuid ClusterRole absent — not OpenShift, skip silently
             log.debug("anyuid SCC grant skipped for %s (not OpenShift)", namespace)
         elif exc.status == 403:
-            log.warning("anyuid SCC grant forbidden for %s: %s", namespace, exc.body)
+            log.warning(
+                "anyuid SCC grant forbidden for %s: status=%s reason=%s",
+                namespace,
+                exc.status,
+                exc.reason,
+            )
         else:
             raise
 

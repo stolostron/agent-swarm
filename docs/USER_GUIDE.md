@@ -448,7 +448,7 @@ Each workspace maps 1:1 to a Kubernetes namespace. When `K8S_NAMESPACE` is set (
 - **Rename** — updates the display name (does not rename the K8s namespace)
 - **Delete** — removes the workspace from the database
 
-All resources (sessions, secrets, repos, MCP servers) are scoped to a workspace. Users only see workspaces whose K8s namespaces they have RBAC access to (checked via `get_accessible_namespaces()`).
+All resources (sessions, secrets, repos, MCP servers) are scoped to a workspace. Users only see workspaces whose K8s namespaces they have RBAC access to (checked via `get_accessible_namespaces()` using SelfSubjectAccessReview for pods `list` in the namespace, matching namespace-scoped `swarmer-user` RoleBindings).
 
 ### Secrets & Credentials
 

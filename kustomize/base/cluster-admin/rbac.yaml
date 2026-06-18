@@ -53,15 +53,13 @@ subjects:
 ---
 # Minimal ClusterRole for swarmer dashboard users.
 # Bind via RoleBinding in workspace namespaces to grant user visibility.
+# Only namespaced rules apply: pods get/list in that namespace.
 # Use: make grant-workspace SA_USER=<name> WORKSPACE_NS=<namespace>
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
   name: swarmer-user
 rules:
-  - apiGroups: [""]
-    resources: ["namespaces"]
-    verbs: ["get"]
   - apiGroups: [""]
     resources: ["pods"]
     verbs: ["get", "list"]
