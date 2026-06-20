@@ -131,8 +131,8 @@ async def _check_and_launch(db=None) -> None:
                 session.id, session.name, session.cron_next_run,
             )
             try:
-                from swarmer.routers.sessions import _do_launch
-                await _do_launch(session, ws, db)
+                from swarmer.routers.sessions import _do_launch, _session_launch_user_id
+                await _do_launch(session, ws, db, user_id=_session_launch_user_id(session))
 
                 session.cron_next_run = croniter(
                     session.cron_schedule, datetime.utcnow()
@@ -174,7 +174,7 @@ async def _process_queue(db) -> None:
         return  # unlimited — nothing should be queued
 
     from swarmer.models.session import Session
-    from swarmer.routers.sessions import _count_running_sessions, _do_launch
+    from swarmer.routers.sessions import _count_running_sessions, _do_launch, _session_launch_user_id
 
     running = await _count_running_sessions(db)
     available = settings.max_concurrent_agents - running
@@ -209,7 +209,7 @@ async def _process_queue(db) -> None:
             continue
         session.phase = "idle"  # reset so _do_launch gate sees accurate count
         try:
-            await _do_launch(session, ws, db)
+            await _do_launch(session, ws, db, user_id=_session_launch_user_id(session))
             log.info("queue: launched session %d (%s), phase=%s", session.id, session.name, session.phase)
         except Exception:
             log.exception("queue: failed to launch session %d", session.id)

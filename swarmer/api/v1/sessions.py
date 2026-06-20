@@ -95,6 +95,7 @@ async def create_session(
     body: SessionCreate,
     ws: Workspace = Depends(get_workspace_or_404),
     db: AsyncSession = Depends(get_db),
+    user: str = Depends(get_current_user),
 ):
     if body.mode not in ("tui", "server", "prompt"):
         raise HTTPException(status_code=422, detail="Invalid mode")
@@ -119,6 +120,7 @@ async def create_session(
         instruction_prompt=body.instruction_prompt.strip(),
         agent_tool=agent_tool,
         working_branch=wb,
+        owner_user_id=user,
     )
     if body.mcp_server_ids:
         session.enabled_mcp_ids = body.mcp_server_ids
@@ -422,6 +424,7 @@ async def schedule_session(
     body: ScheduleRequest,
     ws: Workspace = Depends(get_workspace_or_404),
     db: AsyncSession = Depends(get_db),
+    user: str = Depends(get_current_user),
 ):
     from croniter import croniter
 
@@ -434,6 +437,7 @@ async def schedule_session(
 
     session.cron_schedule = body.cron_expr
     session.cron_next_run = croniter(body.cron_expr, datetime.now(timezone.utc)).get_next(datetime)
+    session.owner_user_id = user
     await db.commit()
     await db.refresh(session)
     return session

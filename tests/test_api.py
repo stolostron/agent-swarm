@@ -526,6 +526,91 @@ class TestSecrets:
         assert bad.status_code == 422
 
     @pytest.mark.asyncio
+    async def test_resolve_opencode_secret_multiple_per_workspace(self):
+        from swarmer.models.opencode_secret import OpencodeSecret
+        from swarmer.models.workspace import Workspace
+        from swarmer.routers.sessions import _get_model_options, _resolve_opencode_secret
+
+        adc = json.dumps({"type": "authorized_user", "client_id": "x"})
+        async with _TestSession() as db:
+            ws = Workspace(display_name="w", namespace="multi-cred-ns")
+            db.add(ws)
+            await db.flush()
+            admin = OpencodeSecret(
+                workspace_id=ws.id,
+                user_id="kube:admin",
+                google_cloud_project="admin-proj",
+                vertex_location="us-east5",
+            )
+            admin.google_api_key = "test-gemini-key"
+            user = OpencodeSecret(
+                workspace_id=ws.id,
+                user_id="alice",
+                google_cloud_project="alice-proj",
+                vertex_location="us-east5",
+            )
+            user.application_default_credentials = adc
+            db.add_all([admin, user])
+            await db.commit()
+
+            assert (await _resolve_opencode_secret(ws.id, db, "alice")).user_id == "alice"
+            assert (await _resolve_opencode_secret(ws.id, db, "kube:admin")).user_id == "kube:admin"
+            alice_opts = await _get_model_options(ws.id, db, user_id="alice")
+            admin_opts = await _get_model_options(ws.id, db, user_id="kube:admin")
+            assert {o["group"] for o in alice_opts} == {"Claude (Vertex)"}
+            assert {o["group"] for o in admin_opts} == {"Gemini"}
+            assert alice_opts != admin_opts
+
+    @pytest.mark.asyncio
+    async def test_resolve_opencode_secret_scheduler_prefers_shared(self):
+        from swarmer.models.opencode_secret import OpencodeSecret
+        from swarmer.models.workspace import Workspace
+        from swarmer.routers.sessions import _resolve_opencode_secret
+
+        adc = json.dumps({"type": "authorized_user", "client_id": "x"})
+        async with _TestSession() as db:
+            ws = Workspace(display_name="w", namespace="shared-cred-ns")
+            db.add(ws)
+            await db.flush()
+            private = OpencodeSecret(
+                workspace_id=ws.id,
+                user_id="kube:admin",
+                google_cloud_project="admin-proj",
+                vertex_location="us-east5",
+            )
+            private.application_default_credentials = adc
+            shared = OpencodeSecret(
+                workspace_id=ws.id,
+                user_id="alice",
+                shared=True,
+                google_cloud_project="shared-proj",
+                vertex_location="us-east5",
+            )
+            shared.application_default_credentials = adc
+            db.add_all([private, shared])
+            await db.commit()
+
+            resolved = await _resolve_opencode_secret(ws.id, db, user_id="")
+            assert resolved.user_id == "alice"
+            assert resolved.shared is True
+
+    @pytest.mark.asyncio
+    async def test_schedule_sets_owner_user_id(self, client):
+        ws = await _create_workspace(client)
+        session = await _create_session(client, ws["id"], "owned-session")
+        resp = await client.post(
+            f"/api/v1/workspaces/{ws['id']}/sessions/{session['id']}/schedule",
+            json={"cron_expr": "0 * * * *"},
+        )
+        assert resp.status_code == 200
+
+        async with _TestSession() as db:
+            from swarmer.models.session import Session
+            row = await db.get(Session, session["id"])
+            assert row is not None
+            assert row.owner_user_id == "test-user"
+
+    @pytest.mark.asyncio
     async def test_pat_crud(self, client):
         ws = await _create_workspace(client)
 

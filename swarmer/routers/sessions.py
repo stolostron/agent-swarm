@@ -51,15 +51,60 @@ def _is_valid_ref_name(name: str) -> bool:
     return _INVALID_REF_RE.search(name) is None
 
 
+async def _resolve_opencode_secret(
+    ws_id: int, db: AsyncSession, user_id: str = ""
+) -> OpencodeSecret | None:
+    """Return credentials for *user_id*, falling back to shared/legacy rows."""
+    filters = [OpencodeSecret.workspace_id == ws_id]
+    if user_id:
+        filters.append(
+            or_(
+                OpencodeSecret.user_id == user_id,
+                OpencodeSecret.shared == True,  # noqa: E712
+                OpencodeSecret.user_id == "",
+            )
+        )
+    result = await db.execute(select(OpencodeSecret).where(*filters))
+    all_secrets = result.scalars().all()
+    if not all_secrets:
+        return None
+    if user_id:
+        for secret in all_secrets:
+            if secret.user_id == user_id:
+                return secret
+        return all_secrets[0]
+    # Background scheduler fallback when owner_user_id is unset (legacy sessions):
+    # prefer shared credentials, then legacy unowned rows.
+    for secret in all_secrets:
+        if secret.shared:
+            return secret
+    for secret in all_secrets:
+        if not secret.user_id:
+            return secret
+    return all_secrets[0]
+
+
+def _session_launch_user_id(session: Session) -> str:
+    """Return the K8s username whose credentials should be used for *session*."""
+    return session.owner_user_id or ""
+
+
+def _redact_user_id_for_log(user_id: str) -> str:
+    """Return a log-safe representation of a K8s username."""
+    if not user_id:
+        return "(scheduler)"
+    return "REDACTED"
+
+
 async def _get_model_options(
-    ws_id: int, db: AsyncSession, agent_tool: str = "opencode"
+    ws_id: int,
+    db: AsyncSession,
+    agent_tool: str = "opencode",
+    user_id: str = "",
 ) -> list[dict]:
     """Return the available model choices for this workspace's sessions."""
     tool = get_tool(agent_tool)
-    result = await db.execute(
-        select(OpencodeSecret).where(OpencodeSecret.workspace_id == ws_id)
-    )
-    oc = result.scalar_one_or_none()
+    oc = await _resolve_opencode_secret(ws_id, db, user_id)
     return tool.get_model_options(oc)
 
 router = APIRouter()
@@ -120,7 +165,9 @@ async def model_options_partial(
     selected_model: str = "",
     db: AsyncSession = Depends(get_db),
 ):
-    model_options = await _get_model_options(ws_id, db, agent_tool)
+    model_options = await _get_model_options(
+        ws_id, db, agent_tool, user_id=_current_user(request)
+    )
     return templates.TemplateResponse(
         request,
         "sessions/_model_select.html",
@@ -253,7 +300,9 @@ async def session_new(
         default_agent_tool = get_tool(settings.default_agent_tool).name
     except ValueError:
         default_agent_tool = "opencode"
-    model_options = await _get_model_options(ws_id, db, default_agent_tool)
+    model_options = await _get_model_options(
+        ws_id, db, default_agent_tool, user_id=_current_user(request)
+    )
     _avail = await asyncio.gather(
         *[k8s.get_image_available(t.get_image(), ws.k8s_namespace) for t in _tools]
     )
@@ -330,7 +379,9 @@ async def session_create(
         agent_tool = "opencode"
 
     if not model.strip():
-        opts = await _get_model_options(ws_id, db, agent_tool)
+        opts = await _get_model_options(
+            ws_id, db, agent_tool, user_id=_current_user(request)
+        )
         model = opts[0]["value"] if opts else ""
 
     wb = working_branch.strip()
@@ -349,6 +400,7 @@ async def session_create(
         instruction_prompt=instruction_prompt.strip(),
         agent_tool=agent_tool,
         working_branch=wb,
+        owner_user_id=_current_user(request),
     )
     # Gather MCP server checkbox selections from the multi-value form field
     form_data = await request.form()
@@ -373,7 +425,9 @@ async def session_create(
             default_agent_tool = get_tool(settings.default_agent_tool).name
         except ValueError:
             default_agent_tool = "opencode"
-        model_options = await _get_model_options(ws_id, db, default_agent_tool)
+        model_options = await _get_model_options(
+            ws_id, db, default_agent_tool, user_id=_current_user(request)
+        )
         _avail = await asyncio.gather(
             *[k8s.get_image_available(t.get_image(), ws.k8s_namespace) for t in _tools]
         )
@@ -438,7 +492,9 @@ async def session_detail(
         tokens.append(tui_token)
         request.session["tui_tokens"] = tokens
 
-    model_options = await _get_model_options(ws_id, db, session.agent_tool)
+    model_options = await _get_model_options(
+        ws_id, db, session.agent_tool, user_id=_current_user(request)
+    )
     pat_token = session.github_pat.pat if session.github_pat else None
     repo_info = await _fetch_repo_info(session.repos, pat_token)
 
@@ -700,28 +756,18 @@ async def _do_launch(session: Session, ws: Workspace, db: AsyncSession, user_id:
     from swarmer import k8s as _k8s
     await asyncio.to_thread(_k8s._grant_anyuid_scc, ws.k8s_namespace)
 
-    from swarmer.models.opencode_secret import OpencodeSecret
-    _user_filter = [OpencodeSecret.workspace_id == session.workspace_id]
-    if user_id:
-        _user_filter.append(
-            or_(
-                OpencodeSecret.user_id == user_id,
-                OpencodeSecret.shared == True,  # noqa: E712
-                OpencodeSecret.user_id == "",
-            )
+    oc_secret = await _resolve_opencode_secret(session.workspace_id, db, user_id)
+    if not oc_secret or not oc_secret.has_adc:
+        oc_secret_user = oc_secret.user_id if oc_secret else ""
+        log.warning(
+            "session %d launch for user %s: no Vertex ADC credentials "
+            "(oc_secret=%s, has_adc=%s, cron=%s)",
+            session.id,
+            _redact_user_id_for_log(user_id),
+            _redact_user_id_for_log(oc_secret_user) if oc_secret_user else None,
+            oc_secret.has_adc if oc_secret else False,
+            bool(session.cron_schedule),
         )
-    oc_result = await db.execute(
-        select(OpencodeSecret).where(*_user_filter)
-    )
-    _oc_all = oc_result.scalars().all()
-    oc_secret = None
-    if user_id:
-        for s in _oc_all:
-            if s.user_id == user_id:
-                oc_secret = s
-                break
-    if oc_secret is None and _oc_all:
-        oc_secret = _oc_all[0]
     has_adc = oc_secret.has_adc if oc_secret else False
     has_gemini = bool(oc_secret and oc_secret.google_api_key_enc)
 
@@ -1078,6 +1124,7 @@ async def session_schedule(
 
     session.cron_schedule = cron_expr
     session.cron_next_run = croniter(cron_expr, datetime.utcnow()).get_next(datetime)
+    session.owner_user_id = _current_user(request)
     await db.commit()
 
     flash(request, f"Schedule set: {session.cron_label or cron_expr}. Next run: {session.cron_next_run.strftime('%b %d %H:%M UTC')}", "success")
@@ -1507,10 +1554,7 @@ async def _build_commit_msg(patch: str, workspace_id: int, db: AsyncSession) -> 
     """Use an LLM to generate a commit message from the diff."""
     truncated = patch[:8000] if len(patch) > 8000 else patch
 
-    oc_result = await db.execute(
-        select(OpencodeSecret).where(OpencodeSecret.workspace_id == workspace_id)
-    )
-    oc = oc_result.scalar_one_or_none()
+    oc = await _resolve_opencode_secret(workspace_id, db)
     if not oc:
         return _fallback_commit_msg(patch)
 

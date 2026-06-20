@@ -65,6 +65,9 @@ class Session(Base):
     patch_base_ref: Mapped[str] = mapped_column(String(255), nullable=False, default="", server_default="")
     cron_schedule: Mapped[str] = mapped_column(String(128), nullable=False, default="", server_default="")
     cron_next_run: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # K8s username of the user who created or scheduled the session; used by the
+    # background scheduler to resolve per-user credentials and MCP tokens.
+    owner_user_id: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
     mcp_server_ids: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
     # Comma-separated list of K8s Secret names created for this session (for cleanup)
     k8s_secret_names: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")

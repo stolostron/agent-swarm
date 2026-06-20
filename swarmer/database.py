@@ -64,6 +64,7 @@ async def migrate_db() -> None:
         "ALTER TABLE mcp_servers ADD COLUMN shared BOOLEAN NOT NULL DEFAULT 1",
         "ALTER TABLE sessions ADD COLUMN prompt_id INTEGER REFERENCES workspace_prompts(id) ON DELETE SET NULL",
         "ALTER TABLE sessions DROP COLUMN resume",
+        "ALTER TABLE sessions ADD COLUMN owner_user_id TEXT NOT NULL DEFAULT ''",
     ]
     async with _engine.begin() as conn:
         for stmt in migrations:
