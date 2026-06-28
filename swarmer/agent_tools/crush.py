@@ -33,6 +33,14 @@ class CrushStrategy(AgentToolStrategy):
         return "Crush"
 
     def get_image(self) -> str:
+        return settings.agent_image_crush
+
+    def require_image(self) -> str:
+        """Return the image, raising ValueError if AGENT_IMAGE_CRUSH is not configured.
+
+        Call this at launch time (not at list/render time) so that missing config
+        fails fast only when an actual launch is attempted, not on every page render.
+        """
         if not settings.agent_image_crush:
             raise ValueError(
                 "AGENT_IMAGE_CRUSH is not set. "

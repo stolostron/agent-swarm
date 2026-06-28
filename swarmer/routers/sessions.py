@@ -1219,6 +1219,14 @@ async def _do_launch_openshell(
     resolved_prompt_safe = resolved_prompt or ""
     model_setup_cmd = tool.build_model_setup_cmd(model).replace("/workspace/", "/sandbox/")
     share_cmd = tool.build_share_setup_cmd().replace("/workspace/", "/sandbox/")
+    # Resolve image early so a missing config (e.g. AGENT_IMAGE_CRUSH not set) fails
+    # before we mark the session pending and commit — keeps the error visible.
+    image = tool.get_image()
+    if not image:
+        raise ValueError(
+            f"No container image configured for agent tool '{tool.name}'. "
+            f"Set the corresponding AGENT_IMAGE_* environment variable."
+        )
 
     # Mark pending and commit — HTTP handler returns immediately; browser unblocks.
     session.phase = "pending"
@@ -1238,7 +1246,7 @@ async def _do_launch_openshell(
             provider_names=provider_names,
             env_vars=env_vars,
             policy=policy,
-            image=tool.get_image(),
+            image=image,
             tool_name=tool.name,
             model=model,
             model_setup_cmd=model_setup_cmd,
