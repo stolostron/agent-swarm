@@ -121,6 +121,17 @@ async def save_credentials(
             ) from exc
         secret.application_default_credentials = adc
 
+    adc = body.application_default_credentials.strip()
+    if adc:
+        try:
+            json.loads(adc)
+        except json.JSONDecodeError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="application_default_credentials must be valid JSON",
+            ) from exc
+        secret.application_default_credentials = adc
+
     await db.commit()
     await db.refresh(secret)
 

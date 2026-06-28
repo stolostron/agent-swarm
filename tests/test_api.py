@@ -658,6 +658,110 @@ class TestSecrets:
         )
         assert resp.status_code == 409
 
+    @pytest.mark.asyncio
+    async def test_save_github_app_rejects_other_users_private_config(self, client):
+        from swarmer.models.github_app import GitHubApp
+
+        ws = await _create_workspace(client)
+        pem = "-----BEGIN RSA PRIVATE KEY-----\nseed\n-----END RSA PRIVATE KEY-----"
+
+        async with _TestSession() as db:
+            existing = GitHubApp(
+                workspace_id=ws["id"],
+                user_id="other-user",
+                app_id="111",
+                installation_id="222",
+            )
+            existing.private_key = pem
+            db.add(existing)
+            await db.commit()
+
+        resp = await client.put(
+            f"/api/v1/workspaces/{ws['id']}/secrets/github-app",
+            json={
+                "app_id": "999",
+                "installation_id": "888",
+                "private_key": pem,
+            },
+        )
+        assert resp.status_code == 403
+
+    @pytest.mark.asyncio
+    async def test_save_github_app_updates_shared_workspace_record(self, client):
+        """Shared workspace config can be updated without duplicate insert."""
+        from sqlalchemy import func, select
+
+        from swarmer.models.github_app import GitHubApp
+
+        ws = await _create_workspace(client)
+        pem = "-----BEGIN RSA PRIVATE KEY-----\nseed\n-----END RSA PRIVATE KEY-----"
+
+        async with _TestSession() as db:
+            existing = GitHubApp(
+                workspace_id=ws["id"],
+                user_id="other-user",
+                app_id="111",
+                installation_id="222",
+                shared=True,
+            )
+            existing.private_key = pem
+            db.add(existing)
+            await db.commit()
+
+        resp = await client.put(
+            f"/api/v1/workspaces/{ws['id']}/secrets/github-app",
+            json={
+                "app_id": "999",
+                "installation_id": "888",
+                "private_key": pem,
+                "shared": True,
+            },
+        )
+        assert resp.status_code == 200
+        assert resp.json()["app_id"] == "999"
+
+        async with _TestSession() as db:
+            count = await db.scalar(
+                select(func.count())
+                .select_from(GitHubApp)
+                .where(GitHubApp.workspace_id == ws["id"])
+            )
+            assert count == 1
+
+    @pytest.mark.asyncio
+    async def test_get_workspace_github_app_scheduler_finds_private_app(self):
+        """Background launch (empty user_id) must see the workspace GitHub App."""
+        from swarmer.github_app import get_workspace_github_app
+        from swarmer.models.github_app import GitHubApp
+        from swarmer.models.workspace import Workspace
+
+        pem = "-----BEGIN RSA PRIVATE KEY-----\nseed\n-----END RSA PRIVATE KEY-----"
+
+        async with _TestSession() as db:
+            ws = Workspace(display_name="w", namespace="sched-ns")
+            db.add(ws)
+            await db.flush()
+            app = GitHubApp(
+                workspace_id=ws.id,
+                user_id="alice",
+                shared=False,
+                app_id="111",
+                installation_id="222",
+            )
+            app.private_key = pem
+            db.add(app)
+            await db.commit()
+
+            found = await get_workspace_github_app(ws.id, db, user_id="")
+            assert found is not None
+            assert found.user_id == "alice"
+
+            blocked = await get_workspace_github_app(ws.id, db, user_id="bob")
+            assert blocked is None
+
+
+
+
 
 # ===========================================================================
 # Auth tests

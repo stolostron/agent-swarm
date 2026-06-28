@@ -56,3 +56,4 @@ class GitHubApp(Base):
             and self.installation_id.strip()
             and self.private_key_enc
         )
+

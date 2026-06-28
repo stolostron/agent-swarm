@@ -284,6 +284,13 @@
       </button>
     </li>
     {% endif %}
+    {% if session.mode == 'prompt' %}
+    <li class="pf-v6-c-tabs__item" id="tab-history">
+      <button class="pf-v6-c-tabs__link" role="tab" aria-selected="false" aria-controls="panel-history" tabindex="-1" onclick="switchTab('history')">
+        <span class="pf-v6-c-tabs__item-text">History{% if session_runs %} ({{ session_runs | length }}){% endif %}</span>
+      </button>
+    </li>
+    {% endif %}
     {% if session.repos %}
     <li class="pf-v6-c-tabs__item" id="tab-patch">
       <button class="pf-v6-c-tabs__link" role="tab" aria-selected="false" aria-controls="panel-patch" tabindex="-1" onclick="switchTab('patch')">

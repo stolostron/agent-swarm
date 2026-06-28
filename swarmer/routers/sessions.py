@@ -11,7 +11,7 @@ import httpx
 from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
-from sqlalchemy import func, or_, select
+from sqlalchemy import desc, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -584,7 +584,6 @@ async def session_detail(
     session_runs: list = []
     if session.mode == "prompt":
         from swarmer.models.session_run import SessionRun
-        from sqlalchemy import desc
 
         runs_result = await db.execute(
             select(SessionRun)
