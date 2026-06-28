@@ -348,6 +348,9 @@ class TestDoLaunchOpenshell:
             resp = await client.post(
                 f"/api/v1/workspaces/{ws['id']}/sessions/{s['id']}/launch"
             )
+            # Yield to the event loop so the asyncio.create_task() background
+            # task (_setup_openshell_sandbox) runs while patches are still active.
+            await asyncio.sleep(0)
 
         assert resp.status_code == 200
         # create_sandbox is called inside _setup_openshell_sandbox (background task).
@@ -518,6 +521,9 @@ class TestDoLaunchOpenshell:
             await client.post(
                 f"/api/v1/workspaces/{ws['id']}/sessions/{s['id']}/launch"
             )
+            # Yield to the event loop so the asyncio.create_task() background
+            # task (_setup_openshell_sandbox) runs while patches are still active.
+            await asyncio.sleep(0)
 
         # _setup_openshell_sandbox is spawned as an asyncio task for background sandbox creation
         mock_setup.assert_called_once()
@@ -816,6 +822,9 @@ class TestDoLaunchOpenshell:
             await client.post(
                 f"/api/v1/workspaces/{ws['id']}/sessions/{s['id']}/launch"
             )
+            # Yield to the event loop so the asyncio.create_task() background
+            # task (_setup_openshell_sandbox) runs while patches are still active.
+            await asyncio.sleep(0)
 
         jira_calls = [
             c for c in mock_ensure.call_args_list
@@ -877,6 +886,9 @@ class TestDoLaunchOpenshell:
             await client.post(
                 f"/api/v1/workspaces/{ws['id']}/sessions/{s['id']}/launch"
             )
+            # Yield to the event loop so the asyncio.create_task() background
+            # task (_setup_openshell_sandbox) runs while patches are still active.
+            await asyncio.sleep(0)
 
         call_kwargs = mock_sandbox.call_args[1] if mock_sandbox.call_args else {}
         call_args = mock_sandbox.call_args[0] if mock_sandbox.call_args else ()
@@ -940,6 +952,9 @@ class TestDoLaunchOpenshell:
             await client.post(
                 f"/api/v1/workspaces/{ws['id']}/sessions/{s['id']}/launch"
             )
+            # Yield to the event loop so the asyncio.create_task() background
+            # task (_setup_openshell_sandbox) runs while patches are still active.
+            await asyncio.sleep(0)
 
         assert captured_env.get("OPENCODE_CONFIG") == "/sandbox/opencode.json", (
             f"Expected OPENCODE_CONFIG=/sandbox/opencode.json in env_vars, got: {captured_env}"
