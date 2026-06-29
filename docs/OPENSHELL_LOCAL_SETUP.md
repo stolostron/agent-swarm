@@ -86,7 +86,7 @@ python3 scripts/openshell_smoke_test.py
 
 Expected output:
 
-```
+```text
 Connecting to localhost:17670 ...
 Creating sandbox ...
 Created sandbox: <name>

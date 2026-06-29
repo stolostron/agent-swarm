@@ -90,7 +90,7 @@ def session():
     s.id = 42
     s.mode = "tui"
     s.agent_tool = "opencode"
-    s.model = "google-vertex-anthropic/claude-sonnet-4-6"
+    s.model = "google-vertex-anthropic/claude-sonnet-4-6@default"
     s.instruction_prompt = ""
     s.sandbox_name = None
     repo = MagicMock()
@@ -104,17 +104,17 @@ def session():
 @pytest.fixture
 def workspace_secret():
     secret = MagicMock()
-    secret.google_api_key = "gkey-test"
-    secret.anthropic_api_key = "akey-test"
-    secret.google_cloud_project = "my-project"
+    secret.google_api_key = "<test-google-api-key>"
+    secret.anthropic_api_key = "<test-anthropic-api-key>"
+    secret.google_cloud_project = "<test-gcp-project>"
     return secret
 
 
 @pytest.fixture
 def github_pat():
     pat = MagicMock()
-    pat.token = "ghp_testtoken"
-    pat.username = "jpacker"
+    pat.token = "<test-github-pat>"
+    pat.username = "<test-github-user>"
     return pat
 
 
@@ -184,9 +184,9 @@ async def test_create_provider_jira_not_in_env_vars(session, workspace_secret):
     """
     jira_mcp = MagicMock()
     jira_mcp.slug = "atlassian-jira"
-    jira_mcp.jira_server_url = "https://redhat.atlassian.net"
-    jira_mcp.jira_access_token = "tok-test"
-    jira_mcp.jira_email = "test@redhat.com"
+    jira_mcp.jira_server_url = "https://example.atlassian.net"
+    jira_mcp.jira_access_token = "<test-jira-token>"
+    jira_mcp.jira_email = "test@example.com"
     env_vars = await oc.create_provider(
         session=session,
         workspace_secret=workspace_secret,
@@ -233,7 +233,7 @@ async def test_create_provider_empty_when_no_extra_env(session, workspace_secret
 
 @pytest.mark.asyncio
 async def test_create_sandbox_passes_byoc_image(sdk_client):
-    image = "quay.io/jpacker/opencode:latest"
+    image = "your-registry.example.com/opencode:latest"
     with patch.object(oc, "_get_client", return_value=sdk_client), \
          patch.object(oc, "_wait_sandbox_ready", new=AsyncMock()):
         await oc.create_sandbox(image=image, env_vars={}, policy=None)
@@ -248,7 +248,7 @@ async def test_wait_ready_called_after_create(sdk_client):
     with patch.object(oc, "_get_client", return_value=sdk_client), \
          patch.object(oc, "_wait_sandbox_ready", new=AsyncMock()) as mock_ready:
         await oc.create_sandbox(
-            image="quay.io/jpacker/opencode:latest", env_vars={}, policy=None
+            image="your-registry.example.com/opencode:latest", env_vars={}, policy=None
         )
     mock_ready.assert_called_once()
 
@@ -260,7 +260,7 @@ async def test_create_sandbox_does_not_create_pvc(sdk_client):
     with patch.object(oc, "_get_client", return_value=sdk_client), \
          patch.object(oc, "_wait_sandbox_ready", new=AsyncMock()):
         await oc.create_sandbox(
-            image="quay.io/jpacker/opencode:latest", env_vars={}, policy=None
+            image="your-registry.example.com/opencode:latest", env_vars={}, policy=None
         )
 
 

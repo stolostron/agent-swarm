@@ -34,6 +34,7 @@ Exit 0 = all steps passed. Exit 1 = one or more failures.
 import asyncio
 import os
 import sys
+import uuid
 
 sys.path.insert(0, ".")
 
@@ -101,14 +102,14 @@ async def run_jira_smoke_test(model: str) -> bool:
     # Presence-check only — never read the token value itself
     has_token = bool(os.environ.get("JIRA_ACCESS_TOKEN", ""))
 
-    ok = step("JIRA_SERVER_URL set", bool(jira_server_url), jira_server_url)
+    ok = step("JIRA_SERVER_URL set", bool(jira_server_url), "(set)" if jira_server_url else "(missing)")
     if not ok:
         print("  Hint: set -a && source ../jira-mcp-server/.env && set +a")
         return False
     ok = step("JIRA_ACCESS_TOKEN set", has_token, "(present, not logged)")
     if not ok:
         return False
-    ok = step("JIRA_EMAIL set", bool(jira_email), jira_email)
+    ok = step("JIRA_EMAIL set", bool(jira_email), "(set)" if jira_email else "(missing)")
     if not ok:
         return False
 
@@ -140,7 +141,8 @@ async def run_jira_smoke_test(model: str) -> bool:
 
     # ── 3. Gateway provider setup ─────────────────────────────────────────────
     print("\n[3] Gateway provider setup")
-    provider_name = "swarmer-jira-smoke-google"
+    # Use a unique suffix to avoid collisions with parallel smoke test runs
+    provider_name = f"swarmer-jira-smoke-google-{uuid.uuid4().hex[:8]}"
     try:
         await ensure_provider(
             provider_name, "google-ai-studio", {},
@@ -442,8 +444,8 @@ if __name__ == "__main__":
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument(
-        "--model", default="google/gemini-3.5-flash",
-        help="Model string for gateway provider (default: google/gemini-3.5-flash)",
+        "--model", default="google/gemini-2.5-flash@default",
+        help="Model string for gateway provider (default: google/gemini-2.5-flash@default)",
     )
     args = parser.parse_args()
 

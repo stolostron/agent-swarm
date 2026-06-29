@@ -43,6 +43,13 @@ def _mask(text: str) -> str:
     return re.sub(r'"key":"[^"]{8}[^"]*"', '"key":"****"', text)
 
 
+def _redact_secret(value: str) -> str:
+    """Return a redacted representation of a secret value for safe log output."""
+    if not value:
+        return "(empty)"
+    return f"(set, len={len(value)})"
+
+
 async def run_smoke_test(model: str) -> bool:
     from swarmer.crypto import init_crypto
     from swarmer.openshell_client import (
@@ -139,7 +146,7 @@ async def run_smoke_test(model: str) -> bool:
         val = r.stdout.strip()
         is_ref = val.startswith("openshell:resolve:")
         ok = step("GOOGLE_API_KEY is reference token", is_ref,
-                  val[:50] if is_ref else f"got: {val!r}")
+                  val[:50] if is_ref else f"got: {_redact_secret(val)}")
         all_passed = all_passed and ok
     except Exception as exc:
         step("GOOGLE_API_KEY check", False, str(exc))
@@ -435,9 +442,9 @@ async def run_vertex_smoke_test(
     if not step("ADC credentials present", bool(adc_json)):
         print("  Hint: configure Application Default Credentials in the AI Tokens settings page")
         return False
-    if not step("GCP project set", bool(project), project):
+    if not step("GCP project set", bool(project)):
         return False
-    if not step("Vertex location set", bool(location), location):
+    if not step("Vertex location set", bool(location)):
         return False
 
     client = _get_client()
@@ -503,7 +510,10 @@ async def run_vertex_smoke_test(
             print(".", end="", flush=True)
     else:
         print(" timeout")
-        step("Token refreshed", False, "timed out waiting for gcloud_adc_token")
+        prereq_passed = step("Token refreshed", False, "timed out waiting for gcloud_adc_token")
+        if not prereq_passed:
+            _cleanup_provider(client, provider_name, openshell_pb2)
+            return False
 
     # ── 3. Sandbox creation ──────────────────────────────────────────────────
     print("\n[3] Sandbox creation")
@@ -552,7 +562,7 @@ async def run_vertex_smoke_test(
         val = r.stdout.strip()
         is_ref = val.startswith("openshell:resolve:")
         step("GOOGLE_VERTEX_AI_TOKEN injected", is_ref or bool(val),
-             val[:60] if val else "empty")
+             val[:60] if is_ref else _redact_secret(val))
         all_passed = all_passed and (is_ref or bool(val))
     except Exception as exc:
         step("GOOGLE_VERTEX_AI_TOKEN check", False, str(exc))
@@ -593,16 +603,19 @@ async def run_vertex_smoke_test(
         from swarmer.openshell_policy import build_session_network_policies
 
         computed_net = build_session_network_policies(_FakeSession(), [], [], agent_tool, model)
-        step("build_session_network_policies returns non-empty dict",
-             len(computed_net) > 0,
-             f"{len(computed_net)} blocks: {sorted(computed_net.keys())}")
+        ok = step("build_session_network_policies returns non-empty dict",
+                  len(computed_net) > 0,
+                  f"{len(computed_net)} blocks: {sorted(computed_net.keys())}")
+        all_passed = all_passed and ok
         agent_block = computed_net.get("agent_api", {})
         agent_endpoints = [ep.get("host", "") for ep in agent_block.get("endpoints", [])]
         has_vertex = any("aiplatform" in h or "inference.local" in h for h in agent_endpoints)
-        step("agent_api block covers VertexAI/inference.local endpoints", has_vertex,
-             f"endpoints: {agent_endpoints}")
+        ok = step("agent_api block covers VertexAI/inference.local endpoints", has_vertex,
+                  f"endpoints: {agent_endpoints}")
+        all_passed = all_passed and ok
     except Exception as exc:
         step("Network policy validation", False, str(exc)[:80])
+        all_passed = False
 
     # ── 6. Agent run with Claude via VertexAI ────────────────────────────────
     print(f"\n[6] {agent_tool} prompt execution (Claude via VertexAI)")
@@ -952,8 +965,9 @@ async def run_policy_extract(
     try:
         r = xec("curl -sf --max-time 5 https://generativelanguage.googleapis.com/ 2>&1 | head -3; true", timeout=10)
         reachable = r.exit_code == 0 or "HTTP" in r.stdout or "json" in r.stdout.lower() or len(r.stdout) > 0
-        step("generativelanguage.googleapis.com reachable", reachable,
-             r.stdout.strip()[:80] if reachable else r.stderr.strip()[:80])
+        ok = step("generativelanguage.googleapis.com reachable", reachable,
+                  r.stdout.strip()[:80] if reachable else r.stderr.strip()[:80])
+        all_passed = all_passed and ok
     except Exception as exc:
         step("googleapis.com curl", False, str(exc))
         all_passed = False
