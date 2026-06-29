@@ -16,4 +16,3 @@ libpod/tmp/pause.pid
 opencode.json
 .deploy-defaults
 swarmer.db
-error.log
