@@ -91,7 +91,7 @@ agent-swarm/
   - `tui` — persistent: runs `sleep infinity`; user connects via xterm.js WebSocket → OpenShell `exec_interactive()` PTY
 - **Session phases**: `idle` → `pending` → `running` → `succeeded`/`failed`/`stopped`
 - **Cron scheduling** — sessions of any mode can have a cron schedule (`cron_schedule` field). A background asyncio loop (`scheduler.py`) checks every 30s, uses an atomic `UPDATE … RETURNING` to claim due rows (prevents duplicates), sets `session.mode = "prompt"` before calling `_do_launch()` (scheduled runs always execute in prompt mode regardless of the session's configured mode), then calls the shared `_do_launch()` helper in `sessions.py`.
-- **OpencodeSecret** — per-workspace encrypted storage for GCP project, Vertex location, ADC JSON, Google API key, Anthropic API key, OpenAI API key. Stored in SQLite via Fernet encryption. Despite the legacy name, used by both OpenCode and Crush.
+- **OpencodeSecret** — per-workspace encrypted storage for GCP project, Vertex location, ADC JSON, Google API key, Anthropic API key, OpenAI API key. Stored in SQLite via Fernet encryption. Despite the legacy name, used by both OpenCode and Crush. Multiple rows per workspace are tolerated (one per `user_id`); read paths use `.scalars().first()` to avoid `MultipleResultsFound` when users share a workspace. A `UNIQUE (workspace_id, user_id)` constraint prevents future duplicates, with a deduplication migration that keeps the newest row per pair.
 - **GitHubPAT** — per-workspace encrypted GitHub personal access tokens with optional org scope for HTTPS git auth. Injected into OpenShell sandboxes via Gateway credential providers. Acts as fallback when no GitHub App is configured.
 - **GitHubApp** — one GitHub App installation per workspace, storing `app_id`, `installation_id`, and a Fernet-encrypted RSA private key (`private_key_enc`). At session launch, Swarmer mints a short-lived Installation Access Token (IAT) server-side using PyJWT + GitHub's REST API and injects it into the sandbox via the OpenShell Gateway provider — the raw PEM key never enters the sandbox. For TUI and server-mode sessions that may exceed the 1-hour token lifetime, a background asyncio task (`github_auth.start_token_refresh_loop`) re-mints and re-registers the provider every 50 minutes. See [docs/GITHUB_APP_SETUP.md](GITHUB_APP_SETUP.md) for setup steps and required permissions.
 - **McpServer** — per-workspace MCP server configurations with OAuth 2.1 tokens encrypted at rest. Enabled servers are configured in the agent config JSON and credentials injected via Gateway env vars.
@@ -136,7 +136,7 @@ All sensitive fields (PATs, API keys, ADC credentials) are Fernet-encrypted at r
 - **SQLite** via `aiosqlite` + SQLAlchemy 2.x async (`AsyncSession`)
 - Database file: `data/swarmer.db` (created automatically on first run)
 - Schema created via `Base.metadata.create_all` — no Alembic
-- Manual migrations in `database.py:migrate_db()` — uses `ALTER TABLE ... ADD COLUMN` wrapped in try/except (idempotent; only suppresses "duplicate column"/"already exists" errors, all others re-raise)
+- Manual migrations in `database.py:migrate_db()` — uses `ALTER TABLE ... ADD COLUMN` wrapped in try/except (idempotent; only suppresses "duplicate column"/"already exists"/"no such column" errors, all others re-raise). Also supports `CREATE TABLE IF NOT EXISTS`, `CREATE UNIQUE INDEX IF NOT EXISTS`, and data-fixup `DELETE` statements.
 - All models must be imported in `models/__init__.py` for table registration to work
 - SQLite single-writer: K8s Deployment uses `strategy: Recreate` (not RollingUpdate)
 - **`NullPool` for SQLite** — `init_db()` uses `NullPool` instead of the default `QueuePool` for SQLite connections. `aiosqlite` opens a new OS-level connection on every call and does not benefit from connection pooling; `QueuePool`'s default limit of 5+10 connections would be exhausted under concurrent chat proxy load (one DB lookup per proxied asset). `NullPool` creates and closes connections on-demand with no cap, matching `aiosqlite`'s actual behaviour.
@@ -192,6 +192,22 @@ All kubernetes client imports remain lazy (inside functions) to avoid import err
 | `expose_service()` | `async (sandbox_name, service_name, target_port, client?) → str` | Exposes sandbox port via gateway and returns a routable URL |
 | `delete_service()` | `async (sandbox_name, service_name, client?) → None` | Deletes an exposed sandbox service endpoint |
 | `approve_draft_policy_chunks()` | `async (sandbox_name, expected_hosts?, client?) → list[str]` | Approves pending network policy chunks for expected hosts |
+
+### OpenShell Deployment on OpenShift
+
+Sandbox pods require elevated Linux capabilities (`NET_ADMIN`, `SYS_ADMIN`, `SYS_PTRACE`, `SYSLOG`) that OpenShift's default `restricted` and `anyuid` SCCs do not allow. `make deploy` automatically grants the `privileged` SCC to both the `openshell` and `openshell-sandbox` service accounts in the OpenShell namespace when `oc` is present on the path. This is idempotent and a no-op on plain Kubernetes where `oc` is absent.
+
+The gateway itself runs under `anyuid` (non-root is fine for the gateway process); only sandbox pods need `privileged`. Both grants are applied unconditionally after install **and** re-deploy so that they survive namespace recreation.
+
+`make deploy` also sets `server.auth.allowUnauthenticatedUsers=true` in the Helm chart. The gateway requires a JWT bearer token in addition to mTLS; for port-forward setups the `openshell` CLI uses `auth_mode: mtls` and does not auto-mint tokens against a remote cluster's JWT signing key. Since the gateway is only reachable via `localhost:<port>` (kubectl port-forward), mTLS alone provides adequate mutual authentication and the JWT layer is redundant. This setting is safe for the port-forward pattern.
+
+### OpenShell Local Gateway Registration (`make openshell-register`)
+
+`make openshell-register` creates or refreshes the gateway entry in `~/.config/openshell/gateways/`. Key behaviours:
+
+- **Stable port on refresh** — if a `metadata.json` already exists for this cluster context, the existing port is reused verbatim. No re-probing. This prevents drift between `metadata.json` and the port-forward started by `make connect-openshell`, which always reads the port from `metadata.json`.
+- **Port selection for fresh registrations** — starts from `OS_LOCAL_PORT` (default 17671, chosen to avoid the local `openshell-gateway` daemon which binds 17670) and walks up, skipping ports already claimed by other registered gateways or currently bound on localhost.
+- **`make connect-openshell`** reads every `~/.config/openshell/gateways/*/metadata.json`, extracts the port, and starts a `kubectl port-forward` for each — one per registered cluster. Port-forwards run until Ctrl-C; if one exits unexpectedly a `[warn]` is printed.
 
 ### OpenShell Config Settings
 
