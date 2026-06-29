@@ -314,6 +314,19 @@ class TestDoLaunchOpenshell:
                 "swarmer.routers.sessions._wait_vertex_provider_ready",
                 new=AsyncMock(),
             ),
+            # provider_exists is called in _do_launch_openshell to check for the
+            # google-cloud (Vertex ADC) provider. Without this patch it tries to
+            # use the real gRPC client (not available in CI) and raises AttributeError.
+            "provider_exists": patch(
+                "swarmer.openshell_client.provider_exists",
+                new=AsyncMock(return_value=False),
+            ),
+            # get_image() raises ValueError when AGENT_IMAGE_OPENCODE is unset (CI).
+            # Patch at the agent-tool level so all launch paths get a valid image.
+            "get_image": patch(
+                "swarmer.agent_tools.opencode.OpenCodeStrategy.get_image",
+                return_value="quay.io/opencode:test",
+            ),
         }
         return patches
 
@@ -329,6 +342,7 @@ class TestDoLaunchOpenshell:
             patches["delete_sandbox"], patches["build_policy"],
             patches["run_agent"], patches["setup_sandbox"],
             patches["wait_vertex_ready"],
+            patches["provider_exists"], patches["get_image"],
         )
 
     @pytest.mark.asyncio
@@ -344,7 +358,8 @@ class TestDoLaunchOpenshell:
              patches["write_agents_md"], patches["exec_command"], \
              patches["start_agent"], patches["delete_sandbox"], \
              patches["build_policy"], patches["run_agent"], \
-             patches["setup_sandbox"] as mock_setup:
+             patches["setup_sandbox"] as mock_setup, \
+             patches["provider_exists"], patches["get_image"]:
             resp = await client.post(
                 f"/api/v1/workspaces/{ws['id']}/sessions/{s['id']}/launch"
             )
@@ -371,7 +386,8 @@ class TestDoLaunchOpenshell:
              patches["write_agent_config"], \
              patches["write_agents_md"], patches["exec_command"], \
              patches["start_agent"], patches["delete_sandbox"], \
-             patches["build_policy"], patches["run_agent"], patches["setup_sandbox"]:
+             patches["build_policy"], patches["run_agent"], patches["setup_sandbox"], \
+             patches["provider_exists"], patches["get_image"]:
             resp = await client.post(
                 f"/api/v1/workspaces/{ws['id']}/sessions/{s['id']}/launch"
             )
@@ -396,7 +412,8 @@ class TestDoLaunchOpenshell:
              patches["write_agent_config"] as mock_cfg, \
              patches["write_agents_md"], patches["exec_command"], \
              patches["start_agent"], patches["delete_sandbox"], \
-             patches["build_policy"], patches["run_agent"], patches["setup_sandbox"]:
+             patches["build_policy"], patches["run_agent"], patches["setup_sandbox"], \
+             patches["provider_exists"], patches["get_image"]:
             await client.post(
                 f"/api/v1/workspaces/{ws['id']}/sessions/{s['id']}/launch"
             )
@@ -417,7 +434,8 @@ class TestDoLaunchOpenshell:
              patches["write_agent_config"], \
              patches["write_agents_md"], patches["exec_command"], \
              patches["start_agent"], patches["delete_sandbox"], \
-             patches["build_policy"], patches["run_agent"], patches["setup_sandbox"]:
+             patches["build_policy"], patches["run_agent"], patches["setup_sandbox"], \
+             patches["provider_exists"], patches["get_image"]:
             await client.post(
                 f"/api/v1/workspaces/{ws['id']}/sessions/{s['id']}/launch"
             )
@@ -439,7 +457,8 @@ class TestDoLaunchOpenshell:
              patches["write_agent_config"], \
              patches["write_agents_md"] as mock_md, patches["exec_command"], \
              patches["start_agent"], patches["delete_sandbox"], \
-             patches["build_policy"], patches["run_agent"], patches["setup_sandbox"]:
+             patches["build_policy"], patches["run_agent"], patches["setup_sandbox"], \
+             patches["provider_exists"], patches["get_image"]:
             await client.post(
                 f"/api/v1/workspaces/{ws['id']}/sessions/{s['id']}/launch"
             )
@@ -458,7 +477,8 @@ class TestDoLaunchOpenshell:
              patches["write_agent_config"], \
              patches["write_agents_md"], patches["exec_command"], \
              patches["start_agent"], patches["delete_sandbox"], \
-             patches["build_policy"], patches["run_agent"], patches["setup_sandbox"]:
+             patches["build_policy"], patches["run_agent"], patches["setup_sandbox"], \
+             patches["provider_exists"], patches["get_image"]:
             resp = await client.post(
                 f"/api/v1/workspaces/{ws['id']}/sessions/{s['id']}/launch"
             )
@@ -479,7 +499,8 @@ class TestDoLaunchOpenshell:
              patches["write_agent_config"], \
              patches["write_agents_md"], patches["exec_command"], \
              patches["start_agent"], patches["delete_sandbox"], \
-             patches["build_policy"], patches["run_agent"], patches["setup_sandbox"]:
+             patches["build_policy"], patches["run_agent"], patches["setup_sandbox"], \
+             patches["provider_exists"], patches["get_image"]:
             await client.post(
                 f"/api/v1/workspaces/{ws['id']}/sessions/{s['id']}/launch"
             )
@@ -497,7 +518,8 @@ class TestDoLaunchOpenshell:
              patches["write_agent_config"], \
              patches["write_agents_md"], patches["exec_command"], \
              patches["start_agent"], patches["delete_sandbox"], \
-             patches["build_policy"], patches["run_agent"], patches["setup_sandbox"]:
+             patches["build_policy"], patches["run_agent"], patches["setup_sandbox"], \
+             patches["provider_exists"], patches["get_image"]:
             await client.post(
                 f"/api/v1/workspaces/{ws['id']}/sessions/{s['id']}/launch"
             )
@@ -543,7 +565,8 @@ class TestDoLaunchOpenshell:
              patches["write_agent_config"], \
              patches["write_agents_md"], patches["exec_command"], \
              patches["start_agent"], patches["delete_sandbox"], \
-             patches["build_policy"], patches["run_agent"], patches["setup_sandbox"]:
+             patches["build_policy"], patches["run_agent"], patches["setup_sandbox"], \
+             patches["provider_exists"], patches["get_image"]:
             mock_provider.return_value = {}
             await client.post(
                 f"/api/v1/workspaces/{ws['id']}/sessions/{s['id']}/launch"
@@ -580,7 +603,8 @@ class TestDoLaunchOpenshell:
              patches["create_sandbox"] as mock_sandbox, patches["write_agent_config"], \
              patches["write_agents_md"], patches["exec_command"], \
              patches["start_agent"], patches["delete_sandbox"], \
-             patches["build_policy"], patches["run_agent"], patches["setup_sandbox"]:
+             patches["build_policy"], patches["run_agent"], patches["setup_sandbox"], \
+             patches["provider_exists"], patches["get_image"]:
             await client.post(
                 f"/api/v1/workspaces/{ws['id']}/sessions/{s['id']}/launch"
             )
@@ -613,7 +637,8 @@ class TestDoLaunchOpenshell:
              patches["create_sandbox"], patches["write_agent_config"], \
              patches["write_agents_md"], patches["exec_command"], \
              patches["start_agent"], patches["delete_sandbox"], \
-             patches["build_policy"], patches["run_agent"], patches["setup_sandbox"]:
+             patches["build_policy"], patches["run_agent"], patches["setup_sandbox"], \
+             patches["provider_exists"], patches["get_image"]:
             await client.post(
                 f"/api/v1/workspaces/{ws['id']}/sessions/{s['id']}/launch"
             )
@@ -818,7 +843,8 @@ class TestDoLaunchOpenshell:
              patches["write_agents_md"], patches["exec_command"], \
              patches["start_agent"], patches["delete_sandbox"], \
              patches["build_policy"], patches["run_agent"], \
-             patches["setup_sandbox"] as mock_setup:
+             patches["setup_sandbox"] as mock_setup, \
+             patches["provider_exists"], patches["get_image"]:
             await client.post(
                 f"/api/v1/workspaces/{ws['id']}/sessions/{s['id']}/launch"
             )
@@ -881,7 +907,8 @@ class TestDoLaunchOpenshell:
              patches["write_agents_md"], patches["exec_command"], \
              patches["start_agent"], patches["delete_sandbox"], \
              patches["build_policy"] as mock_policy, patches["run_agent"], \
-             patch("swarmer.database.get_db", new=_make_test_db_provider()):
+             patch("swarmer.database.get_db", new=_make_test_db_provider()), \
+             patches["provider_exists"], patches["get_image"]:
             mock_policy.return_value = "version: 1\nnetwork_policies: {}\n"
             await client.post(
                 f"/api/v1/workspaces/{ws['id']}/sessions/{s['id']}/launch"
@@ -916,7 +943,8 @@ class TestDoLaunchOpenshell:
              patches["create_sandbox"], patches["write_agent_config"], \
              patches["write_agents_md"], patches["exec_command"], \
              patches["start_agent"], patches["delete_sandbox"], patches["build_policy"], \
-             patches["run_agent"], patches["setup_sandbox"]:
+             patches["run_agent"], patches["setup_sandbox"], \
+             patches["provider_exists"], patches["get_image"]:
             await client.post(f"/api/v1/workspaces/{ws['id']}/sessions/{s['id']}/launch")
 
         session_resp = await client.get(f"/api/v1/workspaces/{ws['id']}/sessions/{s['id']}")
@@ -942,7 +970,8 @@ class TestDoLaunchOpenshell:
              patches["attach_sandbox_provider"], patches["create_sandbox"], \
              patches["write_agent_config"], patches["write_agents_md"], \
              patches["exec_command"], patches["start_agent"], patches["delete_sandbox"], \
-             patches["build_policy"], patches["run_agent"], patches["setup_sandbox"] as mock_setup:
+             patches["build_policy"], patches["run_agent"], patches["setup_sandbox"] as mock_setup, \
+             patches["provider_exists"], patches["get_image"]:
             mock_provider.return_value = {}
 
             def _capture_setup(**kwargs):
