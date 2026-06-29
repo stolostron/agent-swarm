@@ -11,7 +11,8 @@ Matches the upstream `make openshift-deploy` flow. Requires **cluster-admin** pr
 - Creates its own `swarmer` namespace
 - ClusterRole + ClusterRoleBinding for cross-namespace workspace management
 - OAuthClient for "Sign in with OpenShift" button
-- `swarmer-user` ClusterRole for workspace access grants (`make grant-workspace`)
+- `swarmer-user` ClusterRole for workspace access grants (`make grant-workspace-access`)
+- `swarmer-workspace-creator` ClusterRole for workspace creation grants (`make grant-workspace-create`)
 - Each workspace gets its own Kubernetes namespace
 
 Best for: dedicated clusters, production deployments, multi-tenant setups.
@@ -37,7 +38,7 @@ Best for: shared clusters, ephemeral environments, CI/CD, environments without c
 | **Workspace isolation** | One namespace per workspace | All workspaces share one namespace |
 | **Auth** | OpenShift OAuth + bearer token | Bearer token only |
 | **OAuthClient** | Included | Not included |
-| **User management** | `make user-token` / `make grant-workspace` | Use your existing cluster credentials |
+| **User management** | `make user-token` / `make grant-workspace-access` / `make grant-workspace-create` | Use your existing cluster credentials |
 
 ## Prerequisites
 
@@ -84,8 +85,9 @@ Dashboard: `https://<route-host>`
 ### User onboarding
 
 ```sh
-make user-token SA_USER=alice                          # create user + print token
-make grant-workspace SA_USER=alice WORKSPACE_NS=team-a # grant workspace access
+make user-token SA_USER=alice                                  # create user + print token
+make grant-workspace-access SA_USER=alice WORKSPACE_NS=team-a  # grant workspace access
+make grant-workspace-create SA_USER=alice                      # allow self-service workspace creation (optional)
 ```
 
 ## Deploying with namespace-scoped (no cluster-admin)
@@ -142,4 +144,4 @@ The Kustomize deployment is functionally equivalent to `make openshift-deploy` /
 - **Declarative** — all configuration is in YAML files, not shell variable substitution
 - **No Makefile required** — deploy with `oc apply -k` alone
 - **Overlay pattern** — environment-specific values (namespace, image, env vars) are separated from the base manifests
-- **User onboarding** — `make user-token` and `make grant-workspace` still work alongside Kustomize deployments (they operate on the running cluster, not the manifests)
+- **User onboarding** — `make user-token`, `make grant-workspace-access`, and `make grant-workspace-create` still work alongside Kustomize deployments (they operate on the running cluster, not the manifests)

@@ -16,35 +16,35 @@ Step-by-step guide to running Swarmer with a live OpenShell sandbox backend on a
 
 ## Quick Start
 
-### 1. Create the kind cluster
+### 1. Deploy Swarmer + OpenShell into kind
 
 ```sh
-make kind-create
+make setup-secret   # only needed once — generates auth/secret.key
+make kind-deploy
 ```
 
-Creates a `swarmer` kind cluster with a NodePort mapping (30080 → 8080). Make sure `kubectl` context is set to `kind-swarmer` afterwards — run `kind export kubeconfig --name swarmer` if needed.
-
-### 2. Install OpenShell
-
-```sh
-make openshell-setup
-```
-
-This:
+`make kind-deploy` creates the kind cluster (idempotent), builds and loads the swarmer image, then runs `make deploy` which auto-detects OpenShell and installs it if not present:
 1. Installs the Kubernetes Agent Sandbox CRDs at `AGENT_SANDBOX_VERSION` (pinned to v0.4.6 — **do not upgrade to v0.5.0+** until the OpenShell gateway supports v1beta1 ownerReferences; see gotchas below)
-2. Runs `helm upgrade --install` from `oci://ghcr.io/nvidia/openshell/helm-chart` (version from `OPENSHELL_VERSION` in Makefile) into the `openshell` namespace with `allowUnauthenticatedUsers=true` (safe for local kind dev — mTLS still protects the channel)
+2. Runs `helm upgrade --install` from `oci://ghcr.io/nvidia/openshell/helm-chart` (version from `OPENSHELL_VERSION` in Makefile) into the `openshell` namespace
 3. Waits for the gateway pod to be ready
 4. Extracts mTLS client certs to `auth/openshell/`
+5. Deploys Swarmer to the cluster
 
 Verify with:
 
 ```sh
-make openshell-status
+make status
 ```
 
 ### 3. Port-forward the OpenShell gateway
 
 In a separate terminal (keep it running):
+
+```sh
+make connect-openshell
+```
+
+Or manually:
 
 ```sh
 kubectl port-forward -n openshell svc/openshell 17670:8080
@@ -71,11 +71,10 @@ cp .env.example .env
 
 > **Auth model**: The local kind gateway uses `allowUnauthenticatedUsers=true` — mTLS client certs are the only auth mechanism. No bearer token is needed. `OPENSHELL_BEARER_TOKEN` should be left blank.
 
-### 5. Start Swarmer
+### 5. Start Swarmer dev server
 
 ```sh
-make setup-secret   # only needed once — generates auth/secret.key
-make dev            # uvicorn at http://localhost:8090
+make dev            # pip install + uvicorn at http://localhost:8090
 ```
 
 ### 6. Smoke test via SDK (recommended before testing through UI)
@@ -106,13 +105,23 @@ OK
 4. The session should enter `running` phase — Swarmer will create an OpenShell sandbox instead of a K8s pod
 5. Confirm: `kubectl get sandboxes -n openshell`
 
+## One-shot kind deploy (alternative)
+
+For a fully automated local dev setup from scratch:
+
+```sh
+make setup-secret   # only needed once
+make kind-deploy    # create cluster + build image + deploy (includes OpenShell)
+make connect        # port-forward dashboard to localhost:8080
+```
+
 ## Teardown
 
 ```sh
-# Stop swarmer (Ctrl-C in the dev terminal)
+# Stop swarmer dev server (Ctrl-C in the dev terminal)
 # Stop the port-forward (Ctrl-C in that terminal)
-make openshell-delete   # uninstall OpenShell from cluster
-make kind-delete        # delete the kind cluster entirely
+make delete         # uninstall swarmer + OpenShell from cluster
+make kind-delete    # delete the kind cluster entirely
 ```
 
 ## Troubleshooting
@@ -120,14 +129,11 @@ make kind-delete        # delete the kind cluster entirely
 **`helm upgrade` fails with "OCI registry not found"**
 → Ensure you can reach `ghcr.io`. Run `helm pull oci://ghcr.io/nvidia/openshell/helm-chart --version $(OPENSHELL_VERSION)` to test auth.
 
-**`make openshell-extract-tls` fails: secret not found**
-→ The gateway certgen job may still be running. Wait 30 s and retry: `make openshell-extract-tls`.
-
 **gRPC `Connection refused` on `localhost:17670`**
-→ The port-forward is not running. Start it in a separate terminal (step 3).
+→ The port-forward is not running. Start it with `make connect-openshell` in a separate terminal.
 
 **gRPC `UNAUTHENTICATED: missing authorization header`**
-→ The gateway was installed without `allowUnauthenticatedUsers=true`. Re-run `make openshell-setup` (it's idempotent).
+→ The gateway was installed without `allowUnauthenticatedUsers=true`. Re-run `make deploy` (it's idempotent).
 
 **gRPC `UNAUTHENTICATED: invalid token: JSON error: missing field 'sandbox_id'`**
 → A bearer token is set in `.env` that the gateway is trying to validate as a sandbox session token. Clear `OPENSHELL_BEARER_TOKEN=` in `.env`.
@@ -136,10 +142,21 @@ make kind-delete        # delete the kind cluster entirely
 → The sandbox image (`ghcr.io/nvidia/openshell-community/sandboxes/base:latest`) is being pulled — it's ~1.4 GB. The first pull takes 2–5 minutes. Use `kubectl describe pod <name> -n openshell` to watch progress.
 
 **mTLS error: `certificate signed by unknown authority`**
-→ The CA cert in `auth/openshell/ca.crt` doesn't match the cluster. Re-run `make openshell-extract-tls` against the current cluster.
+→ The CA cert in `auth/openshell/ca.crt` doesn't match the cluster. Re-run `make deploy` to re-extract certs, or manually:
+```sh
+kubectl -n openshell get secret openshell-client-tls -o jsonpath='{.data.ca\.crt}' | base64 -d > auth/openshell/ca.crt
+kubectl -n openshell get secret openshell-client-tls -o jsonpath='{.data.tls\.crt}' | base64 -d > auth/openshell/tls.crt
+kubectl -n openshell get secret openshell-client-tls -o jsonpath='{.data.tls\.key}' | base64 -d > auth/openshell/tls.key
+kubectl create secret generic openshell-tls \
+  --from-file=ca.crt=auth/openshell/ca.crt \
+  --from-file=tls.crt=auth/openshell/tls.crt \
+  --from-file=tls.key=auth/openshell/tls.key \
+  -n swarmer --dry-run=client -o yaml | kubectl apply -f -
+kubectl rollout restart deployment/swarmer -n swarmer
+```
 
 **`kubectl` context wrong (deploying to production instead of kind)**
-→ Run `kind export kubeconfig --name swarmer` before running any `make openshell-*` targets to ensure kubectl is pointed at the kind cluster.
+→ Run `kind export kubeconfig --name swarmer` before running any `make` targets to ensure kubectl is pointed at the kind cluster.
 
 **Session stays in `pending` / never reaches `running`**
 → Check `_run_openshell_agent` logs in the Swarmer console. The sandbox image must be pullable from within the kind node — load it with `kind load docker-image <image> --name swarmer` if needed.

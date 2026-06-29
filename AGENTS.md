@@ -15,12 +15,11 @@ A FastAPI + HTMX dashboard for managing AI coding agent workloads on Kubernetes.
 ```sh
 # Setup
 make setup-secret        # Generate SWARMER_SECRET_KEY → auth/secret.key
-make install             # pip install -r requirements.txt
 
 # Development  (requires auth/secret.key — run make setup-secret first)
-make dev                 # uvicorn at localhost:8090 with --reload, K8S_IN_CLUSTER=false
+make dev                 # pip install + uvicorn at localhost:8090 with --reload, K8S_IN_CLUSTER=false
 make lint                # ruff check swarmer/
-make db-reset            # Delete SQLite database (fresh schema on next start)
+rm -f data/swarmer.db   # Delete SQLite database (fresh schema on next start)
 
 # Tests
 make test                                            # Run all unit tests + mcp-server tests (excludes Playwright)
@@ -31,19 +30,17 @@ pytest tests/test_ui_patternfly.py                   # Playwright UI tests (requ
 # Container image
 make image-build         # Build container image (podman by default; SILENT=1 to skip version prompt)
 make image-push REGISTRY=...  # Push to registry
-make image-build-crush   # Build Crush agent container image
 
 # Local kind cluster
-make kind-create         # Create kind cluster with NodePort 30080→8080
-make kind-load           # Load swarmer image into kind
-make kind-deploy         # Full one-shot: create cluster + build + load + deploy
+make kind-deploy         # One-shot: create cluster + build + load image + deploy (includes OpenShell)
 make kind-delete         # Tear down kind cluster
 
-# OpenShell (sandbox runtime — replaces K8s pods)
-make openshell-setup     # Install OpenShell via Helm + extract mTLS certs
-make openshell-gen-token # Generate JWT bearer token → .env
-make openshell-status    # Show gateway pods, CRDs, cert status
-make openshell-delete    # Uninstall OpenShell from cluster
+# Deploy / manage (OpenShell is installed automatically; auto-detects OpenShift vs generic K8s)
+make deploy              # Deploy swarmer + OpenShell to current kubectl context
+make delete              # Remove swarmer + OpenShell from current kubectl context
+make status              # Show OpenShell and swarmer deployment status
+make connect             # Port-forward localhost:8080 → swarmer dashboard
+make connect-openshell   # Port-forward OpenShell gateway gRPC port
 # See docs/OPENSHELL_LOCAL_SETUP.md for full setup walkthrough
 
 # OpenShell e2e sandbox smoke tests (require port-forward to gateway + credentials in env)
@@ -55,14 +52,10 @@ python3 scripts/openshell_smoke_test.py --policy-extract --repo https://github.c
 python3 scripts/openshell_jira_smoke_test.py                     # Jira MCP: env → policy → binary → mcp-server
 # See docs/ARCHITECTURE.md "Adding a new MCP server" for how to write new smoke tests
 
-# Production Kubernetes
-make k8s-deploy          # Deploy to current kubectl context
-make k8s-connect         # Port-forward localhost:8080 → swarmer service
-make k8s-delete          # Remove all swarmer resources
-
 # User management
-make user-token SA_USER=alice                           # Issue a K8s login token (default 8h)
-make grant-workspace SA_USER=alice WORKSPACE_NS=my-proj # Grant workspace access
+make user-token SA_USER=alice                                      # Issue a K8s login token (default 8h)
+make grant-workspace-access SA_USER=alice WORKSPACE_NS=my-proj     # Grant access to an existing workspace
+make grant-workspace-create SA_USER=alice                          # Allow user to create new workspaces
 ```
 
 ## Architecture
