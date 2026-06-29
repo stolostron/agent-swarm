@@ -45,6 +45,13 @@ _sdk_stub.SandboxClient = _MagicMock
 _sdk_stub.TlsConfig = _MagicMock
 _sdk_stub._proto = _proto_stub
 
+# Save any real openshell modules already in sys.modules so we can restore
+# them after importing the swarmer session router with our stubs.  Without the
+# restore, the permanent MagicMock in sys.modules["openshell._proto"] causes
+# lazy imports in test_openshell_policy.py to receive mocks instead of real
+# protobuf classes, breaking the @_requires_sdk tests in that file.
+_saved_modules = {k: v for k, v in sys.modules.items() if "openshell" in k}
+
 sys.modules["openshell"] = _sdk_stub
 sys.modules["openshell._proto"] = _proto_stub
 sys.modules["openshell._proto.openshell_pb2"] = _proto_stub.openshell_pb2
@@ -56,6 +63,18 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from swarmer.database import Base
+
+# Restore real openshell modules (or remove stubs if none were present).
+# Iterate over ALL current sys.modules entries containing "openshell" (excluding
+# swarmer modules we intentionally imported) so that transitively-loaded proto
+# modules (sandbox_pb2, datamodel_pb2, etc.) are also restored.  This prevents
+# the permanent MagicMock stubs from polluting lazy imports in other test files.
+for _k in list(sys.modules):
+    if "openshell" in _k and "swarmer" not in _k:
+        if _k in _saved_modules:
+            sys.modules[_k] = _saved_modules[_k]
+        else:
+            sys.modules.pop(_k, None)
 
 # ---------------------------------------------------------------------------
 # Shared DB fixtures

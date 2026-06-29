@@ -94,13 +94,18 @@ sys.modules["openshell._proto.sandbox_pb2"] = _proto_stub.sandbox_pb2
 
 import swarmer.openshell_client as oc  # noqa: E402
 
-# Restore real openshell modules (or remove the stubs if none were there before)
-for _k in ("openshell", "openshell._proto", "openshell._proto.openshell_pb2",
-           "openshell._proto.sandbox_pb2"):
-    if _k in _saved_modules:
-        sys.modules[_k] = _saved_modules[_k]
-    else:
-        sys.modules.pop(_k, None)
+# Restore real openshell modules (or remove the stubs if none were there before).
+# Iterate over ALL current sys.modules entries that contain "openshell" (excluding
+# swarmer.openshell_client which we intentionally imported) so that transitively-
+# loaded modules (sandbox_pb2, datamodel_pb2, etc.) are also restored.  A hardcoded
+# key list misses those and leaves a stale MagicMock in the module chain, causing
+# lazy imports in other test files to pick up mocks instead of real proto classes.
+for _k in list(sys.modules):
+    if "openshell" in _k and "swarmer" not in _k:
+        if _k in _saved_modules:
+            sys.modules[_k] = _saved_modules[_k]
+        else:
+            sys.modules.pop(_k, None)
 
 
 # Tests in this file that inspect proto message fields (e.g. req.sandbox_id)
