@@ -1,6 +1,11 @@
 """
 Kubernetes utility functions used across the dashboard.
-All functions use the official kubernetes-client Python library.
+
+Swarmer uses K8s for: authentication (TokenReview), image pull secrets,
+workspace namespace scoping, and extra env var storage (pending migration
+to the encrypted DB in ACM-35039). All session lifecycle management goes
+through the OpenShell Gateway + Supervisor APIs — no direct pod/PVC/Secret
+creation for agent sessions.
 """
 from __future__ import annotations
 
@@ -12,8 +17,6 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from kubernetes.client import RbacV1Subject
-
-    from swarmer.models.github_app import GitHubApp
 
 log = logging.getLogger(__name__)
 
@@ -70,12 +73,7 @@ def init_k8s(in_cluster: bool) -> None:
 # ---------- Namespace helpers ----------
 
 def ensure_namespace(namespace: str) -> None:
-    """Create the namespace if it doesn't exist; no-op if it does.
-
-    On OpenShift, also grants the anyuid SCC to the namespace's default SA so
-    that session pods can run as root without requiring privileged host access.
-    This is a no-op on kind/k3s where SCCs do not exist.
-    """
+    """Create the namespace if it doesn't exist; no-op if it does."""
     from kubernetes import client
 
     v1 = client.CoreV1Api()
@@ -204,50 +202,6 @@ def delete_namespace(namespace: str) -> None:
             raise
 
 
-def get_namespace_status(namespace: str) -> str:
-    """Return the namespace phase string or 'Unknown'."""
-    from kubernetes import client
-
-    try:
-        v1 = client.CoreV1Api()
-        ns = v1.read_namespace(namespace)
-        return ns.status.phase or "Unknown"
-    except Exception:
-        return "Unknown"
-
-
-# ---------- ConfigMap helpers ----------
-
-def apply_agent_config(
-    namespace: str, secret=None, agent_tool: str = "opencode", mcp_servers=None
-) -> None:
-    """Create or update the agent tool's ConfigMap in the given namespace."""
-    from kubernetes import client
-    from swarmer.agent_tools.registry import get as get_tool
-
-    tool = get_tool(agent_tool)
-    cm_name = tool.get_config_map_name()
-    data = tool.build_config_data(secret, mcp_servers=mcp_servers)
-
-    v1 = client.CoreV1Api()
-    body = client.V1ConfigMap(
-        metadata=client.V1ObjectMeta(name=cm_name, namespace=namespace),
-        data=data,
-    )
-    try:
-        v1.replace_namespaced_config_map(cm_name, namespace, body)
-    except client.exceptions.ApiException as exc:
-        if exc.status == 404:
-            v1.create_namespaced_config_map(namespace, body)
-        else:
-            raise
-
-
-def apply_opencode_config(namespace: str, secret=None) -> None:
-    """Backward-compat wrapper — delegates to apply_agent_config."""
-    apply_agent_config(namespace, secret=secret, agent_tool="opencode")
-
-
 # ---------- Secret helpers ----------
 
 def _apply_secret(namespace: str, name: str, data: dict[str, str]) -> None:
@@ -275,269 +229,6 @@ def _delete_secret(namespace: str, name: str) -> None:
     v1 = client.CoreV1Api()
     try:
         v1.delete_namespaced_secret(name, namespace)
-    except client.exceptions.ApiException as exc:
-        if exc.status != 404:
-            raise
-
-
-def apply_agent_secret(
-    namespace: str, secret, agent_tool: str = "opencode"
-) -> None:
-    """Sync the agent tool's K8s Secret from the DB model."""
-    from swarmer.agent_tools.registry import get as get_tool
-
-    tool = get_tool(agent_tool)
-    data = tool.build_k8s_secret_data(secret)
-    if data:
-        _apply_secret(namespace, tool.get_secret_name(), data)
-
-
-def sync_all_agent_secrets(namespace: str, secret) -> None:
-    """Sync K8s Secrets for every registered agent tool."""
-    from swarmer.agent_tools.registry import all_tools
-
-    for tool in all_tools():
-        data = tool.build_k8s_secret_data(secret)
-        if data:
-            _apply_secret(namespace, tool.get_secret_name(), data)
-
-
-def apply_opencode_secret(namespace: str, secret) -> None:
-    """Backward-compat wrapper — delegates to apply_agent_secret."""
-    apply_agent_secret(namespace, secret, agent_tool="opencode")
-
-
-def apply_github_pat_secret(namespace: str, pat) -> None:
-    """Sync github-pat-<slug> K8s Secret from the DB model."""
-    _apply_secret(
-        namespace,
-        pat.k8s_secret_name,
-        {
-            "GITHUB_PAT": _b64(pat.pat),
-            "GITHUB_USERNAME": _b64(pat.github_username),
-        },
-    )
-
-
-def delete_github_pat_secret(namespace: str, pat) -> None:
-    _delete_secret(namespace, pat.k8s_secret_name)
-
-
-MCP_SECRET_NAME = "mcp-server-tokens"
-
-# Optional Opaque Secret in each workspace namespace: keys become env vars in the
-# agent container. Managed via the Swarmer UI or externally (GitOps / kubectl).
-AGENT_EXTRA_ENV_SECRET_NAME = "swarmer-agent-extra-env"
-
-
-def get_extra_env_vars(namespace: str) -> dict[str, str]:
-    """Read the swarmer-agent-extra-env Secret and return decoded key-value pairs.
-
-    Returns an empty dict if the secret does not exist.
-    """
-    from kubernetes import client
-
-    v1 = client.CoreV1Api()
-    try:
-        secret = v1.read_namespaced_secret(AGENT_EXTRA_ENV_SECRET_NAME, namespace)
-    except client.exceptions.ApiException as exc:
-        if exc.status == 404:
-            return {}
-        raise
-    result: dict[str, str] = {}
-    if secret.data:
-        for key, value in secret.data.items():
-            result[key] = base64.b64decode(value).decode()
-    return result
-
-
-def set_extra_env_var(namespace: str, key: str, value: str) -> None:
-    """Add or update a single key in the swarmer-agent-extra-env Secret."""
-    existing = get_extra_env_vars(namespace)
-    existing[key] = value
-    data = {k: _b64(v) for k, v in existing.items()}
-    _apply_secret(namespace, AGENT_EXTRA_ENV_SECRET_NAME, data)
-
-
-def delete_extra_env_var(namespace: str, key: str) -> None:
-    """Remove a single key from the swarmer-agent-extra-env Secret.
-
-    Deletes the secret entirely when the last key is removed.
-    """
-    existing = get_extra_env_vars(namespace)
-    existing.pop(key, None)
-    if existing:
-        data = {k: _b64(v) for k, v in existing.items()}
-        _apply_secret(namespace, AGENT_EXTRA_ENV_SECRET_NAME, data)
-    else:
-        _delete_secret(namespace, AGENT_EXTRA_ENV_SECRET_NAME)
-
-
-def sync_mcp_server_secret(namespace: str, mcp_servers) -> None:
-    """Create or update the K8s Secret containing MCP server credentials."""
-    data = {}
-    for srv in mcp_servers:
-        if srv.jira_access_token_enc:
-            data["JIRA_SERVER_URL"] = _b64(srv.jira_server_url)
-            data["JIRA_ACCESS_TOKEN"] = _b64(srv.jira_access_token)
-            data["JIRA_EMAIL"] = _b64(srv.jira_email)
-
-    if data:
-        _apply_secret(namespace, MCP_SECRET_NAME, data)
-    else:
-        _delete_secret(namespace, MCP_SECRET_NAME)
-
-
-# ---------- Session-scoped secret helpers ----------
-
-def create_session_agent_secret(
-    namespace: str, secret_name: str, secret, agent_tool: str = "opencode"
-) -> None:
-    """Create a session-scoped K8s Secret for the agent tool's credentials."""
-    from swarmer.agent_tools.registry import get as get_tool
-
-    tool = get_tool(agent_tool)
-    data = tool.build_k8s_secret_data(secret)
-    if data:
-        _apply_secret(namespace, secret_name, data)
-
-
-def create_session_pat_secret(
-    namespace: str, secret_name: str, pat
-) -> None:
-    """Create a session-scoped K8s Secret for a GitHub PAT."""
-    _apply_secret(
-        namespace,
-        secret_name,
-        {
-            "GITHUB_PAT": _b64(pat.pat),
-            "GITHUB_USERNAME": _b64(pat.github_username),
-        },
-    )
-
-
-def create_session_github_app_secret(
-    namespace: str, secret_name: str, app: GitHubApp,
-) -> None:
-    """Create a session-scoped K8s Secret for GitHub App installation auth."""
-    _apply_secret(
-        namespace,
-        secret_name,
-        {
-            "client_id": _b64(app.app_id.strip()),
-            "installation_id": _b64(app.installation_id.strip()),
-            "private_key": _b64(app.private_key),
-        },
-    )
-
-
-def create_session_mcp_secret(
-    namespace: str, secret_name: str, mcp_servers
-) -> None:
-    """Create a session-scoped K8s Secret for MCP server credentials."""
-    data = {}
-    for srv in mcp_servers:
-        if srv.jira_access_token_enc:
-            data["JIRA_SERVER_URL"] = _b64(srv.jira_server_url)
-            data["JIRA_ACCESS_TOKEN"] = _b64(srv.jira_access_token)
-            data["JIRA_EMAIL"] = _b64(srv.jira_email)
-    if data:
-        _apply_secret(namespace, secret_name, data)
-
-
-def cleanup_session_secrets(namespace: str, session) -> None:
-    """Delete all K8s Secrets associated with a session."""
-    if not session.k8s_secret_names:
-        return
-    for name in session.k8s_secret_names.split(","):
-        name = name.strip()
-        if name:
-            _delete_secret(namespace, name)
-    session.k8s_secret_names = ""
-
-
-# ---------- Pod / PVC helpers (used by sessions) ----------
-
-# Maps the coarse K8s pod phase to our internal phase vocabulary
-_PHASE_MAP = {
-    "Pending": "pending",
-    "Running": "running",
-    "Succeeded": "succeeded",
-    "Failed": "failed",
-}
-
-
-def get_pod_status(pod_name: str, namespace: str) -> tuple[str, str]:
-    """Return (our_phase, detail) for a pod.
-
-    our_phase: pending | running | succeeded | failed | stopped
-    detail:    a human-readable K8s status string, e.g.
-               'PodInitializing', 'ErrImagePull', 'ImagePullBackOff',
-               'ContainerCreating', 'CrashLoopBackOff', 'OOMKilled', 'Running'
-
-    Priority for detail (most specific first):
-      1. Init-container waiting reason  (PodInitializing while init runs)
-      2. Main container waiting reason  (ErrImagePull, ContainerCreating, …)
-      3. Main container terminated reason (OOMKilled, Error, Completed)
-      4. Raw K8s phase string as fallback
-    """
-    from kubernetes import client
-
-    try:
-        v1 = client.CoreV1Api()
-        pod = v1.read_namespaced_pod(pod_name, namespace)
-    except client.exceptions.ApiException as exc:
-        if exc.status == 404:
-            return "stopped", "Not Found"
-        return "pending", "Unknown"
-    except Exception:
-        return "pending", "Cluster Unavailable"
-
-    k8s_phase = pod.status.phase or "Unknown"
-    our_phase = _PHASE_MAP.get(k8s_phase, "pending")
-    detail = k8s_phase  # fallback
-
-    # 1. Init-container waiting reason
-    for cs in pod.status.init_container_statuses or []:
-        if cs.state and cs.state.waiting and cs.state.waiting.reason:
-            return our_phase, cs.state.waiting.reason
-
-    # 2. Main container waiting reason
-    for cs in pod.status.container_statuses or []:
-        if cs.state and cs.state.waiting and cs.state.waiting.reason:
-            return our_phase, cs.state.waiting.reason
-
-    # 3. Main container terminated reason
-    for cs in pod.status.container_statuses or []:
-        if cs.state and cs.state.terminated and cs.state.terminated.reason:
-            return our_phase, cs.state.terminated.reason
-
-    return our_phase, detail
-
-
-def get_pod_phase(pod_name: str, namespace: str) -> str:
-    """Thin wrapper kept for any callers that only need the phase string."""
-    phase, _ = get_pod_status(pod_name, namespace)
-    return phase
-
-
-def get_pod_logs(pod_name: str, namespace: str) -> str:
-    from kubernetes import client
-
-    try:
-        v1 = client.CoreV1Api()
-        resp = v1.read_namespaced_pod_log(pod_name, namespace, _preload_content=False)
-        return resp.data.decode("utf-8", errors="replace")
-    except Exception:
-        return ""
-
-
-def delete_pod(pod_name: str, namespace: str) -> None:
-    from kubernetes import client
-
-    v1 = client.CoreV1Api()
-    try:
-        v1.delete_namespaced_pod(pod_name, namespace)
     except client.exceptions.ApiException as exc:
         if exc.status != 404:
             raise
@@ -719,110 +410,40 @@ async def check_image_reachable(image: str, namespace: str) -> bool:
     return False
 
 
-def exec_model_update(
-    pod_name: str, namespace: str, model: str, agent_tool: str = "opencode"
-) -> None:
-    """Update model selection on a running pod via the tool's strategy."""
-    from swarmer.agent_tools.registry import get as get_tool
+# ---------- Extra env vars (swarmer-agent-extra-env secret) ----------
 
-    tool = get_tool(agent_tool)
-    tool.exec_model_update(pod_name, namespace, model)
+AGENT_EXTRA_ENV_SECRET_NAME = "swarmer-agent-extra-env"
 
 
-def exec_model_json(pod_name: str, namespace: str, model: str) -> None:
-    """Backward-compat wrapper — delegates to exec_model_update."""
-    exec_model_update(pod_name, namespace, model, agent_tool="opencode")
-
-
-def delete_service(service_name: str, namespace: str) -> None:
+def get_extra_env_vars(namespace: str) -> dict[str, str]:
+    """Return the key/value pairs stored in the extra-env secret, or {}."""
     from kubernetes import client
 
-    v1 = client.CoreV1Api()
     try:
-        v1.delete_namespaced_service(service_name, namespace)
+        v1 = client.CoreV1Api()
+        secret = v1.read_namespaced_secret(AGENT_EXTRA_ENV_SECRET_NAME, namespace)
+        return {
+            k: base64.b64decode(v).decode()
+            for k, v in (secret.data or {}).items()
+        }
     except client.exceptions.ApiException as exc:
-        if exc.status != 404:
-            raise
-
-
-# ---------- OpenShift Route helpers ----------
-
-_ROUTE_GROUP = "route.openshift.io"
-_ROUTE_VERSION = "v1"
-_ROUTE_PLURAL = "routes"
-
-
-def create_session_route(session_id: int, namespace: str, service_name: str, port: int = 4096) -> str:
-    """Create an OpenShift edge-TLS Route for a server-mode session.
-
-    Returns the assigned hostname, or '' if Routes are not supported
-    (non-OpenShift cluster) or the hostname is not yet available.
-    Silently skips on kind/k3s where the route.openshift.io CRD is absent.
-    """
-    from kubernetes import client
-
-    custom = client.CustomObjectsApi()
-    route_name = f"session-{session_id}-chat"
-    body = {
-        "apiVersion": f"{_ROUTE_GROUP}/{_ROUTE_VERSION}",
-        "kind": "Route",
-        "metadata": {"name": route_name, "namespace": namespace},
-        "spec": {
-            "to": {"kind": "Service", "name": service_name},
-            "port": {"targetPort": port},
-            "tls": {
-                "termination": "edge",
-                "insecureEdgeTerminationPolicy": "Redirect",
-            },
-        },
-    }
-    try:
-        result = custom.create_namespaced_custom_object(
-            group=_ROUTE_GROUP, version=_ROUTE_VERSION,
-            namespace=namespace, plural=_ROUTE_PLURAL, body=body,
-        )
-        ingresses = result.get("status", {}).get("ingress", [])
-        return ingresses[0].get("host", "") if ingresses else ""
-    except client.exceptions.ApiException as exc:
-        if exc.status == 409:
-            return get_session_route_host(session_id, namespace)
-        if exc.status in (403, 404):
-            log.debug("OpenShift Routes not available (status %s) — skipping", exc.status)
-            return ""
+        if exc.status == 404:
+            return {}
         raise
 
 
-def get_session_route_host(session_id: int, namespace: str) -> str:
-    """Return the hostname of an existing session Route, or ''."""
-    from kubernetes import client
-
-    custom = client.CustomObjectsApi()
-    route_name = f"session-{session_id}-chat"
-    try:
-        result = custom.get_namespaced_custom_object(
-            group=_ROUTE_GROUP, version=_ROUTE_VERSION,
-            namespace=namespace, plural=_ROUTE_PLURAL, name=route_name,
-        )
-        ingresses = result.get("status", {}).get("ingress", [])
-        return ingresses[0].get("host", "") if ingresses else ""
-    except client.exceptions.ApiException as exc:
-        if exc.status in (403, 404):
-            return ""
-        raise
+def set_extra_env_var(namespace: str, key: str, value: str) -> None:
+    """Set a single key in the extra-env secret (create or update)."""
+    existing = get_extra_env_vars(namespace)
+    existing[key] = value
+    _apply_secret(namespace, AGENT_EXTRA_ENV_SECRET_NAME, {k: _b64(v) for k, v in existing.items()})
 
 
-def delete_session_route(session_id: int, namespace: str) -> None:
-    """Delete the session's OpenShift Route; no-op on non-OpenShift or if absent."""
-    from kubernetes import client
-
-    custom = client.CustomObjectsApi()
-    route_name = f"session-{session_id}-chat"
-    try:
-        custom.delete_namespaced_custom_object(
-            group=_ROUTE_GROUP, version=_ROUTE_VERSION,
-            namespace=namespace, plural=_ROUTE_PLURAL, name=route_name,
-        )
-    except client.exceptions.ApiException as exc:
-        if exc.status in (403, 404):
-            return
-        raise
+def delete_extra_env_var(namespace: str, key: str) -> None:
+    """Remove a single key from the extra-env secret."""
+    existing = get_extra_env_vars(namespace)
+    existing.pop(key, None)
+    if existing:
+        _apply_secret(namespace, AGENT_EXTRA_ENV_SECRET_NAME, {k: _b64(v) for k, v in existing.items()})
+    else:
+        _delete_secret(namespace, AGENT_EXTRA_ENV_SECRET_NAME)

@@ -1,0 +1,21 @@
+{# Stable shell — rendered once at page load.                              #}
+{# schedule_create / schedule_edit / schedule_delete / schedule_toggle      #}
+{# all return HX-Trigger: scheduleListChanged, which reloads the inner      #}
+{# content from the /schedules/items endpoint.                              #}
+<div id="schedule-list"
+     hx-get="/workspaces/{{ ws.id }}/sessions/{{ session.id }}/schedules/items"
+     hx-trigger="scheduleListChanged from:body"
+     hx-swap="innerHTML"
+     hx-indicator="#schedule-list-spinner">
+  {% include "sessions/_schedule_items.html" with context %}
+</div>
+<span id="schedule-list-spinner" class="htmx-indicator"
+      style="display:inline-flex; align-items:center; gap:4px; vertical-align:middle;
+             margin-top:var(--pf-t--global--spacer--xs);
+             font-size:var(--pf-t--global--font--size--sm);
+             color:var(--pf-t--global--text--color--subtle);">
+  Loading
+  <span style="display:inline-flex; gap:3px;" aria-hidden="true">
+    <span class="rbd-dot"></span><span class="rbd-dot"></span><span class="rbd-dot"></span>
+  </span>
+</span>

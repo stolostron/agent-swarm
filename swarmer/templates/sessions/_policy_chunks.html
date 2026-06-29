@@ -1,0 +1,125 @@
+{# HTMX partial — draft policy chunks for a session.
+   Polled every 30s while session is active; shows snapshot after completion.
+   chunks: list[dict] with keys id, status, rule_name, endpoints, binaries
+   promoted_binaries: dict[rule_name, set[binary_path]] of rules already added.
+     OPA emits one chunk per (rule_name, binary) pair, so each chunk has one binary.
+     A chunk is "added" only when its rule_name exists AND its binary path is covered.
+     Same rule_name + different binary = still pending (needs to be merged in).
+   NOTE: all JS lives in detail.html — do not put script tags here; this
+   partial is swapped into innerHTML on every poll, so any inline script
+   would re-register listeners on each swap.
+#}
+{% if chunks %}
+<form id="policy-chunks-form"
+      hx-post="/workspaces/{{ ws_id }}/sessions/{{ session.id }}/policy-rules/add"
+      hx-swap="none">
+  <table style="width:100%; border-collapse:collapse; font-size:var(--pf-t--global--font--size--sm);">
+    <thead>
+      <tr style="border-bottom:2px solid var(--pf-t--global--border--color--default); text-align:left;">
+        <th style="padding:var(--pf-t--global--spacer--xs) var(--pf-t--global--spacer--sm); width:28px;"></th>
+        <th style="padding:var(--pf-t--global--spacer--xs) var(--pf-t--global--spacer--sm);">Status</th>
+        <th style="padding:var(--pf-t--global--spacer--xs) var(--pf-t--global--spacer--sm);">Rule Name</th>
+        <th style="padding:var(--pf-t--global--spacer--xs) var(--pf-t--global--spacer--sm);">Endpoints</th>
+        <th style="padding:var(--pf-t--global--spacer--xs) var(--pf-t--global--spacer--sm);">Binaries</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for chunk in chunks %}
+      {#
+        is_added: rule exists AND all binary paths are already covered.
+        OPA emits one chunk per (rule_name, binary), so this is effectively
+        a (rule_name, binary_path) equality check.
+      #}
+      {% set chunk_bins = chunk.binaries | map(attribute='path') | list %}
+      {% if chunk.rule_name in promoted_binaries %}
+        {% set rule_bins = promoted_binaries[chunk.rule_name] %}
+        {% set all_covered = namespace(value=true) %}
+        {% for bp in chunk_bins %}
+          {% if bp not in rule_bins %}
+            {% set all_covered.value = false %}
+          {% endif %}
+        {% endfor %}
+        {% set is_added = all_covered.value %}
+      {% else %}
+        {% set is_added = false %}
+      {% endif %}
+      {% set is_pending = chunk.status == "pending" and not is_added %}
+      <tr style="border-bottom:1px solid var(--pf-t--global--border--color--default);">
+        <td style="padding:var(--pf-t--global--spacer--xs) var(--pf-t--global--spacer--sm);">
+          {% if is_pending %}
+          <input type="checkbox" name="chunk" value="{{ chunk | tojson | forceescape }}"
+                 class="policy-chunk-cb"
+                 style="cursor:pointer;" title="Add to session rules">
+          {% endif %}
+        </td>
+        <td style="padding:var(--pf-t--global--spacer--xs) var(--pf-t--global--spacer--sm);">
+          {% if is_added %}
+          <span class="pf-v6-c-label pf-m-green pf-m-compact">
+            <span class="pf-v6-c-label__content">added</span>
+          </span>
+          {% elif chunk.status == "pending" %}
+          <span class="pf-v6-c-label pf-m-gold pf-m-compact">
+            <span class="pf-v6-c-label__content">pending</span>
+          </span>
+          {% elif chunk.status == "approved" %}
+          <span class="pf-v6-c-label pf-m-green pf-m-compact">
+            <span class="pf-v6-c-label__content">approved</span>
+          </span>
+          {% else %}
+          <span class="pf-v6-c-label pf-m-red pf-m-compact">
+            <span class="pf-v6-c-label__content">{{ chunk.status }}</span>
+          </span>
+          {% endif %}
+        </td>
+        <td style="padding:var(--pf-t--global--spacer--xs) var(--pf-t--global--spacer--sm);">
+          <code style="font-family:var(--pf-t--global--font--family--mono);">{{ chunk.rule_name }}</code>
+        </td>
+        <td style="padding:var(--pf-t--global--spacer--xs) var(--pf-t--global--spacer--sm);">
+          {% for ep in chunk.endpoints %}
+          <div style="white-space:nowrap;">
+            <code style="font-family:var(--pf-t--global--font--family--mono);">{{ ep.host }}:{{ ep.port }}</code>
+            {% if ep.protocol %}<span style="color:var(--pf-t--global--text--color--subtle); font-size:0.85em;"> {{ ep.protocol }}</span>{% endif %}
+          </div>
+          {% endfor %}
+        </td>
+        <td style="padding:var(--pf-t--global--spacer--xs) var(--pf-t--global--spacer--sm); color:var(--pf-t--global--text--color--subtle);">
+          {% for b in chunk.binaries %}
+          <div style="white-space:nowrap; font-size:0.9em;">
+            <code style="font-family:var(--pf-t--global--font--family--mono);">{{ b.path.split('/')[-1] }}</code>
+          </div>
+          {% endfor %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {# Show submit button only when at least one pending (non-added) chunk exists #}
+  {% set has_pending = namespace(value=false) %}
+  {% for chunk in chunks %}
+    {% set chunk_bins = chunk.binaries | map(attribute='path') | list %}
+    {% if chunk.rule_name in promoted_binaries %}
+      {% set rule_bins = promoted_binaries[chunk.rule_name] %}
+      {% set all_covered = namespace(value=true) %}
+      {% for bp in chunk_bins %}
+        {% if bp not in rule_bins %}{% set all_covered.value = false %}{% endif %}
+      {% endfor %}
+      {% if not all_covered.value and chunk.status == "pending" %}
+        {% set has_pending.value = true %}
+      {% endif %}
+    {% elif chunk.status == "pending" %}
+      {% set has_pending.value = true %}
+    {% endif %}
+  {% endfor %}
+  {% if has_pending.value %}
+  <div style="margin-top:var(--pf-t--global--spacer--sm); display:flex; justify-content:flex-end; align-items:center; gap:var(--pf-t--global--spacer--sm);">
+    <button type="submit" class="pf-v6-c-button pf-m-secondary pf-m-small">
+      Add to Net Rules
+    </button>
+  </div>
+  {% endif %}
+</form>
+{% else %}
+<p style="color:var(--pf-t--global--text--color--subtle); font-size:var(--pf-t--global--font--size--sm); margin:0; padding:var(--pf-t--global--spacer--md) 0;">
+  No pending chunks recorded. Chunks appear when the sandbox denies network connections not covered by the static policy.
+</p>
+{% endif %}

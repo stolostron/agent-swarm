@@ -34,6 +34,42 @@ class WorkspaceOut(BaseModel):
 
 
 # ============================================================
+# Session Schedules (defined before SessionOut to avoid forward reference)
+# ============================================================
+
+
+class ScheduleEntryCreate(BaseModel):
+    cron_schedule: str = Field(..., min_length=1, max_length=128)
+    label: str = ""
+    prompt_id: int | None = None
+    instruction_prompt: str = ""
+    enabled: bool = True
+
+
+class ScheduleEntryUpdate(BaseModel):
+    cron_schedule: str | None = Field(None, min_length=1, max_length=128)
+    label: str | None = None
+    prompt_id: int | None = None
+    instruction_prompt: str | None = None
+    enabled: bool | None = None
+
+
+class ScheduleEntryOut(BaseModel):
+    id: int
+    session_id: int
+    cron_schedule: str
+    cron_next_run: datetime | None
+    label: str
+    prompt_id: int | None
+    instruction_prompt: str
+    enabled: bool
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+# ============================================================
 # Sessions
 # ============================================================
 
@@ -46,7 +82,6 @@ class SessionCreate(BaseModel):
     instruction_prompt: str = ""
     github_pat_id: int | None = None
     prompt_id: int | None = None
-    persist: bool = False
     working_branch: str = ""
     mcp_server_ids: list[int] = Field(default_factory=list)
 
@@ -59,7 +94,6 @@ class SessionUpdate(BaseModel):
     instruction_prompt: str | None = None
     github_pat_id: int | None = None
     prompt_id: int | None = None
-    persist: bool | None = None
     working_branch: str | None = None
     mcp_server_ids: list[int] | None = None
 
@@ -74,13 +108,12 @@ class SessionOut(BaseModel):
     instruction_prompt: str
     github_pat_id: int | None
     prompt_id: int | None
-    persist: bool
-    privileged: bool
     working_branch: str
     phase: str
     status_detail: str
-    pod_name: str | None
-    pvc_name: str | None
+    sandbox_name: str | None = None
+    service_url: str | None = None
+    # Deprecated schedule fields — kept for backward compatibility; no new writes.
     cron_schedule: str
     cron_label: str
     run_started_at: datetime | None
@@ -89,12 +122,14 @@ class SessionOut(BaseModel):
     is_active: bool
     created_at: datetime
     updated_at: datetime
+    schedules: list["ScheduleEntryOut"] = Field(default_factory=list)
 
     model_config = {"from_attributes": True}
 
 
 class SessionOutput(BaseModel):
     output: str
+    raw_output: str = ""
 
 
 class SessionRunOut(BaseModel):
@@ -106,6 +141,7 @@ class SessionRunOut(BaseModel):
     completed_at: datetime
     run_duration: str
     last_output: str
+    raw_output: str = ""
 
     model_config = {"from_attributes": True}
 
@@ -124,12 +160,6 @@ class SetModeRequest(BaseModel):
 
 class SetModelRequest(BaseModel):
     model: str = ""
-
-
-class PatchResult(BaseModel):
-    patch: str
-    commit_msg: str
-    filename: str
 
 
 # ============================================================
@@ -165,7 +195,6 @@ class CredentialsSave(BaseModel):
     google_api_key: str = ""
     anthropic_api_key: str = ""
     openai_api_key: str = ""
-    # Raw JSON from gcloud application-default login (or service account key)
     application_default_credentials: str = ""
     shared: bool = False
 
@@ -215,6 +244,7 @@ class PATUpdate(BaseModel):
 class PATOut(BaseModel):
     id: int
     workspace_id: int
+    user_id: str
     name: str
     github_username: str
     github_org: str
@@ -227,14 +257,14 @@ class PATOut(BaseModel):
 
 
 # ============================================================
-# GitHub App (workspace installation)
+# GitHub App
 # ============================================================
 
 
 class GitHubAppSave(BaseModel):
     app_id: str = Field(..., min_length=1)
     installation_id: str = Field(..., min_length=1)
-    private_key: str = ""
+    private_key: str = ""  # omit to keep existing key on update
     shared: bool = False
 
 
@@ -243,7 +273,7 @@ class GitHubAppOut(BaseModel):
     workspace_id: int
     app_id: str
     installation_id: str
-    has_private_key: bool
+    has_private_key: bool  # never exposes the raw PEM
     shared: bool
     created_at: datetime
     updated_at: datetime

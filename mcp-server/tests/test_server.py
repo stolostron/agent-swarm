@@ -1,4 +1,4 @@
-"""Tests for server tool logic: URL normalization, find_sessions_by_repo, wait_for_session."""
+"""Tests for server tool logic: instantiation, URL normalization, find_sessions_by_repo, wait_for_session."""
 
 from __future__ import annotations
 
@@ -9,6 +9,90 @@ import pytest
 from agent_swarm_mcp_server.server import _normalize_repo_url, AgentSwarmMCPServer
 from agent_swarm_mcp_server.config import AgentSwarmConfig
 from agent_swarm_mcp_server.client import AgentSwarmClient
+
+
+# ------------------------------------------------------------------
+# Server instantiation and tool registration
+# ------------------------------------------------------------------
+
+EXPECTED_TOOLS = {
+    "list_workspaces",
+    "list_sessions",
+    "get_session",
+    "find_sessions_by_repo",
+    "create_session",
+    "update_session",
+    "delete_session",
+    "add_repo_to_session",
+    "remove_repo_from_session",
+    "list_workspace_prompts",
+    "set_session_prompt",
+    "launch_session",
+    "stop_session",
+    "get_session_status",
+    "get_session_output",
+    "wait_for_session",
+    "list_github_pats",
+    # ACM-35377: schedule management tools
+    "list_session_schedules",
+    "add_session_schedule",
+    "update_session_schedule",
+    "delete_session_schedule",
+}
+
+
+def test_server_can_be_imported():
+    """Verify AgentSwarmMCPServer and helpers can be imported without errors."""
+    from agent_swarm_mcp_server.server import AgentSwarmMCPServer, _normalize_repo_url  # noqa: F401
+    from agent_swarm_mcp_server.config import AgentSwarmConfig  # noqa: F401
+    from agent_swarm_mcp_server.client import AgentSwarmClient  # noqa: F401
+    from agent_swarm_mcp_server.auth import resolve_token  # noqa: F401
+
+
+def test_server_instantiates_with_config():
+    """Verify AgentSwarmMCPServer constructs without raising."""
+    server = make_server()
+    assert server is not None
+    assert server.config.api_url == "https://swarmer.example.com"
+
+
+def test_server_registers_all_expected_tools():
+    """Verify all 17 MCP tools are registered on the FastMCP instance.
+
+    This test catches regressions where a tool is removed, renamed, or
+    fails to register due to an import/decorator error.
+    """
+    registered_tools: set[str] = set()
+
+    config = AgentSwarmConfig(
+        api_url="https://swarmer.example.com",
+        token="test-token",
+    )
+
+    with patch("agent_swarm_mcp_server.server.FastMCP") as mock_mcp_cls:
+        mock_mcp = MagicMock()
+        registered_names: list[str] = []
+
+        def capture_tool():
+            """Capture the name of each @mcp.tool() decorated function."""
+            def decorator(fn):
+                registered_names.append(fn.__name__)
+                return fn
+            return decorator
+
+        mock_mcp.tool.side_effect = capture_tool
+        mock_mcp_cls.return_value = mock_mcp
+
+        with patch("agent_swarm_mcp_server.server.AgentSwarmClient"):
+            AgentSwarmMCPServer(config=config)
+
+        registered_tools = set(registered_names)
+
+    assert registered_tools == EXPECTED_TOOLS, (
+        f"Tool mismatch.\n"
+        f"  Missing: {EXPECTED_TOOLS - registered_tools}\n"
+        f"  Extra:   {registered_tools - EXPECTED_TOOLS}"
+    )
 
 
 # ------------------------------------------------------------------

@@ -431,7 +431,8 @@ class TestSessions:
         assert resp.status_code == 422
 
     @pytest.mark.asyncio
-    async def test_schedule_non_prompt_fails(self, client):
+    async def test_schedule_non_prompt_allowed(self, client):
+        """Scheduling is now allowed for any mode; the scheduler forces prompt at run time."""
         ws = await _create_workspace(client)
         s = await _create_session(client, ws["id"])
         # Change to TUI mode first
@@ -443,7 +444,7 @@ class TestSessions:
             f"/api/v1/workspaces/{ws['id']}/sessions/{s['id']}/schedule",
             json={"cron_expr": "0 * * * *"},
         )
-        assert resp.status_code == 422
+        assert resp.status_code == 200
 
     @pytest.mark.asyncio
     async def test_schedule_and_unschedule(self, client):
@@ -759,145 +760,7 @@ class TestSecrets:
             assert blocked is None
 
 
-class TestLaunchGitHubAppAuth:
-    @staticmethod
-    async def _fake_to_thread(fn, *args, **kwargs):
-        from unittest.mock import MagicMock
 
-        from swarmer import k8s as k8s_mod
-        from swarmer import k8s_session as k8s_sess_mod
-
-        if fn == k8s_mod.create_session_github_app_secret:
-            raise RuntimeError("k8s fail")
-        if fn == k8s_sess_mod.ensure_session_pvc:
-            return "session-pvc"
-        if fn == k8s_mod.create_session_pat_secret:
-            return None
-        if getattr(fn, "__name__", None) == "create_namespaced_pod":
-            pod = MagicMock()
-            pod.metadata.name = "session-1-abc"
-            return pod
-        return None
-
-    @pytest.mark.asyncio
-    async def test_do_launch_fails_when_app_secret_unavailable_without_pat(self):
-        from unittest.mock import patch
-
-        from swarmer.config import settings
-        from swarmer.models.github_app import GitHubApp
-        from swarmer.models.session import Session
-        from swarmer.models.workspace import Workspace
-        from swarmer.routers.sessions import _do_launch
-
-        pem = "-----BEGIN RSA PRIVATE KEY-----\nseed\n-----END RSA PRIVATE KEY-----"
-        orig_max = settings.max_concurrent_agents
-        settings.max_concurrent_agents = 0
-
-        try:
-            async with _TestSession() as db:
-                ws = Workspace(display_name="w", namespace="app-only-ns")
-                db.add(ws)
-                await db.flush()
-                app = GitHubApp(
-                    workspace_id=ws.id,
-                    user_id="test-user",
-                    app_id="111",
-                    installation_id="222",
-                )
-                app.private_key = pem
-                db.add(app)
-                session = Session(
-                    workspace_id=ws.id,
-                    name="s1",
-                    mode="prompt",
-                    phase="idle",
-                )
-                db.add(session)
-                await db.commit()
-                await db.refresh(session)
-                await db.refresh(ws)
-
-                with patch(
-                    "swarmer.routers.sessions.asyncio.to_thread",
-                    side_effect=self._fake_to_thread,
-                ):
-                    with pytest.raises(RuntimeError, match="k8s fail"):
-                        await _do_launch(session, ws, db, user_id="test-user")
-
-                assert session.pod_name is None
-        finally:
-            settings.max_concurrent_agents = orig_max
-
-    @pytest.mark.asyncio
-    async def test_do_launch_continues_when_app_secret_fails_with_pat_fallback(self):
-        from unittest.mock import patch
-
-        from swarmer.config import settings
-        from swarmer.models.github_app import GitHubApp
-        from swarmer.models.github_pat import GitHubPAT
-        from swarmer.models.session import Session
-        from swarmer.models.workspace import Workspace
-        from swarmer.routers.sessions import _do_launch
-
-        pem = "-----BEGIN RSA PRIVATE KEY-----\nseed\n-----END RSA PRIVATE KEY-----"
-        orig_max = settings.max_concurrent_agents
-        settings.max_concurrent_agents = 0
-
-        try:
-            async with _TestSession() as db:
-                ws = Workspace(display_name="w", namespace="pat-fallback-ns")
-                db.add(ws)
-                await db.flush()
-                pat = GitHubPAT(
-                    workspace_id=ws.id,
-                    user_id="test-user",
-                    name="my-pat",
-                    github_username="alice",
-                )
-                pat.pat = "ghp_test"
-                db.add(pat)
-                await db.flush()
-                app = GitHubApp(
-                    workspace_id=ws.id,
-                    user_id="test-user",
-                    app_id="111",
-                    installation_id="222",
-                )
-                app.private_key = pem
-                db.add(app)
-                session = Session(
-                    workspace_id=ws.id,
-                    github_pat_id=pat.id,
-                    name="s1",
-                    mode="prompt",
-                    phase="idle",
-                )
-                db.add(session)
-                await db.commit()
-
-                from sqlalchemy import select
-                from sqlalchemy.orm import selectinload
-
-                result = await db.execute(
-                    select(Session)
-                    .where(Session.id == session.id)
-                    .options(
-                        selectinload(Session.github_pat),
-                        selectinload(Session.repos),
-                    )
-                )
-                session = result.scalar_one()
-
-                with patch(
-                    "swarmer.routers.sessions.asyncio.to_thread",
-                    side_effect=self._fake_to_thread,
-                ), patch("swarmer.log_poller.start_log_poller"):
-                    await _do_launch(session, ws, db, user_id="test-user")
-
-                assert session.pod_name == "session-1-abc"
-                assert session.phase == "pending"
-        finally:
-            settings.max_concurrent_agents = orig_max
 
 
 # ===========================================================================

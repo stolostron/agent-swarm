@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -111,6 +110,16 @@ async def save_credentials(
         secret.anthropic_api_key = body.anthropic_api_key.strip()
     if body.openai_api_key.strip():
         secret.openai_api_key = body.openai_api_key.strip()
+    adc = body.application_default_credentials.strip()
+    if adc:
+        try:
+            json.loads(adc)
+        except json.JSONDecodeError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="application_default_credentials must be valid JSON",
+            ) from exc
+        secret.application_default_credentials = adc
 
     adc = body.application_default_credentials.strip()
     if adc:
@@ -125,23 +134,6 @@ async def save_credentials(
 
     await db.commit()
     await db.refresh(secret)
-
-    # Best-effort K8s sync
-    try:
-        from swarmer.agent_tools.registry import all_tools
-        from swarmer.routers.mcp_servers import get_enabled_mcp_servers
-        mcp_servers = await get_enabled_mcp_servers(ws_id, db, user_id=user)
-        await asyncio.to_thread(k8s.sync_all_agent_secrets, ws.k8s_namespace, secret)
-        for tool in all_tools():
-            await asyncio.to_thread(
-                k8s.apply_agent_config,
-                ws.k8s_namespace,
-                secret=secret,
-                agent_tool=tool.name,
-                mcp_servers=mcp_servers,
-            )
-    except Exception:
-        pass
 
     return secret
 
@@ -272,13 +264,32 @@ async def delete_pat(
     if pat is None:
         raise HTTPException(status_code=404, detail="PAT not found")
 
+    # Clean up the OpenShell gateway provider for this PAT before deleting the DB record.
+    # Best-effort: log errors but do not block deletion if OpenShell is unavailable.
+    provider_name = f"swarmer-ws-{ws_id}-github-pat-{pat_id}"
+    try:
+        from swarmer import openshell_client
+        from swarmer.config import settings
+        if settings.openshell_gateway_url:
+            sandboxes = await openshell_client.list_sandboxes()
+            for sandbox_name in sandboxes:
+                await openshell_client.detach_sandbox_provider(sandbox_name, provider_name)
+            await openshell_client.delete_provider(provider_name)
+    except Exception:
+        import logging
+        logging.getLogger(__name__).warning(
+            "Failed to clean up OpenShell provider %s during PAT deletion — continuing",
+            provider_name,
+            exc_info=True,
+        )
+
     await db.delete(pat)
     await db.commit()
     return MessageOut(detail="PAT deleted.")
 
 
 # ============================================================
-# GitHub App (workspace installation)
+# GitHub App
 # ============================================================
 
 
@@ -351,7 +362,7 @@ async def save_github_app(
     if body.private_key.strip():
         app.private_key = body.private_key.strip()
     elif not app.private_key_enc:
-        raise HTTPException(status_code=400, detail="private_key is required")
+        raise HTTPException(status_code=400, detail="private_key is required on first save")
 
     if not app.is_configured:
         raise HTTPException(status_code=400, detail="GitHub App credentials are incomplete")

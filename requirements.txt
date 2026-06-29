@@ -6,8 +6,9 @@ python-multipart==0.0.32
 sqlalchemy[asyncio]==2.0.50
 aiosqlite==0.22.1
 argon2-cffi==25.1.0
-cryptography==48.0.1
-pydantic-settings==2.14.2
+cryptography==48.0.0
+pydantic-settings==2.14.1
+PyJWT==2.10.1
 kubernetes==36.0.2
 pyyaml==6.0.3
 httpx==0.28.1
@@ -15,3 +16,4 @@ google-auth==2.53.0
 websockets==16.0
 itsdangerous==2.2.0
 croniter==6.2.2
+openshell>=0.0.70             # OpenShell sandbox SDK

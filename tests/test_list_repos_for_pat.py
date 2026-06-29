@@ -210,3 +210,51 @@ async def test_authorization_header_sent():
         await list_repos_for_pat(pat)
 
     assert captured_headers.get("authorization") == "token ghp_supersecret"
+
+
+@pytest.mark.asyncio
+async def test_org_404_falls_back_to_user_repos():
+    """Falls back to /users/{name}/repos when /orgs/{name}/repos returns 404.
+
+    This covers the case where github_org is set to a personal GitHub username
+    rather than a GitHub organization.
+    """
+    pat = _FakePAT(pat="ghp_test", github_org="jnpacker")
+    repos = [_repo(i) for i in range(1, 4)]
+
+    with respx.mock:
+        respx.get("https://api.github.com/orgs/jnpacker/repos").mock(
+            return_value=httpx.Response(
+                404,
+                json={"message": "Not Found"},
+                headers={"content-type": "application/json"},
+            )
+        )
+        respx.get("https://api.github.com/users/jnpacker/repos").mock(
+            return_value=httpx.Response(200, json=repos)
+        )
+        result = await list_repos_for_pat(pat)
+
+    assert isinstance(result, list)
+    assert len(result) == 3
+    assert result[0]["full_name"] == "octocat/repo-1"
+
+
+@pytest.mark.asyncio
+async def test_org_404_fallback_non_404_error_not_retried():
+    """A non-404 error from /orgs/{name}/repos is returned as-is, not retried."""
+    pat = _FakePAT(pat="ghp_test", github_org="my-enterprise")
+
+    with respx.mock:
+        respx.get("https://api.github.com/orgs/my-enterprise/repos").mock(
+            return_value=httpx.Response(
+                403,
+                json={"message": "Forbidden"},
+                headers={"content-type": "application/json"},
+            )
+        )
+        result = await list_repos_for_pat(pat)
+
+    assert isinstance(result, str)
+    assert "403" in result
+    assert "Forbidden" in result

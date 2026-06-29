@@ -4,17 +4,22 @@ This file provides guidance to Claude Code (claude.ai/code) and other AI agents 
 
 A FastAPI + HTMX dashboard for managing AI coding agent workloads on Kubernetes. Supports multiple agent tools (OpenCode, Crush). Server-rendered UI with PatternFly 6 dark theme. Token-based auth via Kubernetes ServiceAccount bearer tokens (+ optional OpenShift OAuth).
 
+## Tool Availability
+
+**GitHub:** MCP tools (`mcp__github-*`) and the `gh` CLI are equally valid — use whichever is configured. Never mix both in the same operation.
+
+**Jira:** MCP tools (`mcp__jira-mcp-server__*`) and the `jira` CLI are equally valid — use whichever is configured. Never run raw `curl` against the Jira API.
+
 ## Commands
 
 ```sh
 # Setup
 make setup-secret        # Generate SWARMER_SECRET_KEY → auth/secret.key
-make install             # pip install -r requirements.txt
 
 # Development  (requires auth/secret.key — run make setup-secret first)
-make dev                 # uvicorn at localhost:8090 with --reload, K8S_IN_CLUSTER=false
+make dev                 # pip install + uvicorn at localhost:8090 with --reload, K8S_IN_CLUSTER=false
 make lint                # ruff check swarmer/
-make db-reset            # Delete SQLite database (fresh schema on next start)
+rm -f data/swarmer.db   # Delete SQLite database (fresh schema on next start)
 
 # Tests
 make test                                            # Run all unit tests + mcp-server tests (excludes Playwright)
@@ -25,24 +30,32 @@ pytest tests/test_ui_patternfly.py                   # Playwright UI tests (requ
 # Container image
 make image-build         # Build container image (podman by default; SILENT=1 to skip version prompt)
 make image-push REGISTRY=...  # Push to registry
-make image-build-crush   # Build Crush agent container image
 
 # Local kind cluster
-make kind-create         # Create kind cluster with NodePort 30080→8080
-make kind-load           # Load swarmer image into kind
-make kind-load-opencode  # Load opencode agent image into kind
-make kind-load-crush     # Load crush agent image into kind
-make kind-deploy         # Full one-shot: create cluster + build + load + deploy
+make kind-deploy         # One-shot: create cluster + build + load image + deploy (includes OpenShell)
 make kind-delete         # Tear down kind cluster
 
-# Production Kubernetes
-make k8s-deploy          # Deploy to current kubectl context
-make k8s-connect         # Port-forward localhost:8080 → swarmer service
-make k8s-delete          # Remove all swarmer resources
+# Deploy / manage (OpenShell is installed automatically; auto-detects OpenShift vs generic K8s)
+make deploy              # Deploy swarmer + OpenShell to current kubectl context
+make delete              # Remove swarmer + OpenShell from current kubectl context
+make status              # Show OpenShell and swarmer deployment status
+make connect             # Port-forward localhost:8080 → swarmer dashboard
+make connect-openshell   # Port-forward OpenShell gateway gRPC port
+# See docs/OPENSHELL_LOCAL_SETUP.md for full setup walkthrough
+
+# OpenShell e2e sandbox smoke tests (require port-forward to gateway + credentials in env)
+# Source credentials first: set -a && source ../jira-mcp-server/.env && set +a
+python3 scripts/openshell_smoke_test.py                          # OpenCode + Gemini (Google AI Studio)
+python3 scripts/openshell_smoke_test.py --vertex                 # OpenCode + Claude via VertexAI
+python3 scripts/openshell_smoke_test.py --vertex --agent crush   # Crush + Claude via VertexAI
+python3 scripts/openshell_smoke_test.py --policy-extract --repo https://github.com/org/repo  # git clone + policy
+python3 scripts/openshell_jira_smoke_test.py                     # Jira MCP: env → policy → binary → mcp-server
+# See docs/ARCHITECTURE.md "Adding a new MCP server" for how to write new smoke tests
 
 # User management
-make user-token SA_USER=alice                           # Issue a K8s login token (default 8h)
-make grant-workspace SA_USER=alice WORKSPACE_NS=my-proj # Grant workspace access
+make user-token SA_USER=alice                                      # Issue a K8s login token (default 8h)
+make grant-workspace-access SA_USER=alice WORKSPACE_NS=my-proj     # Grant access to an existing workspace
+make grant-workspace-create SA_USER=alice                          # Allow user to create new workspaces
 ```
 
 ## Architecture
@@ -63,6 +76,8 @@ For system architecture, data flows, module layout, and guidance on adding new f
 
 Use placeholder patterns instead: `<YOUR_PROJECT>`, `example.com`, `your-registry.example.com`, generic variable references (`settings.foo`), or environment variable lookups. Encrypted values must always go through the `crypto.encrypt()`/`crypto.decrypt()` pattern — never store or log plaintext secrets.
 
+**GitHub App private keys** (RSA PEM) are stored encrypted via `GitHubApp.private_key_enc` and accessed only through the `private_key` property. The raw PEM is never logged, never included in API responses (`has_private_key: bool` is returned instead), and never passed to the OpenShell sandbox — only short-lived Installation Access Tokens (IATs) minted by `github_auth.mint_installation_token()` are injected.
+
 ## Code Conventions
 
 ### Python Style
@@ -70,7 +85,7 @@ Use placeholder patterns instead: `<YOUR_PROJECT>`, `example.com`, `your-registr
 - Python 3.12, type hints throughout (using `X | None` union syntax, not `Optional`)
 - `Mapped[type]` for all SQLAlchemy columns (SQLAlchemy 2.x declarative style)
 - Module-level singleton pattern: `settings = Settings()`, `_fernet: Fernet | None = None`
-- Lazy kubernetes imports inside functions (avoid import errors when K8s isn't configured)
+- Lazy kubernetes imports inside functions (avoid import errors when K8s isn't configured) — K8s is used only for auth, pull secrets, and namespace management
 - `noqa: F401` on model imports in `__init__.py` and forward-reference strings in relationships
 
 ### Router Pattern
@@ -89,18 +104,23 @@ Use placeholder patterns instead: `<YOUR_PROJECT>`, `example.com`, `your-registr
 - Router files: plural noun matching the resource (`workspaces.py`, `sessions.py`)
 - Template directories: plural noun matching the resource
 - HTMX partial templates: prefixed with `_` (e.g., `_status_badge.html`, `_repo_list.html`, `_list_rows.html`)
-- K8s resource names: `session-{session_id}-{suffix}` (pods, PVCs), `session-{session_id}-svc` (services), `session-{session_id}-chat` (routes)
-- K8s secret names: derived from model fields (e.g., `github-pat-{slug}`, `opencode-secret`, `crush-secret`); optional unmanaged `swarmer-agent-extra-env` in the workspace namespace injects extra agent env vars (`envFrom`, optional)
+- OpenShell sandbox names: `swarmer-session-{session_id}-{hex}` (auto-generated at launch)
+- K8s resource names (infrastructure only): workspace namespace, `quay-pull-secret`, `swarmer-agent-extra-env` (env vars, pending ACM-35039 migration)
 - URL pattern: `/workspaces/{ws_id}/sessions/{sid}/action`
+
+### Design Principles
+
+- **Favor encrypted database over Kubernetes objects** — Store credentials, configuration, and state in the encrypted SQLite database rather than K8s Secrets/ConfigMaps. Values go through `crypto.encrypt()`/`crypto.decrypt()` and are never stored or logged in plaintext.
+- **OpenShell is the sole session runtime** — All agent session lifecycle goes through OpenShell Gateway + Supervisor APIs. Never create K8s pods, PVCs, Services, or Routes for sessions.
+- **Minimal K8s surface** — New features should not add K8s dependencies. If you need to store data, use the DB. If you need to inject something into a sandbox, use the OpenShell Gateway API.
 
 ### Configuration
 
 - `pydantic-settings` with `.env` file support, `extra="ignore"` (unrecognized env vars silently ignored)
 - All settings have sensible defaults for local development
-- Key env vars: `DATABASE_URL`, `SWARMER_SECRET_KEY`, `K8S_IN_CLUSTER`, `K8S_API_URL`, `OPENSHIFT_OAUTH_URL`
+- Key env vars: `DATABASE_URL`, `SWARMER_SECRET_KEY`, `K8S_IN_CLUSTER`, `K8S_API_URL`, `OPENSHIFT_OAUTH_URL`, `OPENSHELL_GATEWAY_URL`, `OPENSHELL_SUPERVISOR_URL`
 - Agent images: `AGENT_IMAGE_OPENCODE`, `AGENT_IMAGE_CRUSH`, `CRUSH_VERSION`, `DEFAULT_AGENT_TOOL`
 - Concurrency: `MAX_CONCURRENT_AGENTS` (default 5) — global cap on concurrent agent pods; set to 0 to disable
-- Container runtime defaults to `podman` (override with `CONTAINER_CMD=docker`)
 
 ### Testing
 
@@ -119,10 +139,11 @@ Use placeholder patterns instead: `<YOUR_PROJECT>`, `example.com`, `your-registr
 
 4. **SQLite single-writer**: The K8s Deployment uses `strategy: Recreate` (not RollingUpdate) because SQLite doesn't support concurrent writers. Only one replica is safe.
 
-5. **Session mode affects pod lifecycle**:
-   - `prompt` mode: `restartPolicy: Never`, pod exits after agent finishes, auto-cleaned by log_poller
-   - `server`/`tui` modes: `restartPolicy: Always`, pod runs indefinitely
-   - Stopping a session always deletes the pod; if `persist=False`, the PVC is also deleted
+5. **Session mode affects sandbox lifecycle**:
+   - `prompt` mode: sandbox runs the agent command once; on success, `_run_openshell_agent` auto-deletes the sandbox. On app restart, `_restart_prompt_pollers()` resumes monitoring via `exec_command_streaming`.
+   - `server` mode: sandbox runs the agent serve command indefinitely; `expose_service()` creates a routable URL stored in `session.service_url`. The chat proxy rewrites the gateway-assigned virtual hostname to the real gateway address at connect time (`_resolve_upstream()`) and sets the `Host` header to the virtual domain for gateway routing — the domain itself is not DNS-resolvable from the Swarmer pod.
+   - `tui` mode: sandbox runs `sleep infinity`; browser connects via xterm.js → WebSocket → OpenShell `exec_interactive()` PTY
+   - Stopping always calls `openshell_client.delete_sandbox()` (and `delete_service()` for server mode)
 
 6. **OpenCode model format quirk**: Model strings use `provider/model@version` format (e.g., `google-vertex-anthropic/claude-sonnet-4-6@default`). The `@version` suffix is part of the model ID. Crush uses simpler `provider/model` format (e.g., `vertexai/claude-sonnet-4-6`).
 
@@ -134,7 +155,7 @@ Use placeholder patterns instead: `<YOUR_PROJECT>`, `example.com`, `your-registr
 
 10. **Manual migrations**: New columns are added via `database.py:migrate_db()` with `ALTER TABLE` statements. Only "duplicate column" / "already exists" errors are suppressed; other failures re-raise so startup fails visibly. When adding a new column to an existing table, add the migration there and include a `server_default` so existing rows work.
 
-11. **Blocking K8s calls in async handlers**: All synchronous `kubernetes` client calls inside async functions must be wrapped with `asyncio.to_thread()` to avoid blocking the event loop. The TUI WebSocket handler uses a background thread with `threading.Event` for the pod exec stream reader.
+11. **Blocking K8s calls in async handlers**: The remaining synchronous `kubernetes` client calls (auth, pull secrets, env vars) inside async functions must be wrapped with `asyncio.to_thread()`. The TUI WebSocket handler uses a background thread with `threading.Event` for the OpenShell gRPC stream reader.
 
 12. **`OpencodeSecret` naming is misleading**: Despite the name, this model stores credentials for all agent tools (OpenCode, Crush), including Anthropic and OpenAI API keys. The table name `opencode_secrets` is a legacy artifact.
 
@@ -146,11 +167,17 @@ Use placeholder patterns instead: `<YOUR_PROJECT>`, `example.com`, `your-registr
 
 16. **Container image runs as non-root**: The Containerfile uses UBI10 `python-312-minimal` with UID 1001. Directories `/data` and `/auth` are created as root then ownership dropped. PVCs must be group-0 writable for the non-root user.
 
-17. **Concurrency limit queues, not rejects**: When `MAX_CONCURRENT_AGENTS` is reached, `_do_launch()` sets `phase="queued"` and returns without creating a pod — it does NOT raise an exception. The queue processor in `scheduler.py` re-evaluates every 2 minutes (with a 2-minute in-memory cooldown). Stopping a queued session (no pod exists) returns it to `"idle"` not `"stopped"`, and skips all K8s cleanup. The `"queued"` phase is included in `is_active`, so the session is protected from re-launch and editing while waiting.
+17. **Concurrency limit queues, not rejects**: When `MAX_CONCURRENT_AGENTS` is reached, `_do_launch()` sets `phase="queued"` and returns without creating a sandbox — it does NOT raise an exception. The queue processor in `scheduler.py` re-evaluates every 2 minutes (with a 2-minute in-memory cooldown). Stopping a queued session (no sandbox exists) returns it to `"idle"` not `"stopped"`, and skips all sandbox cleanup. The `"queued"` phase is included in `is_active`, so the session is protected from re-launch and editing while waiting.
+
+18. **GitHub App IAT refresh loop**: For TUI and server-mode sessions using a GitHub App, `_setup_openshell_sandbox` starts a background `asyncio.create_task` called `iat-refresh-{session_id}`. This task calls `github_auth.start_token_refresh_loop()`, which sleeps `IAT_REFRESH_INTERVAL` (3000 s) then re-mints an IAT and calls `openshell_client.ensure_provider()` to update the Gateway. The task is cancelled when the event loop session is torn down. The raw PEM private key is serialised into the task as a plain string (not an ORM object) to survive the DB session expiry.
 
 ## Personal configuration
 
-Read `.claude/user.local.md` at the start of any task that needs an assignee, email, or project key. If the file does not exist, fall back to Claude memory (`user-config`), then placeholders.
+Read `~/.config/user.local.md` at the start of any task that needs an assignee, email, or project key. If the file does not exist, fall back to Claude memory (`user-config`), then placeholders.
+
+**Jira defaults for this project:**
+- `components`: `ACM AI`
+- `labels`: `agentic-sdlc`
 
 ## Fleet Engineering Skills
 
@@ -158,10 +185,20 @@ Fetch and apply the relevant skill when the task matches its domain.
 
 | Skill | When to use |
 |---|---|
-| [start-work](https://raw.githubusercontent.com/OpenShift-Fleet/agentic-sdlc/main/skills/sdlc/start-work/SKILL.md) | Create a Jira sub-task for the work |
-| [finish-work](https://raw.githubusercontent.com/OpenShift-Fleet/agentic-sdlc/main/skills/sdlc/finish-work/SKILL.md) | Commit, push, open PR, and update Jira |
-| [jira-specialist](https://raw.githubusercontent.com/OpenShift-Fleet/agentic-sdlc/main/skills/jira/jira-specialist/SKILL.md) | General Jira ticket management, triage, search, linking, transitions |
-| [task-specialist](https://raw.githubusercontent.com/OpenShift-Fleet/agentic-sdlc/main/skills/sdlc/task-specialist/SKILL.md) | Internal technical task breakdown and planning |
-| [bug-specialist](https://raw.githubusercontent.com/OpenShift-Fleet/agentic-sdlc/main/skills/jira/bug-specialist/SKILL.md) | Bug triage, reproduction steps, fix planning |
-| [story-specialist](https://raw.githubusercontent.com/OpenShift-Fleet/agentic-sdlc/main/skills/jira/story-specialist/SKILL.md) | User story creation and acceptance criteria |
-| [pr-review](https://raw.githubusercontent.com/OpenShift-Fleet/agentic-sdlc/main/skills/sdlc/pr-review/SKILL.md) | GitHub PR review with inline comments |
+| [start-work](https://raw.githubusercontent.com/OpenShift-Fleet/agentic-sdlc/main/skills/start-work/SKILL.md) | Create a Jira sub-task for the work |
+| [finish-work](https://raw.githubusercontent.com/OpenShift-Fleet/agentic-sdlc/main/skills/finish-work/SKILL.md) | Commit, push, open PR, and update Jira |
+| [jira-specialist](https://raw.githubusercontent.com/OpenShift-Fleet/agentic-sdlc/main/skills/jira-specialist/SKILL.md) | General Jira ticket management, triage, search, linking, transitions |
+| [task-specialist](https://raw.githubusercontent.com/OpenShift-Fleet/agentic-sdlc/main/skills/task-specialist/SKILL.md) | Internal technical task breakdown and planning |
+| [bug-specialist](https://raw.githubusercontent.com/OpenShift-Fleet/agentic-sdlc/main/skills/bug-specialist/SKILL.md) | Bug triage, reproduction steps, fix planning |
+| [story-specialist](https://raw.githubusercontent.com/OpenShift-Fleet/agentic-sdlc/main/skills/story-specialist/SKILL.md) | User story creation and acceptance criteria |
+| [epic-specialist](https://raw.githubusercontent.com/OpenShift-Fleet/agentic-sdlc/main/skills/epic-specialist/SKILL.md) | Multi-sprint epics with outcomes |
+| [feature-specialist](https://raw.githubusercontent.com/OpenShift-Fleet/agentic-sdlc/main/skills/feature-specialist/SKILL.md) | Large customer-facing capabilities |
+| [spike-specialist](https://raw.githubusercontent.com/OpenShift-Fleet/agentic-sdlc/main/skills/spike-specialist/SKILL.md) | Time-boxed research and proof-of-concept work |
+| [jira-create](https://raw.githubusercontent.com/OpenShift-Fleet/agentic-sdlc/main/skills/jira-create/SKILL.md) | Interactive issue creation with specialist delegation |
+| [jira-report](https://raw.githubusercontent.com/OpenShift-Fleet/agentic-sdlc/main/skills/jira-report/SKILL.md) | Jira portfolio reports — quality reviews, component/team/worktype listings |
+| [pr-review](https://raw.githubusercontent.com/OpenShift-Fleet/agentic-sdlc/main/skills/pr-review/SKILL.md) | GitHub PR review with inline comments |
+| [pr-fix](https://raw.githubusercontent.com/OpenShift-Fleet/agentic-sdlc/main/skills/pr-fix/SKILL.md) | Fix blocked PRs: merge conflicts, CI failures, review comments |
+| [ci-triage](https://raw.githubusercontent.com/OpenShift-Fleet/agentic-sdlc/main/skills/ci-triage/SKILL.md) | Diagnose failing CI checks — classify failures, post triage summary |
+| [breaking-changes](https://raw.githubusercontent.com/OpenShift-Fleet/agentic-sdlc/main/skills/breaking-changes/SKILL.md) | Detect breaking changes across API, database, config, behavior, integrations |
+| [test-coverage-gap](https://raw.githubusercontent.com/OpenShift-Fleet/agentic-sdlc/main/skills/test-coverage-gap/SKILL.md) | Risk-prioritized coverage gap analysis with concrete test suggestions |
+| [release-notes](https://raw.githubusercontent.com/OpenShift-Fleet/agentic-sdlc/main/skills/release-notes/SKILL.md) | Generate categorized release notes from merged PRs between two git refs |

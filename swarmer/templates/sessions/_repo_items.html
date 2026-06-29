@@ -8,7 +8,8 @@
               border-bottom:1px solid var(--pf-t--global--border--color--default);">
     <div style="min-width:0; flex:1;">
       <div style="font-size:var(--pf-t--global--font--size--sm); word-break:break-all; margin-bottom:2px;">
-        {{ repo.repo_url }}
+        <a href="{{ repo.repo_url }}" target="_blank" rel="noopener noreferrer"
+           style="color:var(--pf-t--global--text--color--link--default);">{{ repo.repo_url }}</a>
         {% if info is not none and info.is_public is not none %}
           {% if info.is_public %}
           <span class="pf-v6-c-label pf-m-green pf-m-outline" style="margin-left:var(--pf-t--global--spacer--xs); vertical-align:middle;"><span class="pf-v6-c-label__content">Public</span></span>
@@ -21,10 +22,10 @@
         <code>{{ repo.branch }}</code>
         <span style="margin:0 var(--pf-t--global--spacer--xs);">→</span>
         <code>/workspace/{{ repo.local_path }}</code>
-        {% if info is not none and info.can_push is not none and not info.can_push %}
+        {% if info is not none and info.can_push is false %}
         <span class="pf-v6-c-label pf-m-gold pf-m-outline"
               style="margin-left:var(--pf-t--global--spacer--xs); vertical-align:middle;"
-              title="This PAT cannot push to this repo — commits and PRs will fail">
+              title="Write access could not be confirmed — commits and PRs will fail">
           <span class="pf-v6-c-label__content">⚠ No write access</span>
         </span>
         {% endif %}
@@ -52,8 +53,8 @@
                      border:1px solid currentColor;
                      border-radius:var(--pf-t--global--border--radius--small);">+</button>
 
-    {% elif not session.github_pat %}
-      {# No PAT selected — show manual entry form on click #}
+    {% elif not session.github_pat and not has_github_app %}
+      {# No PAT and no GitHub App — show manual entry form on click #}
       <button type="button" id="repo-add-btn"
               class="pf-v6-c-button pf-m-plain pf-m-small"
               aria-label="Add repository"
@@ -108,15 +109,22 @@
       </form>
 
     {% else %}
-      {# PAT selected — HTMX repo picker #}
+      {# PAT or GitHub App configured — HTMX repo picker #}
+      {% if session.github_pat %}
+        {% set _pick_url = "/workspaces/" ~ ws_id ~ "/sessions/" ~ session.id ~ "/repos/pick?pat_id=" ~ session.github_pat.id %}
+        {% set _pick_title = "Browse repositories (via PAT)" %}
+      {% else %}
+        {% set _pick_url = "/workspaces/" ~ ws_id ~ "/sessions/" ~ session.id ~ "/repos/pick" %}
+        {% set _pick_title = "Browse repositories (via GitHub App)" %}
+      {% endif %}
       <button type="button" id="repo-add-btn"
               class="pf-v6-c-button pf-m-plain pf-m-small"
               aria-label="Add repository"
-              title="Browse repositories"
+              title="{{ _pick_title }}"
               style="color:var(--pf-t--global--text--color--link--default);
                      border:1px solid currentColor;
                      border-radius:var(--pf-t--global--border--radius--small);"
-              hx-get="/workspaces/{{ ws_id }}/sessions/{{ session.id }}/repos/pick?pat_id={{ session.github_pat.id }}"
+              hx-get="{{ _pick_url }}"
               hx-target="#repo-picker-container"
               hx-swap="innerHTML"
               hx-indicator="#repo-picker-spinner"

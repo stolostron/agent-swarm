@@ -11,10 +11,15 @@ async def get_workspace_github_app(
     db: AsyncSession,
     user_id: str = "",
 ) -> GitHubApp | None:
-    """Return the configured GitHub App for a workspace, or None."""
+    """Return the configured GitHub App for a workspace, or None.
+
+    Scheduler/queue launches pass an empty user_id and receive the App
+    unconditionally (only one row per workspace exists).  User-initiated
+    launches prefer the user's own record, then any shared/legacy record.
+    Returns None when no fully-configured App exists.
+    """
     if not user_id:
-        # Scheduler/queue launches have no authenticated user. One GitHub App
-        # row exists per workspace, so resolve by workspace_id only.
+        # Scheduler/queue — resolve by workspace_id only.
         result = await db.execute(
             select(GitHubApp).where(GitHubApp.workspace_id == workspace_id)
         )
@@ -35,11 +40,10 @@ async def get_workspace_github_app(
     )
     apps = result.scalars().all()
     app = None
-    if user_id:
-        for candidate in apps:
-            if candidate.user_id == user_id:
-                app = candidate
-                break
+    for candidate in apps:
+        if candidate.user_id == user_id:
+            app = candidate
+            break
     if app is None and apps:
         app = apps[0]
     if app is None or not app.is_configured:

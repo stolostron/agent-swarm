@@ -181,3 +181,49 @@ async def test_record_session_run_prunes_old_runs(monkeypatch):
         )
         details = list(result.scalars().all())
         assert details == ["run-2", "run-3", "run-4"]
+
+
+@pytest.mark.asyncio
+async def test_record_session_run_stores_raw_output():
+    """raw_output is preserved separately from last_output in session_runs."""
+    async with _TestSession() as db:
+        session = await _make_prompt_session(db)
+        completed_at = datetime.utcnow()
+
+        run = await record_session_run(
+            db,
+            session,
+            phase="succeeded",
+            status_detail="",
+            last_output="clean assistant response from opencode db",
+            raw_output="raw console: \x1b[32m[tool] reading file\x1b[0m\n...\nDone.",
+            completed_at=completed_at,
+        )
+        await db.commit()
+
+        assert run is not None
+        assert run.last_output == "clean assistant response from opencode db"
+        assert run.raw_output == "raw console: \x1b[32m[tool] reading file\x1b[0m\n...\nDone."
+        # They differ — this is the OpenCode case where the console log is preserved
+        assert run.raw_output != run.last_output
+
+
+@pytest.mark.asyncio
+async def test_record_session_run_raw_output_defaults_empty():
+    """raw_output defaults to empty string when not provided (backward compat)."""
+    async with _TestSession() as db:
+        session = await _make_prompt_session(db)
+
+        run = await record_session_run(
+            db,
+            session,
+            phase="succeeded",
+            status_detail="",
+            last_output="some output",
+            completed_at=datetime.utcnow(),
+            # raw_output not passed — should default to ""
+        )
+        await db.commit()
+
+        assert run is not None
+        assert run.raw_output == ""

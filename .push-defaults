@@ -1,2 +1,2 @@
 REGISTRY=quay.io/jpacker
-IMAGE_TAG=0.2.9
+IMAGE_TAG=0.3.5

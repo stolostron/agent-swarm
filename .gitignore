@@ -13,4 +13,6 @@ dist/
 .claude/
 libpod/tmp/pause.pid
 .mcp.json
+opencode.json
 .deploy-defaults
+swarmer.db

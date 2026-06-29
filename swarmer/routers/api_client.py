@@ -237,14 +237,13 @@ class APIClient:
         self,
         ws_id: int,
         name: str,
-        *,
-        mode: str = "prompt",
-        model: str = "",
-        agent_tool: str = "opencode",
-        instruction_prompt: str = "",
+         *,
+         mode: str = "prompt",
+         model: str = "",
+         agent_tool: str = "opencode",
+         instruction_prompt: str = "",
         github_pat_id: int | None = None,
         prompt_id: int | None = None,
-        persist: bool = False,
         working_branch: str = "",
         mcp_server_ids: list[int] | None = None,
     ) -> dict:
@@ -254,7 +253,6 @@ class APIClient:
             "model": model,
             "agent_tool": agent_tool,
             "instruction_prompt": instruction_prompt,
-            "persist": persist,
             "working_branch": working_branch,
         }
         if github_pat_id is not None:
@@ -407,9 +405,6 @@ class APIClient:
             },
         )
 
-    async def list_pats(self, ws_id: int) -> list[dict]:
-        return await self._get(f"/api/v1/workspaces/{ws_id}/secrets/pats")
-
     async def get_github_app(self, ws_id: int) -> dict | None:
         return await self._get(f"/api/v1/workspaces/{ws_id}/secrets/github-app")
 
@@ -434,6 +429,9 @@ class APIClient:
 
     async def delete_github_app(self, ws_id: int) -> dict:
         return await self._delete(f"/api/v1/workspaces/{ws_id}/secrets/github-app")
+
+    async def list_pats(self, ws_id: int) -> list[dict]:
+        return await self._get(f"/api/v1/workspaces/{ws_id}/secrets/pats")
 
     async def create_pat(
         self,

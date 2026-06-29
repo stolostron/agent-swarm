@@ -1,0 +1,164 @@
+{# Inner partial — replaced on every scheduleListChanged event. #}
+
+{% if schedules %}
+<div style="display:flex; flex-direction:column; gap:var(--pf-t--global--spacer--sm); margin-bottom:var(--pf-t--global--spacer--md);">
+  {% for sched in schedules %}
+  <div style="padding:var(--pf-t--global--spacer--sm) var(--pf-t--global--spacer--md);
+              background:var(--pf-t--global--background--color--secondary--default);
+              border-radius:var(--pf-t--global--border--radius--small);
+              {% if not sched.enabled %}opacity:0.55;{% endif %}">
+    <div style="display:flex; justify-content:space-between; align-items:flex-start; flex-wrap:wrap; gap:var(--pf-t--global--spacer--xs);">
+      <div>
+        {% if sched.label %}
+        <span class="pf-v6-c-label pf-m-purple" style="margin-right:var(--pf-t--global--spacer--xs);"><span class="pf-v6-c-label__content">{{ sched.label }}</span></span>
+        {% endif %}
+        <code style="font-size:var(--pf-t--global--font--size--xs);">{{ sched.cron_schedule }}</code>
+        {% if sched.prompt %}
+        <span style="margin-left:var(--pf-t--global--spacer--xs); font-size:var(--pf-t--global--font--size--xs); color:var(--pf-t--global--text--color--subtle);">· {{ sched.prompt.display_name }}</span>
+        {% else %}
+        <span style="margin-left:var(--pf-t--global--spacer--xs); font-size:var(--pf-t--global--font--size--xs); color:var(--pf-t--global--text--color--subtle);">· (session default prompt)</span>
+        {% endif %}
+      </div>
+      <div style="display:flex; gap:var(--pf-t--global--spacer--xs); flex-shrink:0;">
+        {# Toggle enabled/disabled #}
+        <form method="post"
+              action="/workspaces/{{ ws.id }}/sessions/{{ session.id }}/schedules/{{ sched.id }}/toggle"
+              hx-post="/workspaces/{{ ws.id }}/sessions/{{ session.id }}/schedules/{{ sched.id }}/toggle"
+              hx-swap="none"
+              style="display:inline;">
+          <button type="submit" class="pf-v6-c-button pf-m-small pf-m-secondary"
+                  title="{% if sched.enabled %}Disable{% else %}Enable{% endif %}">
+            {% if sched.enabled %}Disable{% else %}Enable{% endif %}
+          </button>
+        </form>
+        {# Edit — expand an inline form #}
+        <button type="button" class="pf-v6-c-button pf-m-small pf-m-secondary"
+                onclick="document.getElementById('sched-edit-{{ sched.id }}').style.display='block'; this.style.display='none';">Edit</button>
+        {# Delete #}
+        <form method="post"
+              action="/workspaces/{{ ws.id }}/sessions/{{ session.id }}/schedules/{{ sched.id }}/delete"
+              hx-post="/workspaces/{{ ws.id }}/sessions/{{ session.id }}/schedules/{{ sched.id }}/delete"
+              hx-swap="none"
+              style="display:inline;"
+              onsubmit="return confirm('Delete this schedule?');">
+          <button type="submit" class="pf-v6-c-button pf-m-small pf-m-danger">Delete</button>
+        </form>
+      </div>
+    </div>
+    {% if sched.cron_next_run %}
+    <div style="margin-top:var(--pf-t--global--spacer--xs); font-size:var(--pf-t--global--font--size--xs); color:var(--pf-t--global--text--color--subtle);">
+      {% if session.is_active and session.active_schedule_id == sched.id %}
+        Currently running.
+      {% elif sched.enabled %}
+        Next: <strong>{{ sched.cron_next_run.strftime('%b %d, %Y %H:%M') }} UTC</strong>
+      {% else %}
+        Disabled
+      {% endif %}
+    </div>
+    {% endif %}
+
+    {# Inline edit form (hidden by default) #}
+    <div id="sched-edit-{{ sched.id }}" style="display:none; margin-top:var(--pf-t--global--spacer--sm);">
+      <form method="post"
+            action="/workspaces/{{ ws.id }}/sessions/{{ session.id }}/schedules/{{ sched.id }}/edit"
+            hx-post="/workspaces/{{ ws.id }}/sessions/{{ session.id }}/schedules/{{ sched.id }}/edit"
+            hx-swap="none"
+            style="display:flex; flex-direction:column; gap:var(--pf-t--global--spacer--sm);">
+        <div style="display:flex; gap:var(--pf-t--global--spacer--xs); flex-wrap:wrap; align-items:center;">
+          <input type="text" name="cron_expr" class="pf-v6-c-form-control"
+                 value="{{ sched.cron_schedule }}" placeholder="*/30 * * * *" required
+                 style="flex:1; min-width:140px; font-family:monospace; font-size:var(--pf-t--global--font--size--sm);">
+          <input type="text" name="label" class="pf-v6-c-form-control"
+                 value="{{ sched.label }}" placeholder="Label (optional)"
+                 style="flex:1; min-width:120px; font-size:var(--pf-t--global--font--size--sm);">
+        </div>
+        <div>
+          <label style="font-size:var(--pf-t--global--font--size--sm); color:var(--pf-t--global--text--color--subtle);">Prompt override</label>
+          <select name="prompt_id" class="pf-v6-c-form-control" style="font-size:var(--pf-t--global--font--size--sm);">
+            <option value="">(Use session default)</option>
+            {% for source in prompt_sources %}
+            <optgroup label="{{ source.name }}">
+              {% for p in source.prompts %}
+              <option value="{{ p.id }}" {% if sched.prompt_id == p.id %}selected{% endif %}>{{ p.display_name }}</option>
+              {% endfor %}
+            </optgroup>
+            {% endfor %}
+          </select>
+        </div>
+        <details>
+          <summary style="font-size:var(--pf-t--global--font--size--sm); cursor:pointer; color:var(--pf-t--global--text--color--subtle);">Additional Instructions</summary>
+          <textarea name="instruction_prompt" class="pf-v6-c-form-control"
+                    placeholder="Leave empty to use the session's additional instructions"
+                    style="min-height:80px; font-size:var(--pf-t--global--font--size--sm); margin-top:var(--pf-t--global--spacer--xs); resize:vertical;">{{ sched.instruction_prompt }}</textarea>
+        </details>
+        <div style="display:flex; gap:var(--pf-t--global--spacer--xs);">
+          <button type="submit" class="pf-v6-c-button pf-m-primary pf-m-small">Save</button>
+          <button type="button" class="pf-v6-c-button pf-m-secondary pf-m-small"
+                  onclick="document.getElementById('sched-edit-{{ sched.id }}').style.display='none'; this.closest('form').previousElementSibling.previousElementSibling.previousElementSibling.querySelector('button[onclick]').style.display='inline-block';">Cancel</button>
+        </div>
+      </form>
+    </div>
+  </div>
+  {% endfor %}
+</div>
+{% else %}
+<p style="color:var(--pf-t--global--text--color--subtle); font-size:var(--pf-t--global--font--size--sm); margin-bottom:var(--pf-t--global--spacer--md);">No schedules yet. Add one below.</p>
+{% endif %}
+
+{# Add Schedule form #}
+<details id="schedule-add-toggle">
+  <summary style="font-size:var(--pf-t--global--font--size--sm); cursor:pointer; font-weight:var(--pf-t--global--font--weight--heading--bold); margin-bottom:var(--pf-t--global--spacer--sm);">+ Add schedule</summary>
+  <form method="post"
+        action="/workspaces/{{ ws.id }}/sessions/{{ session.id }}/schedules"
+        hx-post="/workspaces/{{ ws.id }}/sessions/{{ session.id }}/schedules"
+        hx-swap="none"
+        hx-on::after-request="if(event.detail.successful){this.reset();}"
+        style="display:flex; flex-direction:column; gap:var(--pf-t--global--spacer--sm); margin-top:var(--pf-t--global--spacer--sm);">
+    <div style="margin-bottom:var(--pf-t--global--spacer--xs);">
+      <label style="font-size:var(--pf-t--global--font--size--sm); color:var(--pf-t--global--text--color--subtle); display:block; margin-bottom:var(--pf-t--global--spacer--xs);">Quick presets</label>
+      <div style="display:grid; grid-template-columns:repeat(3, 1fr); gap:var(--pf-t--global--spacer--xs);">
+        {% for expr, lbl in cron_presets.items() %}
+        <button type="button" class="pf-v6-c-button pf-m-secondary pf-m-small"
+                onclick="this.closest('form').querySelector('[name=cron_expr]').value='{{ expr }}'; this.closest('form').querySelector('[name=label]').value='{{ lbl }}';"
+                style="width:100%;">{{ lbl }}</button>
+        {% endfor %}
+      </div>
+    </div>
+    <div style="display:flex; gap:var(--pf-t--global--spacer--xs); flex-wrap:wrap; align-items:center;">
+      <input type="text" name="cron_expr" class="pf-v6-c-form-control"
+             placeholder="*/30 * * * *" required
+             style="flex:1; min-width:140px; font-family:monospace; font-size:var(--pf-t--global--font--size--sm);">
+      <input type="text" name="label" class="pf-v6-c-form-control"
+             placeholder="Label (optional)"
+             style="flex:1; min-width:120px; font-size:var(--pf-t--global--font--size--sm);">
+    </div>
+    <div style="font-size:var(--pf-t--global--font--size--xs); color:var(--pf-t--global--text--color--subtle);">
+      min hour dom month dow (UTC) · <a href="https://crontab.guru/" target="_blank" rel="noopener">crontab.guru</a>
+    </div>
+    <div>
+      <label style="font-size:var(--pf-t--global--font--size--sm); color:var(--pf-t--global--text--color--subtle);">Prompt override</label>
+      <select name="prompt_id" class="pf-v6-c-form-control" style="font-size:var(--pf-t--global--font--size--sm);">
+        <option value="">(Use session default)</option>
+        {% for source in prompt_sources %}
+        <optgroup label="{{ source.name }}">
+          {% for p in source.prompts %}
+          <option value="{{ p.id }}">{{ p.display_name }}</option>
+          {% endfor %}
+        </optgroup>
+        {% endfor %}
+      </select>
+    </div>
+    <details>
+      <summary style="font-size:var(--pf-t--global--font--size--sm); cursor:pointer; color:var(--pf-t--global--text--color--subtle);">Additional Instructions</summary>
+      <textarea name="instruction_prompt" class="pf-v6-c-form-control"
+                placeholder="Leave empty to use the session's additional instructions"
+                style="min-height:80px; font-size:var(--pf-t--global--font--size--sm); margin-top:var(--pf-t--global--spacer--xs); resize:vertical;"></textarea>
+    </details>
+    <div>
+      <button type="submit" class="pf-v6-c-button pf-m-primary pf-m-small">Add Schedule</button>
+    </div>
+    <p style="color:var(--pf-t--global--text--color--subtle); font-size:var(--pf-t--global--font--size--xs); margin:0;">
+      Scheduled runs always execute in Prompt mode.
+    </p>
+  </form>
+</details>

@@ -19,12 +19,18 @@ spec:
         app: swarmer
     spec:
       serviceAccountName: swarmer
+      securityContext:
+        # FS_GROUP_VALUE is replaced by the deploy Makefile target:
+        #   OpenShift:           fsGroup: 1001
+        #   generic K8s / kind:  this line is deleted, leaving an empty securityContext: {}
+        fsGroup: FS_GROUP_VALUE
 
       containers:
         - name: swarmer
           # SWARMER_IMAGE is replaced by the deploy Makefile target
           image: SWARMER_IMAGE
-          imagePullPolicy: IfNotPresent
+          # IMAGE_PULL_POLICY_VALUE: IfNotPresent (kind/generic K8s) or Always (OpenShift)
+          imagePullPolicy: IMAGE_PULL_POLICY_VALUE
           ports:
             - containerPort: 8080
               name: http
@@ -45,16 +51,29 @@ spec:
               value: "OPENSHIFT_OAUTH_URL_VALUE"
             - name: REDIRECT_BASE_URL
               value: "REDIRECT_BASE_URL_VALUE"
+            - name: DEFAULT_AGENT_TOOL
+              value: "DEFAULT_AGENT_TOOL_VALUE"
             - name: AGENT_IMAGE_OPENCODE
               value: "AGENT_IMAGE_OPENCODE_VALUE"
             - name: AGENT_IMAGE_CRUSH
               value: "AGENT_IMAGE_CRUSH_VALUE"
             - name: MAX_CONCURRENT_AGENTS
               value: "MAX_CONCURRENT_AGENTS_VALUE"
+            - name: OPENSHELL_GATEWAY_URL
+              value: "OPENSHELL_GATEWAY_URL_VALUE"
+            - name: OPENSHELL_TLS_CA
+              value: "/auth/openshell/ca.crt"
+            - name: OPENSHELL_TLS_CERT
+              value: "/auth/openshell/tls.crt"
+            - name: OPENSHELL_TLS_KEY
+              value: "/auth/openshell/tls.key"
 
           volumeMounts:
             - name: swarmer-data
               mountPath: /data
+            - name: openshell-tls
+              mountPath: /auth/openshell
+              readOnly: true
 
           resources:
             requests:
@@ -75,3 +94,6 @@ spec:
         - name: swarmer-data
           persistentVolumeClaim:
             claimName: swarmer-data
+        - name: openshell-tls
+          secret:
+            secretName: openshell-tls

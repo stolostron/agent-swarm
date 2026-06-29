@@ -13,13 +13,16 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from swarmer import k8s, k8s_session as k8s_sess
+from pydantic import BaseModel
+
 from swarmer.agent_tools.registry import get as get_tool
 from swarmer.database import get_db
 from swarmer.api.deps import get_current_user, get_workspace_or_404, require_api_auth
 from swarmer.api.schemas import (
     MessageOut,
-    PatchResult,
+    ScheduleEntryCreate,
+    ScheduleEntryOut,
+    ScheduleEntryUpdate,
     ScheduleRequest,
     SessionCreate,
     SessionOut,
@@ -33,6 +36,12 @@ from swarmer.api.schemas import (
 from swarmer.models.session import Session
 from swarmer.models.session_run import SessionRun
 from swarmer.models.workspace import Workspace
+
+
+class PatchResult(BaseModel):
+    patch: str
+    commit_msg: str
+    filename: str
 
 log = logging.getLogger(__name__)
 
@@ -115,7 +124,6 @@ async def create_session(
         name=body.name.strip(),
         mode=body.mode,
         model=body.model.strip(),
-        persist=body.persist,
         instruction_prompt=body.instruction_prompt.strip(),
         agent_tool=agent_tool,
         working_branch=wb,
@@ -183,8 +191,6 @@ async def update_session(
         session.github_pat_id = body.github_pat_id
     if body.prompt_id is not None:
         session.prompt_id = body.prompt_id
-    if body.persist is not None:
-        session.persist = body.persist
     if body.working_branch is not None:
         wb = body.working_branch.strip()
         if wb and not _is_valid_ref_name(wb):
@@ -217,15 +223,18 @@ async def delete_session(
     if session.is_active:
         raise HTTPException(status_code=409, detail="Stop the session before deleting")
 
-    if session.pvc_name:
+    if session.sandbox_name:
+        # OpenShell session — delete sandbox
+        from swarmer import openshell_client
+        if session.service_url:
+            try:
+                await openshell_client.delete_service(session.sandbox_name, "agent")
+            except Exception:
+                pass
         try:
-            k8s_sess.delete_session_pvc(ws.k8s_namespace, session.pvc_name)
+            await openshell_client.delete_sandbox(session.sandbox_name)
         except Exception:
             pass
-    try:
-        k8s.cleanup_session_secrets(ws.k8s_namespace, session)
-    except Exception:
-        pass
 
     name = session.name
     await db.delete(session)
@@ -275,29 +284,27 @@ async def stop_session(
         await db.refresh(session)
         return session
 
-    if session.pod_name:
-        from swarmer import log_poller
-        log_poller.stop_log_poller(sid)
-        try:
-            k8s.delete_pod(session.pod_name, ws.k8s_namespace)
-            if session.mode == "server":
-                k8s.delete_service(f"session-{session.id}-svc", ws.k8s_namespace)
-                k8s.delete_session_route(session.id, ws.k8s_namespace)
-        except Exception:
-            pass
+    # Cancel any background tasks for this session before touching the DB so
+    # the task cannot race and overwrite the "stopped" phase we're about to set.
+    _task_names = (f"openshell-setup-{sid}", f"openshell-agent-{sid}")
+    for _t in asyncio.all_tasks():
+        if _t.get_name() in _task_names:
+            _t.cancel()
+            log.info("stop_session: cancelled background task %s", _t.get_name())
 
-    if not session.persist and session.pvc_name:
+    if session.sandbox_name:
+        from swarmer import openshell_client
+        if session.service_url:
+            try:
+                await openshell_client.delete_service(session.sandbox_name, "agent")
+            except Exception:
+                pass
         try:
-            k8s_sess.delete_session_pvc(ws.k8s_namespace, session.pvc_name)
-            session.pvc_name = None
+            await openshell_client.delete_sandbox(session.sandbox_name)
         except Exception:
             pass
-
-    if not session.cron_schedule:
-        try:
-            k8s.cleanup_session_secrets(ws.k8s_namespace, session)
-        except Exception:
-            pass
+        session.sandbox_name = None
+        session.service_url = None
 
     from swarmer.session_runs import STOPPED_BY_USER_DETAIL, record_session_run
 
@@ -309,12 +316,24 @@ async def stop_session(
             phase="stopped",
             status_detail=STOPPED_BY_USER_DETAIL,
             last_output=session.last_output,
+            raw_output=session.raw_output,
             completed_at=completed_at,
         )
     session.run_completed_at = completed_at
     session.phase = "stopped"
     session.status_detail = STOPPED_BY_USER_DETAIL
-    session.pod_name = None
+
+    # Advance cron_next_run so the scheduler doesn't immediately re-launch a
+    # cron-scheduled session that was manually stopped.
+    if session.cron_schedule and session.cron_next_run is not None:
+        try:
+            from croniter import croniter as _croniter
+            session.cron_next_run = _croniter(
+                session.cron_schedule, datetime.now(timezone.utc)
+            ).get_next(datetime)
+        except Exception:
+            log.warning("stop_session: failed to advance cron_next_run for session %d", sid, exc_info=True)
+
     await db.commit()
     await db.refresh(session)
     return session
@@ -395,17 +414,6 @@ async def set_model(
     session = await _get_session_or_404(ws_id, sid, db)
     new_model = body.model.strip()
 
-    if session.is_active and session.pod_name:
-        try:
-            tool = get_tool(session.agent_tool)
-            tool.exec_model_update(session.pod_name, ws.k8s_namespace, new_model)
-        except Exception as exc:
-            log.warning("exec_model_update failed for session %d: %s", sid, exc)
-            raise HTTPException(
-                status_code=500,
-                detail=f"Failed to update model on running pod: {exc}",
-            )
-
     session.model = new_model
     await db.commit()
     await db.refresh(session)
@@ -423,17 +431,38 @@ async def schedule_session(
     ws: Workspace = Depends(get_workspace_or_404),
     db: AsyncSession = Depends(get_db),
 ):
+    """Backward-compat: create or replace a single schedule entry on the session."""
     from croniter import croniter
+    from swarmer.models.session_schedule import SessionSchedule
 
     session = await _get_session_or_404(ws_id, sid, db)
-    if session.mode != "prompt":
-        raise HTTPException(status_code=422, detail="Scheduling only supported for prompt-mode sessions")
-
     if not croniter.is_valid(body.cron_expr):
         raise HTTPException(status_code=422, detail=f"Invalid cron expression: {body.cron_expr}")
 
+    # Write to the deprecated session fields for backward compat (cron_schedule / cron_next_run).
     session.cron_schedule = body.cron_expr
     session.cron_next_run = croniter(body.cron_expr, datetime.now(timezone.utc)).get_next(datetime)
+
+    # Delegate to the new model: upsert a schedule entry with an empty label.
+    result = await db.execute(
+        select(SessionSchedule)
+        .where(SessionSchedule.session_id == sid, SessionSchedule.label == "")
+        .limit(1)
+    )
+    sched = result.scalars().first()
+    next_run = croniter(body.cron_expr, datetime.now(timezone.utc)).get_next(datetime)
+    if sched is None:
+        sched = SessionSchedule(
+            session_id=sid,
+            cron_schedule=body.cron_expr,
+            cron_next_run=next_run,
+        )
+        db.add(sched)
+    else:
+        sched.cron_schedule = body.cron_expr
+        sched.cron_next_run = next_run
+        sched.enabled = True
+
     await db.commit()
     await db.refresh(session)
     return session
@@ -446,19 +475,122 @@ async def unschedule_session(
     ws: Workspace = Depends(get_workspace_or_404),
     db: AsyncSession = Depends(get_db),
 ):
+    """Backward-compat: disable all schedules on the session and clear deprecated fields."""
+    from swarmer.models.session_schedule import SessionSchedule
+
     session = await _get_session_or_404(ws_id, sid, db)
+
+    # Clear deprecated session-level fields.
     session.cron_schedule = ""
     session.cron_next_run = None
 
-    if session.k8s_secret_names:
-        try:
-            k8s.cleanup_session_secrets(ws.k8s_namespace, session)
-        except Exception:
-            pass
+    result = await db.execute(
+        select(SessionSchedule).where(SessionSchedule.session_id == sid)
+    )
+    for sched in result.scalars().all():
+        sched.enabled = False
 
     await db.commit()
     await db.refresh(session)
     return session
+
+
+# ---------- Schedule sub-resource ----------
+
+
+@router.get("/{sid}/schedules", response_model=list[ScheduleEntryOut])
+async def list_schedules(
+    ws_id: int,
+    sid: int,
+    ws: Workspace = Depends(get_workspace_or_404),
+    db: AsyncSession = Depends(get_db),
+):
+    from swarmer.models.session_schedule import SessionSchedule
+    await _get_session_or_404(ws_id, sid, db)
+    result = await db.execute(
+        select(SessionSchedule)
+        .where(SessionSchedule.session_id == sid)
+        .order_by(SessionSchedule.created_at)
+    )
+    return result.scalars().all()
+
+
+@router.post("/{sid}/schedules", response_model=ScheduleEntryOut, status_code=201)
+async def create_schedule(
+    ws_id: int,
+    sid: int,
+    body: ScheduleEntryCreate,
+    ws: Workspace = Depends(get_workspace_or_404),
+    db: AsyncSession = Depends(get_db),
+):
+    from croniter import croniter
+    from swarmer.models.session_schedule import SessionSchedule
+    await _get_session_or_404(ws_id, sid, db)
+    if not croniter.is_valid(body.cron_schedule):
+        raise HTTPException(status_code=422, detail=f"Invalid cron expression: {body.cron_schedule}")
+    sched = SessionSchedule(
+        session_id=sid,
+        cron_schedule=body.cron_schedule,
+        cron_next_run=croniter(body.cron_schedule, datetime.now(timezone.utc)).get_next(datetime),
+        label=body.label,
+        prompt_id=body.prompt_id,
+        instruction_prompt=body.instruction_prompt,
+        enabled=body.enabled,
+    )
+    db.add(sched)
+    await db.commit()
+    await db.refresh(sched)
+    return sched
+
+
+@router.put("/{sid}/schedules/{sched_id}", response_model=ScheduleEntryOut)
+async def update_schedule(
+    ws_id: int,
+    sid: int,
+    sched_id: int,
+    body: ScheduleEntryUpdate,
+    ws: Workspace = Depends(get_workspace_or_404),
+    db: AsyncSession = Depends(get_db),
+):
+    from croniter import croniter
+    from swarmer.models.session_schedule import SessionSchedule
+    await _get_session_or_404(ws_id, sid, db)
+    sched = await db.get(SessionSchedule, sched_id)
+    if sched is None or sched.session_id != sid:
+        raise HTTPException(status_code=404, detail="Schedule not found")
+    if body.cron_schedule is not None:
+        if not croniter.is_valid(body.cron_schedule):
+            raise HTTPException(status_code=422, detail=f"Invalid cron expression: {body.cron_schedule}")
+        sched.cron_schedule = body.cron_schedule
+        sched.cron_next_run = croniter(body.cron_schedule, datetime.now(timezone.utc)).get_next(datetime)
+    if body.label is not None:
+        sched.label = body.label
+    if body.prompt_id is not None:
+        sched.prompt_id = body.prompt_id
+    if body.instruction_prompt is not None:
+        sched.instruction_prompt = body.instruction_prompt
+    if body.enabled is not None:
+        sched.enabled = body.enabled
+    await db.commit()
+    await db.refresh(sched)
+    return sched
+
+
+@router.delete("/{sid}/schedules/{sched_id}", status_code=204)
+async def delete_schedule(
+    ws_id: int,
+    sid: int,
+    sched_id: int,
+    ws: Workspace = Depends(get_workspace_or_404),
+    db: AsyncSession = Depends(get_db),
+):
+    from swarmer.models.session_schedule import SessionSchedule
+    await _get_session_or_404(ws_id, sid, db)
+    sched = await db.get(SessionSchedule, sched_id)
+    if sched is None or sched.session_id != sid:
+        raise HTTPException(status_code=404, detail="Schedule not found")
+    await db.delete(sched)
+    await db.commit()
 
 
 # ---------- Output & Patches ----------
@@ -472,7 +604,7 @@ async def get_output(
     db: AsyncSession = Depends(get_db),
 ):
     session = await _get_session_or_404(ws_id, sid, db)
-    return SessionOutput(output=session.last_output)
+    return SessionOutput(output=session.last_output, raw_output=session.raw_output)
 
 
 @router.post("/{sid}/clear-output", response_model=SessionOut)
@@ -484,6 +616,7 @@ async def clear_output(
 ):
     session = await _get_session_or_404(ws_id, sid, db)
     session.last_output = ""
+    session.raw_output = ""
     await db.commit()
     await db.refresh(session)
     return session
@@ -496,55 +629,47 @@ async def generate_patch(
     ws: Workspace = Depends(get_workspace_or_404),
     db: AsyncSession = Depends(get_db),
 ):
+    from swarmer import openshell_client
+    from swarmer.routers.sessions import _build_commit_msg, _patch_filename
+
     session = await _get_session_or_404(ws_id, sid, db)
-    if not session.pod_name or not session.is_active:
+    if not session.sandbox_name:
+        raise HTTPException(status_code=404, detail="Session is not an OpenShell session")
+    if session.phase != "running":
         raise HTTPException(status_code=409, detail="Session must be running to generate a patch")
 
-    from swarmer.routers.sessions import (
-        _build_commit_msg,
-        _exec_in_pod,
-        _patch_filename,
-        _prefix_diff_paths,
-    )
+    if session.patch_base_ref:
+        cmd = ["git", "diff", f"origin/{session.patch_base_ref}"]
+    else:
+        cmd = ["git", "diff"]
 
-    combined_diff = ""
-    for repo in session.repos:
-        workdir = f"/workspace/{repo.local_path}"
-        try:
-            if session.working_branch:
-                diff = await asyncio.to_thread(
-                    _exec_in_pod,
-                    session.pod_name, ws.k8s_namespace, workdir,
-                    ["git", "diff", f"origin/{session.working_branch.split('/')[-1]}..HEAD"],
-                    container=get_tool(session.agent_tool).get_container_name(),
-                )
-            else:
-                diff = await asyncio.to_thread(
-                    _exec_in_pod,
-                    session.pod_name, ws.k8s_namespace, workdir,
-                    ["git", "diff"],
-                    container=get_tool(session.agent_tool).get_container_name(),
-                )
-        except Exception as exc:
-            raise HTTPException(status_code=500, detail=f"Git diff failed: {exc}")
+    try:
+        result = await openshell_client.exec_command(
+            sandbox_name=session.sandbox_name,
+            cmd=cmd,
+            client=openshell_client._get_client(),
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Git diff failed: {exc}")
 
-        if diff.strip() and len(session.repos) > 1:
-            diff = _prefix_diff_paths(diff, repo.local_path)
-        combined_diff += diff
+    patch = result.stdout or ""
+    commit_msg = result.stderr or ""
 
-    if not combined_diff.strip():
+    if not patch.strip():
         session.patch_output = ""
         session.commit_msg = ""
         await db.commit()
         return PatchResult(patch="", commit_msg="No changes detected.", filename=_patch_filename(session))
 
-    commit_msg = await _build_commit_msg(combined_diff, session.workspace_id, db)
-    session.patch_output = combined_diff
+    if not commit_msg:
+        commit_msg = await _build_commit_msg(patch, session.workspace_id, db)
+
+    session.patch_output = patch
     session.commit_msg = commit_msg
     await db.commit()
 
     return PatchResult(
-        patch=combined_diff,
+        patch=patch,
         commit_msg=commit_msg,
         filename=_patch_filename(session),
     )

@@ -1,14 +1,17 @@
-"""Unit tests for _build_repo_context() in swarmer.k8s_session.
+"""Unit tests for _build_repo_context() in swarmer.routers.sessions.
 
 Tests the pure function that generates the markdown repository context
 block appended to AGENTS.md and prompt text.  No K8s or DB dependencies.
+
+Note: default base_path is /sandbox (OpenShell runtime). Pass base_path="/workspace"
+explicitly for tests that need the old K8s path behaviour.
 """
 
 import sys
 import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from swarmer.k8s_session import _build_repo_context  # noqa: E402
+from swarmer.routers.sessions import _build_repo_context  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -42,7 +45,7 @@ def test_single_repo():
     assert "## Workspace Repositories" in result
     assert "| `stolostron/agent-swarm` |" in result
     assert "| `main` |" in result
-    assert "| `/workspace/agent-swarm` |" in result
+    assert "| `/sandbox/agent-swarm` |" in result
 
 
 def test_multiple_repos():
@@ -57,7 +60,7 @@ def test_multiple_repos():
     assert "| `stolostron/agent-containers` |" in result
     # Branch and path correct for second repo
     assert "| `release-2.11` |" in result
-    assert "| `/workspace/containers` |" in result
+    assert "| `/sandbox/containers` |" in result
 
 
 def test_org_repo_extraction_without_git_suffix():
@@ -75,7 +78,7 @@ def test_org_repo_extraction_with_trailing_slash():
 def test_custom_local_path():
     repos = [_FakeRepo("https://github.com/org/repo.git", local_path="my-custom-path")]
     result = _build_repo_context(repos)
-    assert "| `/workspace/my-custom-path` |" in result
+    assert "| `/sandbox/my-custom-path` |" in result
 
 
 def test_output_is_valid_markdown_table():

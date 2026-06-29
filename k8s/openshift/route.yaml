@@ -3,6 +3,11 @@ kind: Route
 metadata:
   name: swarmer
   namespace: swarmer
+  annotations:
+    # Extend timeout for long-lived SSE and WebSocket connections (chat proxy,
+    # TUI, log streaming).  Default OpenShift Route timeout is 30s which causes
+    # 504s on SSE event streams and slow upstream connects.
+    haproxy.router.openshift.io/timeout: 600s
 spec:
   to:
     kind: Service

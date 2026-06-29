@@ -111,7 +111,7 @@ async def mcp_server_save_config(
                 jira_access_token=jira_access_token,
             )
             # Check auth status to determine success message
-            if result.get("auth_status") == "valid":
+            if result.get("auth_status") == "active":
                 flash(
                     request,
                     f"Connected to {result.get('display_name', 'MCP server')}! Token validated.",

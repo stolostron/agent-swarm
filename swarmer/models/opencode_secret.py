@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, Integer, Text, func
+from sqlalchemy import DateTime, ForeignKey, Integer, Text, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 import swarmer.crypto as crypto
@@ -9,6 +9,7 @@ from swarmer.database import Base
 
 class OpencodeSecret(Base):
     __tablename__ = "opencode_secrets"
+    __table_args__ = (UniqueConstraint("workspace_id", "user_id", name="uq_opencode_secrets_workspace_user"),)
 
     id: Mapped[int] = mapped_column(primary_key=True)
     workspace_id: Mapped[int] = mapped_column(

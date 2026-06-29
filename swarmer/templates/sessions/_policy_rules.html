@@ -1,0 +1,59 @@
+{# HTMX partial — session-level custom policy rules (approved from draft chunks).
+   Refreshes on the policyChanged HTMX trigger.
+   rules: list[dict] with keys name, endpoints, binaries, source, added_at
+#}
+{% if rules %}
+<table style="width:100%; border-collapse:collapse; font-size:var(--pf-t--global--font--size--sm);">
+  <thead>
+    <tr style="border-bottom:2px solid var(--pf-t--global--border--color--default); text-align:left;">
+      <th style="padding:var(--pf-t--global--spacer--xs) var(--pf-t--global--spacer--sm);">Rule Name</th>
+      <th style="padding:var(--pf-t--global--spacer--xs) var(--pf-t--global--spacer--sm);">Endpoints</th>
+      <th style="padding:var(--pf-t--global--spacer--xs) var(--pf-t--global--spacer--sm);">Binaries</th>
+      <th style="padding:var(--pf-t--global--spacer--xs) var(--pf-t--global--spacer--sm);">Added</th>
+      <th style="padding:var(--pf-t--global--spacer--xs) var(--pf-t--global--spacer--sm);"></th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for rule in rules %}
+    <tr style="border-bottom:1px solid var(--pf-t--global--border--color--default);">
+      <td style="padding:var(--pf-t--global--spacer--xs) var(--pf-t--global--spacer--sm);">
+        <code style="font-family:var(--pf-t--global--font--family--mono);">{{ rule.name }}</code>
+      </td>
+      <td style="padding:var(--pf-t--global--spacer--xs) var(--pf-t--global--spacer--sm);">
+        {% for ep in rule.endpoints %}
+        <div style="white-space:nowrap;">
+          <code style="font-family:var(--pf-t--global--font--family--mono);">{{ ep.host }}:{{ ep.port }}</code>
+          {% if ep.protocol %}<span style="color:var(--pf-t--global--text--color--subtle); font-size:0.85em;"> {{ ep.protocol }}</span>{% endif %}
+        </div>
+        {% endfor %}
+      </td>
+      <td style="padding:var(--pf-t--global--spacer--xs) var(--pf-t--global--spacer--sm); color:var(--pf-t--global--text--color--subtle);">
+        {% for b in rule.binaries %}
+        <div style="white-space:nowrap; font-size:0.9em;">
+          <code style="font-family:var(--pf-t--global--font--family--mono);">{{ b.path.split('/')[-1] }}</code>
+        </div>
+        {% endfor %}
+      </td>
+      <td style="padding:var(--pf-t--global--spacer--xs) var(--pf-t--global--spacer--sm); color:var(--pf-t--global--text--color--subtle); white-space:nowrap;">
+        {{ rule.added_at[:10] if rule.added_at else "" }}
+      </td>
+      <td style="padding:var(--pf-t--global--spacer--xs) var(--pf-t--global--spacer--sm); text-align:right;">
+        <button class="pf-v6-c-button pf-m-plain pf-m-small"
+                title="Remove rule"
+                style="color:var(--pf-t--global--color--status--danger--default); padding:2px 4px; line-height:1;"
+                hx-post="/workspaces/{{ ws_id }}/sessions/{{ session.id }}/policy-rules/{{ loop.index0 }}/delete"
+                hx-swap="none">
+          <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+            <path d="M5.5 1a.5.5 0 0 1 .5-.5h4a.5.5 0 0 1 .5.5V2H5.5V1zM4 2v-.5A1.5 1.5 0 0 1 5.5.5h5A1.5 1.5 0 0 1 12 1.5V2h2.5a.5.5 0 0 1 0 1H13v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V3H1.5a.5.5 0 0 1 0-1H4zm1 1v10h6V3H5zm1.5 2a.5.5 0 0 1 .5.5v6a.5.5 0 0 1-1 0v-6a.5.5 0 0 1 .5-.5zm3 0a.5.5 0 0 1 .5.5v6a.5.5 0 0 1-1 0v-6a.5.5 0 0 1 .5-.5z"/>
+          </svg>
+        </button>
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p style="color:var(--pf-t--global--text--color--subtle); font-size:var(--pf-t--global--font--size--sm); margin:0; padding:var(--pf-t--global--spacer--md) 0;">
+  No net rules yet. Select pending chunks below and click "Add to Net Rules" to promote them.
+</p>
+{% endif %}

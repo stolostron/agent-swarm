@@ -7,14 +7,15 @@ A FastAPI + HTMX dashboard for managing AI coding agent workloads on Kubernetes.
 ## Capabilities
 
 - **Workspaces** — each workspace maps 1:1 to a Kubernetes namespace; create, rename, and delete workspaces from the UI
-- **Secrets** — Fernet-encrypted storage for provider credentials (GCP/Vertex AI, Gemini, Anthropic, OpenAI), GitHub PATs for HTTPS git auth, and OCI registry pull secrets; all auto-synced to Kubernetes Secrets
-- **Session lifecycle** — create → launch → monitor → stop → delete sessions backed by Kubernetes Pods and PVCs
+- **Secrets** — Fernet-encrypted storage for provider credentials (GCP/Vertex AI, Gemini, Anthropic, OpenAI), GitHub PATs for HTTPS git auth, and OCI registry pull secrets
+- **Session lifecycle** — create → launch → monitor → stop → delete sessions backed by OpenShell sandboxes
 - **Three session modes:**
-  - **Prompt** — one-shot: run a prompt, stream output, pod exits when done
+  - **Prompt** — one-shot: run a prompt, stream output, sandbox exits when done
   - **Server** — persistent agent web API with in-dashboard chat link
-  - **TUI** — full xterm.js browser terminal connected via WebSocket + `kubectl exec` PTY
-- **Git cloning** — init containers clone configured repos into the PVC-backed workspace before the agent starts
+  - **TUI** — full xterm.js browser terminal connected via WebSocket + OpenShell PTY
+- **Git cloning** — repos cloned into the sandbox via OpenShell API at session launch
 - **Live UI** — HTMX polling for session status and output; no page reloads needed
+- **Dual output capture** — prompt-mode sessions preserve both the processed agent response (`last_output`) and the raw console log (`raw_output`); an Output / Raw Log toggle appears in the UI when they differ
 - **Multi-agent support** — OpenCode (Go) and Crush (Rust) coding agents
 - **MCP server integration** — Model Context Protocol servers per workspace (e.g., Atlassian Jira)
 - **Prompt library** — workspace-level prompt library with git-backed folders and per-session picker
@@ -73,17 +74,28 @@ Share the printed token with the user — it expires after `TOKEN_DURATION`.
 Binds a user to a specific workspace namespace so they can see and manage sessions in it:
 
 ```sh
-make grant-workspace SA_USER=alice WORKSPACE_NS=my-project
+make grant-workspace-access SA_USER=alice WORKSPACE_NS=my-project
 ```
 
 Run this once per user per namespace. A user with no workspace grants can log in but will see no workspaces.
 
+### Allow a user to create new workspaces
+
+Grants cluster-scoped `create namespaces` permission so the user sees the **Create Workspace** button.
+Users can only see workspaces they have been explicitly granted access to — this does not expose other users' workspaces:
+
+```sh
+make grant-workspace-create SA_USER=alice
+```
+
 ### Typical onboarding flow
 
 ```sh
-make user-token SA_USER=alice                          # 1. create user + print token
-make grant-workspace SA_USER=alice WORKSPACE_NS=team-a # 2. give access to a workspace
-make grant-workspace SA_USER=alice WORKSPACE_NS=team-b # 3. repeat for additional workspaces
+make user-token SA_USER=alice                                  # 1. create user + print token
+make grant-workspace-access SA_USER=alice WORKSPACE_NS=team-a  # 2. give access to a workspace
+make grant-workspace-access SA_USER=alice WORKSPACE_NS=team-b  # 3. repeat for additional workspaces
+# Optionally allow the user to create their own workspaces:
+make grant-workspace-create SA_USER=alice                      # 4. allow self-service workspace creation
 ```
 
 ## Other useful targets

@@ -88,7 +88,7 @@ Verify the output looks correct before continuing.
 
 ### Option 1 — OpenShift Deployment (Recommended)
 
-This is the manual step-by-step procedure. For an automated approach, see `make openshift-deploy`.
+This is the manual step-by-step procedure. For an automated approach, see `make deploy`.
 
 #### Step 1 — Apply shared resources (namespace, RBAC, PVC)
 
@@ -136,7 +136,7 @@ sed -e "s|SWARMER_IMAGE|${SWARMER_IMAGE}|g" \
     -e "s|OPENSHIFT_OAUTH_URL_VALUE|${OPENSHIFT_OAUTH_URL}|g" \
     -e "s|AGENT_IMAGE_OPENCODE_VALUE|${AGENT_IMAGE_OPENCODE}|g" \
     -e "s|AGENT_IMAGE_CRUSH_VALUE|${AGENT_IMAGE_CRUSH}|g" \
-    k8s/openshift/deployment.yaml | oc apply -f -
+    k8s/swarmer/deployment.yaml | oc apply -f -
 ```
 
 #### Step 7 — Wait for rollout
@@ -177,10 +177,8 @@ Best for active Python development. FastAPI runs locally with auto-reload; sessi
 
 ```sh
 make setup-secret          # generate SWARMER_SECRET_KEY → auth/secret.key
-make install               # pip install -r requirements.txt
-make kind-create           # create kind cluster (localhost:8080 → NodePort 30080)
-make kind-load-opencode    # load opencode agent image into kind
-make dev                   # uvicorn at http://localhost:8090, K8S_IN_CLUSTER=false
+make kind-deploy           # create kind cluster + build + load image + deploy (includes OpenShell)
+make dev                   # pip install + uvicorn at http://localhost:8090, K8S_IN_CLUSTER=false
 ```
 
 Dashboard: http://localhost:8090
@@ -194,15 +192,15 @@ Push the image to a registry and deploy to your current `kubectl` context.
 ```sh
 make setup-secret
 make image-build image-push REGISTRY=your-registry.example.com
-make k8s-deploy            # applies namespace, RBAC, PVC, service, deployment
-make k8s-connect           # port-forward → http://localhost:8080
+make deploy                # applies namespace, RBAC, PVC, service, deployment + installs OpenShell
+make connect               # port-forward → http://localhost:8080
 ```
 
 Dashboard: http://localhost:8080 via port-forward
 
 Teardown:
 ```sh
-make k8s-delete            # removes all swarmer resources from the namespace
+make delete                # removes swarmer + OpenShell from the cluster
 ```
 
 ### Option 5 — Kustomize Overlays
@@ -219,7 +217,7 @@ Declarative deployment using Kustomize overlays instead of `make`. Two flavors:
 | **Workspace isolation** | One namespace per workspace | All workspaces share one namespace |
 | **Auth** | OpenShift OAuth + bearer token | Bearer token only |
 | **OAuthClient** | Included | Not included |
-| **User management** | `make user-token` / `make grant-workspace` | Use your existing cluster credentials |
+| **User management** | `make user-token` / `make grant-workspace-access` / `make grant-workspace-create` | Use your existing cluster credentials |
 
 #### Prerequisites
 
@@ -266,8 +264,8 @@ Dashboard: `https://<route-host>`
 ##### User onboarding (cluster-admin)
 
 ```sh
-make user-token SA_USER=alice                          # create user + print token
-make grant-workspace SA_USER=alice WORKSPACE_NS=team-a # grant workspace access
+make user-token SA_USER=alice                                  # create user + print token
+make grant-workspace-access SA_USER=alice WORKSPACE_NS=team-a  # grant workspace access
 ```
 
 #### Deploying namespace-scoped (no cluster-admin)
@@ -296,7 +294,7 @@ oc apply -k kustomize/overlays/my-env
 - **Declarative** — all configuration is in YAML files, not shell variable substitution
 - **No Makefile required** — deploy with `oc apply -k` alone
 - **Overlay pattern** — environment-specific values (namespace, image, env vars) are separated from the base manifests
-- **User onboarding** — `make user-token` and `make grant-workspace` still work alongside Kustomize deployments
+- **User onboarding** — `make user-token`, `make grant-workspace-access`, and `make grant-workspace-create` still work alongside Kustomize deployments
 
 ---
 
@@ -360,7 +358,7 @@ The key must decode to exactly 32 bytes (base64url-encoded). All sensitive data 
 - Manual migrations in `database.py:migrate_db()` — uses `ALTER TABLE ... ADD COLUMN` wrapped in try/except (idempotent)
 
 ```sh
-make db-reset    # delete the SQLite database (forces fresh schema on next start)
+rm -f data/swarmer.db   # delete the SQLite database (forces fresh schema on next start)
 ```
 
 > **Note:** SQLite supports only a single concurrent writer. The K8s Deployment uses `strategy: Recreate` (not RollingUpdate). Only one replica is safe.
@@ -378,8 +376,9 @@ Agent container images are built from the repository's Containerfiles:
 
 ```sh
 make image-build           # Build swarmer image (depends on sync-images)
-make image-build-crush     # Build Crush agent image
 ```
+
+> **Note:** The Crush agent image is built from the `stolostron/agent-containers` repository, not this Makefile.
 
 **Pushing:**
 
@@ -389,7 +388,7 @@ make image-push REGISTRY=your-registry.example.com
 
 **Syncing agent image refs into `.env`:**
 
-The `sync-images` target reads `REGISTRY` and `IMAGE_TAG` from `.push-defaults` and updates `AGENT_IMAGE`, `AGENT_IMAGE_OPENCODE`, and `AGENT_IMAGE_CRUSH` in `.env`:
+The `sync-images` target reads `REGISTRY` and `IMAGE_TAG` from `.push-defaults` and updates `AGENT_IMAGE_OPENCODE` and `AGENT_IMAGE_CRUSH` in `.env`:
 
 ```sh
 make sync-images
@@ -419,17 +418,28 @@ Share the printed token with the user — it expires after `TOKEN_DURATION`.
 Binds a user to a specific workspace namespace so they can see and manage sessions in it:
 
 ```sh
-make grant-workspace SA_USER=alice WORKSPACE_NS=my-project
+make grant-workspace-access SA_USER=alice WORKSPACE_NS=my-project
 ```
 
 Run this once per user per namespace. A user with no workspace grants can log in but will see no workspaces.
 
+#### Allowing a user to create new workspaces
+
+Grants cluster-scoped `create namespaces` permission so the user sees the **Create Workspace** button.
+Users can only see workspaces they have been explicitly granted access to — this does not expose other users' workspaces:
+
+```sh
+make grant-workspace-create SA_USER=alice
+```
+
 #### Typical onboarding flow
 
 ```sh
-make user-token SA_USER=alice                          # 1. create user + print token
-make grant-workspace SA_USER=alice WORKSPACE_NS=team-a # 2. give access to a workspace
-make grant-workspace SA_USER=alice WORKSPACE_NS=team-b # 3. repeat for additional workspaces
+make user-token SA_USER=alice                                  # 1. create user + print token
+make grant-workspace-access SA_USER=alice WORKSPACE_NS=team-a  # 2. give access to a workspace
+make grant-workspace-access SA_USER=alice WORKSPACE_NS=team-b  # 3. repeat for additional workspaces
+# Optionally allow the user to create their own workspaces:
+make grant-workspace-create SA_USER=alice                      # 4. allow self-service workspace creation
 ```
 
 #### OpenShift OAuth
@@ -654,10 +664,16 @@ Generate git diffs from running session pods:
 
 ## Teardown
 
-### OpenShift
+### OpenShift / Kubernetes (generic)
+
+```sh
+make delete    # removes swarmer resources + uninstalls OpenShell
+```
+
+Or manually with `oc`:
 
 ```bash
-oc delete -f k8s/openshift/deployment.yaml --ignore-not-found
+oc delete -f k8s/swarmer/deployment.yaml --ignore-not-found
 oc delete -f k8s/openshift/service.yaml --ignore-not-found
 oc delete route swarmer -n swarmer --ignore-not-found
 oc delete oauthclient swarmer --ignore-not-found
@@ -671,12 +687,6 @@ oc delete -f k8s/swarmer/namespace.yaml --ignore-not-found
 
 ```sh
 make kind-delete
-```
-
-### Kubernetes (generic)
-
-```sh
-make k8s-delete
 ```
 
 ### Kustomize
@@ -702,13 +712,12 @@ All targets can be listed with `make help`. Run `make lint` to check code style 
 | Target | Description | Key Variables |
 |---|---|---|
 | `setup-secret` | Generate `SWARMER_SECRET_KEY` → `auth/secret.key` | |
-| `k8s-secret` | Create/update `swarmer-secret` K8s Secret from `auth/secret.key` | `NAMESPACE` |
-| `install` | `pip install -r requirements.txt` | |
-| `dev` | Uvicorn at `localhost:8090` with `--reload`, `K8S_IN_CLUSTER=false` | |
+| `dev` | `pip install` + Uvicorn at `localhost:8090` with `--reload`, `K8S_IN_CLUSTER=false` | |
 | `lint` | `ruff check swarmer/` | |
 | `test` | `pytest tests/ -q --ignore=tests/test_ui_patternfly.py` | |
-| `db-reset` | Delete the SQLite database (fresh schema on next start) | |
 | `sync-images` | Sync `AGENT_IMAGE_*` in `.env` from `.push-defaults` | `AC_DEFAULTS` |
+
+> **Reset database:** `rm -f data/swarmer.db` — fresh schema is created on next start.
 
 #### Container Image
 
@@ -716,27 +725,22 @@ All targets can be listed with `make help`. Run `make lint` to check code style 
 |---|---|---|
 | `image-build` | Build the swarmer container image | `REGISTRY`, `SILENT` |
 | `image-push` | Push image to registry | `REGISTRY` |
-| `image-build-crush` | Build the Crush agent container image | `CRUSH_VERSION`, `CRUSH_IMAGE` |
 
-#### Kubernetes Deployment
+#### Deploy / Delete
 
 | Target | Description | Key Variables |
 |---|---|---|
-| `k8s-deploy` | Deploy swarmer to the current `kubectl` context | `IMAGE_REF`, `NAMESPACE` |
-| `k8s-delete` | Remove swarmer from Kubernetes | `NAMESPACE` |
-| `k8s-connect` | Port-forward dashboard to `localhost:8080` | `NAMESPACE` |
-| `openshift-deploy` | Deploy to OpenShift: Route + OAuthClient + app | `SWARMER_HOST`, `NAMESPACE` |
+| `deploy` | Deploy swarmer + OpenShell to current `kubectl` context (auto-detects OpenShift) | `IMAGE_REF`, `NAMESPACE`, `SILENT` |
+| `delete` | Remove swarmer + OpenShell from cluster | `NAMESPACE` |
+| `connect` | Port-forward dashboard to `localhost:$(LOCAL_PORT)` | `NAMESPACE`, `LOCAL_PORT` |
+| `connect-openshell` | Port-forward OpenShell gateway gRPC port | `OPENSHELL_NAMESPACE` |
+| `status` | Show OpenShell and swarmer deployment status | `NAMESPACE` |
 
 #### Kind (Local Dev)
 
 | Target | Description | Key Variables |
 |---|---|---|
-| `kind-create` | Create a kind cluster with host port `8080→30080` | `KIND_CLUSTER` |
-| `kind-load` | Load the swarmer image into kind | `IMAGE_REF`, `KIND_CLUSTER` |
-| `kind-load-opencode` | Load the OpenCode image into kind | `OPENCODE_IMAGE`, `KIND_CLUSTER` |
-| `kind-load-crush` | Load the Crush agent image into kind | `CRUSH_IMAGE`, `KIND_CLUSTER` |
-| `kind-deploy` | One-shot: create cluster + build + load + deploy | |
-| `kind-connect` | Port-forward to the kind-deployed dashboard | |
+| `kind-deploy` | One-shot: create cluster + build + load image + deploy (includes OpenShell) | `KIND_CLUSTER` |
 | `kind-delete` | Delete the kind cluster and all data | `KIND_CLUSTER` |
 
 #### User Management
@@ -744,7 +748,9 @@ All targets can be listed with `make help`. Run `make lint` to check code style 
 | Target | Description | Key Variables |
 |---|---|---|
 | `user-token` | Issue a K8s login token for a user | `SA_USER`, `TOKEN_DURATION` (default `8h`) |
-| `grant-workspace` | Grant a user access to a workspace namespace | `SA_USER`, `WORKSPACE_NS` |
+| `grant-workspace-access` | Grant a user access to a specific workspace namespace | `SA_USER`, `WORKSPACE_NS` |
+| `grant-workspace-create` | Allow a user to create new workspaces | `SA_USER` |
+| `grant-workspace` | Deprecated alias for `grant-workspace-access` | `SA_USER`, `WORKSPACE_NS` |
 
 #### Key overridable variables
 
@@ -757,7 +763,7 @@ All targets can be listed with `make help`. Run `make lint` to check code style 
 | `KIND_CLUSTER` | `swarmer` | Kind cluster name |
 | `NAMESPACE` | `swarmer` | Kubernetes namespace |
 | `SA_USER` | _(required)_ | ServiceAccount username for token/grant targets |
-| `WORKSPACE_NS` | _(required)_ | Workspace namespace for grant-workspace |
+| `WORKSPACE_NS` | _(required)_ | Workspace namespace for grant-workspace-access |
 | `TOKEN_DURATION` | `8h` | Token validity duration |
 | `SILENT` | _(empty)_ | Set to `1` to skip interactive prompts |
 
@@ -794,5 +800,5 @@ oc exec -it <pod> -- ls -la /data
 oc get pods -n swarmer                  # List swarmer pods
 oc logs deployment/swarmer -n swarmer   # View swarmer logs
 oc get route swarmer -n swarmer         # Check route
-make db-reset                           # Reset database
+rm -f data/swarmer.db                   # Reset database (fresh schema on next start)
 ```

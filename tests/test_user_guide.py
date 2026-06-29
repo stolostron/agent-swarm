@@ -117,16 +117,15 @@ REQUIRED_TERMS = [
     "make setup-secret",
     "make kind-deploy",
     "make kind-delete",
-    "make k8s-deploy",
-    "make k8s-delete",
-    "make k8s-connect",
+    "make deploy",
+    "make delete",
+    "make connect",
     "make user-token",
     "make grant-workspace",
     "make image-build",
     "make image-push",
     "make dev",
     "make lint",
-    "make db-reset",
     "sqlite",
     "sleep infinity",
     "xterm.js",
@@ -146,21 +145,13 @@ def test_required_term_present(guide_content, term):
 
 MAKEFILE_TARGETS_IN_GUIDE = [
     "setup-secret",
-    "install",
     "dev",
     "lint",
-    "db-reset",
     "image-build",
     "image-push",
-    "image-build-crush",
-    "k8s-deploy",
-    "k8s-delete",
-    "k8s-connect",
-    "openshift-deploy",
-    "kind-create",
-    "kind-load",
-    "kind-load-opencode",
-    "kind-load-crush",
+    "deploy",
+    "delete",
+    "connect",
     "kind-deploy",
     "kind-delete",
     "user-token",
@@ -193,7 +184,6 @@ REFERENCED_PATHS = [
     "k8s/swarmer/namespace.yaml",
     "k8s/swarmer/rbac.yaml",
     "k8s/swarmer/pvc.yaml",
-    "k8s/openshift/deployment.yaml",
     "k8s/openshift/route.yaml",
     "k8s/openshift/oauth-client.yaml",
     "k8s/kind-config.yaml",
@@ -257,7 +247,7 @@ def test_agent_tool_model_formats(guide_content):
 def test_teardown_commands(guide_content):
     teardown_section = guide_content[guide_content.index("## Teardown"):]
     assert "kind-delete" in teardown_section
-    assert "k8s-delete" in teardown_section
+    assert "make delete" in teardown_section
     assert "oc delete" in teardown_section
 
 

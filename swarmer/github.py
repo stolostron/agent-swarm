@@ -50,53 +50,109 @@ def github_slug(url: str) -> str | None:
 async def fetch_repo_info(repos: list, pat: str | None) -> dict:
     """Return per-repo visibility and push-access info via the GitHub API.
 
+    Rules (caller is responsible for selecting the right token):
+      - No token (pat=None): do nothing — return all-None for every repo.
+      - Token present: determine public/private and whether the token can push.
+
+    Token-scope caveat for fine-grained PATs (github_pat_...):
+      GitHub's permissions.push field reflects the *user's* collaborator status,
+      not whether the token's repository scope includes the repo.  A fine-grained
+      PAT held by an admin will show push=True on a public repo even if that repo
+      is not listed in the token's allowed repositories.  To detect this we make a
+      second call to GET /repos/{slug}/git/refs which requires actual token-level
+      repo access — a 403 there means the token cannot access the repo regardless
+      of what permissions.push says.
+
     Result shape: {repo_id: {"is_public": bool|None, "can_push": bool|None}}
-    None means the check could not be performed (non-GitHub URL, API error, etc.)
+      is_public: True=public, False=private, None=could not determine
+      can_push:  True=confirmed write access, False=no write access, None=skipped (no token)
     """
-    headers = {"Accept": "application/vnd.github+json"}
-    if pat:
-        headers["Authorization"] = f"token {pat}"
+    # No credential — nothing to check.
+    if not pat:
+        return {r.id: {"is_public": None, "can_push": None} for r in repos}
+
+    headers = {
+        "Accept": "application/vnd.github+json",
+        "Authorization": f"token {pat}",
+    }
+    _is_fine_grained = pat.startswith("github_pat_")
+    _is_app_token = pat.startswith("ghs_")
 
     async def _check(client: httpx.AsyncClient, repo) -> tuple[int, dict]:
         slug = github_slug(repo.repo_url)
         if not slug:
-            return repo.id, {"is_public": None, "can_push": None}
+            return repo.id, {"is_public": None, "can_push": False}
         try:
-            r = await client.get(
-                f"https://api.github.com/repos/{slug}", headers=headers
-            )
+            r = await client.get(f"https://api.github.com/repos/{slug}", headers=headers)
+
             if r.status_code == 200:
                 data = r.json()
+                is_public = not data.get("private", True)
                 perms = data.get("permissions", {})
-                return repo.id, {
-                    "is_public": not data.get("private", True),
-                    "can_push": perms.get("push"),
-                }
-            # 404 → private repo the token can't see (or doesn't exist)
-            if r.status_code == 404:
-                return repo.id, {"is_public": None, "can_push": False if pat else None}
-            # Any other non-200 (rate-limit, 5xx, …) — don't infer push access
-            return repo.id, {"is_public": None, "can_push": None}
+                push_from_perms = bool(perms.get("push"))
+
+                if not push_from_perms:
+                    if _is_app_token:
+                        # App IAT: permissions.push=False is unreliable — the App's actual
+                        # write access is determined by its installation permissions, not
+                        # this field. Treat as indeterminate so no false "No write access".
+                        return repo.id, {"is_public": is_public, "can_push": None}
+                    # PAT: push=False is definitive.
+                    return repo.id, {"is_public": is_public, "can_push": False}
+
+                if _is_fine_grained:
+                    # permissions.push reflects user collaborator status, not token scope.
+                    # Probe with a token-scoped read endpoint to confirm actual access.
+                    r2 = await client.get(
+                        f"https://api.github.com/repos/{slug}/git/refs",
+                        headers=headers,
+                    )
+                    if r2.status_code == 403:
+                        # Token does not include this repo in its scope.
+                        log.debug(
+                            "fetch_repo_info: fine-grained PAT excluded from %s (refs 403)", slug
+                        )
+                        return repo.id, {"is_public": is_public, "can_push": False}
+
+                return repo.id, {"is_public": is_public, "can_push": True}
+
+            if r.status_code == 401:
+                # Token invalid/expired — retry unauthenticated for public/private visibility.
+                log.warning("fetch_repo_info: 401 for %s — retrying unauthenticated", slug)
+                r2 = await client.get(
+                    f"https://api.github.com/repos/{slug}",
+                    headers={"Accept": "application/vnd.github+json"},
+                )
+                is_public = not r2.json().get("private", True) if r2.status_code == 200 else None
+                return repo.id, {"is_public": is_public, "can_push": False}
+
+            # 404, 403, or anything else → no write access.
+            return repo.id, {"is_public": None, "can_push": False}
+
         except Exception:
-            return repo.id, {"is_public": None, "can_push": None}
+            return repo.id, {"is_public": None, "can_push": False}
 
     async with httpx.AsyncClient(timeout=5) as client:
         results = await asyncio.gather(*[_check(client, r) for r in repos])
-    return dict(results)
+    result_dict = dict(results)
+    log.debug("fetch_repo_info: fine_grained=%s results=%s", _is_fine_grained, result_dict)
+    return result_dict
 
 
 async def list_repos_for_pat(pat) -> list[dict] | str:
     """Fetch all repos accessible via a GitHubPAT, paginated up to 500.
 
-    If pat.github_org is set, lists repos from that org via GET /orgs/{org}/repos.
-    Otherwise lists the authenticated user's repos via GET /user/repos.
+    If pat.github_org is set, tries GET /orgs/{org}/repos first. If that returns
+    404 (i.e. the name is a personal account, not an org), falls back to
+    GET /users/{org}/repos. Otherwise lists the authenticated user's repos via
+    GET /user/repos.
 
     Returns a list of repo dicts (keys: full_name, private, updated_at, description)
     or a string error message on failure.
 
     The ``pat`` argument must expose:
       - pat.pat       (str)  — the raw token value
-      - pat.github_org (str) — org name or empty string
+      - pat.github_org (str) — org/username name or empty string
     """
     headers = {
         "Accept": "application/vnd.github+json",
@@ -115,6 +171,13 @@ async def list_repos_for_pat(pat) -> list[dict] | str:
             while url and len(repos) < 500:
                 r = await client.get(url, headers=headers, params=params)
                 params = {}  # pagination: subsequent URLs already carry params
+                if r.status_code == 404 and pat.github_org and url.startswith(
+                    f"https://api.github.com/orgs/{pat.github_org}/repos"
+                ):
+                    # The name is a personal account, not an org — retry as user
+                    url = f"https://api.github.com/users/{pat.github_org}/repos"
+                    params = {"per_page": 100, "sort": "updated"}
+                    continue
                 if r.status_code != 200:
                     ct = r.headers.get("content-type", "")
                     msg = (
@@ -125,6 +188,48 @@ async def list_repos_for_pat(pat) -> list[dict] | str:
                     return f"GitHub API error {r.status_code}: {msg}"
                 repos.extend(r.json())
                 # Follow Link header for next page
+                next_url: str | None = None
+                for part in r.headers.get("link", "").split(","):
+                    if 'rel="next"' in part:
+                        next_url = part.split(";")[0].strip().strip("<>")
+                url = next_url
+    except Exception as exc:
+        return f"Failed to contact GitHub API: {exc}"
+
+    return repos
+
+
+async def list_repos_for_github_app(token: str) -> list[dict] | str:
+    """Fetch all repos accessible to a GitHub App installation via an IAT.
+
+    Uses GET /installation/repositories (paginated, up to 500).
+    Returns same shape as list_repos_for_pat: list of dicts with keys
+    full_name, private, updated_at, description.
+    Returns a string error message on failure.
+    """
+    headers = {
+        "Accept": "application/vnd.github+json",
+        "Authorization": f"token {token}",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+    url: str | None = "https://api.github.com/installation/repositories"
+    params: dict = {"per_page": 100}
+    repos: list[dict] = []
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            while url and len(repos) < 500:
+                r = await client.get(url, headers=headers, params=params)
+                params = {}
+                if r.status_code != 200:
+                    ct = r.headers.get("content-type", "")
+                    msg = (
+                        r.json().get("message", "unknown error")
+                        if ct.startswith("application/json")
+                        else r.text
+                    )
+                    return f"GitHub API error {r.status_code}: {msg}"
+                data = r.json()
+                repos.extend(data.get("repositories", []))
                 next_url: str | None = None
                 for part in r.headers.get("link", "").split(","):
                     if 'rel="next"' in part:

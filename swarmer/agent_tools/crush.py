@@ -1,4 +1,3 @@
-import base64
 import json
 import shlex
 
@@ -6,29 +5,21 @@ from swarmer.agent_tools import AgentToolStrategy
 from swarmer.config import settings
 
 
-def _b64(value: str) -> str:
-    return base64.b64encode(value.encode()).decode()
+_SMALL_MODEL = "gemini/gemini-3.5-flash"
 
 
-_HAIKU_BY_PROVIDER = {
-    "vertexai": "claude-haiku-4-5-20251001",
-    "anthropic": "claude-haiku-3.5",
-}
+_SMALL_MODEL_VERTEX = "vertexai/claude-haiku-4-5-20251001"
 
 
 def _derive_small_model(model: str) -> str | None:
-    if "/" not in model:
-        return None
-    provider_id, model_id = model.split("/", 1)
-
-    if provider_id in {"vertexai", "anthropic"} and "opus" in model_id:
-        return f"{provider_id}/claude-sonnet-4-6"
-    if provider_id in {"vertexai", "anthropic"} and "sonnet" in model_id:
-        haiku_id = _HAIKU_BY_PROVIDER.get(provider_id)
-        return f"{provider_id}/{haiku_id}" if haiku_id else None
-    if provider_id in {"vertexai", "gemini"} and "gemini" in model_id and "pro" in model_id:
-        return f"{provider_id}/{model_id.replace('pro', 'flash')}"
-    return None
+    """Return the small model paired with the given large model, or None if same."""
+    if model == _SMALL_MODEL:
+        return None  # already the small model — no separate small needed
+    if model.startswith("vertexai/claude-"):
+        if model == _SMALL_MODEL_VERTEX:
+            return None
+        return _SMALL_MODEL_VERTEX
+    return _SMALL_MODEL
 
 
 class CrushStrategy(AgentToolStrategy):
@@ -42,6 +33,14 @@ class CrushStrategy(AgentToolStrategy):
         return "Crush"
 
     def get_image(self) -> str:
+        return settings.agent_image_crush
+
+    def require_image(self) -> str:
+        """Return the image, raising ValueError if AGENT_IMAGE_CRUSH is not configured.
+
+        Call this at launch time (not at list/render time) so that missing config
+        fails fast only when an actual launch is attempted, not on every page render.
+        """
         if not settings.agent_image_crush:
             raise ValueError(
                 "AGENT_IMAGE_CRUSH is not set. "
@@ -50,10 +49,29 @@ class CrushStrategy(AgentToolStrategy):
             )
         return settings.agent_image_crush
 
-    def get_config_map_name(self) -> str:
-        return "crush-config"
+    def build_config_data(self, secret=None, mcp_servers=None, use_inference_local: bool = False, model: str = "") -> dict[str, str]:
+        # Crush requires explicit provider entries in the config — it does not
+        # auto-detect from env vars alone.  The value is a map[string]ProviderConfig
+        # (keyed by provider ID), NOT an array.  Use $VAR references so values are
+        # resolved at runtime from whatever the sandbox environment provides
+        # (injected by the OpenShell provider mechanism).
+        providers = {
+            "gemini": {
+                "name": "Google Gemini",
+                "type": "gemini",
+                "api_key": "$GOOGLE_API_KEY",
+            },
+        }
+        # Add Vertex AI provider if the selected model uses it.
+        # The google-cloud OpenShell provider sets GCP_ADC_ACCESS_TOKEN; the GCE metadata
+        # emulator (127.0.0.1:8174) exposes it so the vertexai SDK obtains credentials
+        # without needing an explicit API key in the config.
+        if model.startswith("vertexai/"):
+            providers["vertexai"] = {
+                "name": "Vertex AI",
+                "type": "vertexai",
+            }
 
-    def build_config_data(self, secret=None, mcp_servers=None) -> dict[str, str]:
         config = {
             "$schema": "https://charm.land/crush.json",
             "options": {
@@ -62,6 +80,7 @@ class CrushStrategy(AgentToolStrategy):
                 "data_directory": ".crush",
                 "auto_lsp": True,
             },
+            "providers": providers,
             "lsp": {
                 "go": {"command": "gopls"},
                 "python": {"command": "pyright-langserver", "args": ["--stdio"]},
@@ -88,12 +107,6 @@ class CrushStrategy(AgentToolStrategy):
             "gitconfig": "[safe]\n\tdirectory = *\n",
         }
 
-    def get_config_mount_path(self) -> str:
-        return "/workspace/.config/crush"
-
-    def get_secret_name(self) -> str:
-        return "crush-secret"
-
     def get_container_name(self) -> str:
         return "crush"
 
@@ -117,13 +130,17 @@ class CrushStrategy(AgentToolStrategy):
             provider_id, model_id = model.split("/", 1)
         else:
             provider_id, model_id = "", model
-        large = {"model": model_id, "provider": provider_id}
+        # think: false disables Gemini reasoning/thinking tokens.  The OpenShell
+        # egress proxy performs TLS inspection and corrupts the opaque signatures
+        # embedded in reasoning blocks, causing "Corrupted thought signature"
+        # errors after the first few turns.
+        large = {"model": model_id, "provider": provider_id, "think": False}
         models_cfg: dict = {"large": large}
 
         small = _derive_small_model(model)
         if small:
             sp, sm = small.split("/", 1)
-            models_cfg["small"] = {"model": sm, "provider": sp}
+            models_cfg["small"] = {"model": sm, "provider": sp, "think": False}
 
         config_data = json.dumps({"models": models_cfg})
         return (
@@ -140,167 +157,32 @@ class CrushStrategy(AgentToolStrategy):
             return "sleep infinity"
         else:
             base_parts = ["crush", "run"]
-            if model:
-                base_parts.extend(["--model", model])
+            # Do not pass --model on the CLI — Crush validates it against its
+            # built-in catalogue and rejects unknown IDs like gemini-3.1-pro-preview.
+            # The model is already written to crush.json by build_model_setup_cmd.
             prompt_text = resolved_prompt or session.instruction_prompt
             prompt_parts = [prompt_text] if prompt_text else []
             return " ".join(shlex.quote(p) for p in base_parts + prompt_parts)
 
-    def get_server_mode_ports(self) -> list:
-        from kubernetes import client
-        port = settings.crush_server_port
-        return [client.V1ContainerPort(container_port=port, name="crush")]
-
     def is_valid_model(self, model: str) -> bool:
-        return model.startswith(("vertexai/", "anthropic/", "gemini/", "openai/"))
+        return model.startswith(("gemini/", "vertexai/"))
 
-    def get_model_options(self, secret=None) -> list[dict]:
+    def get_model_options(self, secret=None, has_vertex: bool = False) -> list[dict]:
         options = []
-        if secret and secret.has_adc:
+        if has_vertex:
             options.extend([
-                {"value": "vertexai/claude-sonnet-4-6", "label": "Claude Sonnet 4.6 (balanced)", "group": "Vertex AI — Claude"},
-                {"value": "vertexai/claude-opus-4-6", "label": "Claude Opus 4.6 (most capable)", "group": "Vertex AI — Claude"},
-                {"value": "vertexai/claude-haiku-4-5-20251001", "label": "Claude Haiku 4.5 (fast)", "group": "Vertex AI — Claude"},
-                {"value": "vertexai/gemini-3.5-pro", "label": "Gemini 3.5 Pro", "group": "Vertex AI — Gemini"},
-                {"value": "vertexai/gemini-3.5-flash", "label": "Gemini 3.5 Flash (fast)", "group": "Vertex AI — Gemini"},
-            ])
-        elif secret and getattr(secret, "has_vertex", False):
-            options.extend([
-                {"value": "vertexai/claude-sonnet-4-6", "label": "Claude Sonnet 4.6 (balanced)", "group": "Vertex AI — Claude"},
-                {"value": "vertexai/claude-opus-4-6", "label": "Claude Opus 4.6 (most capable)", "group": "Vertex AI — Claude"},
-                {"value": "vertexai/claude-haiku-4-5-20251001", "label": "Claude Haiku 4.5 (fast)", "group": "Vertex AI — Claude"},
-                {"value": "vertexai/gemini-3.5-pro", "label": "Gemini 3.5 Pro", "group": "Vertex AI — Gemini"},
-                {"value": "vertexai/gemini-3.5-flash", "label": "Gemini 3.5 Flash (fast)", "group": "Vertex AI — Gemini"},
-            ])
-        if secret and getattr(secret, "anthropic_api_key_enc", ""):
-            options.extend([
-                {"value": "anthropic/claude-sonnet-4-6", "label": "Claude Sonnet 4.6", "group": "Anthropic (direct)"},
-                {"value": "anthropic/claude-opus-4-6", "label": "Claude Opus 4.6 (most capable)", "group": "Anthropic (direct)"},
-                {"value": "anthropic/claude-haiku-3.5", "label": "Claude Haiku 3.5 (fast)", "group": "Anthropic (direct)"},
-            ])
-        if secret and getattr(secret, "openai_api_key_enc", ""):
-            options.extend([
-                {"value": "openai/gpt-4o", "label": "GPT-4o", "group": "OpenAI"},
-                {"value": "openai/o3", "label": "o3 (reasoning)", "group": "OpenAI"},
+                {"value": "vertexai/claude-opus-4-6", "label": "Claude Opus 4.6 (most capable)", "group": "Claude (Vertex AI)"},
+                {"value": "vertexai/claude-sonnet-4-6", "label": "Claude Sonnet 4.6 (balanced)", "group": "Claude (Vertex AI)"},
+                {"value": "vertexai/claude-haiku-4-5-20251001", "label": "Claude Haiku 4.5 (fast)", "group": "Claude (Vertex AI)"},
             ])
         if secret and getattr(secret, "google_api_key_enc", ""):
             options.extend([
-                {"value": "gemini/gemini-3.5-flash", "label": "Gemini 3.5 Flash (fast)", "group": "Gemini (AI Studio)"},
-                {"value": "gemini/gemini-3-pro-preview", "label": "Gemini 3 Pro", "group": "Gemini (AI Studio)"},
+                {"value": "gemini/gemini-3.5-flash", "label": "Gemini 3.5 Flash (fast)", "group": "Gemini"},
+                {"value": "gemini/gemini-3.1-pro-preview", "label": "Gemini 3.1 Pro", "group": "Gemini"},
             ])
         return options
 
-    def get_default_model(self, has_adc: bool, has_gemini: bool) -> str:
+    def get_default_model(self, has_adc: bool) -> str:
         if has_adc:
             return "vertexai/claude-sonnet-4-6"
-        if has_gemini:
-            return "gemini/gemini-3.5-flash"
-        return ""
-
-    def exec_model_update(self, pod_name: str, namespace: str, model: str) -> None:
-        pass
-
-    def get_env_from_sources(self, secret_name: str = "") -> list:
-        from kubernetes import client
-        return [
-            client.V1EnvFromSource(
-                secret_ref=client.V1SecretEnvSource(
-                    name=secret_name or "crush-secret", optional=True
-                )
-            )
-        ]
-
-    def get_extra_env(self, has_adc: bool) -> list:
-        from kubernetes import client
-        env = []
-        if has_adc:
-            env.append(client.V1EnvVar(
-                name="GOOGLE_APPLICATION_CREDENTIALS",
-                value="/app/gcloud/credentials.json",
-            ))
-        return env
-
-    def get_extra_volumes(self, has_adc: bool, secret_name: str = "") -> list:
-        from kubernetes import client
-        volumes = []
-        if has_adc:
-            volumes.append(
-                client.V1Volume(
-                    name="gcloud-creds",
-                    secret=client.V1SecretVolumeSource(
-                        secret_name=secret_name or "crush-secret",
-                        items=[
-                            client.V1KeyToPath(
-                                key="application_default_credentials.json",
-                                path="credentials.json",
-                            )
-                        ],
-                    ),
-                )
-            )
-        return volumes
-
-    def get_extra_volume_mounts(self, has_adc: bool) -> list:
-        from kubernetes import client
-        mounts = []
-        if has_adc:
-            mounts.append(
-                client.V1VolumeMount(
-                    name="gcloud-creds",
-                    mount_path="/app/gcloud",
-                    read_only=True,
-                )
-            )
-        return mounts
-
-    def build_k8s_secret_data(self, secret) -> dict[str, str]:
-        data = {}
-        if secret.google_api_key_enc:
-            data["GEMINI_API_KEY"] = _b64(secret.google_api_key)
-        if getattr(secret, "anthropic_api_key_enc", "") and secret.anthropic_api_key_enc:
-            data["ANTHROPIC_API_KEY"] = _b64(secret.anthropic_api_key)
-        if getattr(secret, "openai_api_key_enc", "") and secret.openai_api_key_enc:
-            data["OPENAI_API_KEY"] = _b64(secret.openai_api_key)
-        if secret.google_cloud_project:
-            data["VERTEXAI_PROJECT"] = _b64(secret.google_cloud_project)
-        if secret.vertex_location:
-            data["VERTEXAI_LOCATION"] = _b64(secret.vertex_location)
-        if secret.has_adc:
-            data["application_default_credentials.json"] = _b64(
-                secret.application_default_credentials
-            )
-        return data
-
-    def build_mcp_config_cmd(self, mcp_servers) -> str:
-        config = {
-            "$schema": "https://charm.land/crush.json",
-            "options": {
-                "disable_metrics": True,
-                "disable_notifications": True,
-                "data_directory": ".crush",
-                "auto_lsp": True,
-            },
-            "lsp": {
-                "go": {"command": "gopls"},
-                "python": {"command": "pyright-langserver", "args": ["--stdio"]},
-            },
-        }
-        if mcp_servers:
-            mcp_config = {}
-            for srv in mcp_servers:
-                mcp_config[srv.slug] = {
-                    "type": "stdio",
-                    "command": "jira-mcp-server",
-                    "env": {
-                        "JIRA_SERVER_URL": "$JIRA_SERVER_URL",
-                        "JIRA_ACCESS_TOKEN": "$JIRA_ACCESS_TOKEN",
-                        "JIRA_EMAIL": "$JIRA_EMAIL",
-                    },
-                }
-            config["mcp"] = mcp_config
-        config_json = json.dumps(config)
-        config_path = self.get_config_mount_path()
-        return (
-            f"printf '%s' {shlex.quote(config_json)} "
-            f"> {config_path}/crush.json && "
-        )
+        return "gemini/gemini-3.1-pro-preview"

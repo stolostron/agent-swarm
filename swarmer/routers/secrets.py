@@ -1,13 +1,14 @@
-"""Console routes — Secrets management (credentials, PATs, pull secrets).
+"""Console routes — Secrets management (credentials, PATs, GitHub App, pull secrets).
 
 All data access goes through the REST API client (/api/v1/).
 """
 
 from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
 from fastapi.responses import RedirectResponse
-from starlette.responses import Response
 from fastapi.templating import Jinja2Templates
+from starlette.responses import Response
 
+from swarmer import openshell_client
 from swarmer.csrf import CSRFError, ensure_csrf_token, validate_csrf_token
 from swarmer.deps import require_auth
 from swarmer.flash import flash
@@ -55,11 +56,22 @@ async def _secrets_context(api, ws_id: int) -> dict:
     except APIError:
         github_app = None
 
+    # Check gateway for Vertex AI (google-cloud) provider — ADC is stored on OpenShell,
+    # not in the Swarmer DB, so the gateway is the source of truth for this status.
+    vertex_provider_configured = False
+    try:
+        vertex_provider_configured = await openshell_client.provider_exists(
+            f"swarmer-ws-{ws_id}-google-cloud"
+        )
+    except Exception:
+        pass  # gateway may be unreachable in local dev without OpenShell
+
     return {
         "secret": secret,
         "pats": pats,
         "pull_secret_info": pull_secret_info,
         "github_app": github_app,
+        "vertex_provider_configured": vertex_provider_configured,
     }
 
 
@@ -128,15 +140,15 @@ async def opencode_secret_save(
     shared: str = Form(""),
     adc_file: UploadFile | None = File(None),
 ):
-    adc_json = ""
-    if adc_file and adc_file.filename:
-        import json
+    import json as _json
 
+    adc_content = ""
+    if adc_file and adc_file.filename:
         content = await adc_file.read()
         try:
-            json.loads(content)
-            adc_json = content.decode("utf-8")
-        except (json.JSONDecodeError, UnicodeDecodeError):
+            _json.loads(content)
+            adc_content = content.decode("utf-8")
+        except (ValueError, UnicodeDecodeError):
             async with get_api_client(request) as api:
                 try:
                     ws = await api.get_workspace(ws_id)
@@ -155,6 +167,7 @@ async def opencode_secret_save(
                 },
                 status_code=422,
             )
+
     async with get_api_client(request) as api:
         try:
             ws = await api.get_workspace(ws_id)
@@ -162,6 +175,9 @@ async def opencode_secret_save(
             return RedirectResponse(url="/workspaces", status_code=302)
 
         try:
+            # Save project/region to DB (non-secret config).
+            # ADC JSON is NOT stored in the Swarmer DB — it is pushed exclusively to
+            # the OpenShell gateway below so credentials never persist in Swarmer.
             await api.save_credentials(
                 ws_id,
                 google_cloud_project=google_cloud_project,
@@ -169,11 +185,26 @@ async def opencode_secret_save(
                 google_api_key=google_api_key,
                 anthropic_api_key=anthropic_api_key,
                 openai_api_key=openai_api_key,
-                application_default_credentials=adc_json,
+                application_default_credentials="",  # intentionally empty — gateway is the store
                 shared=bool(shared),
             )
         except APIError as exc:
             flash(request, f"Failed to save credentials: {exc.detail}", "danger")
+            return RedirectResponse(url=f"/workspaces/{ws_id}/secrets?tab=credentials", status_code=302)
+
+    # Push Vertex AI credentials to OpenShell gateway if ADC was provided.
+    # The gateway stores and auto-refreshes the credential; Swarmer never persists it.
+    if adc_content and google_cloud_project and vertex_location:
+        provider_name = f"swarmer-ws-{ws_id}-google-cloud"
+        try:
+            await openshell_client.create_google_cloud_provider(
+                provider_name, google_cloud_project, vertex_location
+            )
+            await openshell_client.configure_google_cloud_provider(provider_name, adc_content)
+        except Exception as exc:
+            flash(request, f"Credentials saved, but failed to configure Vertex AI on OpenShell: {exc}", "warning")
+    elif adc_content and not (google_cloud_project and vertex_location):
+        flash(request, "ADC file provided but GCP Project ID and Vertex AI Region are required to configure the provider.", "warning")
 
     return RedirectResponse(url=f"/workspaces/{ws_id}/secrets?tab=credentials", status_code=302)
 
@@ -344,7 +375,6 @@ async def github_pat_delete(
 # GitHub App
 # ============================================================
 
-
 @router.post(
     "/workspaces/{ws_id}/secrets/github-app",
     dependencies=[Depends(require_auth)],
@@ -352,8 +382,8 @@ async def github_pat_delete(
 async def github_app_save(
     ws_id: int,
     request: Request,
-    app_id: str = Form(...),
-    installation_id: str = Form(...),
+    app_id: str = Form(""),
+    installation_id: str = Form(""),
     private_key: str = Form(""),
     shared: str = Form(""),
     csrf_token: str = Form(""),
@@ -365,7 +395,7 @@ async def github_app_save(
 
     async with get_api_client(request) as api:
         try:
-            await api.get_workspace(ws_id)
+            ws = await api.get_workspace(ws_id)
         except APIError:
             return RedirectResponse(url="/workspaces", status_code=302)
 
@@ -377,12 +407,9 @@ async def github_app_save(
                 private_key=private_key.strip(),
                 shared=bool(shared),
             )
+            flash(request, "GitHub App saved.", "success")
         except APIError as exc:
             ctx = await _secrets_context(api, ws_id)
-            try:
-                ws = await api.get_workspace(ws_id)
-            except APIError:
-                return RedirectResponse(url="/workspaces", status_code=302)
             return templates.TemplateResponse(
                 request,
                 "secrets/tabs.html",
@@ -394,7 +421,6 @@ async def github_app_save(
                     "github_app_error": exc.detail,
                     **ctx,
                 },
-                status_code=422,
             )
 
     return RedirectResponse(url=f"/workspaces/{ws_id}/secrets?tab=github-app", status_code=302)
@@ -417,6 +443,7 @@ async def github_app_delete(
     async with get_api_client(request) as api:
         try:
             await api.delete_github_app(ws_id)
+            flash(request, "GitHub App deleted.", "success")
         except APIError:
             pass
 

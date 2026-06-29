@@ -1,5 +1,8 @@
 {# HTMX partial — polled every 5s while session is active #}
 {% set _raw = session.last_output %}
+{% set _stream = session.raw_output %}
+{# Show toggle only when session is done, both fields have content, and they differ #}
+{% set _show_toggle = session.phase not in ('pending', 'running') and _raw and _stream and _raw != _stream %}
 {% if session.mode == 'server' and not session.last_output %}
 <div id="last-output-pre"
      class="last-output" style="padding:var(--pf-t--global--spacer--lg); margin:0; text-align:center;"
@@ -12,17 +15,42 @@
   <p style="color:var(--pf-t--global--text--color--subtle); font-size:var(--pf-t--global--font--size--sm); margin-bottom:var(--pf-t--global--spacer--md);">No output yet — use the chat to interact with the session.</p>
   <a href="/workspaces/{{ ws_id }}/sessions/{{ session.id }}/chat"
      target="_blank" rel="noopener"
-     class="pf-v6-c-button pf-m-primary pf-m-small">Open Chat ↗</a>
+     class="pf-v6-c-button pf-m-primary pf-m-small">Chat ↗</a>
   {% else %}
   <span style="color:var(--pf-t--global--text--color--subtle); font-size:var(--pf-t--global--font--size--sm);">No output yet. Launch the session to see logs here.</span>
   {% endif %}
 </div>
 {% else %}
-<pre id="last-output-pre"
-     class="last-output" style="padding:var(--pf-t--global--spacer--md); margin:0;"
+<div id="last-output-pre"
      {% if session.phase in ('pending', 'running') %}
      hx-get="/workspaces/{{ ws_id }}/sessions/{{ session.id }}/last-output"
      hx-trigger="every 5s"
      hx-swap="outerHTML"
-     {% endif %}>{% if _raw %}{{ _raw | ansi_to_html }}{% else %}<span style="color:var(--pf-t--global--text--color--subtle);">No output yet. Launch the session to see logs here.</span>{% endif %}</pre>
+     {% endif %}>
+  {% if _show_toggle %}
+  {# Output / Raw Log toggle — client-side only, no round-trip needed #}
+  <div style="display:flex; gap:var(--pf-t--global--spacer--sm); padding:var(--pf-t--global--spacer--sm) var(--pf-t--global--spacer--md); border-bottom:1px solid var(--pf-t--global--border--color--default);">
+    <button id="btn-output-processed"
+            class="log-pill selected"
+            onclick="document.getElementById('out-processed').style.display='block';
+                     document.getElementById('out-raw').style.display='none';
+                     this.classList.add('selected');
+                     document.getElementById('btn-output-raw').classList.remove('selected');">
+      Output
+    </button>
+    <button id="btn-output-raw"
+            class="log-pill"
+            onclick="document.getElementById('out-raw').style.display='block';
+                     document.getElementById('out-processed').style.display='none';
+                     this.classList.add('selected');
+                     document.getElementById('btn-output-processed').classList.remove('selected');">
+      Raw Log
+    </button>
+  </div>
+  <pre id="out-processed" class="last-output" style="padding:var(--pf-t--global--spacer--md); margin:0; display:block;">{{ _raw | ansi_to_html }}</pre>
+  <pre id="out-raw" class="last-output" style="padding:var(--pf-t--global--spacer--md); margin:0; display:none;">{{ _stream | ansi_to_html }}</pre>
+  {% else %}
+  <pre class="last-output" style="padding:var(--pf-t--global--spacer--md); margin:0;">{% if _stream %}{{ _stream | ansi_to_html }}{% elif _raw %}{{ _raw | ansi_to_html }}{% else %}<span style="color:var(--pf-t--global--text--color--subtle);">No output yet. Launch the session to see logs here.</span>{% endif %}</pre>
+  {% endif %}
+</div>
 {% endif %}

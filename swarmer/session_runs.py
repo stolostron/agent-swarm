@@ -31,6 +31,7 @@ async def record_session_run(
     phase: str,
     status_detail: str,
     last_output: str,
+    raw_output: str = "",
     completed_at: datetime,
 ) -> SessionRun | None:
     """Append a historical run record for a completed session execution."""
@@ -50,6 +51,7 @@ async def record_session_run(
         started_at=_as_utc(session.run_started_at),
         completed_at=_as_utc(completed_at),
         last_output=last_output or "",
+        raw_output=raw_output or "",
     )
     db.add(run)
     await _prune_old_runs(db, session.id, settings.session_run_history_limit)

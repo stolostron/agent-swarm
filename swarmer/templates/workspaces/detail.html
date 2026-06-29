@@ -32,7 +32,7 @@
   </div>
   <div style="display:flex; gap:var(--pf-t--global--spacer--sm);">
     <a href="/workspaces/{{ ws.id }}/prompts" class="pf-v6-c-button pf-m-secondary pf-m-small">Prompts</a>
-    <a href="/workspaces/{{ ws.id }}/secrets" class="pf-v6-c-button pf-m-secondary pf-m-small">Secrets</a>
+    <a href="/workspaces/{{ ws.id }}/secrets" class="pf-v6-c-button pf-m-secondary pf-m-small">AI Tokens</a>
     <a href="/workspaces/{{ ws.id }}/mcp-servers" class="pf-v6-c-button pf-m-secondary pf-m-small">MCP Servers</a>
     <a href="/workspaces/{{ ws.id }}/edit" class="pf-v6-c-button pf-m-secondary pf-m-small">Edit</a>
   </div>
@@ -55,7 +55,6 @@
       <th class="pf-v6-c-table__th" role="columnheader">Started</th>
       <th class="pf-v6-c-table__th" role="columnheader">Duration</th>
       <th class="pf-v6-c-table__th" role="columnheader">GitHub PAT</th>
-      <th class="pf-v6-c-table__th" role="columnheader">Persist</th>
       <th class="pf-v6-c-table__th pf-m-fit-content" role="columnheader" style="text-align:right;">Actions</th>
     </tr>
   </thead>
@@ -99,13 +98,6 @@
       </td>
       <td class="pf-v6-c-table__td" role="cell" data-label="GitHub PAT" style="color:var(--pf-t--global--text--color--subtle); font-size:var(--pf-t--global--font--size--sm);">
         {{ s.github_pat.name if s.github_pat else '—' }}
-      </td>
-      <td class="pf-v6-c-table__td" role="cell" data-label="Persist">
-        {% if s.persist %}
-          <span class="pf-v6-c-label pf-m-cyan"><span class="pf-v6-c-label__content">Yes</span></span>
-        {% else %}
-          <span style="color:var(--pf-t--global--text--color--subtle);">—</span>
-        {% endif %}
       </td>
       <td class="pf-v6-c-table__td pf-m-fit-content" role="cell" data-label="Actions" style="text-align:right;">
         <a href="/workspaces/{{ ws.id }}/sessions/{{ s.id }}"

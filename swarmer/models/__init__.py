@@ -8,3 +8,5 @@ from swarmer.models.session_repo import SessionRepo  # noqa: F401
 from swarmer.models.session_run import SessionRun  # noqa: F401
 from swarmer.models.mcp_server import McpServer  # noqa: F401
 from swarmer.models.workspace_prompt import WorkspacePromptSource, WorkspacePrompt  # noqa: F401
+from swarmer.models.sandbox_env_var import SandboxEnvVar  # noqa: F401
+from swarmer.models.session_schedule import SessionSchedule  # noqa: F401

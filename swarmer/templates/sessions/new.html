@@ -101,26 +101,6 @@
     </div>
 
     <div class="pf-v6-l-grid__item pf-m-6-col-on-md">
-      {# Mode card #}
-      <div class="pf-v6-c-card" style="margin-bottom:var(--pf-t--global--spacer--md);">
-        <div class="pf-v6-c-card__header">
-          <h3 class="pf-v6-c-card__header-main" style="font-weight:var(--pf-t--global--font--weight--heading--bold);">Mode</h3>
-        </div>
-        <div class="pf-v6-c-card__body">
-          <select class="pf-v6-c-form-control" name="mode" id="mode"
-                  onchange="document.getElementById('prompt-row').style.display = this.value === 'prompt' ? '' : 'none'" style="margin-bottom:var(--pf-t--global--spacer--sm);">
-            <option value="prompt">Prompt — run a one-shot prompt, then exit</option>
-            <option value="server">Server — persistent API access</option>
-            <option value="tui">TUI — interactive terminal in the browser</option>
-          </select>
-          <div class="pf-v6-c-form__helper-text">
-            <div class="pf-v6-c-helper-text__item">
-              <span class="pf-v6-c-helper-text__item-text">Can be changed later from the session detail page.</span>
-            </div>
-          </div>
-        </div>
-      </div>
-
       {# Working branch card #}
       <div class="pf-v6-c-card" style="margin-bottom:var(--pf-t--global--spacer--md);">
         <div class="pf-v6-c-card__header">
@@ -134,25 +114,6 @@
             <div class="pf-v6-c-helper-text__item">
               <span class="pf-v6-c-helper-text__item-text">Branch name for changes when repos are attached. Auto-generated if left blank.</span>
             </div>
-          </div>
-        </div>
-      </div>
-
-      {# Persistence card #}
-      <div class="pf-v6-c-card">
-        <div class="pf-v6-c-card__header">
-          <h3 class="pf-v6-c-card__header-main" style="font-weight:var(--pf-t--global--font--weight--heading--bold);">Persistence</h3>
-        </div>
-        <div class="pf-v6-c-card__body">
-          <div class="pf-v6-c-check" style="margin-bottom:var(--pf-t--global--spacer--sm);">
-            <input class="pf-v6-c-check__input" type="checkbox" name="persist"
-                   id="persist" value="true">
-            <label class="pf-v6-c-check__label" for="persist">
-              <strong>Persist workspace</strong>
-            </label>
-            <span class="pf-v6-c-check__description">
-              The PVC (git repos, files) survives when the session is stopped.
-            </span>
           </div>
         </div>
       </div>

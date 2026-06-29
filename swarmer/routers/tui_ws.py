@@ -1,7 +1,4 @@
-"""
-WebSocket endpoint that proxies a browser xterm.js terminal to a session pod
-using the Kubernetes Python client exec stream (no kubectl subprocess needed).
-"""
+"""WebSocket endpoint that proxies a browser xterm.js terminal to an OpenShell sandbox using the ExecSandboxInteractive gRPC stream."""
 import asyncio
 import json
 import logging
@@ -9,17 +6,12 @@ import shlex
 import threading
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
-from sqlalchemy.orm import selectinload
 
 from swarmer.database import get_db
 from swarmer.models.session import Session
-from swarmer.models.workspace import Workspace
 
 router = APIRouter()
 log = logging.getLogger(__name__)
-
-_STDIN_CHANNEL = 0
-_RESIZE_CHANNEL = 4
 
 
 @router.websocket("/ws/{ws_id}/sessions/{sid}/tui")
@@ -50,100 +42,149 @@ async def session_tui(
 
     # ---------- Load session from DB ----------
     async for db in get_db():
-        session = await db.get(
-            Session,
-            sid,
-            options=[selectinload(Session.workspace)],
-        )
-        ws = await db.get(Workspace, ws_id)
+        session = await db.get(Session, sid)
         break
 
-    if session is None or ws is None or session.workspace_id != ws_id:
+    if session is None or session.workspace_id != ws_id:
         await websocket.close(code=4002, reason="Session not found")
         return
 
-    if not session.pod_name or session.phase != "running":
-        log.warning("TUI WS: session %d not running (phase=%s, pod=%s)", sid, session.phase if session else "none", session.pod_name if session else "none")
+    if session.phase != "running" or not session.sandbox_name:
+        log.warning(
+            "TUI WS: session %d not running (phase=%s, sandbox=%s)",
+            sid, session.phase, session.sandbox_name,
+        )
         await websocket.close(code=4003, reason="Session not running")
         return
 
-    namespace = ws.k8s_namespace
-    pod_name = session.pod_name
-
     from swarmer.agent_tools.registry import get as get_tool
     tool = get_tool(session.agent_tool)
-    container_name = tool.get_container_name()
 
     tui_cmd_parts = [tool.get_tui_binary()]
-    if session.model and hasattr(tool, 'get_tui_model_args'):
-        tui_cmd_parts.extend(tool.get_tui_model_args(session.model))
-    elif session.model and tool.name != "crush":
-        tui_cmd_parts.extend(["--model", session.model])
+    _tui_model = session.model or ""
+    if _tui_model and tool.name != "crush":
+        tui_cmd_parts.extend(["--model", _tui_model])
     cmd_base = " ".join(shlex.quote(p) for p in tui_cmd_parts)
     tui_shell = (
-        f"export PATH=\"$HOME/.local/bin:$PATH\" && "
+        f"export HOME=/sandbox PATH=\"/sandbox/.local/bin:$PATH\" && "
         f"{{ {cmd_base} --continue || exec {cmd_base}; }}"
     )
-
-    # ---------- Open kubernetes exec stream ----------
-    from kubernetes import client as k8s_client
-    from kubernetes.stream import stream as k8s_stream
-
-    v1 = k8s_client.CoreV1Api()
-    try:
-        exec_resp = k8s_stream(
-            v1.connect_get_namespaced_pod_exec,
-            pod_name,
-            namespace,
-            container=container_name,
-            command=["sh", "-c", tui_shell],
-            stderr=True,
-            stdin=True,
-            stdout=True,
-            tty=True,
-            _preload_content=False,
-        )
-    except Exception as exc:
-        log.error("TUI exec stream open failed for pod %s: %s", pod_name, exc)
-        try:
-            await websocket.close(code=4004, reason="Exec failed")
-        except Exception:
-            pass
-        return
-
-    # Send initial terminal size (channel 4 = resize)
-    try:
-        exec_resp.write_channel(
-            _RESIZE_CHANNEL, json.dumps({"Width": cols, "Height": rows})
-        )
-    except Exception:
-        pass
 
     loop = asyncio.get_running_loop()
     read_q: asyncio.Queue[bytes | None] = asyncio.Queue()
     stop_event = threading.Event()
 
+    await _run_openshell_tui(
+        websocket=websocket,
+        session=session,
+        tui_shell=tui_shell,
+        cols=cols,
+        rows=rows,
+        loop=loop,
+        read_q=read_q,
+        stop_event=stop_event,
+    )
+
+
+async def _run_openshell_tui(
+    websocket: WebSocket,
+    session: Session,
+    tui_shell: str,
+    cols: int,
+    rows: int,
+    loop,
+    read_q: asyncio.Queue,
+    stop_event: threading.Event,
+) -> None:
+    from swarmer import openshell_client
+    from openshell._proto import openshell_pb2
+
+    sandbox_name = session.sandbox_name
+
+    # Resolve sandbox_id synchronously (brief blocking call)
+    try:
+        sandbox_id = await openshell_client._sandbox_id(sandbox_name, openshell_client._get_client())
+    except Exception as exc:
+        log.error("TUI: sandbox_id lookup failed for %s: %s", sandbox_name, exc)
+        await websocket.close(code=4004, reason="Sandbox lookup failed")
+        return
+
+    # Inject workspace extra env vars (arbitrary key-value pairs stored in DB) and
+    # Jira MCP non-secret config (JIRA_SERVER_URL, JIRA_EMAIL).
+    # NOTE: provider credentials (GOOGLE_API_KEY, JIRA_ACCESS_TOKEN, GH_TOKEN etc.)
+    # are attached as providers at sandbox creation and injected by the gateway supervisor
+    # as opaque reference tokens — they ARE inherited by exec calls.
+    # However, JIRA_SERVER_URL and JIRA_EMAIL are plain env vars (not provider credentials)
+    # and must be passed explicitly on every ExecSandboxRequest.
+    tui_env: dict[str, str] = {}
+    try:
+        from sqlalchemy import select as _sa_select
+        from swarmer.database import get_db as _get_db
+        from swarmer.models.sandbox_env_var import SandboxEnvVar
+        from swarmer.routers.mcp_servers import get_enabled_mcp_servers as _get_mcp
+        async for db in _get_db():
+            _ev_result = await db.execute(
+                _sa_select(SandboxEnvVar).where(
+                    SandboxEnvVar.workspace_id == session.workspace_id
+                )
+            )
+            for ev_row in _ev_result.scalars().all():
+                tui_env[ev_row.key] = ev_row.value
+            for mcp in await _get_mcp(session.workspace_id, db):
+                if "jira" in getattr(mcp, "slug", "") and getattr(mcp, "jira_access_token_enc", ""):
+                    if mcp.jira_server_url:
+                        tui_env["JIRA_SERVER_URL"] = mcp.jira_server_url
+                    if mcp.jira_email:
+                        tui_env["JIRA_EMAIL"] = mcp.jira_email
+                    break
+            break
+    except Exception:
+        log.warning("TUI: failed to load workspace env vars for session %d", session.id, exc_info=True)
+    # Point OpenCode at the config file written at sandbox setup time.
+    # OPENCODE_CONFIG is the env-var equivalent of --config (there is no CLI flag).
+    if session.agent_tool == "opencode":
+        tui_env["OPENCODE_CONFIG"] = "/sandbox/opencode.json"
+
+    command = ["sh", "-c", tui_shell]
+
+    try:
+        client = openshell_client._get_client()
+        response_stream, input_q = openshell_client.exec_interactive(
+            sandbox_name=sandbox_name,
+            sandbox_id=sandbox_id,
+            command=command,
+            cols=cols,
+            rows=rows,
+            env=tui_env or None,
+            client=client,
+        )
+    except Exception as exc:
+        log.error("TUI: exec_interactive failed for sandbox %s: %s", sandbox_name, exc)
+        await websocket.close(code=4004, reason="Exec failed")
+        return
+
     def _stream_reader() -> None:
-        """Pump pod stdout/stderr into read_q (runs in a background thread)."""
+        """Drain the gRPC response stream into read_q (background thread)."""
         try:
-            while not stop_event.is_set() and exec_resp.is_open():
-                exec_resp.update(timeout=0.1)
-                if exec_resp.peek_stdout():
-                    data = exec_resp.read_stdout()
+            for event in response_stream:
+                if stop_event.is_set():
+                    break
+                which = event.WhichOneof("payload")
+                if which == "stdout":
+                    data = event.stdout.data
                     if data:
-                        chunk = data if isinstance(data, bytes) else data.encode("utf-8", errors="replace")
+                        loop.call_soon_threadsafe(read_q.put_nowait, data)
+                elif which == "stderr":
+                    data = event.stderr.data
+                    if data:
+                        chunk = b"\r\n\x1b[31m" + data + b"\x1b[0m"
                         loop.call_soon_threadsafe(read_q.put_nowait, chunk)
-                if exec_resp.peek_stderr():
-                    data = exec_resp.read_stderr()
-                    if data:
-                        chunk = data if isinstance(data, bytes) else data.encode("utf-8", errors="replace")
-                        loop.call_soon_threadsafe(read_q.put_nowait, b"\r\n\x1b[31m" + chunk + b"\x1b[0m")
+                elif which == "exit":
+                    break
         except Exception as exc:
             if not stop_event.is_set():
-                log.error("TUI stream reader error for pod %s: %s", pod_name, exc)
+                log.error("TUI gRPC stream reader error for sandbox %s: %s", sandbox_name, exc)
         finally:
-            if not stop_event.is_set():
-                log.info("TUI stream reader: exec closed for pod %s", pod_name)
             loop.call_soon_threadsafe(read_q.put_nowait, None)
 
     reader_thread = threading.Thread(target=_stream_reader, daemon=True)
@@ -164,19 +205,17 @@ async def session_tui(
             while True:
                 msg = await websocket.receive()
                 if msg.get("bytes"):
-                    # Raw bytes from xterm.js → pod stdin (channel 0)
-                    exec_resp.write_channel(_STDIN_CHANNEL, msg["bytes"])
+                    input_q.put(openshell_pb2.ExecSandboxInput(stdin=msg["bytes"]))
                 elif msg.get("text"):
                     try:
                         payload = json.loads(msg["text"])
                         if payload.get("type") == "resize":
-                            exec_resp.write_channel(
-                                _RESIZE_CHANNEL,
-                                json.dumps({
-                                    "Width": payload.get("cols", 80),
-                                    "Height": payload.get("rows", 24),
-                                }),
-                            )
+                            input_q.put(openshell_pb2.ExecSandboxInput(
+                                resize=openshell_pb2.ExecSandboxWindowResize(
+                                    cols=payload.get("cols", 80),
+                                    rows=payload.get("rows", 24),
+                                )
+                            ))
                     except Exception:
                         pass
         except WebSocketDisconnect:
@@ -199,15 +238,15 @@ async def session_tui(
             except asyncio.CancelledError:
                 pass
     except Exception as exc:
-        log.error("TUI proxy error for pod %s: %s", pod_name, exc)
+        log.error("TUI proxy error for sandbox %s: %s", sandbox_name, exc)
     finally:
         stop_event.set()
-        try:
-            exec_resp.close()
-        except Exception:
-            pass
+        input_q.put(None)  # stop the gRPC request generator
         reader_thread.join(timeout=2.0)
         try:
             await websocket.close()
         except Exception:
             pass
+
+
+

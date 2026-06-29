@@ -9,6 +9,84 @@
 <style>
   #terminal { padding: 12px; box-sizing: border-box; }
   #terminal .xterm-screen { border-radius: var(--pf-t--global--border--radius--medium); }
+  .agent-pill {
+    display: inline-flex; align-items: center;
+    padding: 4px 12px;
+    border: 2px solid #444;
+    border-radius: var(--pf-t--global--border--radius--small);
+    font-family: monospace; font-weight: 700;
+    font-size: var(--pf-t--global--font--size--sm);
+    cursor: pointer; transition: all 0.15s ease;
+    background: none;
+  }
+  .launch-pill-green {
+    --pf-v6-c-label--BackgroundColor: var(--pf-t--global--color--status--success--default);
+    --pf-v6-c-label--Color: #111;
+  }
+  .launch-pill-green:hover {
+    --pf-v6-c-label--BackgroundColor: var(--pf-t--global--color--status--success--hover, #1e7e34);
+    --pf-v6-c-label--Color: #333;
+  }
+  .launch-pill-muted {
+    --pf-v6-c-label--BackgroundColor: #2d2d2d;
+    --pf-v6-c-label--Color: #ccc;
+    --pf-v6-c-label--BorderWidth: var(--pf-t--global--border--width--action--default);
+    --pf-v6-c-label--BorderColor: var(--pf-t--global--color--status--success--default);
+  }
+  .launch-pill-muted:hover {
+    --pf-v6-c-label--BorderColor: var(--pf-t--global--color--status--success--hover, #1e7e34);
+    --pf-v6-c-label--Color: #fff;
+  }
+  .agent-pill-oc               { background: #2d2d2d; }
+  .agent-pill-crush            { background: #1a1a2e; color: #56b6c2; letter-spacing: 0.05em; }
+  .agent-pill.selected {
+    border: 2px solid transparent;
+    background-origin: border-box;
+    background-clip: padding-box, border-box;
+  }
+  .agent-pill-oc.selected {
+    background-image:
+      linear-gradient(#1e1e1e, #1e1e1e),
+      linear-gradient(135deg, #e06c75, #e5c07b, #98c379, #56b6c2, #61afef, #c678dd);
+  }
+  .agent-pill-crush.selected {
+    color: #61dafb;
+    background-image:
+      linear-gradient(#0d1b2a, #0d1b2a),
+      linear-gradient(135deg, #e06c75, #e5c07b, #98c379, #56b6c2, #61afef, #c678dd);
+  }
+  /* ── Log-view toggle pills (Output tab + History expanded rows) ── */
+  .log-pill {
+    display: inline-flex; align-items: center;
+    padding: 4px 12px;
+    border: 2px solid #444;
+    border-radius: var(--pf-t--global--border--radius--small);
+    font-family: monospace; font-weight: 700;
+    font-size: var(--pf-t--global--font--size--sm);
+    cursor: pointer; transition: color 0.15s ease, border-color 0.15s ease;
+    background: #2d2d2d; background-image: none; background-clip: border-box;
+    background-origin: padding-box; color: #aaa;
+  }
+  .log-pill:hover { border-color: #666; color: #fff; }
+  .log-pill.selected {
+    border: 2px solid transparent;
+    background-origin: border-box;
+    background-clip: padding-box, border-box;
+    background-image:
+      linear-gradient(#1e1e1e, #1e1e1e),
+      linear-gradient(135deg, #e06c75, #e5c07b, #98c379, #56b6c2, #61afef, #c678dd);
+    color: #fff;
+  }
+  /* ── History expandable row ── */
+  .pf-v6-c-table__toggle button {
+    background: none; border: none; cursor: pointer;
+    color: var(--pf-t--global--text--color--subtle);
+    padding: 4px 6px; border-radius: var(--pf-t--global--border--radius--small);
+    transition: color 0.15s ease;
+  }
+  .pf-v6-c-table__toggle button:hover { color: var(--pf-t--global--text--color--regular); }
+  .pf-v6-c-table__toggle button svg { transition: transform 0.2s ease; display: block; }
+  .pf-v6-c-table__toggle.pf-m-expanded button svg { transform: rotate(90deg); }
 </style>
 {% endblock %}
 
@@ -64,51 +142,57 @@
 {# ── Status + actions bar ── #}
 <div style="display:flex; align-items:center; margin-bottom:var(--pf-t--global--spacer--md); gap:var(--pf-t--global--spacer--sm); flex-wrap:wrap;">
   {% include "sessions/_status_badge.html" %}
+  <hr class="pf-v6-c-divider pf-m-vertical">
 
-  {# Launch / Stop — next to status #}
+  {# Stop button — shown when session is active #}
   <div id="launch-stop"
        {% if not session.is_active %}style="display:none"{% endif %}>
     <form method="post"
           action="/workspaces/{{ ws.id }}/sessions/{{ session.id }}/stop">
       <button type="submit" id="launch-stop-btn"
-              class="pf-v6-c-button pf-m-small pf-m-warning">&#9632; Stop</button>
+              class="pf-v6-c-label pf-m-warning" style="cursor:pointer; font-family:inherit; font-weight:700;">
+        <span class="pf-v6-c-label__content">&#9632; Stop</span>
+      </button>
     </form>
   </div>
-  <form method="post" id="launch-form"
-        {% if session.is_active %}style="display:none"{% endif %}
-        action="/workspaces/{{ ws.id }}/sessions/{{ session.id }}/launch">
-    {% set _avail = tool_image_available.get(canonical_agent_tool, False) %}
-    <div style="display:flex; gap:var(--pf-t--global--spacer--xs); align-items:center;">
-      {% set _launch_ok = not session.is_active and (_avail or session.phase == 'failed') %}
-      <button type="submit" id="launch-btn"
-              class="pf-v6-c-button pf-m-small {% if not _launch_ok %}pf-m-secondary{% else %}pf-m-primary{% endif %}"
-              {% if not _launch_ok %}disabled{% endif %}>
-        ▶ Launch
-      </button>
-      <select id="launch-tool-select" class="pf-v6-c-form-control"
-              style="width:auto; min-width:130px;"
-              data-availability="{{ tool_image_available | tojson }}"
-              {% if session.is_active %}disabled{% endif %}>
-        {% for tool in agent_tools %}
-        <option value="{{ tool.name }}"
-                {{ 'selected' if canonical_agent_tool == tool.name }}>
-          {{ tool.display_name }}
-        </option>
-        {% endfor %}
-      </select>
-      <span style="font-size:var(--pf-t--global--font--size--sm); color:var(--pf-t--global--text--color--subtle);">Image Found:</span>
-      <span id="launch-avail-pill" style="font-size:1.1em; line-height:1;">{{ '✅' if _avail else '❌' }}</span>
-    </div>
-  </form>
 
-  <div style="display:flex; gap:var(--pf-t--global--spacer--sm); margin-left:var(--pf-t--global--spacer--sm);" id="session-actions">
-    {% if session.mode == 'server' %}
-    <a href="/workspaces/{{ ws.id }}/sessions/{{ session.id }}/chat"
-       target="_blank" rel="noopener"
-       class="pf-v6-c-button pf-m-primary pf-m-small{% if session.phase != 'running' %}" style="display:none{% endif %}"
-       id="server-chat-btn">Open Web Chat ↗</a>
-    {% endif %}
+  {# Three launch pills — hidden when session is active #}
+  <div id="launch-pills" style="display:{% if session.is_active %}none{% else %}flex{% endif %}; gap:var(--pf-t--global--spacer--sm); align-items:center;">
+    <form method="post" action="/workspaces/{{ ws.id }}/sessions/{{ session.id }}/launch">
+      <input type="hidden" name="mode" value="tui">
+      <button type="submit" class="pf-v6-c-label launch-pill-green" style="cursor:pointer; font-family:inherit; font-weight:700;">
+        <span class="pf-v6-c-label__content">&#9654; TERM.UI</span>
+      </button>
+    </form>
+    <form method="post" action="/workspaces/{{ ws.id }}/sessions/{{ session.id }}/launch">
+      <input type="hidden" name="mode" value="server">
+      <button type="submit" class="pf-v6-c-label launch-pill-green" style="cursor:pointer; font-family:inherit; font-weight:700;">
+        <span class="pf-v6-c-label__content">&#9654; CHAT</span>
+      </button>
+    </form>
+    <form method="post" action="/workspaces/{{ ws.id }}/sessions/{{ session.id }}/launch">
+      <input type="hidden" name="mode" value="prompt">
+      <button type="submit" class="pf-v6-c-label launch-pill-muted" style="cursor:pointer; font-family:inherit; font-weight:700;">
+        <span class="pf-v6-c-label__content">&#9654; PROMPT</span>
+      </button>
+    </form>
   </div>
+
+  {# Sandbox name — between Stop and Chat ↗ #}
+  <span id="sandbox-name-display"
+        style="font-family:var(--pf-t--global--font--family--mono);
+               font-size:var(--pf-t--global--font--size--sm);
+               color:var(--pf-t--global--text--color--subtle);
+               display:{{ 'inline' if session.sandbox_name else 'none' }};">
+    {{ session.sandbox_name or '' }}
+  </span>
+
+  {# Chat ↗ — only in server mode while running #}
+  <a href="/workspaces/{{ ws.id }}/sessions/{{ session.id }}/chat"
+     target="_blank" rel="noopener"
+     class="pf-v6-c-button pf-m-primary pf-m-small"
+     style="{% if not (session.mode == 'server' and session.phase == 'running') %}display:none{% endif %}"
+     id="server-chat-btn">Chat ↗</a>
 
   <div style="margin-left:auto;">
     <form method="post" action="/workspaces/{{ ws.id }}/sessions/{{ session.id }}/delete"
@@ -123,18 +207,22 @@
 
 {# ── Capacity bar — shown when concurrency limiting is enabled ── #}
 {% if capacity and capacity.max > 0 %}
+{% if capacity.ws_queued > 0 %}
+  {% set _cap_colour = 'pf-m-red' %}
+{% elif capacity.max <= 2 and capacity.ws_active >= capacity.max %}
+  {% set _cap_colour = 'pf-m-gold' %}
+{% elif capacity.max > 2 and capacity.ws_active >= capacity.max - 1 %}
+  {% set _cap_colour = 'pf-m-gold' %}
+{% elif capacity.ws_active >= 1 %}
+  {% set _cap_colour = 'pf-m-green' %}
+{% else %}
+  {% set _cap_colour = 'pf-m-outline' %}
+{% endif %}
 <div style="display:flex; align-items:center; gap:var(--pf-t--global--spacer--sm); flex-wrap:wrap; margin-bottom:var(--pf-t--global--spacer--md);">
-  <span style="font-size:var(--pf-t--global--font--size--sm); color:var(--pf-t--global--text--color--subtle);">Cluster capacity:</span>
-  <span class="pf-v6-c-label pf-m-green"><span class="pf-v6-c-label__content">{{ capacity.ws_active }} active</span></span>
-  {% if capacity.ws_queued > 0 %}
-  <span class="pf-v6-c-label pf-m-cyan"><span class="pf-v6-c-label__content">{{ capacity.ws_queued }} queued</span></span>
-  {% else %}
-  <span class="pf-v6-c-label pf-m-outline">
-    <span class="pf-v6-c-label__content">
-      {% if capacity.slots_available == 1 %}1 slot available{% else %}{{ capacity.slots_available }} slots available{% endif %}
-    </span>
+  <span style="font-size:var(--pf-t--global--font--size--sm); color:var(--pf-t--global--text--color--subtle);">Sessions:</span>
+  <span class="pf-v6-c-label {{ _cap_colour }}">
+    <span class="pf-v6-c-label__content">{{ capacity.ws_active }} / {{ capacity.max }} active{% if capacity.ws_queued > 0 %} · {{ capacity.ws_queued }} queued{% endif %}</span>
   </span>
-  {% endif %}
 </div>
 {% endif %}
 
@@ -185,7 +273,14 @@
     {% if session.mode in ('prompt', 'server') %}
     <li class="pf-v6-c-tabs__item" id="tab-output">
       <button class="pf-v6-c-tabs__link" role="tab" aria-selected="false" aria-controls="panel-output" tabindex="-1" onclick="switchTab('output')">
-        <span class="pf-v6-c-tabs__item-text" id="output-tab-text">Output</span>
+        <span class="pf-v6-c-tabs__item-text" id="output-tab-text">Logs</span>
+      </button>
+    </li>
+    {% endif %}
+    {% if session.mode == 'prompt' %}
+    <li class="pf-v6-c-tabs__item" id="tab-history">
+      <button class="pf-v6-c-tabs__link" role="tab" aria-selected="false" aria-controls="panel-history" tabindex="-1" onclick="switchTab('history')">
+        <span class="pf-v6-c-tabs__item-text" id="history-tab-text"><span id="history-tab-dot" style="display:none;">● </span>History{% if session_runs %}&nbsp;<span style="display:inline-flex;align-items:center;justify-content:center;min-width:1.75em;height:1.75em;padding:0 0.45em;background:#111;color:#ccc;border:1px solid #444;border-radius:999px;font-size:0.875em;font-family:monospace;font-weight:700;line-height:1;vertical-align:middle;">{{ session_runs | length }}</span>{% endif %}</span>
       </button>
     </li>
     {% endif %}
@@ -199,7 +294,14 @@
     {% if session.repos %}
     <li class="pf-v6-c-tabs__item" id="tab-patch">
       <button class="pf-v6-c-tabs__link" role="tab" aria-selected="false" aria-controls="panel-patch" tabindex="-1" onclick="switchTab('patch')">
-        <span class="pf-v6-c-tabs__item-text">Patch</span>
+        <span class="pf-v6-c-tabs__item-text" id="patch-tab-text">Patch</span>
+      </button>
+    </li>
+    {% endif %}
+    {% if show_policy_tab %}
+    <li class="pf-v6-c-tabs__item" id="tab-policy">
+      <button class="pf-v6-c-tabs__link" role="tab" aria-selected="false" aria-controls="panel-policy" tabindex="-1" onclick="switchTab('policy')">
+        <span class="pf-v6-c-tabs__item-text" id="policy-tab-text">Net Rules</span>
       </button>
     </li>
     {% endif %}
@@ -212,8 +314,8 @@
 <div id="panel-details" class="pf-v6-c-tab-content" role="tabpanel" aria-labelledby="tab-details" style="margin-top:var(--pf-t--global--spacer--lg);">
   <div class="pf-v6-l-grid pf-m-gutter" style="--pf-v6-l-grid--m-gutter--GridGap:var(--pf-t--global--spacer--lg);">
 
-    {# Left column: Configuration #}
-    <div class="pf-v6-l-grid__item pf-m-4-col-on-md" id="left-col">
+    {# Left column: Configuration + Schedule #}
+    <div class="pf-v6-l-grid__item pf-m-4-col-on-md" id="left-col" style="display:flex; flex-direction:column; gap:var(--pf-t--global--spacer--md);">
 
       <div class="pf-v6-c-card">
         <div class="pf-v6-c-card__header">
@@ -225,38 +327,42 @@
           <form method="post" id="cfg-edit-form" class="pf-v6-c-form"
                 action="/workspaces/{{ ws.id }}/sessions/{{ session.id }}/edit">
             <input type="hidden" name="name" value="{{ session.name }}">
-            <input type="hidden" name="agent_tool" value="{{ canonical_agent_tool }}" id="cfg_agent_tool">
             <input type="hidden" name="save_config" value="1">
 
-            <div class="pf-v6-c-form__group">
-              <div style="display:flex; align-items:center; margin-bottom:var(--pf-t--global--spacer--sm);">
-                <label style="flex:0 0 40%; color:var(--pf-t--global--text--color--subtle); font-size:var(--pf-t--global--font--size--sm);">Mode</label>
-                <div style="flex:0 0 auto;">
-                  <select name="mode" class="pf-v6-c-form-control" style="width:auto;"
-                          {% if session.is_active %}disabled title="Stop session to change mode"{% endif %}>
-                    <option value="prompt" {{ 'selected' if session.mode == 'prompt' }}>Prompt</option>
-                    <option value="server" {{ 'selected' if session.mode == 'server' }}>Server</option>
-                    <option value="tui"    {{ 'selected' if session.mode == 'tui' }}>TUI</option>
-                  </select>
-                </div>
+            {# Agent tool branded pills — first item in config card #}
+            <div class="pf-v6-c-form__group" style="margin-bottom: var(--pf-t--global--spacer--md);">
+              <label class="pf-v6-c-form__label"
+                     style="color:var(--pf-t--global--text--color--subtle); font-size:var(--pf-t--global--font--size--sm);">
+                <span class="pf-v6-c-form__label-text">Agent</span>
+                {% if tool_image_available.get(canonical_agent_tool, False) %}
+                <span style="margin-left:0.5em; font-size:var(--pf-t--global--font--size--xs); color:var(--pf-t--global--icon--color--status--success--default);">[&#x2713; Image found]</span>
+                {% else %}
+                <span style="margin-left:0.5em; font-size:var(--pf-t--global--font--size--xs); color:var(--pf-t--global--icon--color--status--warning--default);">[&#x2717; Image not available]</span>
+                {% endif %}
+              </label>
+              <div style="display:flex; gap:var(--pf-t--global--spacer--sm); align-items:center;
+                          margin-top:var(--pf-t--global--spacer--xs);">
+                {% for tool in agent_tools %}
+                <button type="button"
+                        class="agent-pill agent-pill-{{ 'oc' if tool.name == 'opencode' else tool.name }}
+                               {% if canonical_agent_tool == tool.name %}selected{% endif %}"
+                        data-tool="{{ tool.name }}"
+                        onclick="selectAgentTool(this)"
+                        {% if session.is_active %}disabled{% endif %}>
+                  {% if tool.name == 'opencode' %}<svg width="78" height="14" viewBox="0 0 234 42" fill="none" xmlns="http://www.w3.org/2000/svg" style="display:block;"><path d="M18 30H6V18H18V30Z" fill="#4B4646"/><path d="M18 12H6V30H18V12ZM24 36H0V6H24V36Z" fill="#B7B1B1"/><path d="M48 30H36V18H48V30Z" fill="#4B4646"/><path d="M36 30H48V12H36V30ZM54 36H36V42H30V6H54V36Z" fill="#B7B1B1"/><path d="M84 24V30H66V24H84Z" fill="#4B4646"/><path d="M84 24H66V30H84V36H60V6H84V24ZM66 18H78V12H66V18Z" fill="#B7B1B1"/><path d="M108 36H96V18H108V36Z" fill="#4B4646"/><path d="M108 12H96V36H90V6H108V12ZM114 36H108V12H114V36Z" fill="#B7B1B1"/><path d="M144 30H126V18H144V30Z" fill="#4B4646"/><path d="M144 12H126V30H144V36H120V6H144V12Z" fill="#F1ECEC"/><path d="M168 30H156V18H168V30Z" fill="#4B4646"/><path d="M168 12H156V30H168V12ZM174 36H150V6H174V36Z" fill="#F1ECEC"/><path d="M198 30H186V18H198V30Z" fill="#4B4646"/><path d="M198 12H186V30H198V12ZM204 36H180V6H198V0H204V36Z" fill="#F1ECEC"/><path d="M234 24V30H216V24H234Z" fill="#4B4646"/><path d="M216 12V18H228V12H216ZM234 24H216V30H234V36H210V6H234V24Z" fill="#F1ECEC"/></svg>
+                  {% elif tool.name == 'crush' %}CR╚═╝SH
+                  {% else %}{{ tool.display_name }}{% endif %}
+                </button>
+                {% endfor %}
+                <input type="hidden" name="agent_tool" id="cfg_agent_tool" value="{{ canonical_agent_tool }}">
               </div>
+
             </div>
 
             <input type="hidden" name="github_pat_id" id="cfg_pat"
                    value="{{ session.github_pat.id if session.github_pat else '' }}">
 
-            <div style="display:flex; align-items:center; margin-bottom:var(--pf-t--global--spacer--sm);">
-              <div style="flex:0 0 40%; color:var(--pf-t--global--text--color--subtle); font-size:var(--pf-t--global--font--size--sm);">Persist workspace</div>
-              <div style="flex:1;">
-                <div class="pf-v6-c-check">
-                  <input type="checkbox" class="pf-v6-c-check__input" name="persist"
-                         id="cfg_persist" value="true"
-                         {{ 'checked' if session.persist }}
-                         {% if session.is_active %}disabled{% endif %}>
-                </div>
-              </div>
-            </div>
-
+            <div id="model-select-wrapper">
             {% if model_options %}
             <div class="pf-v6-c-form__group" style="margin-bottom:var(--pf-t--global--spacer--md);">
               <label class="pf-v6-c-form__label" style="color:var(--pf-t--global--text--color--subtle); font-size:var(--pf-t--global--font--size--sm);">
@@ -284,6 +390,7 @@
             {% else %}
             <input type="hidden" name="model" value="{{ session.model }}">
             {% endif %}
+            </div>
 
             <div class="pf-v6-c-form__group" style="margin-bottom:var(--pf-t--global--spacer--md);">
               <div style="display:flex; align-items:center;">
@@ -328,10 +435,6 @@
             </div>
             {% endif %}
 
-            <div style="color:var(--pf-t--global--text--color--subtle); font-size:var(--pf-t--global--font--size--sm); margin-bottom:var(--pf-t--global--spacer--md);">
-              PVC: <code style="font-family:var(--pf-t--global--font--family--mono);">{{ session.pvc_name or '—' }}</code>
-            </div>
-
             <p style="color:var(--pf-t--global--text--color--subtle); font-size:var(--pf-t--global--font--size--sm); margin:0;{% if not session.is_active %} display:none;{% endif %}"
                id="cfg-stop-msg">Stop the session to edit settings.</p>
             <div id="cfg-save-indicator"
@@ -341,71 +444,20 @@
         </div>
       </div>
 
-    </div>
-
-    {# Right column — Schedule (prompt mode) + Git Repos (all modes) #}
-    <div class="pf-v6-l-grid__item pf-m-8-col-on-md" style="display:flex; flex-direction:column; gap:var(--pf-t--global--spacer--md);">
-      {% if session.mode == 'prompt' %}
-      <div class="pf-v6-c-card">
+      {# Schedule card — left column, below Configuration #}
+      <div class="pf-v6-c-card" id="schedule">
         <div class="pf-v6-c-card__header">
-          <h3 class="pf-v6-c-card__header-main" style="font-weight:var(--pf-t--global--font--weight--heading--bold);">Schedule</h3>
+          <h3 class="pf-v6-c-card__header-main" style="font-weight:var(--pf-t--global--font--weight--heading--bold);">Schedules</h3>
         </div>
         <div class="pf-v6-c-card__body">
-          {% if session.cron_schedule %}
-          <div style="margin-bottom:var(--pf-t--global--spacer--md); padding:var(--pf-t--global--spacer--sm) var(--pf-t--global--spacer--md); background:var(--pf-t--global--background--color--secondary--default); border-radius:var(--pf-t--global--border--radius--small);">
-            <div style="display:flex; justify-content:space-between; align-items:center;">
-              <div>
-                <span style="font-weight:var(--pf-t--global--font--weight--heading--bold);">Active schedule:</span>
-                <span class="pf-v6-c-label pf-m-purple" style="margin-left:var(--pf-t--global--spacer--xs);"><span class="pf-v6-c-label__content">{{ session.cron_label }}</span></span>
-                <span style="margin-left:var(--pf-t--global--spacer--sm); color:var(--pf-t--global--text--color--subtle); font-size:var(--pf-t--global--font--size--sm);">
-                  ({{ session.cron_schedule }})
-                </span>
-              </div>
-              <form method="post" action="/workspaces/{{ ws.id }}/sessions/{{ session.id }}/unschedule" style="display:inline;">
-                <button type="submit" class="pf-v6-c-button pf-m-danger pf-m-small">Cancel Schedule</button>
-              </form>
-            </div>
-            {% if session.cron_next_run %}
-            <div style="margin-top:var(--pf-t--global--spacer--xs); color:var(--pf-t--global--text--color--subtle); font-size:var(--pf-t--global--font--size--sm);">
-              {% if session.is_active %}
-                Currently running. Next run will be scheduled after completion.
-              {% else %}
-                Next run: <strong>{{ session.cron_next_run.strftime('%b %d, %Y %H:%M') }} UTC</strong>
-              {% endif %}
-            </div>
-            {% endif %}
-          </div>
-          {% endif %}
-
-          <form method="post" action="/workspaces/{{ ws.id }}/sessions/{{ session.id }}/schedule">
-            <div style="margin-bottom:var(--pf-t--global--spacer--md);">
-              <label style="font-weight:var(--pf-t--global--font--weight--heading--bold); display:block; margin-bottom:var(--pf-t--global--spacer--xs);">Quick presets</label>
-              <div style="display:flex; flex-wrap:wrap; gap:var(--pf-t--global--spacer--xs);">
-                {% for expr, label in cron_presets.items() %}
-                <button type="button" class="pf-v6-c-button pf-m-secondary pf-m-small" onclick="setCron('{{ expr }}')">{{ label }}</button>
-                {% endfor %}
-              </div>
-            </div>
-            <div style="margin-bottom:var(--pf-t--global--spacer--md);">
-              <label for="cron_expr" style="font-weight:var(--pf-t--global--font--weight--heading--bold); display:block; margin-bottom:var(--pf-t--global--spacer--xs);">
-                Cron expression
-                <a href="https://crontab.guru/" target="_blank" rel="noopener" style="font-weight:normal; font-size:var(--pf-t--global--font--size--sm); margin-left:var(--pf-t--global--spacer--xs);">(crontab.guru)</a>
-              </label>
-              <div style="display:flex; gap:var(--pf-t--global--spacer--sm); align-items:center;">
-                <input type="text" id="cron_expr" name="cron_expr" class="pf-v6-c-form-control"
-                       placeholder="*/30 * * * *" value="{{ session.cron_schedule }}"
-                       required aria-required="true"
-                       style="max-width:280px; font-family:var(--pf-t--global--font--family--mono);">
-                <button type="submit" class="pf-v6-c-button pf-m-primary pf-m-small">Save Schedule</button>
-              </div>
-              <div style="margin-top:var(--pf-t--global--spacer--xs); color:var(--pf-t--global--text--color--subtle); font-size:var(--pf-t--global--font--size--xs);">
-                Format: minute hour day-of-month month day-of-week (UTC)
-              </div>
-            </div>
-          </form>
+          {% include "sessions/_schedule_list.html" with context %}
         </div>
       </div>
-      {% endif %}
+
+    </div>
+
+    {# Right column — Git Repos #}
+    <div class="pf-v6-l-grid__item pf-m-8-col-on-md" style="display:flex; flex-direction:column; gap:var(--pf-t--global--spacer--md);">
       <div class="pf-v6-c-card">
         <div class="pf-v6-c-card__header" style="display:flex; justify-content:space-between; align-items:center;">
           <h3 class="pf-v6-c-card__header-main" style="font-weight:var(--pf-t--global--font--weight--heading--bold);">Git Repositories</h3>
@@ -457,7 +509,7 @@
 <div id="panel-output" class="pf-v6-c-tab-content" role="tabpanel" aria-labelledby="tab-output" hidden style="margin-top:var(--pf-t--global--spacer--lg);">
   <div class="pf-v6-c-card">
     <div class="pf-v6-c-card__header" style="display:flex; justify-content:space-between; align-items:center;">
-      <h3 class="pf-v6-c-card__header-main" style="font-weight:var(--pf-t--global--font--weight--heading--bold);">Last Output</h3>
+      <h3 class="pf-v6-c-card__header-main" style="font-weight:var(--pf-t--global--font--weight--heading--bold);">Last Session</h3>
     </div>
     <div class="pf-v6-c-card__body" style="padding:0;">
       {% include "sessions/_last_output.html" with context %}
@@ -591,6 +643,77 @@ git apply /path/to/{{ patch_filename }}
 </div>
 {% endif %}
 
+{# ════════════════════════════════════════════════════════════
+   Tab panel: Net Rules (OpenShell sessions)
+   ════════════════════════════════════════════════════════════ #}
+{% if show_policy_tab %}
+<div id="panel-policy" class="pf-v6-c-tab-content" role="tabpanel" aria-labelledby="tab-policy" hidden style="margin-top:var(--pf-t--global--spacer--lg);">
+
+  {# ── Net Rules card ── #}
+  <div class="pf-v6-c-card" style="margin-bottom:var(--pf-t--global--spacer--md);">
+    <div class="pf-v6-c-card__header">
+      <h3 class="pf-v6-c-card__header-main" style="font-weight:var(--pf-t--global--font--weight--heading--bold);">Net Rules</h3>
+    </div>
+    <div class="pf-v6-c-card__body"
+         hx-get="/workspaces/{{ ws.id }}/sessions/{{ session.id }}/policy-rules-partial"
+         hx-trigger="policyChanged from:body"
+         hx-swap="innerHTML"
+         id="policy-rules-container">
+      {% set rules = custom_policy_rules %}
+      {% include "sessions/_policy_rules.html" with context %}
+    </div>
+  </div>
+
+  {# ── Pending Chunks card ── #}
+  <div class="pf-v6-c-card">
+    <div class="pf-v6-c-card__header">
+      <h3 class="pf-v6-c-card__header-main" style="font-weight:var(--pf-t--global--font--weight--heading--bold);">Pending Chunks</h3>
+    </div>
+    <div class="pf-v6-c-card__body" style="padding:0;"
+         id="policy-chunks-container">
+      <div id="policy-chunks-content"
+           hx-get="/workspaces/{{ ws.id }}/sessions/{{ session.id }}/policy-chunks"
+           {% if session.is_active %}
+           hx-trigger="load, every 30s"
+           data-active="1"
+           {% else %}
+           hx-trigger="load"
+           data-active="0"
+           {% endif %}
+           hx-swap="innerHTML"
+           style="padding:var(--pf-t--global--spacer--md);">
+        <span style="color:var(--pf-t--global--text--color--subtle); font-size:var(--pf-t--global--font--size--sm);">Loading…</span>
+      </div>
+    </div>
+  </div>
+
+</div>
+{% endif %}
+
+{# ── Floating toast notification (bottom-right) ── #}
+<div id="policy-toast"
+     style="display:none; position:fixed; bottom:var(--pf-t--global--spacer--lg); right:var(--pf-t--global--spacer--lg);
+            z-index:9999; min-width:280px; max-width:400px;
+            background:var(--pf-t--global--background--color--secondary--default);
+            border:1px solid var(--pf-t--global--border--color--default);
+            border-radius:var(--pf-t--global--border--radius--medium);
+            box-shadow:0 4px 16px rgba(0,0,0,0.4);
+            overflow:hidden;
+            flex-direction:column; gap:0;">
+  <div style="display:flex; align-items:center; gap:var(--pf-t--global--spacer--md);
+              padding:var(--pf-t--global--spacer--md) var(--pf-t--global--spacer--lg);">
+    <span id="policy-toast-msg" style="flex:1; font-size:var(--pf-t--global--font--size--sm);"></span>
+    <button onclick="_policyHideToast()"
+            style="background:none; border:none; cursor:pointer; padding:0; line-height:1;
+                   color:var(--pf-t--global--text--color--subtle); font-size:1rem;"
+            title="Dismiss">&#x2715;</button>
+  </div>
+  {# Progress bar sweeps left→right over the toast duration #}
+  <div id="policy-toast-bar"
+       style="height:3px; width:0%; background:var(--pf-t--global--color--brand--default);
+              transition:none;"></div>
+</div>
+
 {% endblock %}
 
 {% block scripts %}
@@ -619,26 +742,45 @@ function switchTab(name) {
     if (initTerminal()) window._terminalInitialized = true;
   }
 
-  // Clear Output tab new-content marker when visiting the tab
+  // Clear tab new-content markers when visiting the tab
   if (name === 'output') {
     const textEl = document.getElementById('output-tab-text');
-    if (textEl) textEl.textContent = 'Output';
+    if (textEl) textEl.textContent = 'Logs';
+  }
+  if (name === 'history') {
+    const dot = document.getElementById('history-tab-dot');
+    if (dot) dot.style.display = 'none';
+  }
+  if (name === 'policy') {
+    const textEl = document.getElementById('policy-tab-text');
+    if (textEl) textEl.textContent = 'Net Rules';
   }
 }
 
-// Show ● on Output tab when new output arrives while not viewing it
+// Show ● on Output / History tabs when new output arrives while not viewing them
+// Seed from current DOM so a page load/refresh never fires spurious dots.
 (function() {
-  let lastOutputText = '';
+  const _initEl = document.getElementById('last-output-pre');
+  let lastOutputText = _initEl ? _initEl.textContent : '';
   document.addEventListener('htmx:afterSwap', function() {
     const newEl = document.getElementById('last-output-pre');
     if (!newEl) return;
     const newText = newEl.textContent;
     if (newText === lastOutputText) return;
     lastOutputText = newText;
+
+    // Output dot
     const outputTab = document.getElementById('tab-output');
-    if (outputTab && outputTab.classList.contains('pf-m-current')) return;
-    const textEl = document.getElementById('output-tab-text');
-    if (textEl) textEl.textContent = 'Output ●';
+    if (outputTab && !outputTab.classList.contains('pf-m-current')) {
+      const textEl = document.getElementById('output-tab-text');
+      if (textEl) textEl.textContent = '● Logs';
+    }
+    // History dot — new output means a run just completed
+    const histTab = document.getElementById('tab-history');
+    if (histTab && !histTab.classList.contains('pf-m-current')) {
+      const dot = document.getElementById('history-tab-dot');
+      if (dot) dot.style.display = '';
+    }
   });
 })();
 
@@ -721,12 +863,7 @@ function copyCommitMsg(btn) { _copyBlock('commit-msg', btn); }
 
   window._cfgSave = doSave;
 
-  const modeSelect = form.querySelector('select[name=mode]');
-  if (modeSelect) {
-    modeSelect.addEventListener('change', () => { form.submit(); });
-  }
-
-  form.querySelectorAll('select:not([name=mode]), input[type=checkbox]').forEach(el => {
+  form.querySelectorAll('select, input[type=checkbox]').forEach(el => {
     el.addEventListener('change', doSave);
   });
 
@@ -749,49 +886,30 @@ function copyCommitMsg(btn) { _copyBlock('commit-msg', btn); }
     });
   });
 
-  const launchForm = document.getElementById('launch-form');
-  const launchSelect = document.getElementById('launch-tool-select');
-  const launchBtn = document.getElementById('launch-btn');
-
-  if (launchForm) {
-    launchForm.addEventListener('submit', function (e) {
-      e.preventDefault();
-      const agentTool = launchSelect ? launchSelect.value : '';
-      const data = new FormData(form);
-      data.set('agent_tool', agentTool);
-      const tempForm = document.createElement('form');
-      tempForm.method = 'POST';
-      tempForm.action = launchForm.action;
-      tempForm.style.display = 'none';
-      for (const [key, value] of data.entries()) {
-        const input = document.createElement('input');
-        input.type = 'hidden';
-        input.name = key;
-        input.value = value;
-        tempForm.appendChild(input);
-      }
-      document.body.appendChild(tempForm);
-      if (document.getElementById('panel-terminal')) {
-        sessionStorage.setItem('switchToTab', 'terminal');
-      } else if (document.getElementById('panel-output')) {
-        sessionStorage.setItem('switchToTab', 'output');
-      }
-      tempForm.submit();
-    });
-  }
-
-  if (launchSelect) {
-    launchSelect.addEventListener('change', function () {
-      const availMap = JSON.parse(this.dataset.availability || '{}');
-      const avail = availMap[this.value] === true;
-      updateLaunchAvailPill(avail);
-      if (!launchBtn) return;
-      launchBtn.disabled = !avail;
-      launchBtn.classList.toggle('pf-m-primary', avail);
-      launchBtn.classList.toggle('pf-m-secondary', !avail);
-    });
-  }
 })();
+
+// ── Launch pills delegated submit handler ──
+document.getElementById('launch-pills') && document.getElementById('launch-pills').addEventListener('submit', function(e) {
+  e.preventDefault();
+  const pillForm = e.target;
+  const mode = pillForm.querySelector('input[name=mode]').value;
+  const cfgForm = document.getElementById('cfg-edit-form');
+  const data = new FormData(cfgForm);
+  data.set('mode', mode);
+  data.set('save_config', '1');
+  const tempForm = document.createElement('form');
+  tempForm.method = 'POST';
+  tempForm.action = pillForm.action;
+  tempForm.style.display = 'none';
+  for (const [k, v] of data.entries()) {
+    const inp = document.createElement('input');
+    inp.type = 'hidden'; inp.name = k; inp.value = v;
+    tempForm.appendChild(inp);
+  }
+  document.body.appendChild(tempForm);
+  sessionStorage.setItem('switchToTab', mode === 'tui' ? 'terminal' : 'output');
+  tempForm.submit();
+});
 
     function togglePrompt() {
       const card = document.getElementById('prompt-card');
@@ -821,10 +939,44 @@ function copyCommitMsg(btn) { _copyBlock('commit-msg', btn); }
   });
 })();
 
-function updateLaunchAvailPill(avail) {
-  const pill = document.getElementById('launch-avail-pill');
-  if (!pill) return;
-  pill.textContent = avail ? '✅' : '❌';
+function selectAgentTool(btn) {
+  document.querySelectorAll('.agent-pill').forEach(p => p.classList.remove('selected'));
+  btn.classList.add('selected');
+  document.getElementById('cfg_agent_tool').value = btn.dataset.tool;
+  htmx.ajax('GET',
+    '/workspaces/{{ ws.id }}/sessions/model-options?agent_tool=' + btn.dataset.tool,
+    { target: '#model-select-wrapper', swap: 'outerHTML' }
+  );
+  window._cfgSave();
+}
+
+// ── History expandable rows ──
+function toggleHistoryRow(runId) {
+  var toggleTd = document.getElementById('hist-toggle-' + runId);
+  var row      = document.getElementById('hist-expand-' + runId);
+  if (!toggleTd || !row) return;
+  var expanded = toggleTd.classList.toggle('pf-m-expanded');
+  row.style.display = expanded ? '' : 'none';
+  toggleTd.querySelector('button').setAttribute('aria-expanded', expanded ? 'true' : 'false');
+}
+
+function switchHistoryOutput(runId, type) {
+  var processed = document.getElementById('hist-out-processed-' + runId);
+  var raw       = document.getElementById('hist-out-raw-' + runId);
+  var btnP      = document.getElementById('hist-btn-processed-' + runId);
+  var btnR      = document.getElementById('hist-btn-raw-' + runId);
+  if (!processed || !raw) return;
+  if (type === 'processed') {
+    processed.style.display = 'block';
+    raw.style.display = 'none';
+    if (btnP) { btnP.classList.add('selected'); }
+    if (btnR) { btnR.classList.remove('selected'); }
+  } else {
+    raw.style.display = 'block';
+    processed.style.display = 'none';
+    if (btnR) { btnR.classList.add('selected'); }
+    if (btnP) { btnP.classList.remove('selected'); }
+  }
 }
 
 function showRename() {
@@ -879,25 +1031,24 @@ document.addEventListener('htmx:afterSwap', function () {
   const launchStop = document.getElementById('launch-stop');
   if (launchStop) launchStop.style.display = isActive ? '' : 'none';
 
-  const launchForm = document.getElementById('launch-form');
-  if (launchForm) launchForm.style.display = isBlocked ? 'none' : '';
+  // Toggle launch pills vs stop
+  const pills = document.getElementById('launch-pills');
+  if (pills) pills.style.display = isBlocked ? 'none' : 'flex';
 
-  const _launchBtn = document.getElementById('launch-btn');
-  const _launchSelect = document.getElementById('launch-tool-select');
-  if (_launchSelect) _launchSelect.disabled = isBlocked;
-  
+  // Sync sandbox name display from polled data attribute
+  const statusDiv = document.getElementById('session-status');
+  const sandboxName = statusDiv ? (statusDiv.dataset.sandbox || '') : '';
+  const sandboxDisplay = document.getElementById('sandbox-name-display');
+  if (sandboxDisplay) {
+    sandboxDisplay.textContent = sandboxName;
+    sandboxDisplay.style.display = sandboxName ? '' : 'none';
+  }
 
-
-  if (_launchBtn) {
-    const availMap = _launchSelect ? JSON.parse(_launchSelect.dataset.availability || '{}') : {};
-    const selectedTool = _launchSelect ? _launchSelect.value : '';
-    const avail = availMap[selectedTool] === true;
-    const isFailed = badge && badge.classList.contains('pf-m-red');
-    const blocked = !avail && !isFailed;
-    _launchBtn.disabled = blocked;
-    _launchBtn.classList.toggle('pf-m-primary', !blocked);
-    _launchBtn.classList.toggle('pf-m-secondary', blocked);
-    updateLaunchAvailPill(avail);
+  // Chat ↗ button: only in server mode while running
+  const chatBtn = document.getElementById('server-chat-btn');
+  const liveMode = statusDiv ? (statusDiv.dataset.mode || '') : '';
+  if (chatBtn) {
+    chatBtn.style.display = (liveMode === 'server' && isRunning) ? '' : 'none';
   }
 
 });
@@ -919,6 +1070,165 @@ document.addEventListener('htmx:afterSwap', function () {
   }, 2000);
 })();
 {% endif %}
+
+// ── Net Rules / Policy tab JS ──
+// All policy interactions live here (page-level) so that HTMX innerHTML
+// swaps of _policy_chunks.html never destroy event bindings.
+(function () {
+
+  // ── Toast helpers ──
+  var _toastTimer = null;
+  var _toastBarRaf = null;
+
+  function _showToast(msg, seconds) {
+    var toast = document.getElementById('policy-toast');
+    var msgEl = document.getElementById('policy-toast-msg');
+    var bar   = document.getElementById('policy-toast-bar');
+    if (!toast || !msgEl) return;
+    msgEl.textContent = msg;
+    toast.style.display = 'flex';
+    clearTimeout(_toastTimer);
+    cancelAnimationFrame(_toastBarRaf);
+
+    // Reset bar instantly, then animate to 100% over `seconds`.
+    if (bar) {
+      bar.style.transition = 'none';
+      bar.style.width = '0%';
+      // Force reflow so the reset takes effect before starting the animation.
+      void bar.offsetWidth;
+      bar.style.transition = 'width ' + (seconds || 10) + 's linear';
+      bar.style.width = '100%';
+    }
+
+    _toastTimer = setTimeout(function () { _hideToast(); }, (seconds || 10) * 1000);
+  }
+
+  function _hideToast() {
+    clearTimeout(_toastTimer);
+    var toast = document.getElementById('policy-toast');
+    var bar   = document.getElementById('policy-toast-bar');
+    if (toast) toast.style.display = 'none';
+    if (bar) { bar.style.transition = 'none'; bar.style.width = '0%'; }
+  }
+
+  window._policyHideToast = _hideToast;
+
+  // ── Chunk poll pause/resume ──
+  // Use a flag + htmx:beforeRequest to cancel in-flight polls rather than
+  // mutating hx-trigger + calling htmx.process(), which re-initializes all
+  // child HTMX bindings and can reset checkbox state.
+  var _pollPaused = false;
+
+  function _chunkEl() { return document.getElementById('policy-chunks-content'); }
+
+  function _pauseChunkPoll() { _pollPaused = true; }
+
+  function _resumeChunkPoll() { _pollPaused = false; }
+
+  function _refreshChunks() {
+    _pollPaused = false;
+    var el = _chunkEl();
+    if (!el) return;
+    // Use htmx.ajax directly rather than triggering a synthetic 'load' event,
+    // which may be intercepted or not map to the element's hx-trigger binding.
+    var url = el.getAttribute('hx-get');
+    if (url) htmx.ajax('GET', url, {target: el, swap: 'innerHTML'});
+  }
+
+  // Cancel outgoing chunk poll requests while checkboxes are checked.
+  // _refreshChunks() uses htmx.ajax directly and bypasses this guard.
+  document.addEventListener('htmx:beforeRequest', function (e) {
+    var el = _chunkEl();
+    if (!el || e.detail.elt !== el) return;
+    if (_pollPaused) e.preventDefault();
+  });
+
+  // Checkbox change — pause poll when anything is checked.
+  document.addEventListener('change', function (e) {
+    if (!e.target.classList.contains('policy-chunk-cb')) return;
+    var any = document.querySelectorAll('.policy-chunk-cb:checked').length > 0;
+    if (any) { _pauseChunkPoll(); } else { _resumeChunkPoll(); }
+  });
+
+  // ── Handle add-form submission ──
+  // Listen on document so the handler survives innerHTML swaps of the partial.
+  document.addEventListener('htmx:afterRequest', function (e) {
+    // Match requests to the add endpoint by URL pattern.
+    var url = (e.detail && e.detail.pathInfo && e.detail.pathInfo.requestPath) || '';
+    var xhr = e.detail && e.detail.xhr;
+    if (!url.endsWith('/policy-rules/add') || !xhr) return;
+
+    var rawTrigger = xhr.getResponseHeader('HX-Trigger') || '';
+    var form = document.getElementById('policy-chunks-form');
+    if (form) form.reset();
+    _resumeChunkPoll();
+
+    if (rawTrigger === 'policyNoop') {
+      _showToast('Rule already in Net Rules — no changes made', 6);
+      return;
+    }
+
+    // Parse JSON trigger to get added count.
+    var added = 0;
+    try {
+      var parsed = JSON.parse(rawTrigger);
+      added = (parsed.policyChanged && parsed.policyChanged.added) || 0;
+    } catch (_) {}
+
+    if (added > 0) {
+      _showToast('Added ' + added + ' rule' + (added === 1 ? '' : 's') + ' to Net Rules', 6);
+      _markPolicyTabDirty();
+    }
+
+    // Refresh both panels: rules container (via policyChanged event that HTMX
+    // dispatches from the HX-Trigger header) and chunks (force a reload so
+    // promoted rules are reflected as "added" immediately).
+    _refreshChunks();
+  });
+
+  // ── Handle delete-button responses ──
+  document.addEventListener('htmx:afterRequest', function (e) {
+    var url = (e.detail && e.detail.pathInfo && e.detail.pathInfo.requestPath) || '';
+    var xhr = e.detail && e.detail.xhr;
+    if (!/\/policy-rules\/\d+\/delete$/.test(url) || !xhr) return;
+
+    var rawTrigger = xhr.getResponseHeader('HX-Trigger') || '';
+    var deleted = 0;
+    try {
+      var parsed = JSON.parse(rawTrigger);
+      deleted = (parsed.policyChanged && parsed.policyChanged.deleted) || 0;
+    } catch (_) {}
+
+    if (deleted) {
+      _showToast('Rule removed from Net Rules', 6);
+      _markPolicyTabDirty();
+      _refreshChunks(); // refresh so "added" badge reverts to "pending" for removed rule
+    }
+  });
+
+  // ── Dot indicator on Net Rules tab ──
+  function _markPolicyTabDirty() {
+    var tab = document.getElementById('tab-policy');
+    if (tab && tab.classList.contains('pf-m-current')) return;
+    var textEl = document.getElementById('policy-tab-text');
+    if (textEl) textEl.textContent = '● Net Rules';
+  }
+  // Fired by HTMX from HX-Trigger headers (bubbles up from the requesting element).
+  document.body.addEventListener('policyChanged', _markPolicyTabDirty);
+  // Also mark directly from our afterRequest handlers so the dot always
+  // appears even if the HX-Trigger event doesn't reach body for any reason.
+  window._markPolicyTabDirty = _markPolicyTabDirty;
+
+  // Mark dot when the chunk poll swap reveals pending chunks while on another tab.
+  document.addEventListener('htmx:afterSwap', function (e) {
+    var el = _chunkEl();
+    if (!el || e.detail.elt !== el) return;
+    // Check if any pending (non-added) chunks are now visible in the swapped content.
+    var hasPending = el.querySelector('.policy-chunk-cb') !== null;
+    if (hasPending) _markPolicyTabDirty();
+  });
+
+}());
 </script>
 
 {% if session.mode == 'tui' and session.phase == 'running' and tui_token %}

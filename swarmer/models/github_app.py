@@ -8,7 +8,13 @@ from swarmer.database import Base
 
 
 class GitHubApp(Base):
-    """Workspace GitHub App installation credentials for session pods."""
+    """Workspace GitHub App installation credentials.
+
+    One App per workspace (enforced by UniqueConstraint).  Credentials are
+    stored encrypted; the PEM private key never leaves Swarmer in plaintext.
+    At session launch, Swarmer mints a short-lived Installation Access Token
+    (IAT) server-side and injects it via the OpenShell Gateway provider API.
+    """
 
     __tablename__ = "github_apps"
     __table_args__ = (UniqueConstraint("workspace_id"),)
@@ -21,9 +27,9 @@ class GitHubApp(Base):
     shared: Mapped[bool] = mapped_column(
         nullable=False, default=False, server_default="0"
     )
-    app_id: Mapped[str] = mapped_column(Text, nullable=False, default="")
-    installation_id: Mapped[str] = mapped_column(Text, nullable=False, default="")
-    private_key_enc: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    app_id: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
+    installation_id: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
+    private_key_enc: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
     created_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, server_default=func.now()
     )
@@ -51,6 +57,3 @@ class GitHubApp(Base):
             and self.private_key_enc
         )
 
-    @property
-    def k8s_secret_name(self) -> str:
-        return "github-app"

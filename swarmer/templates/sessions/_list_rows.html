@@ -1,16 +1,20 @@
 {% if capacity and capacity.max > 0 %}
+{% if capacity.ws_queued > 0 %}
+  {% set _cap_colour = 'pf-m-red' %}
+{% elif capacity.max <= 2 and capacity.ws_active >= capacity.max %}
+  {% set _cap_colour = 'pf-m-gold' %}
+{% elif capacity.max > 2 and capacity.ws_active >= capacity.max - 1 %}
+  {% set _cap_colour = 'pf-m-gold' %}
+{% elif capacity.ws_active >= 1 %}
+  {% set _cap_colour = 'pf-m-green' %}
+{% else %}
+  {% set _cap_colour = 'pf-m-outline' %}
+{% endif %}
 <div style="display:flex; align-items:center; gap:var(--pf-t--global--spacer--sm); flex-wrap:wrap; margin-bottom:var(--pf-t--global--spacer--md);">
-  <span style="font-size:var(--pf-t--global--font--size--sm); color:var(--pf-t--global--text--color--subtle);">Cluster capacity:</span>
-  <span class="pf-v6-c-label pf-m-green"><span class="pf-v6-c-label__content">{{ capacity.ws_active }} active</span></span>
-  {% if capacity.ws_queued > 0 %}
-  <span class="pf-v6-c-label pf-m-cyan"><span class="pf-v6-c-label__content">{{ capacity.ws_queued }} queued</span></span>
-  {% else %}
-  <span class="pf-v6-c-label pf-m-outline">
-    <span class="pf-v6-c-label__content">
-      {% if capacity.slots_available == 1 %}1 slot available{% else %}{{ capacity.slots_available }} slots available{% endif %}
-    </span>
+  <span style="font-size:var(--pf-t--global--font--size--sm); color:var(--pf-t--global--text--color--regular); font-weight:700;">Sessions:</span>
+  <span class="pf-v6-c-label {{ _cap_colour }}">
+    <span class="pf-v6-c-label__content">{{ capacity.ws_active }} / {{ capacity.max }} active{% if capacity.ws_queued > 0 %} · {{ capacity.ws_queued }} queued{% endif %}</span>
   </span>
-  {% endif %}
 </div>
 {% endif %}
 <table class="pf-v6-c-table pf-m-grid-md" role="grid">
@@ -18,12 +22,10 @@
     <tr class="pf-v6-c-table__tr" role="row">
       <th class="pf-v6-c-table__th" role="columnheader">Name</th>
       <th class="pf-v6-c-table__th" role="columnheader">Tool</th>
-      <th class="pf-v6-c-table__th" role="columnheader">Mode</th>
       <th class="pf-v6-c-table__th" role="columnheader">Status</th>
       <th class="pf-v6-c-table__th" role="columnheader">Last Run</th>
       <th class="pf-v6-c-table__th" role="columnheader">GitHub PAT</th>
       <th class="pf-v6-c-table__th" role="columnheader">Repos</th>
-      <th class="pf-v6-c-table__th" role="columnheader">Persist</th>
       <th class="pf-v6-c-table__th" role="columnheader">Schedule</th>
       <th class="pf-v6-c-table__th" role="columnheader">Next Run</th>
       <th class="pf-v6-c-table__th pf-m-fit-content" role="columnheader" style="text-align:right;">Actions</th>
@@ -38,9 +40,6 @@
       </td>
       <td class="pf-v6-c-table__td" role="cell" data-label="Tool">
         <span class="pf-v6-c-label pf-m-outline"><span class="pf-v6-c-label__content">{{ s.agent_tool | capitalize }}</span></span>
-      </td>
-      <td class="pf-v6-c-table__td" role="cell" data-label="Mode">
-        <span class="pf-v6-c-label pf-m-{{ mode_badge(s) }}"><span class="pf-v6-c-label__content">{{ mode_label(s) }}</span></span>
       </td>
       <td class="pf-v6-c-table__td" role="cell" data-label="Status">
         {% if s.phase == 'queued' %}
@@ -84,29 +83,27 @@
       <td class="pf-v6-c-table__td" role="cell" data-label="Repos" style="color:var(--pf-t--global--text--color--subtle); font-size:var(--pf-t--global--font--size--sm);">
         {{ s.repos | length }}
       </td>
-      <td class="pf-v6-c-table__td" role="cell" data-label="Persist">
-        {% if s.persist %}
-          <span class="pf-v6-c-label pf-m-cyan"><span class="pf-v6-c-label__content">Persist</span></span>
-        {% else %}
-          <span style="color:var(--pf-t--global--text--color--subtle);">—</span>
-        {% endif %}
-      </td>
       <td class="pf-v6-c-table__td" role="cell" data-label="Schedule" style="font-size:var(--pf-t--global--font--size--sm);">
-        {% if s.cron_schedule and s.mode == 'prompt' %}
-          <a href="/workspaces/{{ ws.id }}/sessions/{{ s.id }}#schedule"
-             style="text-decoration:none;">
-            <span class="pf-v6-c-label pf-m-purple"><span class="pf-v6-c-label__content">{{ s.cron_label }}</span></span>
+        {% set _enabled_scheds = s.schedules | selectattr('enabled') | list %}
+        {% if _enabled_scheds | length == 0 %}
+          <span style="color:var(--pf-t--global--text--color--subtle);">—</span>
+        {% elif _enabled_scheds | length == 1 %}
+          <a href="/workspaces/{{ ws.id }}/sessions/{{ s.id }}#schedule" style="text-decoration:none;">
+            <span class="pf-v6-c-label pf-m-purple"><span class="pf-v6-c-label__content">{{ _enabled_scheds[0].label or _enabled_scheds[0].cron_schedule }}</span></span>
           </a>
         {% else %}
-          <span style="color:var(--pf-t--global--text--color--subtle);">—</span>
+          <a href="/workspaces/{{ ws.id }}/sessions/{{ s.id }}#schedule" style="text-decoration:none;">
+            <span class="pf-v6-c-label pf-m-purple"><span class="pf-v6-c-label__content">{{ _enabled_scheds | length }} schedules</span></span>
+          </a>
         {% endif %}
       </td>
       <td class="pf-v6-c-table__td" role="cell" data-label="Next Run" style="color:var(--pf-t--global--text--color--subtle); font-size:var(--pf-t--global--font--size--sm); white-space:nowrap;">
-        {% if s.cron_schedule and s.mode == 'prompt' %}
+        {% set _earliest = s.earliest_next_run %}
+        {% if _enabled_scheds %}
           {% if s.is_active %}
             <span class="pf-v6-c-label pf-m-green"><span class="pf-v6-c-label__content">Running...</span></span>
-          {% elif s.cron_next_run %}
-            {{ s.cron_next_run.strftime('%b %d %H:%M') }} UTC
+          {% elif _earliest %}
+            {{ _earliest.strftime('%b %d %H:%M') }} UTC
           {% else %}
             —
           {% endif %}

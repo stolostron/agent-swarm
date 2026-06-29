@@ -756,3 +756,278 @@ class TestCronCapacityCheck:
             result = await db.execute(select(Session).where(Session.id == cron_s["id"]))
             sess = result.scalar_one()
         assert sess.phase == "idle"
+
+
+# ===========================================================================
+# Cron scheduler — mode coercion (ACM-35280)
+# Scheduled runs always execute in prompt mode regardless of the session's
+# configured mode. The scheduler sets session.mode = "prompt" before _do_launch.
+# ===========================================================================
+
+
+class TestCronModeCoercion:
+    @pytest.mark.asyncio
+    async def test_cron_sets_mode_to_prompt_for_tui_session(self, client):
+        """Scheduler coerces a TUI-mode session to prompt before launching."""
+        import swarmer.scheduler as sched
+
+        ws = await _create_workspace(client)
+        cron_s = await _create_session(client, ws["id"], "tui-cron-session")
+
+        # Set mode to TUI and insert an overdue session_schedules entry.
+        async with _TestSession() as db:
+            await db.execute(
+                text(
+                    "UPDATE sessions SET mode='tui', cron_schedule='*/30 * * * *', "
+                    "cron_next_run=datetime('now','-1 minute'), phase='idle' "
+                    "WHERE id=:id"
+                ),
+                {"id": cron_s["id"]},
+            )
+            await db.execute(
+                text(
+                    "INSERT INTO session_schedules "
+                    "(session_id, cron_schedule, cron_next_run, label, enabled) "
+                    "VALUES (:sid, '*/30 * * * *', datetime('now','-1 minute'), '', 1)"
+                ),
+                {"sid": cron_s["id"]},
+            )
+            await db.commit()
+
+        launched = []
+
+        async def _fake_do_launch(session, ws, db):
+            launched.append(session.mode)
+
+        with patch("swarmer.routers.sessions._do_launch", new=_fake_do_launch):
+            async with _TestSession() as db:
+                await sched._check_and_launch(db)
+
+        assert launched == ["prompt"], (
+            f"Expected scheduler to coerce mode to 'prompt', got {launched}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_cron_sets_mode_to_prompt_for_server_session(self, client):
+        """Scheduler coerces a server-mode session to prompt before launching."""
+        import swarmer.scheduler as sched
+
+        ws = await _create_workspace(client)
+        cron_s = await _create_session(client, ws["id"], "server-cron-session")
+
+        async with _TestSession() as db:
+            await db.execute(
+                text(
+                    "UPDATE sessions SET mode='server', cron_schedule='*/30 * * * *', "
+                    "cron_next_run=datetime('now','-1 minute'), phase='idle' "
+                    "WHERE id=:id"
+                ),
+                {"id": cron_s["id"]},
+            )
+            await db.execute(
+                text(
+                    "INSERT INTO session_schedules "
+                    "(session_id, cron_schedule, cron_next_run, label, enabled) "
+                    "VALUES (:sid, '*/30 * * * *', datetime('now','-1 minute'), '', 1)"
+                ),
+                {"sid": cron_s["id"]},
+            )
+            await db.commit()
+
+        launched = []
+
+        async def _fake_do_launch(session, ws, db):
+            launched.append(session.mode)
+
+        with patch("swarmer.routers.sessions._do_launch", new=_fake_do_launch):
+            async with _TestSession() as db:
+                await sched._check_and_launch(db)
+
+        assert launched == ["prompt"], (
+            f"Expected scheduler to coerce mode to 'prompt', got {launched}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_cron_claims_non_prompt_sessions(self, client):
+        """Scheduler now claims sessions of any mode (not just prompt-mode)."""
+        import swarmer.scheduler as sched
+
+        ws = await _create_workspace(client)
+        cron_s = await _create_session(client, ws["id"], "tui-cron-any-mode")
+
+        async with _TestSession() as db:
+            await db.execute(
+                text(
+                    "UPDATE sessions SET mode='tui', cron_schedule='*/30 * * * *', "
+                    "cron_next_run=datetime('now','-1 minute'), phase='idle' "
+                    "WHERE id=:id"
+                ),
+                {"id": cron_s["id"]},
+            )
+            await db.execute(
+                text(
+                    "INSERT INTO session_schedules "
+                    "(session_id, cron_schedule, cron_next_run, label, enabled) "
+                    "VALUES (:sid, '*/30 * * * *', datetime('now','-1 minute'), '', 1)"
+                ),
+                {"sid": cron_s["id"]},
+            )
+            await db.commit()
+
+        launched = []
+
+        async def _fake_do_launch(session, ws, db):
+            launched.append(session.id)
+
+        with patch("swarmer.routers.sessions._do_launch", new=_fake_do_launch):
+            async with _TestSession() as db:
+                await sched._check_and_launch(db)
+
+        assert cron_s["id"] in launched, (
+            "Expected TUI-mode session to be claimed and launched by cron scheduler"
+        )
+
+
+# ===========================================================================
+# List-page launch — mode coercion
+# The list-page "Launch" button sends no mode or save_config, so the endpoint
+# must default to prompt mode regardless of the session's configured mode.
+# ===========================================================================
+
+
+class TestListPageLaunchModeCoercion:
+    """The list-page Launch button sends no mode/save_config, so the endpoint
+    must default to prompt mode regardless of the session's configured mode."""
+
+    @pytest_asyncio.fixture(autouse=True)
+    async def _patch_auth(self):
+        """Override require_auth so the HTML launch endpoint is accessible."""
+        from swarmer.deps import require_auth
+        from swarmer.main import app
+
+        app.dependency_overrides[require_auth] = lambda: None
+        yield
+        app.dependency_overrides.pop(require_auth, None)
+
+    @pytest.mark.asyncio
+    async def test_list_launch_coerces_tui_to_prompt(self, client):
+        """List-page launch (no save_config) coerces a TUI-mode session to prompt."""
+        ws = await _create_workspace(client)
+        s = await _create_session(client, ws["id"], "tui-list-launch", mode="tui")
+
+        launched_modes = []
+
+        async def _fake_do_launch(session, workspace, db, user_id=""):
+            launched_modes.append(session.mode)
+
+        with patch("swarmer.routers.sessions._do_launch", new=_fake_do_launch):
+            resp = await client.post(
+                f"/workspaces/{ws['id']}/sessions/{s['id']}/launch",
+                data={"redirect_to": "list"},
+                follow_redirects=False,
+            )
+
+        assert resp.status_code in (302, 303)
+        assert launched_modes == ["prompt"], (
+            f"Expected list-page launch to coerce mode to 'prompt', got {launched_modes}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_list_launch_coerces_server_to_prompt(self, client):
+        """List-page launch (no save_config) coerces a server-mode session to prompt."""
+        ws = await _create_workspace(client)
+        s = await _create_session(client, ws["id"], "server-list-launch", mode="server")
+
+        launched_modes = []
+
+        async def _fake_do_launch(session, workspace, db, user_id=""):
+            launched_modes.append(session.mode)
+
+        with patch("swarmer.routers.sessions._do_launch", new=_fake_do_launch):
+            resp = await client.post(
+                f"/workspaces/{ws['id']}/sessions/{s['id']}/launch",
+                data={"redirect_to": "list"},
+                follow_redirects=False,
+            )
+
+        assert resp.status_code in (302, 303)
+        assert launched_modes == ["prompt"], (
+            f"Expected list-page launch to coerce mode to 'prompt', got {launched_modes}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_detail_launch_preserves_explicit_mode(self, client):
+        """Detail-page launch (with save_config + mode) preserves the chosen mode."""
+        ws = await _create_workspace(client)
+        s = await _create_session(client, ws["id"], "tui-detail-launch", mode="prompt")
+
+        launched_modes = []
+
+        async def _fake_do_launch(session, workspace, db, user_id=""):
+            launched_modes.append(session.mode)
+
+        with patch("swarmer.routers.sessions._do_launch", new=_fake_do_launch):
+            resp = await client.post(
+                f"/workspaces/{ws['id']}/sessions/{s['id']}/launch",
+                data={"save_config": "1", "mode": "tui", "redirect_to": "detail"},
+                follow_redirects=False,
+            )
+
+        assert resp.status_code in (302, 303)
+        assert launched_modes == ["tui"], (
+            f"Expected detail-page launch to preserve 'tui' mode, got {launched_modes}"
+        )
+
+
+# ===========================================================================
+# WAL mode — database.py must enable WAL so the scheduler can write
+# concurrently while a route handler holds an open read transaction.
+# ===========================================================================
+
+
+class TestSQLiteWALMode:
+    """Verify that init_db() enables WAL journal mode on SQLite engines."""
+
+    @pytest.mark.asyncio
+    async def test_wal_mode_and_busy_timeout_enabled_by_init_db(self, tmp_path):
+        import swarmer.database as db_module
+
+        db_path = tmp_path / "test_wal.db"
+        db_url = f"sqlite+aiosqlite:///{db_path}"
+
+        orig_engine = db_module._engine
+        orig_session = db_module._AsyncSessionLocal
+
+        try:
+            db_module.init_db(db_url)
+            async with db_module._engine.connect() as conn:
+                mode = (await conn.execute(text("PRAGMA journal_mode"))).scalar()
+                timeout = (await conn.execute(text("PRAGMA busy_timeout"))).scalar()
+            assert mode == "wal", f"Expected WAL journal mode, got: {mode!r}"
+            assert int(timeout) >= 5000, f"Expected busy_timeout >= 5000ms, got: {timeout}"
+        finally:
+            await db_module._engine.dispose()
+            db_module._engine = orig_engine
+            db_module._AsyncSessionLocal = orig_session
+
+    @pytest.mark.asyncio
+    async def test_in_memory_db_skips_wal(self):
+        """In-memory SQLite doesn't persist so WAL isn't required; guard is present."""
+        import swarmer.database as db_module
+
+        orig_engine = db_module._engine
+        orig_session = db_module._AsyncSessionLocal
+
+        try:
+            # In-memory URL still starts with "sqlite" so WAL is attempted;
+            # in-memory SQLite silently stays in "memory" mode but must not raise.
+            db_module.init_db("sqlite+aiosqlite://")
+            async with db_module._engine.connect() as conn:
+                result = await conn.execute(text("PRAGMA journal_mode"))
+                mode = result.scalar()
+            # In-memory SQLite ignores WAL and stays in "memory" mode — that's fine.
+            assert mode in ("wal", "memory")
+        finally:
+            await db_module._engine.dispose()
+            db_module._engine = orig_engine
+            db_module._AsyncSessionLocal = orig_session

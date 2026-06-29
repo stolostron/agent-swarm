@@ -20,6 +20,7 @@ class SessionRun(Base):
     started_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     completed_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     last_output: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
+    raw_output: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
     created_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, server_default=func.now()
     )

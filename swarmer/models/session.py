@@ -1,7 +1,6 @@
 from datetime import datetime, timezone
 
 from sqlalchemy import (
-    Boolean,
     DateTime,
     ForeignKey,
     Integer,
@@ -29,9 +28,9 @@ CRON_PRESETS: dict[str, str] = {
 }
 
 # Valid mode values
-#   tui    — pod keeps alive (sleep infinity); browser connects via xterm.js and the K8s exec API
-#   server — pod runs opencode serve --hostname 0.0.0.0
-#   prompt — pod runs opencode run "<prompt>" once and exits
+#   tui    — sandbox keeps alive (sleep infinity); browser connects via xterm.js and OpenShell exec
+#   server — sandbox runs opencode serve --hostname 0.0.0.0
+#   prompt — sandbox runs, exits on completion; sandbox deleted on success
 MODES = ("tui", "server", "prompt")
 
 
@@ -55,8 +54,6 @@ class Session(Base):
     )
     model: Mapped[str] = mapped_column(String(128), nullable=False, default="", server_default="")
     language: Mapped[str] = mapped_column(String(32), nullable=False, default="golang", server_default="golang")
-    persist: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
-    privileged: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="0")
     agent_tool: Mapped[str] = mapped_column(String(32), nullable=False, default="opencode", server_default="opencode")
     instruction_prompt: Mapped[str] = mapped_column(Text, nullable=False, default="")
     working_branch: Mapped[str] = mapped_column(String(255), nullable=False, default="", server_default="")
@@ -65,14 +62,19 @@ class Session(Base):
     patch_base_ref: Mapped[str] = mapped_column(String(255), nullable=False, default="", server_default="")
     cron_schedule: Mapped[str] = mapped_column(String(128), nullable=False, default="", server_default="")
     cron_next_run: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # Which SessionSchedule triggered the current run; cleared on stop/completion.
+    active_schedule_id: Mapped[int | None] = mapped_column(Integer, nullable=True, default=None)
     mcp_server_ids: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
-    # Comma-separated list of K8s Secret names created for this session (for cleanup)
-    k8s_secret_names: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
     # Runtime state — managed by dashboard
-    pod_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    pvc_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    sandbox_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    service_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
     last_output: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    raw_output: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
     status_detail: Mapped[str] = mapped_column(String(255), nullable=False, default="", server_default="")
+    # OpenShell draft policy chunks — JSON snapshot from last run (cleared on next launch)
+    policy_chunks: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
+    # Session-level custom network rules approved from chunks — JSON array, cumulative
+    custom_policies: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
     phase: Mapped[str] = mapped_column(String(32), nullable=False, default="idle")
     run_started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     run_completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
@@ -99,6 +101,15 @@ class Session(Base):
     prompt: Mapped["WorkspacePrompt | None"] = relationship(  # noqa: F821
         back_populates="sessions"
     )
+    schedules: Mapped[list["SessionSchedule"]] = relationship(  # noqa: F821
+        back_populates="session", cascade="all, delete-orphan", lazy="selectin"
+    )
+
+    @staticmethod
+    def _as_utc(dt: datetime) -> datetime:
+        if dt.tzinfo is None:
+            return dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(timezone.utc)
 
     @staticmethod
     def _as_utc(dt: datetime) -> datetime:
@@ -129,7 +140,7 @@ class Session(Base):
 
     @property
     def interactive_mode(self) -> bool:
-        """True for modes that keep the pod running persistently."""
+        """True for modes that keep the sandbox running."""
         return self.mode in ("tui", "server")
 
     @property
@@ -140,6 +151,14 @@ class Session(Base):
     def cron_label(self) -> str:
         """Human-readable label for common cron expressions."""
         return CRON_PRESETS.get(self.cron_schedule, self.cron_schedule) if self.cron_schedule else ""
+
+    @property
+    def earliest_next_run(self) -> "datetime | None":
+        """Earliest cron_next_run across all enabled schedules, or None."""
+        enabled = [s for s in (self.schedules or []) if s.enabled and s.cron_next_run is not None]
+        if not enabled:
+            return None
+        return min(s.cron_next_run for s in enabled)
 
     @property
     def phase_badge_class(self) -> str:

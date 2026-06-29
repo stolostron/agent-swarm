@@ -7,6 +7,7 @@ inheritance: true
 
 reviews:
   auto_approve: true
+  request_changes_workflow: true
 
   auto_review:
     enabled: true
@@ -98,7 +99,85 @@ reviews:
       enabled: false
     golangci-lint:
       enabled: false
+    gitleaks:
+      enabled: true
+    semgrep:
+      enabled: true
+    checkov:
+      enabled: true
+    hadolint:
+      enabled: true
+    trivy:
+      enabled: true
+    osvScanner:
+      enabled: true
+    actionlint:
+      enabled: true
+    ast-grep:
+      essential_rules: true
+
+  pre_merge_checks:
+    description:
+      mode: "warning"
+    custom_checks:
+      - name: "no-hardcoded-secrets"
+        instructions: |
+          Flag hardcoded secrets: API keys, tokens, passwords, private
+          keys, credentials. Also flag base64 strings >32 chars in config,
+          URLs with embedded credentials, variables named api_key/secret/
+          token/password assigned string literals.
+        mode: "error"
+
+      - name: "no-weak-crypto"
+        instructions: |
+          Flag MD5, SHA1, DES, RC4, 3DES, Blowfish, ECB mode usage.
+          Flag custom crypto implementations. Flag non-constant-time
+          comparison of secrets or tokens.
+        mode: "error"
+
+      - name: "no-injection-vectors"
+        instructions: |
+          Flag SQL string concatenation, shell=True with user input,
+          eval/exec on untrusted data, pickle.loads on untrusted input,
+          yaml.load without SafeLoader, os.system with variables,
+          dangerouslySetInnerHTML with user data.
+        mode: "error"
+
+      - name: "container-privileges"
+        instructions: |
+          Flag privileged: true, hostPID, hostNetwork, hostIPC,
+          SYS_ADMIN capability, running as root without justification,
+          allowPrivilegeEscalation: true in container/K8s manifests.
+        mode: "error"
+
+      - name: "no-sensitive-data-in-logs"
+        instructions: |
+          Flag logging that may expose passwords, tokens, API keys,
+          PII (email, SSN, credit card), session IDs, internal
+          hostnames, or customer data.
+        mode: "error"
+
+      - name: "ai-attribution"
+        instructions: |
+          If AI tools were used (mentioned in PR or commits), verify
+          Red Hat attribution: Assisted-by or Generated-by trailers.
+          Flag use of Co-Authored-By for AI tools.
+        mode: "warning"
 
 knowledge_base:
   learnings:
     scope: "local"
+  code_guidelines:
+    enabled: true
+    filePatterns:
+      - "**/AGENTS.md"
+      - "**/CLAUDE.md"
+      - "**/GEMINI.md"
+      - "**/CONTRIBUTING.md"
+  issues:
+    scope: "auto"
+  pull_requests:
+    scope: "auto"
+
+chat:
+  auto_reply: true

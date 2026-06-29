@@ -192,6 +192,49 @@ class AgentSwarmClient:
         return await self._get(f"/api/v1/workspaces/{ws_id}/prompts")
 
     # ==================================================================
+    # Session Schedules
+    # ==================================================================
+
+    async def list_session_schedules(self, ws_id: int, sid: int) -> list[dict]:
+        return await self._get(f"/api/v1/workspaces/{ws_id}/sessions/{sid}/schedules")
+
+    async def create_session_schedule(
+        self,
+        ws_id: int,
+        sid: int,
+        cron_schedule: str,
+        *,
+        label: str = "",
+        prompt_id: int | None = None,
+        instruction_prompt: str = "",
+        enabled: bool = True,
+    ) -> dict:
+        body: dict = {
+            "cron_schedule": cron_schedule,
+            "label": label,
+            "instruction_prompt": instruction_prompt,
+            "enabled": enabled,
+        }
+        if prompt_id is not None:
+            body["prompt_id"] = prompt_id
+        return await self._post(f"/api/v1/workspaces/{ws_id}/sessions/{sid}/schedules", json=body)
+
+    async def update_session_schedule(
+        self,
+        ws_id: int,
+        sid: int,
+        sched_id: int,
+        **fields: Any,
+    ) -> dict:
+        return await self._put(
+            f"/api/v1/workspaces/{ws_id}/sessions/{sid}/schedules/{sched_id}",
+            json=fields,
+        )
+
+    async def delete_session_schedule(self, ws_id: int, sid: int, sched_id: int) -> None:
+        await self._delete(f"/api/v1/workspaces/{ws_id}/sessions/{sid}/schedules/{sched_id}")
+
+    # ==================================================================
     # GitHub PATs
     # ==================================================================
 
