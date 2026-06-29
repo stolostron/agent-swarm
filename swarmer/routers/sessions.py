@@ -816,7 +816,7 @@ def _build_expected_hosts(model: str, repos_data: list[dict], tool_name: str, mo
     provider = model.split("/")[0] if "/" in model else ""
     if provider in ("google", "vertexai", "google-vertex-anthropic"):
         hosts.add("generativelanguage.googleapis.com")
-        hosts.add("*.aiplatform.googleapis.com")
+        hosts.add("aiplatform.googleapis.com")
         hosts.add("oauth2.googleapis.com")
     if provider == "gemini":
         hosts.add("generativelanguage.googleapis.com")
