@@ -136,6 +136,13 @@ async def migrate_db() -> None:
         # ACM-35750: raw streaming console output preserved alongside processed last_output
         "ALTER TABLE sessions ADD COLUMN raw_output TEXT NOT NULL DEFAULT ''",
         "ALTER TABLE session_runs ADD COLUMN raw_output TEXT NOT NULL DEFAULT ''",
+        # ACM-34850: deduplicate opencode_secrets rows then enforce (workspace_id, user_id) uniqueness.
+        # Keep the newest row per (workspace_id, user_id) pair before creating the index.
+        """DELETE FROM opencode_secrets WHERE id NOT IN (
+            SELECT MAX(id) FROM opencode_secrets GROUP BY workspace_id, user_id
+        )""",
+        """CREATE UNIQUE INDEX IF NOT EXISTS uq_opencode_secrets_workspace_user
+           ON opencode_secrets (workspace_id, user_id)""",
         # ACM-35370: GitHub App credentials for server-side IAT minting
         """CREATE TABLE IF NOT EXISTS github_apps (
             id INTEGER PRIMARY KEY AUTOINCREMENT,

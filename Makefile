@@ -27,7 +27,7 @@ SWARMER_HOST         ?=
 
 # Port-forward ports
 LOCAL_PORT      ?= 8080
-OS_LOCAL_PORT   ?= 17670
+OS_LOCAL_PORT   ?= 17671
 
 # User token duration
 # agent-containers build defaults (registry + image tag — checked in)
@@ -185,7 +185,7 @@ deploy:  ## Deploy swarmer to the current kubectl context  (SILENT=1 for non-int
 	    oci://ghcr.io/nvidia/openshell/helm-chart \
 	    --version $(OPENSHELL_VERSION) \
 	    --namespace $(OPENSHELL_NAMESPACE) \
-	    --set server.auth.allowUnauthenticatedUsers=false \
+	    --set server.auth.allowUnauthenticatedUsers=true \
 	    --wait --timeout 5m; \
 	  echo "✓ OpenShell $(OPENSHELL_VERSION) installed."; \
 	else \
@@ -362,23 +362,30 @@ openshell-register:  ## Register (or refresh) the active cluster's OpenShell gat
 	GW_DIR="$(HOME)/.config/openshell/gateways/$$GW_NAME"; \
 	CERTS="$(OPENSHELL_TLS_DIR)"; \
 	\
-	# Auto-select a free port: skip ports used by other gateways OR already bound on localhost \
-	PORT=$(OS_LOCAL_PORT); \
-	while true; do \
-	  USED=0; \
-	  for meta in $(HOME)/.config/openshell/gateways/*/metadata.json; do \
-	    [ -f "$$meta" ] || continue; \
-	    GNAME=$$(python3 -c "import json; d=json.load(open('$$meta')); print(d.get('name',''))" 2>/dev/null); \
-	    [ "$$GNAME" = "$$GW_NAME" ] && continue; \
-	    P=$$(python3 -c "import json; d=json.load(open('$$meta')); ep=d.get('gateway_endpoint',''); print(ep.rsplit(':',1)[-1] if ':' in ep else '')" 2>/dev/null); \
-	    [ "$$P" = "$$PORT" ] && USED=1 && break; \
+	# If gateway already registered, reuse its existing port to avoid drift. \
+	# Only pick a new port for fresh registrations. \
+	if [ -f "$$GW_DIR/metadata.json" ]; then \
+	  PORT=$$(python3 -c "import json; d=json.load(open('$$GW_DIR/metadata.json')); ep=d.get('gateway_endpoint',''); print(ep.rsplit(':',1)[-1] if ':' in ep else '$(OS_LOCAL_PORT)')" 2>/dev/null); \
+	  PORT=$${PORT:-$(OS_LOCAL_PORT)}; \
+	else \
+	  # Auto-select a free port: skip ports used by other gateways OR already bound on localhost \
+	  PORT=$(OS_LOCAL_PORT); \
+	  while true; do \
+	    USED=0; \
+	    for meta in $(HOME)/.config/openshell/gateways/*/metadata.json; do \
+	      [ -f "$$meta" ] || continue; \
+	      GNAME=$$(python3 -c "import json; d=json.load(open('$$meta')); print(d.get('name',''))" 2>/dev/null); \
+	      [ "$$GNAME" = "$$GW_NAME" ] && continue; \
+	      P=$$(python3 -c "import json; d=json.load(open('$$meta')); ep=d.get('gateway_endpoint',''); print(ep.rsplit(':',1)[-1] if ':' in ep else '')" 2>/dev/null); \
+	      [ "$$P" = "$$PORT" ] && USED=1 && break; \
+	    done; \
+	    if [ "$$USED" -eq 0 ]; then \
+	      python3 -c "import socket; s=socket.socket(); s.bind(('127.0.0.1',$$PORT)); s.close()" 2>/dev/null || USED=1; \
+	    fi; \
+	    [ "$$USED" -eq 0 ] && break; \
+	    PORT=$$((PORT + 1)); \
 	  done; \
-	  if [ "$$USED" -eq 0 ]; then \
-	    python3 -c "import socket; s=socket.socket(); s.bind(('127.0.0.1',$$PORT)); s.close()" 2>/dev/null || USED=1; \
-	  fi; \
-	  [ "$$USED" -eq 0 ] && break; \
-	  PORT=$$((PORT + 1)); \
-	done; \
+	fi; \
 	\
 	echo "Registering gateway '$$GW_NAME' on localhost:$$PORT (context: $$CTX)"; \
 	\
@@ -386,15 +393,7 @@ openshell-register:  ## Register (or refresh) the active cluster's OpenShell gat
 	if [ ! -f "$$GW_DIR/metadata.json" ]; then \
 	  openshell gateway add https://localhost:$$PORT --local --name "$$GW_NAME" 2>&1 || true; \
 	else \
-	  echo "  Gateway '$$GW_NAME' already registered — refreshing port and certs."; \
-	  python3 -c "\
-import json; \
-path='$$GW_DIR/metadata.json'; \
-d=json.load(open(path)); \
-d['gateway_endpoint']='https://localhost:$$PORT'; \
-json.dump(d, open(path,'w'), indent=2); \
-print('  Updated endpoint → https://localhost:$$PORT'); \
-"; \
+	  echo "  Gateway '$$GW_NAME' already registered — refreshing certs (port unchanged: $$PORT)."; \
 	fi; \
 	\
 	# Copy this cluster's certs only — never cross-contaminate with other clusters \

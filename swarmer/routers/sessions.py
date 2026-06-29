@@ -182,7 +182,7 @@ async def _get_model_options(
     result = await db.execute(
         select(OpencodeSecret).where(OpencodeSecret.workspace_id == ws_id)
     )
-    oc = result.scalar_one_or_none()
+    oc = result.scalars().first()
     # Check gateway for Vertex AI provider — ADC is stored on OpenShell, not Swarmer DB.
     has_vertex = False
     try:
@@ -2762,7 +2762,7 @@ async def _build_commit_msg(patch: str, workspace_id: int, db: AsyncSession) -> 
     oc_result = await db.execute(
         select(OpencodeSecret).where(OpencodeSecret.workspace_id == workspace_id)
     )
-    oc = oc_result.scalar_one_or_none()
+    oc = oc_result.scalars().first()
     if not oc:
         return _fallback_commit_msg(patch)
 
