@@ -179,8 +179,6 @@ deploy:  ## Deploy swarmer to the current kubectl context  (SILENT=1 for non-int
 	  echo "OpenShell not found — installing $(OPENSHELL_VERSION)..."; \
 	  kubectl apply -f https://github.com/kubernetes-sigs/agent-sandbox/releases/download/$(AGENT_SANDBOX_VERSION)/manifest.yaml; \
 	  kubectl create namespace $(OPENSHELL_NAMESPACE) --dry-run=client -o yaml | kubectl apply -f -; \
-	  oc adm policy add-scc-to-user anyuid -z openshell -n $(OPENSHELL_NAMESPACE) 2>/dev/null || true; \
-	  oc adm policy add-scc-to-user anyuid -z openshell-sandbox -n $(OPENSHELL_NAMESPACE) 2>/dev/null || true; \
 	  DOCKER_CONFIG=$$(mktemp -d) helm upgrade --install openshell \
 	    oci://ghcr.io/nvidia/openshell/helm-chart \
 	    --version $(OPENSHELL_VERSION) \
@@ -190,6 +188,14 @@ deploy:  ## Deploy swarmer to the current kubectl context  (SILENT=1 for non-int
 	  echo "✓ OpenShell $(OPENSHELL_VERSION) installed."; \
 	else \
 	  echo "OpenShell already installed."; \
+	fi; \
+	# Grant OpenShift SCCs required for sandbox pods (no-op on plain k8s / if oc is absent) \
+	if command -v oc > /dev/null 2>&1; then \
+	  oc adm policy add-scc-to-user anyuid    -z openshell         -n $(OPENSHELL_NAMESPACE) 2>/dev/null || true; \
+	  oc adm policy add-scc-to-user anyuid    -z openshell-sandbox -n $(OPENSHELL_NAMESPACE) 2>/dev/null || true; \
+	  oc adm policy add-scc-to-user privileged -z openshell         -n $(OPENSHELL_NAMESPACE) 2>/dev/null || true; \
+	  oc adm policy add-scc-to-user privileged -z openshell-sandbox -n $(OPENSHELL_NAMESPACE) 2>/dev/null || true; \
+	  echo "  ✓ OpenShift SCC grants applied (anyuid + privileged for openshell and openshell-sandbox)"; \
 	fi
 	@# ── 3. Extract OpenShell mTLS certs ────────────────────────────────────
 	@mkdir -p $(OPENSHELL_TLS_DIR)
