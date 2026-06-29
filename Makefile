@@ -358,7 +358,7 @@ connect:  ## Port-forward the swarmer dashboard to localhost:$(LOCAL_PORT)
 openshell-register:  ## Register (or refresh) the active cluster's OpenShell gateway in the local CLI
 	@# Derive a stable gateway name from the current kubectl context
 	@CTX=$$(kubectl config current-context 2>/dev/null || echo "unknown"); \
-	GW_NAME=$$(echo "$$CTX" | tr '/:.' '-' | sed 's/[^a-zA-Z0-9_-]/-/g'); \
+	GW_NAME=$$(echo "$$CTX" | tr '/:.' '-' | sed 's/[^a-zA-Z0-9_-]/-/g' | sed 's/^-*//'); \
 	GW_DIR="$(HOME)/.config/openshell/gateways/$$GW_NAME"; \
 	CERTS="$(OPENSHELL_TLS_DIR)"; \
 	\
