@@ -385,7 +385,7 @@ def build_session_policy(
     Returns a SandboxPolicy proto object to be set on SandboxSpec.policy.
     """
     from google.protobuf.json_format import ParseDict
-    from openshell._proto import openshell_pb2
+    from openshell._proto import sandbox_pb2
 
     network_policies_dict = build_session_network_policies(
         session, repos, mcp_servers, agent_tool, model,
@@ -401,8 +401,10 @@ def build_session_policy(
         "process": {"run_as_group": "sandbox", "run_as_user": "sandbox"},
         "network_policies": network_policies_dict,
     }
-    # Get SandboxPolicy class from a SandboxSpec instance
-    policy_instance = openshell_pb2.SandboxSpec().policy.__class__()
+    # Import SandboxPolicy directly from sandbox_pb2 — SandboxSpec().policy may
+    # be None when unset in newer SDK versions, so deriving the class from the
+    # instance is not reliable.
+    policy_instance = sandbox_pb2.SandboxPolicy()
     return ParseDict(policy_dict, policy_instance, ignore_unknown_fields=True)
 
 
