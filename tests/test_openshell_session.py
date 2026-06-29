@@ -539,7 +539,8 @@ class TestDoLaunchOpenshell:
              patches["write_agents_md"], patches["exec_command"], \
              patches["start_agent"], patches["delete_sandbox"], \
              patches["build_policy"], patches["run_agent"], \
-             patches["setup_sandbox"] as mock_setup:
+             patches["setup_sandbox"] as mock_setup, \
+             patches["provider_exists"], patches["get_image"]:
             await client.post(
                 f"/api/v1/workspaces/{ws['id']}/sessions/{s['id']}/launch"
             )
