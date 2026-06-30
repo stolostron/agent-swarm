@@ -489,7 +489,16 @@ Image pull secret name for private container registries. Specify the name of an 
 
 #### Extra environment variables
 
-An optional unmanaged Secret named `swarmer-agent-extra-env` can be created in the workspace namespace to inject extra environment variables into agent pods via `envFrom`.
+Workspace-scoped key-value pairs injected into every sandbox session at launch. Managed from
+**Environment Variables** on the workspace sessions page (`/workspaces/{id}/env-vars`).
+
+- Stored in the Swarmer database, **Fernet-encrypted at rest**, and passed to the agent process
+  via OpenShell at session launch
+- Applies to all sessions in the workspace (prompt, server, TUI, and cron-scheduled runs)
+- Common uses: `SLACK_WEBHOOK_URL` for workflow notifications, `SKIP_SLACK` to disable Slack
+  for a workspace, or other secrets your agent prompts expect
+
+See [SLACK_NOTIFICATIONS.md](SLACK_NOTIFICATIONS.md) for Slack Incoming Webhook setup.
 
 ### Git Repositories
 
@@ -702,6 +711,15 @@ oc delete -k kustomize/overlays/my-env
 ---
 
 ## Appendix
+
+### Setup guides
+
+| Guide | Description |
+|-------|-------------|
+| [GITHUB_APP_SETUP.md](GITHUB_APP_SETUP.md) | GitHub App auth instead of PATs |
+| [SLACK_NOTIFICATIONS.md](SLACK_NOTIFICATIONS.md) | Slack webhooks for workspace sessions |
+| [OPENSHELL_LOCAL_SETUP.md](OPENSHELL_LOCAL_SETUP.md) | Local OpenShell gateway development |
+| [ARCHITECTURE.md](ARCHITECTURE.md) | Internal architecture reference |
 
 ### Makefile Reference
 

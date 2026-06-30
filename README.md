@@ -33,6 +33,8 @@ Dashboard: http://localhost:8080
 
 See the [User Guide](docs/USER_GUIDE.md) for OpenShift deployment, Kustomize overlays, and all other options.
 
+Additional setup guides: [Slack notifications](docs/SLACK_NOTIFICATIONS.md) · [GitHub App auth](docs/GITHUB_APP_SETUP.md) · [OpenShell local dev](docs/OPENSHELL_LOCAL_SETUP.md)
+
 ## Configuration
 
 Copy `.env.example` to `.env` and adjust as needed:
