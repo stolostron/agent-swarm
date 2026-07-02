@@ -11,7 +11,7 @@ dependencies = [
     "fastmcp>=3.4.0",
     "httpx>=0.28.1",
     "pydantic>=2.13.4",
-    "pydantic-settings>=2.14.2",
+    "pydantic-settings>=2.14.2",  # GHSA-4xgf-cpjx-pc3j fixed in 2.14.2
     "pyyaml>=6.0.3",
     "starlette>=1.2.1",
 ]
