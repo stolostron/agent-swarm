@@ -454,10 +454,11 @@ class AgentSwarmMCPServer:
             Args:
                 workspace_id: The workspace id.
                 name: Unique session name within the workspace.
-                agent_tool: Agent tool. One of: opencode. Default: opencode.
+                agent_tool: Agent tool. One of: opencode, crush. Default: opencode.
                 mode: Execution mode. One of: prompt, tui, server. Default: prompt.
                 model: LLM model identifier. Empty string uses the tool default.
-                       OpenCode: google-vertex-anthropic/claude-sonnet-5@default
+                       OpenCode: google-vertex-anthropic/claude-sonnet-4-6@default
+                       Crush: vertexai/claude-sonnet-4-6
                 persist: Keep workspace PVC between runs. Default: false.
                 working_branch: Git branch to create/checkout in the pod.
                 instruction_prompt: Additional instructions prepended to the base prompt.
@@ -625,7 +626,7 @@ class AgentSwarmMCPServer:
             (output) and the raw console log (raw_output). For OpenCode sessions
             these differ: output contains the clean assistant conversation from
             OpenCode's SQLite DB; raw_output contains the raw stdout/stderr stream.
-            For TUI/server-mode sessions they are identical.
+            For Crush sessions and TUI/server-mode sessions they are identical.
 
             Args:
                 workspace_id: The workspace id.

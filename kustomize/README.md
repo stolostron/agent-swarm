@@ -68,9 +68,10 @@ oc apply -k kustomize/base/cluster-admin
 # 3. Set the image (replace SWARMER_IMAGE placeholder)
 oc set image deployment/swarmer swarmer=<your-image> -n swarmer
 
-# 4. Set agent image and OAuth URL
+# 4. Set agent images and OAuth URL
 oc set env deployment/swarmer -n swarmer \
   AGENT_IMAGE_OPENCODE=ghcr.io/anomalyco/opencode:latest \
+  AGENT_IMAGE_CRUSH=ghcr.io/gurnben/crush-container:latest \
   OPENSHIFT_OAUTH_URL=https://$(oc get route oauth-openshift -n openshift-authentication -o jsonpath='{.spec.host}')
 
 # 5. Update OAuthClient redirect URI
@@ -124,7 +125,7 @@ The `overlays/ephemeral/` directory is a template with three placeholders:
 | `NAMESPACE` | Target namespace name | `ephemeral-abc123` |
 | `IMAGE_REGISTRY/NAMESPACE/swarmer` | Full image reference (without tag) | `image-registry.openshift-image-registry.svc:5000/ephemeral-abc123/swarmer` |
 
-The agent image defaults to `ghcr.io/anomalyco/opencode:latest`.
+Agent images default to `ghcr.io/anomalyco/opencode:latest` and `ghcr.io/gurnben/crush-container:latest`.
 
 ## Teardown
 

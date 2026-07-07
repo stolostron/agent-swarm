@@ -15,8 +15,9 @@ IMAGE_REF     = $(if $(REGISTRY),$(REGISTRY)/$(IMAGE):$(IMAGE_TAG),$(IMAGE):$(IM
 # docker or podman
 CONTAINER_CMD ?= podman
 
-# Agent tool image (overridable via .env or command line)
+# Agent tool images (overridable via .env or command line)
 AGENT_IMAGE_OPENCODE ?=
+AGENT_IMAGE_CRUSH    ?=
 
 # Kubernetes
 NAMESPACE            ?= swarmer
@@ -56,12 +57,13 @@ OPENSHELL_TLS_DIR        ?= auth/openshell
 #  Developer tooling
 # ──────────────────────────────────────────────────────────────
 
-sync-images:  ## Sync AGENT_IMAGE_OPENCODE in .env from .push-defaults
+sync-images:  ## Sync AGENT_IMAGE_OPENCODE / AGENT_IMAGE_CRUSH in .env from .push-defaults
 	@test -f $(AC_DEFAULTS) || (echo "$(AC_DEFAULTS) not found — create/update .push-defaults first" && exit 1)
 	$(eval AC_REGISTRY := $(shell grep '^REGISTRY=' $(AC_DEFAULTS) | cut -d= -f2-))
 	$(eval AC_TAG      := $(shell grep '^IMAGE_TAG=' $(AC_DEFAULTS) | cut -d= -f2-))
-	@echo "Syncing agent image → $(AC_REGISTRY)/opencode:$(AC_TAG)"
+	@echo "Syncing agent images → $(AC_REGISTRY)/{opencode,crush}:$(AC_TAG)"
 	@sed -i "s|^AGENT_IMAGE_OPENCODE=.*|AGENT_IMAGE_OPENCODE=$(AC_REGISTRY)/opencode:$(AC_TAG)|" .env
+	@sed -i "s|^AGENT_IMAGE_CRUSH=.*|AGENT_IMAGE_CRUSH=$(AC_REGISTRY)/crush:$(AC_TAG)|" .env
 	@echo "Updated .env"
 
 setup-secret:  ## Generate a new SWARMER_SECRET_KEY and save to auth/secret.key
@@ -313,6 +315,7 @@ deploy:  ## Deploy swarmer to the current kubectl context  (SILENT=1 for non-int
 	     s|REDIRECT_BASE_URL_VALUE|$$REDIRECT_URL|g; \
 	     s|DEFAULT_AGENT_TOOL_VALUE|$$DEFAULT_TOOL|g; \
 	     s|AGENT_IMAGE_OPENCODE_VALUE|$(AGENT_IMAGE_OPENCODE)|g; \
+	     s|AGENT_IMAGE_CRUSH_VALUE|$(AGENT_IMAGE_CRUSH)|g; \
 	     s|MAX_CONCURRENT_AGENTS_VALUE|$$MAX_VAL|g; \
 	     s|OPENSHELL_GATEWAY_URL_VALUE|$$OPENSHELL_GW|g" \
 	  k8s/swarmer/deployment.yaml | kubectl apply -f -
@@ -399,20 +402,6 @@ openshell-register:  ## Register (or refresh) the active cluster's OpenShell gat
 	  echo "  Gateway '$$GW_NAME' already registered — refreshing certs (port unchanged: $$PORT)."; \
 	fi; \
 	\
-	# Always pull fresh certs from the cluster secret so stale/rotated certs are never used \
-	if kubectl -n $(OPENSHELL_NAMESPACE) get secret openshell-client-tls > /dev/null 2>&1; then \
-	  mkdir -p "$$CERTS"; \
-	  kubectl -n $(OPENSHELL_NAMESPACE) get secret openshell-client-tls \
-	    -o jsonpath='{.data.ca\.crt}'  | base64 -d > "$$CERTS/ca.crt"; \
-	  kubectl -n $(OPENSHELL_NAMESPACE) get secret openshell-client-tls \
-	    -o jsonpath='{.data.tls\.crt}' | base64 -d > "$$CERTS/tls.crt"; \
-	  kubectl -n $(OPENSHELL_NAMESPACE) get secret openshell-client-tls \
-	    -o jsonpath='{.data.tls\.key}' | base64 -d > "$$CERTS/tls.key"; \
-	  echo "  ✓ Fetched fresh mTLS certs from cluster secret"; \
-	else \
-	  echo "  ⚠ Secret openshell-client-tls not found in $(OPENSHELL_NAMESPACE) — using cached certs if available"; \
-	fi; \
-	\
 	# Copy this cluster's certs only — never cross-contaminate with other clusters \
 	if [ -f "$$CERTS/ca.crt" ]; then \
 	  mkdir -p "$$GW_DIR/mtls"; \
@@ -421,7 +410,7 @@ openshell-register:  ## Register (or refresh) the active cluster's OpenShell gat
 	  cp "$$CERTS/tls.key" "$$GW_DIR/mtls/tls.key"; \
 	  echo "  ✓ mTLS certs installed for '$$GW_NAME'"; \
 	else \
-	  echo "  ⚠ No certs available — run 'make deploy' first"; \
+	  echo "  ⚠ No certs in $(OPENSHELL_TLS_DIR) — run 'make deploy' first"; \
 	fi; \
 	\
 	# Save kubectl context so connect-openshell can forward the right cluster later \
@@ -433,8 +422,7 @@ openshell-register:  ## Register (or refresh) the active cluster's OpenShell gat
 	  echo "$$GW_NAME" > "$(HOME)/.config/openshell/active_gateway"; \
 	echo "  ✓ Active gateway set to '$$GW_NAME'"
 
-connect-openshell:  ## Refresh certs + port-forward every registered OpenShell gateway (Ctrl-C stops all)
-	$(MAKE) openshell-register
+connect-openshell:  ## Port-forward every registered OpenShell gateway (Ctrl-C stops all)
 	python3 scripts/openshell_connect.py --namespace $(OPENSHELL_NAMESPACE)
 
 status:  ## Show OpenShell and swarmer deployment status
@@ -501,7 +489,7 @@ help:  ## Show this help
 	@echo "  IMAGE=$(IMAGE)  IMAGE_TAG=$(IMAGE_TAG)  REGISTRY=$(REGISTRY)"
 	@echo "  CONTAINER_CMD=$(CONTAINER_CMD)  KIND_CLUSTER=$(KIND_CLUSTER)"
 	@echo "  NAMESPACE=$(NAMESPACE)  LOCAL_PORT=$(LOCAL_PORT)"
-	@echo "  TOKEN_DURATION=$(TOKEN_DURATION)  AGENT_IMAGE_OPENCODE=$(AGENT_IMAGE_OPENCODE)"
+	@echo "  TOKEN_DURATION=$(TOKEN_DURATION)  AGENT_IMAGE_OPENCODE  AGENT_IMAGE_CRUSH"
 	@echo ""
 	@echo "Notes:"
 	@echo "  Reset DB: delete data/swarmer.db (fresh schema created on next start)"

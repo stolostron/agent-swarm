@@ -72,6 +72,7 @@ REQUIRED_SECTIONS = [
     "#### Session Lifecycle",
     "### Agent Tools",
     "#### OpenCode",
+    "#### Crush",
     "#### Model Selection",
     "### MCP Servers",
     "### Prompt Library",
@@ -104,12 +105,14 @@ REQUIRED_TERMS = [
     "K8S_IN_CLUSTER",
     "DATABASE_URL",
     "AGENT_IMAGE_OPENCODE",
+    "AGENT_IMAGE_CRUSH",
     "DEFAULT_AGENT_TOOL",
     "AGENT_IMAGE_PULL_SECRET",
     "AGENT_IMAGE_PULL_POLICY",
     "K8S_NAMESPACE",
     "OPENSHIFT_OAUTH_URL",
     "opencode",
+    "crush",
     "cron",
     "make setup-secret",
     "make kind-deploy",
@@ -235,7 +238,7 @@ def test_session_modes(guide_content):
 
 def test_agent_tool_model_formats(guide_content):
     assert "provider/model@version" in guide_content or "provider/model" in guide_content
-    assert "google-vertex-anthropic/" in guide_content
+    assert "vertexai/" in guide_content
     assert "claude-sonnet" in guide_content.lower()
 
 

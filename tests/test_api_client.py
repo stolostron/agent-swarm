@@ -245,8 +245,8 @@ class TestSessionOps:
     async def test_set_model(self, api_client):
         ws = await api_client.create_workspace("WS")
         s = await api_client.create_session(ws["id"], "orig")
-        updated = await api_client.set_session_model(ws["id"], s["id"], "claude-sonnet-5")
-        assert updated["model"] == "claude-sonnet-5"
+        updated = await api_client.set_session_model(ws["id"], s["id"], "claude-sonnet-4-6")
+        assert updated["model"] == "claude-sonnet-4-6"
 
     @pytest.mark.asyncio
     async def test_get_output(self, api_client):
@@ -327,10 +327,10 @@ class TestSecretsOps:
             ws["id"],
             google_cloud_project="my-project",
             vertex_location="us-central1",
-            google_api_key="AIza-test",
+            anthropic_api_key="sk-ant-test",
         )
         assert cred["google_cloud_project"] == "my-project"
-        assert cred["masked_api_key"]
+        assert cred["has_anthropic"] is True
 
     @pytest.mark.asyncio
     async def test_pat_crud(self, api_client):

@@ -351,10 +351,10 @@ class TestSessions:
         s = await _create_session(client, ws["id"])
         resp = await client.post(
             f"/api/v1/workspaces/{ws['id']}/sessions/{s['id']}/set-model",
-            json={"model": "claude-sonnet-5"},
+            json={"model": "claude-sonnet-4-6"},
         )
         assert resp.status_code == 200
-        assert resp.json()["model"] == "claude-sonnet-5"
+        assert resp.json()["model"] == "claude-sonnet-4-6"
 
     @pytest.mark.asyncio
     async def test_get_output(self, client):
@@ -366,7 +366,7 @@ class TestSessions:
 
     @pytest.mark.asyncio
     async def test_list_session_runs(self, client):
-        from datetime import datetime, timezone
+        from datetime import datetime
 
         from swarmer.models.session import Session
         from swarmer.session_runs import record_session_run
@@ -375,14 +375,14 @@ class TestSessions:
         s = await _create_session(client, ws["id"])
         async with _TestSession() as db:
             session = await db.get(Session, s["id"])
-            session.run_started_at = datetime.now(timezone.utc)
+            session.run_started_at = datetime.utcnow()
             await record_session_run(
                 db,
                 session,
                 phase="succeeded",
                 status_detail="Completed",
                 last_output="done",
-                completed_at=datetime.now(timezone.utc),
+                completed_at=datetime.utcnow(),
             )
             await db.commit()
 
@@ -577,14 +577,15 @@ class TestSecrets:
             json={
                 "google_cloud_project": "my-project",
                 "vertex_location": "us-central1",
-                "google_api_key": "AIza-test123456",
+                "anthropic_api_key": "sk-ant-test123456",
             },
         )
         assert resp.status_code == 200
         cred = resp.json()
         assert cred["google_cloud_project"] == "my-project"
+        assert cred["has_anthropic"] is True
         assert cred["has_adc"] is False
-        assert "AIza-test123456" not in cred.get("masked_api_key", "")  # key should be masked
+        assert "sk-ant" not in cred.get("masked_anthropic_key", "")  # key should be masked
 
     @pytest.mark.asyncio
     async def test_save_adc_credentials(self, client):

@@ -994,17 +994,8 @@ async def _do_launch_openshell(
     # Resolve model first so it is available for provider registration and policy building
     if session.model and tool.is_valid_model(session.model):
         model = session.model
-        log.info(
-            "_do_launch_openshell: session %d using stored model %r (tool=%s)",
-            session.id, model, tool.name,
-        )
     else:
         model = tool.get_default_model(has_adc)
-        log.info(
-            "_do_launch_openshell: session %d stored model %r invalid/empty — "
-            "falling back to default %r (tool=%s, has_adc=%s)",
-            session.id, session.model, model, tool.name, has_adc,
-        )
     model = model.strip("\r\n")  # strip any stray line endings before embedding in shell commands
 
     # Query workspace env vars from DB before releasing the connection.
@@ -1228,7 +1219,7 @@ async def _do_launch_openshell(
     resolved_prompt_safe = resolved_prompt or ""
     model_setup_cmd = tool.build_model_setup_cmd(model).replace("/workspace/", "/sandbox/")
     share_cmd = tool.build_share_setup_cmd().replace("/workspace/", "/sandbox/")
-    # Resolve image early so a missing config (e.g. AGENT_IMAGE_OPENCODE not set) fails
+    # Resolve image early so a missing config (e.g. AGENT_IMAGE_CRUSH not set) fails
     # before we mark the session pending and commit — keeps the error visible.
     image = tool.get_image()
     if not image:
@@ -1243,7 +1234,7 @@ async def _do_launch_openshell(
     session.raw_output = ""
     session.status_detail = ""   # clear stale status from any previous run
     session.policy_chunks = ""   # clear stale chunks; fresh snapshot at completion
-    session.run_started_at = datetime.now(timezone.utc)
+    session.run_started_at = datetime.utcnow()
     session.run_completed_at = None
     await db.commit()
 
@@ -1467,11 +1458,14 @@ async def _setup_openshell_sandbox(
         # TUI/server: main_cmd is "sleep infinity" / "opencode serve …"; agent is
         # started later by the WebSocket handler or start_agent().
         if mode == "prompt":
-            _tool_bin = {"opencode": "opencode run"}.get(tool_name, "opencode run")
+            _tool_bin = {"opencode": "opencode run", "crush": "crush run"}.get(tool_name, "opencode run")
             if agents_md:
                 # Read the full AGENTS.md (prompt + repo context) as the CLI argument.
-                _model_arg = shlex.quote(model) if model else ""
-                agent_cmd = f"HOME=/sandbox {_tool_bin} --model {_model_arg} \"$(</sandbox/AGENTS.md)\""
+                if tool_name == "crush":
+                    agent_cmd = f"HOME=/sandbox {_tool_bin} \"$(</sandbox/AGENTS.md)\""
+                else:
+                    _model_arg = shlex.quote(model) if model else ""
+                    agent_cmd = f"HOME=/sandbox {_tool_bin} --model {_model_arg} \"$(</sandbox/AGENTS.md)\""
             else:
                 # No prompt configured — launch without a message argument.
                 agent_cmd = f"HOME=/sandbox {main_cmd}"
@@ -1529,7 +1523,7 @@ async def _setup_openshell_sandbox(
         raise
     except Exception:
         log.exception("_setup_openshell_sandbox failed for session %d", session_id)
-        await _update_db(phase="failed", run_completed_at=datetime.now(timezone.utc))
+        await _update_db(phase="failed", run_completed_at=datetime.utcnow())
 
 
 async def _run_openshell_agent(
@@ -1592,7 +1586,8 @@ async def _run_openshell_agent(
             # on_output is called every 5 s with accumulated stdout/stderr so the
             # HTMX UI updates incrementally without waiting for the run to finish.
             # OpenCode writes minimal stdout (content lives in its SQLite DB), so
-            # we do a final read_opencode_response call after the exec completes.
+            # the streaming output is most useful for Crush; for OpenCode we do a
+            # final read_opencode_response call after the exec completes.
             _streamed: list[str] = []  # tracks last value passed to on_output
 
             async def _on_output(text: str) -> None:
@@ -1616,11 +1611,14 @@ async def _run_openshell_agent(
             # incremental stdout that on_output already captured, but only the
             # last chunk — the accumulated buffer has everything).
             _streamed_text = _streamed[0] if _streamed else ""
-            output = (
-                await openshell_client.read_opencode_response(sandbox_name)
-                or _streamed_text
-                or stderr
-            )
+            if agent_tool == "opencode":
+                output = (
+                    await openshell_client.read_opencode_response(sandbox_name)
+                    or _streamed_text
+                    or stderr
+                )
+            else:
+                output = _streamed_text or stderr
 
             # Snapshot draft policy chunks before any sandbox deletion so the
             # Policy tab can show what was denied/proposed during this run.
@@ -1659,7 +1657,7 @@ async def _run_openshell_agent(
                 raw_output=_streamed_text,  # preserve raw console log regardless of agent tool
                 status_detail="",  # clear any stale status from previous runs
                 policy_chunks=chunks_json,
-                run_completed_at=datetime.now(timezone.utc),
+                run_completed_at=datetime.utcnow(),
                 sandbox_name=new_sandbox_name,
                 active_schedule_id=None,
             )
@@ -1696,7 +1694,7 @@ async def _run_openshell_agent(
                     await _update_db(
                         phase="failed",
                         status_detail="Failed to expose service URL — check server logs",
-                        run_completed_at=datetime.now(timezone.utc),
+                        run_completed_at=datetime.utcnow(),
                     )
 
     except asyncio.CancelledError:
@@ -1706,7 +1704,7 @@ async def _run_openshell_agent(
         await _update_db(
             phase="failed",
             status_detail="OpenShell agent startup failed",
-            run_completed_at=datetime.now(timezone.utc),
+            run_completed_at=datetime.utcnow(),
         )
 
 
@@ -1931,7 +1929,7 @@ async def session_schedule(
         return RedirectResponse(url=f"/workspaces/{ws_id}/sessions/{sid}#schedule", status_code=302)
 
     session.cron_schedule = cron_expr
-    session.cron_next_run = croniter(cron_expr, datetime.now(timezone.utc)).get_next(datetime)
+    session.cron_next_run = croniter(cron_expr, datetime.utcnow()).get_next(datetime)
     await db.commit()
 
     flash(request, f"Schedule set: {session.cron_label or cron_expr}. Next run: {session.cron_next_run.strftime('%b %d %H:%M UTC')}", "success")
@@ -2038,7 +2036,7 @@ async def schedule_create(
     sched = SessionSchedule(
         session_id=sid,
         cron_schedule=cron_expr,
-        cron_next_run=_croniter(cron_expr, datetime.now(timezone.utc)).get_next(datetime),
+        cron_next_run=_croniter(cron_expr, datetime.utcnow()).get_next(datetime),
         label=label.strip(),
         prompt_id=pid,
         instruction_prompt=instruction_prompt,
@@ -2079,7 +2077,7 @@ async def schedule_edit(
         return HTMLResponse("", status_code=422, headers={"HX-Trigger": "scheduleFormError"})
 
     sched.cron_schedule = cron_expr
-    sched.cron_next_run = _croniter(cron_expr, datetime.now(timezone.utc)).get_next(datetime)
+    sched.cron_next_run = _croniter(cron_expr, datetime.utcnow()).get_next(datetime)
     sched.label = label.strip()
     sched.prompt_id = int(prompt_id) if prompt_id.strip().isdigit() else None
     sched.instruction_prompt = instruction_prompt

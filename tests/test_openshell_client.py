@@ -96,7 +96,7 @@ def session():
     s.id = 42
     s.mode = "tui"
     s.agent_tool = "opencode"
-    s.model = "google-vertex-anthropic/claude-sonnet-5@default"
+    s.model = "google-vertex-anthropic/claude-sonnet-4-6@default"
     s.instruction_prompt = ""
     s.sandbox_name = None
     repo = MagicMock()
@@ -111,6 +111,7 @@ def session():
 def workspace_secret():
     secret = MagicMock()
     secret.google_api_key = "<test-google-api-key>"
+    secret.anthropic_api_key = "<test-anthropic-api-key>"
     secret.google_cloud_project = "<test-gcp-project>"
     return secret
 

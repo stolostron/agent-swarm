@@ -1,0 +1,34 @@
+FROM registry.access.redhat.com/ubi9/ubi-minimal:latest
+
+ARG CRUSH_VERSION=0.57.0
+LABEL org.opencontainers.image.title="crush-container" \
+      org.opencontainers.image.description="Crush CLI agent container (UBI 9)"
+
+RUN microdnf install -y --nodocs \
+        tar gzip git openssh-clients ca-certificates findutils \
+    && microdnf clean all
+
+ARG TARGETARCH=amd64
+RUN set -ex; \
+    case "${TARGETARCH}" in \
+        amd64)  ARCH="x86_64" ;; \
+        arm64)  ARCH="arm64" ;; \
+        *)      echo "Unsupported architecture: ${TARGETARCH}" && exit 1 ;; \
+    esac; \
+    FILENAME="crush_${CRUSH_VERSION}_Linux_${ARCH}.tar.gz"; \
+    URL="https://github.com/charmbracelet/crush/releases/download/v${CRUSH_VERSION}/${FILENAME}"; \
+    echo "Downloading Crush v${CRUSH_VERSION} for ${ARCH}..."; \
+    curl --retry 5 --retry-delay 3 --retry-all-errors -fsSL "${URL}" \
+        | tar -xz --strip-components=1 -C /usr/local/bin \
+            "crush_${CRUSH_VERSION}_Linux_${ARCH}/crush"; \
+    chmod +x /usr/local/bin/crush; \
+    crush --version
+
+RUN mkdir -p /root/.config/crush /root/.local/share/crush /workspace
+
+WORKDIR /workspace
+
+ENV CRUSH_DISABLE_METRICS=1 \
+    DO_NOT_TRACK=1
+
+CMD ["sleep", "infinity"]
