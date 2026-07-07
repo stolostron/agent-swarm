@@ -10,6 +10,17 @@ _SMALL_MODEL = "gemini/gemini-3.5-flash"
 
 _SMALL_MODEL_VERTEX = "vertexai/claude-haiku-4-5@20251001"
 
+# Normalise legacy model IDs (stored in session.model before the @version suffix
+# was introduced) to the canonical form Crush expects.  Applied at model-setup time
+# so existing sessions don't need a DB migration.
+_MODEL_ALIASES: dict[str, str] = {
+    "vertexai/claude-opus-4-6":          "vertexai/claude-opus-4-6@default",
+    "vertexai/claude-sonnet-4-6":        "vertexai/claude-sonnet-5@default",
+    "vertexai/claude-sonnet-5":          "vertexai/claude-sonnet-5@default",
+    "vertexai/claude-haiku-4-5-20251001": "vertexai/claude-haiku-4-5@20251001",
+    "vertexai/claude-haiku-4-5":         "vertexai/claude-haiku-4-5@20251001",
+}
+
 
 def _derive_small_model(model: str) -> str | None:
     """Return the small model paired with the given large model, or None if same.
@@ -71,6 +82,7 @@ class CrushStrategy(AgentToolStrategy):
         # Only include the provider that matches the selected model — including a
         # gemini provider with an unresolvable $GOOGLE_API_KEY when an Anthropic
         # model is chosen causes Crush to fall back to the wrong provider.
+        model = _MODEL_ALIASES.get(model, model)  # normalise legacy IDs
         providers: dict = {}
         if model.startswith("gemini/"):
             providers["gemini"] = {
@@ -141,6 +153,7 @@ class CrushStrategy(AgentToolStrategy):
     def build_model_setup_cmd(self, model: str) -> str:
         if not model:
             return ""
+        model = _MODEL_ALIASES.get(model, model)  # normalise legacy IDs
         if "/" in model:
             provider_id, model_id = model.split("/", 1)
         else:

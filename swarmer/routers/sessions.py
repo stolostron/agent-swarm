@@ -994,8 +994,17 @@ async def _do_launch_openshell(
     # Resolve model first so it is available for provider registration and policy building
     if session.model and tool.is_valid_model(session.model):
         model = session.model
+        log.info(
+            "_do_launch_openshell: session %d using stored model %r (tool=%s)",
+            session.id, model, tool.name,
+        )
     else:
         model = tool.get_default_model(has_adc)
+        log.info(
+            "_do_launch_openshell: session %d stored model %r invalid/empty — "
+            "falling back to default %r (tool=%s, has_adc=%s)",
+            session.id, session.model, model, tool.name, has_adc,
+        )
     model = model.strip("\r\n")  # strip any stray line endings before embedding in shell commands
 
     # Query workspace env vars from DB before releasing the connection.
