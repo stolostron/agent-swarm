@@ -501,7 +501,7 @@ help:  ## Show this help
 	@echo "  IMAGE=$(IMAGE)  IMAGE_TAG=$(IMAGE_TAG)  REGISTRY=$(REGISTRY)"
 	@echo "  CONTAINER_CMD=$(CONTAINER_CMD)  KIND_CLUSTER=$(KIND_CLUSTER)"
 	@echo "  NAMESPACE=$(NAMESPACE)  LOCAL_PORT=$(LOCAL_PORT)"
-	@echo "  TOKEN_DURATION=$(TOKEN_DURATION)  AGENT_IMAGE_OPENCODE"
+	@echo "  TOKEN_DURATION=$(TOKEN_DURATION)  AGENT_IMAGE_OPENCODE=$(AGENT_IMAGE_OPENCODE)"
 	@echo ""
 	@echo "Notes:"
 	@echo "  Reset DB: delete data/swarmer.db (fresh schema created on next start)"

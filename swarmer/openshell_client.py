@@ -974,7 +974,9 @@ async def write_agent_config(
     config_json: str,
     client=None,
 ) -> None:
-    """Write agent config JSON to /sandbox/opencode.json, passed via --config at startup.
+    """Write agent config JSON to /sandbox/opencode.json, loaded via the
+    OPENCODE_CONFIG environment variable at startup (OpenCode has no --config
+    CLI flag).
 
     Uses stdin to deliver file content so the gateway's no-newline-in-args
     restriction is never hit.
@@ -986,8 +988,9 @@ async def write_agent_config(
         client = _get_client()
     sid = await _sandbox_id(sandbox_name, client)
     
-    # Write to /sandbox/opencode.json — passed explicitly via --config so
-    # OpenCode loads it regardless of HOME or working directory.
+    # Write to /sandbox/opencode.json — loaded via the OPENCODE_CONFIG env var
+    # (set at launch time) so OpenCode picks it up regardless of HOME or
+    # working directory.
     dest = shlex.quote("/sandbox/opencode.json")
     script = f"cat > {dest}"
 
