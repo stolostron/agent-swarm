@@ -577,10 +577,10 @@ Go-based AI coding agent ([opencode.ai](https://opencode.ai)).
 
 | Provider | Credential Required | Model Format |
 |---|---|---|
-| Google Vertex AI (Anthropic Claude) | ADC JSON + GCP Project | `google-vertex-anthropic/claude-sonnet-4-6@default` |
+| Google Vertex AI (Anthropic Claude) | ADC JSON + GCP Project | `google-vertex-anthropic/claude-sonnet-5@default` |
 | Google Gemini (AI Studio) | Google API Key | `google/gemini-3.5-flash` |
 
-**Model format:** `provider/model@version` (e.g., `google-vertex-anthropic/claude-sonnet-4-6@default`)
+**Model format:** `provider/model@version` (e.g., `google-vertex-anthropic/claude-sonnet-5@default`)
 
 **Modes:**
 
@@ -598,13 +598,13 @@ Rust-based AI coding agent ([Crush](https://charm.land)).
 
 | Provider | Credential Required | Model Format |
 |---|---|---|
-| Vertex AI (Claude) | ADC JSON + GCP Project | `vertexai/claude-sonnet-4-6` |
+| Vertex AI (Claude) | ADC JSON + GCP Project | `vertexai/claude-sonnet-5@default` |
 | Vertex AI (Gemini) | ADC JSON + GCP Project | `vertexai/gemini-3.5-flash` |
-| Anthropic (direct) | Anthropic API Key | `anthropic/claude-sonnet-4-6` |
+| Anthropic (direct) | Anthropic API Key | `anthropic/claude-sonnet-5` |
 | OpenAI | OpenAI API Key | `openai/gpt-4o` |
 | Gemini (AI Studio) | Google API Key | `gemini/gemini-3.5-flash` |
 
-**Model format:** `provider/model` (e.g., `vertexai/claude-sonnet-4-6`)
+**Model format:** `provider/model@version` (e.g., `vertexai/claude-sonnet-5@default`)
 
 **Small model auto-derivation:**
 
@@ -627,7 +627,7 @@ Config written to `/workspace/.config/crush/crush.json` at pod startup with MCP 
 - Models are selected per-session from a dropdown in the UI
 - Available models depend on which credentials are configured in the workspace
 - Default model auto-selected based on available credentials:
-  - ADC configured → Vertex AI Claude Sonnet (OpenCode) or `vertexai/claude-sonnet-4-6` (Crush)
+  - ADC configured → Vertex AI Claude Sonnet (OpenCode) or `vertexai/claude-sonnet-5@default` (Crush)
   - Gemini API key only → `google/gemini-3.5-flash` (OpenCode) or `gemini/gemini-3.5-flash` (Crush)
 
 ### MCP Servers

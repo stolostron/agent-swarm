@@ -1063,6 +1063,14 @@ async def _do_launch_openshell(
     # OPENCODE_CONFIG env var (there is no --config CLI flag).
     if tool.name == "opencode":
         env_vars["OPENCODE_CONFIG"] = "/sandbox/opencode.json"
+    # Crush's vertexai SDK requires VERTEXAI_PROJECT and VERTEXAI_LOCATION.
+    # The google-cloud provider injects GOOGLE_CLOUD_PROJECT / VERTEX_LOCATION
+    # but not the VERTEXAI_* aliases that the Crush vertexai SDK expects.
+    # Inject them explicitly from the workspace secret (plain-text fields).
+    if tool.name == "crush" and oc_secret and oc_secret.google_cloud_project:
+        env_vars["VERTEXAI_PROJECT"] = oc_secret.google_cloud_project
+    if tool.name == "crush" and oc_secret and oc_secret.vertex_location:
+        env_vars["VERTEXAI_LOCATION"] = oc_secret.vertex_location
 
     # 1b. Create/update gateway providers for each available credential.
     #     Must happen BEFORE sandbox creation: provider names go into SandboxSpec.providers

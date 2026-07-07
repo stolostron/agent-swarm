@@ -457,8 +457,8 @@ class AgentSwarmMCPServer:
                 agent_tool: Agent tool. One of: opencode, crush. Default: opencode.
                 mode: Execution mode. One of: prompt, tui, server. Default: prompt.
                 model: LLM model identifier. Empty string uses the tool default.
-                       OpenCode: google-vertex-anthropic/claude-sonnet-4-6@default
-                       Crush: vertexai/claude-sonnet-4-6
+                       OpenCode: google-vertex-anthropic/claude-sonnet-5@default
+                       Crush: vertexai/claude-sonnet-5@default
                 persist: Keep workspace PVC between runs. Default: false.
                 working_branch: Git branch to create/checkout in the pod.
                 instruction_prompt: Additional instructions prepended to the base prompt.

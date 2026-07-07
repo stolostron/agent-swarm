@@ -129,7 +129,7 @@ class OpenCodeStrategy(AgentToolStrategy):
         if has_vertex:
             options.extend([
                 {"value": "google-vertex-anthropic/claude-opus-4-6@default", "label": "Claude Opus 4.6 (most capable)", "group": "Claude (Vertex AI)"},
-                {"value": "google-vertex-anthropic/claude-sonnet-4-6@default", "label": "Claude Sonnet 4.6 (balanced)", "group": "Claude (Vertex AI)"},
+                {"value": "google-vertex-anthropic/claude-sonnet-5@default", "label": "Claude Sonnet 5 (balanced)", "group": "Claude (Vertex AI)"},
                 {"value": "google-vertex-anthropic/claude-haiku-4-5@20251001", "label": "Claude Haiku 4.5 (fast)", "group": "Claude (Vertex AI)"},
             ])
         if secret and getattr(secret, "google_api_key_enc", ""):
@@ -141,5 +141,5 @@ class OpenCodeStrategy(AgentToolStrategy):
 
     def get_default_model(self, has_adc: bool) -> str:
         if has_adc:
-            return "google-vertex-anthropic/claude-sonnet-4-6@default"
+            return "google-vertex-anthropic/claude-sonnet-5@default"
         return "google/gemini-3.1-pro-preview"

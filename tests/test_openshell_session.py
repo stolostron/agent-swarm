@@ -732,7 +732,7 @@ class TestDoLaunchOpenshell:
                 policy=None,
                 image="quay.io/opencode:latest",
                 tool_name="opencode",
-                model="google-vertex-anthropic/claude-sonnet-4-6@default",
+                model="google-vertex-anthropic/claude-sonnet-5@default",
                 model_setup_cmd="",
                 share_cmd="",
                 mcp_patch={},
@@ -802,7 +802,7 @@ class TestDoLaunchOpenshell:
                 policy=None,
                 image="quay.io/opencode:latest",
                 tool_name="opencode",
-                model="google-vertex-anthropic/claude-sonnet-4-6@default",
+                model="google-vertex-anthropic/claude-sonnet-5@default",
                 model_setup_cmd="",
                 share_cmd="",
                 mcp_patch={},
@@ -2023,7 +2023,7 @@ def _make_crush_setup_patches(sandbox_name: str = "sandbox-crush-abc"):
 async def _call_crush_setup(
     session_id: int,
     workspace_id: int = 0,
-    model: str = "anthropic/claude-sonnet-4-6",
+    model: str = "anthropic/claude-sonnet-5",
     mode: str = "prompt",
     resolved_prompt: str = "Write hello world",
 ):
@@ -2108,7 +2108,7 @@ class TestCrushOpenshellSetup:
         from swarmer.routers.sessions import _setup_openshell_sandbox
 
         tool = CrushStrategy()
-        model = "anthropic/claude-sonnet-4-6"
+        model = "anthropic/claude-sonnet-5"
         captured_cmd: list[str] = []
 
         def _capture_run_agent(session_id, workspace_id, sandbox_name, cmd, mode, agent_tool, env_vars=None, **kwargs):
@@ -2299,7 +2299,7 @@ class TestCrushOpenshellSetup:
         from swarmer.routers.sessions import _setup_openshell_sandbox
 
         tool = CrushStrategy()
-        model = "anthropic/claude-sonnet-4-6"
+        model = "anthropic/claude-sonnet-5"
         captured_cmd: list[str] = []
 
         # Use a plain function (not async) so the cmd is captured synchronously
@@ -2507,7 +2507,7 @@ class TestMcpPatchInjection:
         from swarmer.config import settings as _settings
 
         tool = CrushStrategy()
-        model = "anthropic/claude-sonnet-4-6"
+        model = "anthropic/claude-sonnet-5"
         captured_config: list[str] = []
 
         async def _capture_write_agent_config(sandbox_name, tool_name, config_json):

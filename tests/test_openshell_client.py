@@ -96,7 +96,7 @@ def session():
     s.id = 42
     s.mode = "tui"
     s.agent_tool = "opencode"
-    s.model = "google-vertex-anthropic/claude-sonnet-4-6@default"
+    s.model = "google-vertex-anthropic/claude-sonnet-5@default"
     s.instruction_prompt = ""
     s.sandbox_name = None
     repo = MagicMock()

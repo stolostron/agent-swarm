@@ -72,7 +72,7 @@ def _make_session(language="golang"):
         "id": 1,
         "language": language,
         "agent_tool": "opencode",
-        "model": "google-vertex-anthropic/claude-sonnet-4-6",
+        "model": "google-vertex-anthropic/claude-sonnet-5@default",
     })()
 
 
@@ -94,7 +94,7 @@ def _policy_dict(policy) -> dict:
     }
 
 
-_MODEL = "google-vertex-anthropic/claude-sonnet-4-6"
+_MODEL = "google-vertex-anthropic/claude-sonnet-5@default"
 
 
 def _bnet(
@@ -127,13 +127,13 @@ def _bhosts(
 
 @_requires_sdk
 def test_policy_has_version_1():
-    result = build_session_policy(_make_session(), repos=[], mcp_servers=[], agent_tool="opencode", model="google-vertex-anthropic/claude-sonnet-4-6")
+    result = build_session_policy(_make_session(), repos=[], mcp_servers=[], agent_tool="opencode", model="google-vertex-anthropic/claude-sonnet-5@default")
     assert result.version == 1
 
 
 @_requires_sdk
 def test_policy_has_filesystem_policy():
-    result = build_session_policy(_make_session(), repos=[], mcp_servers=[], agent_tool="opencode", model="google-vertex-anthropic/claude-sonnet-4-6")
+    result = build_session_policy(_make_session(), repos=[], mcp_servers=[], agent_tool="opencode", model="google-vertex-anthropic/claude-sonnet-5@default")
     assert result.filesystem.include_workdir is True
     assert "/sandbox" in result.filesystem.read_write
 
@@ -182,7 +182,7 @@ def test_build_session_policy_network_policies_match_build_session_network_polic
 
 @_requires_sdk
 def test_policy_sandbox_uses_sandbox_path():
-    result = build_session_policy(_make_session(), repos=[], mcp_servers=[], agent_tool="opencode", model="google-vertex-anthropic/claude-sonnet-4-6")
+    result = build_session_policy(_make_session(), repos=[], mcp_servers=[], agent_tool="opencode", model="google-vertex-anthropic/claude-sonnet-5@default")
     assert "/sandbox" in result.filesystem.read_write
     assert "/workspace" not in list(result.filesystem.read_write)
 
@@ -270,7 +270,7 @@ def test_all_binary_entries_have_harness_true():
 
 def test_crush_agent_api_binary_has_harness_true():
     """Crush binary in agent_api block must also have harness=True."""
-    net = _bnet(agent_tool="crush", model="vertexai/claude-sonnet-4-6")
+    net = _bnet(agent_tool="crush", model="vertexai/claude-sonnet-5@default")
     agent_block = net.get("agent_api", {})
     for binary in agent_block.get("binaries", []):
         path = binary.get("path", "?")
@@ -359,7 +359,7 @@ def test_agent_api_block_opencode_includes_gemini_endpoint():
 
 
 def test_agent_api_block_crush_includes_crush_binary():
-    net = _bnet(agent_tool="crush", model="vertexai/claude-sonnet-4-6")
+    net = _bnet(agent_tool="crush", model="vertexai/claude-sonnet-5@default")
     api_block = net.get("agent_api")
     assert api_block is not None
     # Crush block has no binaries restriction; opencode binary should not appear

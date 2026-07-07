@@ -8,16 +8,29 @@ from swarmer.config import settings
 _SMALL_MODEL = "gemini/gemini-3.5-flash"
 
 
-_SMALL_MODEL_VERTEX = "vertexai/claude-haiku-4-5-20251001"
+_SMALL_MODEL_VERTEX = "vertexai/claude-haiku-4-5@20251001"
 
 
 def _derive_small_model(model: str) -> str | None:
-    """Return the small model paired with the given large model, or None if same."""
+    """Return the small model paired with the given large model, or None if same.
+
+    Pairing rules (large → small):
+      opus  → sonnet 5
+      sonnet → haiku
+      haiku  → None (already the smallest)
+    """
     if model == _SMALL_MODEL:
         return None  # already the small model — no separate small needed
-    if model.startswith("vertexai/claude-"):
-        if model == _SMALL_MODEL_VERTEX:
-            return None
+    # Strip @version suffix for base comparison
+    base = model.split("@")[0] if "@" in model else model
+    if base.startswith("vertexai/claude-"):
+        if base == "vertexai/claude-opus-4-6":
+            return "vertexai/claude-sonnet-5@default"
+        if base == "vertexai/claude-sonnet-5":
+            return _SMALL_MODEL_VERTEX
+        if base == "vertexai/claude-haiku-4-5":
+            return None  # already the smallest
+        # Unknown claude model — default to haiku
         return _SMALL_MODEL_VERTEX
     return _SMALL_MODEL
 
@@ -171,9 +184,9 @@ class CrushStrategy(AgentToolStrategy):
         options = []
         if has_vertex:
             options.extend([
-                {"value": "vertexai/claude-opus-4-6", "label": "Claude Opus 4.6 (most capable)", "group": "Claude (Vertex AI)"},
-                {"value": "vertexai/claude-sonnet-4-6", "label": "Claude Sonnet 4.6 (balanced)", "group": "Claude (Vertex AI)"},
-                {"value": "vertexai/claude-haiku-4-5-20251001", "label": "Claude Haiku 4.5 (fast)", "group": "Claude (Vertex AI)"},
+                {"value": "vertexai/claude-opus-4-6@default", "label": "Claude Opus 4.6 (most capable)", "group": "Claude (Vertex AI)"},
+                {"value": "vertexai/claude-sonnet-5@default", "label": "Claude Sonnet 5 (balanced)", "group": "Claude (Vertex AI)"},
+                {"value": "vertexai/claude-haiku-4-5@20251001", "label": "Claude Haiku 4.5 (fast)", "group": "Claude (Vertex AI)"},
             ])
         if secret and getattr(secret, "google_api_key_enc", ""):
             options.extend([
@@ -184,5 +197,5 @@ class CrushStrategy(AgentToolStrategy):
 
     def get_default_model(self, has_adc: bool) -> str:
         if has_adc:
-            return "vertexai/claude-sonnet-4-6"
+            return "vertexai/claude-sonnet-5@default"
         return "gemini/gemini-3.1-pro-preview"

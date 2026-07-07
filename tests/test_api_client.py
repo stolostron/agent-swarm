@@ -245,8 +245,8 @@ class TestSessionOps:
     async def test_set_model(self, api_client):
         ws = await api_client.create_workspace("WS")
         s = await api_client.create_session(ws["id"], "orig")
-        updated = await api_client.set_session_model(ws["id"], s["id"], "claude-sonnet-4-6")
-        assert updated["model"] == "claude-sonnet-4-6"
+        updated = await api_client.set_session_model(ws["id"], s["id"], "claude-sonnet-5")
+        assert updated["model"] == "claude-sonnet-5"
 
     @pytest.mark.asyncio
     async def test_get_output(self, api_client):

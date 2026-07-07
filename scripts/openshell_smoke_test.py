@@ -388,8 +388,8 @@ conn.close()
 
 
 async def run_vertex_smoke_test(
-    opencode_model: str = "google-vertex-anthropic/claude-sonnet-4-6@default",
-    crush_model: str = "vertexai/claude-sonnet-4-6",
+    opencode_model: str = "google-vertex-anthropic/claude-sonnet-5@default",
+    crush_model: str = "vertexai/claude-sonnet-5@default",
     agent_tool: str = "opencode",
 ) -> bool:
     """E2e smoke test for the google-vertex-ai provider (ADC / VertexAI Anthropic Claude).

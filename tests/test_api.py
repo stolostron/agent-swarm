@@ -351,10 +351,10 @@ class TestSessions:
         s = await _create_session(client, ws["id"])
         resp = await client.post(
             f"/api/v1/workspaces/{ws['id']}/sessions/{s['id']}/set-model",
-            json={"model": "claude-sonnet-4-6"},
+            json={"model": "claude-sonnet-5"},
         )
         assert resp.status_code == 200
-        assert resp.json()["model"] == "claude-sonnet-4-6"
+        assert resp.json()["model"] == "claude-sonnet-5"
 
     @pytest.mark.asyncio
     async def test_get_output(self, client):
