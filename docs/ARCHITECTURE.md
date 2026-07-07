@@ -5,8 +5,7 @@
 ```
 agent-swarm/
 ├── Makefile                    # All build/deploy/dev commands
-├── Containerfile               # UBI10 python-312-minimal, runs uvicorn on port 8080
-├── Containerfile.crush         # UBI9 minimal + Crush CLI (sleep infinity)
+├── Containerfile                # UBI10 python-312-minimal, runs uvicorn on port 8080
 ├── requirements.txt            # Pinned minimum versions
 ├── VERSION                     # Semver used as image tag
 ├── .env.example                # Copy to .env for local dev
@@ -42,18 +41,17 @@ agent-swarm/
     ├── github_app.py           # Resolve workspace GitHub App credentials (user/shared visibility)
     ├── github_auth.py          # IAT minting (JWT → GitHub REST → token) + refresh loop for long sessions
     ├── csrf.py                 # CSRF token helpers for server-rendered HTML forms
-    ├── agent_tools/            # Strategy pattern for multi-agent support
+    ├── agent_tools/            # Strategy pattern for agent tool support
     │   ├── __init__.py         # AgentToolStrategy ABC
     │   ├── registry.py         # Global registry + aliases (_init() auto-registers all tools)
-    │   ├── opencode.py         # OpenCode strategy (Vertex AI Anthropic/Gemini models)
-    │   └── crush.py            # Crush strategy (Vertex AI, Anthropic, OpenAI, Gemini models)
+    │   └── opencode.py         # OpenCode strategy (Vertex AI Anthropic/Gemini models)
     ├── models/                 # SQLAlchemy ORM models
     │   ├── __init__.py         # Imports all models (required for Base.metadata)
     │   ├── workspace.py        # Workspace → K8s namespace (or shared via settings.k8s_namespace)
     │   ├── session.py          # Session (sandbox lifecycle, modes: tui/server/prompt, cron scheduling)
     │   ├── session_repo.py     # Git repos attached to sessions (cloned into sandbox at launch)
     │   ├── sandbox_env_var.py  # Per-workspace env vars (encrypted at rest, injected into sandboxes)
-    │   ├── opencode_secret.py  # Fernet-encrypted provider credentials (GCP/Anthropic/OpenAI/Gemini)
+    │   ├── opencode_secret.py  # Fernet-encrypted provider credentials (GCP/Gemini)
     │   ├── github_pat.py       # Fernet-encrypted GitHub PATs for HTTPS git auth
     │   ├── github_app.py       # Fernet-encrypted GitHub App credentials (one per workspace)
     │   └── mcp_server.py       # MCP server configs with Fernet-encrypted OAuth tokens
@@ -69,7 +67,7 @@ agent-swarm/
     └── templates/              # Jinja2 HTML templates (PatternFly 6 dark theme + HTMX)
         ├── base.html           # Layout with masthead, flash messages, PatternFly CDN
         ├── workspaces/         # list, detail, new, edit, _delete_confirm
-        ├── sessions/           # list, detail, new, _status_badge, _last_output, _repo_list, crush_chat, etc.
+        ├── sessions/           # list, detail, new, _status_badge, _last_output, _repo_list, etc.
         ├── secrets/            # tabs, opencode_form, github_pat_form, github_pat_list
         └── mcp_servers/        # list (catalog + configured servers with OAuth status)
 ```
@@ -91,7 +89,7 @@ agent-swarm/
   - `tui` — persistent: runs `sleep infinity`; user connects via xterm.js WebSocket → OpenShell `exec_interactive()` PTY
 - **Session phases**: `idle` → `pending` → `running` → `succeeded`/`failed`/`stopped`
 - **Cron scheduling** — sessions of any mode can have a cron schedule (`cron_schedule` field). A background asyncio loop (`scheduler.py`) checks every 30s, uses an atomic `UPDATE … RETURNING` to claim due rows (prevents duplicates), sets `session.mode = "prompt"` before calling `_do_launch()` (scheduled runs always execute in prompt mode regardless of the session's configured mode), then calls the shared `_do_launch()` helper in `sessions.py`.
-- **OpencodeSecret** — per-workspace encrypted storage for GCP project, Vertex location, ADC JSON, Google API key, Anthropic API key, OpenAI API key. Stored in SQLite via Fernet encryption. Despite the legacy name, used by both OpenCode and Crush. Multiple rows per workspace are tolerated (one per `user_id`); read paths use `.scalars().first()` to avoid `MultipleResultsFound` when users share a workspace. A `UNIQUE (workspace_id, user_id)` constraint prevents future duplicates, with a deduplication migration that keeps the newest row per pair.
+- **OpencodeSecret** — per-workspace encrypted storage for GCP project, Vertex location, ADC JSON, and Google API key. Stored in SQLite via Fernet encryption. Despite the legacy name, used by OpenCode. Multiple rows per workspace are tolerated (one per `user_id`); read paths use `.scalars().first()` to avoid `MultipleResultsFound` when users share a workspace. A `UNIQUE (workspace_id, user_id)` constraint prevents future duplicates, with a deduplication migration that keeps the newest row per pair.
 - **GitHubPAT** — per-workspace encrypted GitHub personal access tokens with optional org scope for HTTPS git auth. Injected into OpenShell sandboxes via Gateway credential providers. Acts as fallback when no GitHub App is configured.
 - **GitHubApp** — one GitHub App installation per workspace, storing `app_id`, `installation_id`, and a Fernet-encrypted RSA private key (`private_key_enc`). At session launch, Swarmer mints a short-lived Installation Access Token (IAT) server-side using PyJWT + GitHub's REST API and injects it into the sandbox via the OpenShell Gateway provider — the raw PEM key never enters the sandbox. For TUI and server-mode sessions that may exceed the 1-hour token lifetime, a background asyncio task (`github_auth.start_token_refresh_loop`) re-mints and re-registers the provider every 50 minutes. See [docs/GITHUB_APP_SETUP.md](GITHUB_APP_SETUP.md) for setup steps and required permissions.
 - **McpServer** — per-workspace MCP server configurations with OAuth 2.1 tokens encrypted at rest. Enabled servers are configured in the agent config JSON and credentials injected via Gateway env vars.
@@ -100,7 +98,7 @@ agent-swarm/
 
 ## Agent Tool Strategy Pattern
 
-Multi-agent support uses the Strategy pattern (`agent_tools/`). Each tool (OpenCode, Crush) implements `AgentToolStrategy` with abstract methods covering:
+Agent tool support uses the Strategy pattern (`agent_tools/`). Each tool (currently OpenCode) implements `AgentToolStrategy` with abstract methods covering:
 - Image selection and container name
 - Config data generation (`build_config_data` → written to sandbox via `write_agent_config()`)
 - Mode-specific command construction (`build_main_cmd`, `build_model_setup_cmd`, `build_share_setup_cmd`)
@@ -175,7 +173,7 @@ All kubernetes client imports remain lazy (inside functions) to avoid import err
 | `_get_client()` | `() → SandboxClient` | Internal factory; reads settings, returns configured SDK client |
 | `get_client()` | `(gateway_url, tls_ca_path?, tls_cert_path?, tls_key_path?) → SandboxClient` | Public factory for e2e tests |
 | `create_provider()` | `async (session, workspace_secret, github_pat, mcp_servers, client?) → dict[str,str]` | Collects DB credentials into env-var dict (no K8s Secrets, no I/O) |
-| `create_provider_from_env()` | `async (google_api_key, anthropic_api_key, github_pat, client?) → dict[str,str]` | Builds env-var dict from explicit values (for tests) |
+| `create_provider_from_env()` | `async (google_api_key, github_pat, client?) → dict[str,str]` | Builds env-var dict from explicit values (for tests) |
 | `ensure_provider()` | `async (name, profile_type, config, credentials?, client?) → None` | Creates or updates a named gateway provider (idempotent) |
 | `configure_provider_credential()` | `async (provider_name, credential_key, credential_value, client?) → None` | Stores a static credential on a gateway-managed provider |
 | `configure_vertex_provider()` | `async (provider_name, adc_json, project, location, client?) → None` | Configures google-vertex-ai provider with ADC-based token refresh |
@@ -229,13 +227,13 @@ Every data item Swarmer currently pushes into agent pods, its source model, the 
 
 | Category | Data | Source Model | Current K8s Mechanism | Target OpenShell API |
 |---|---|---|---|---|
-| AI Credentials | GCP Project, Vertex Location, ADC JSON, Gemini key, Anthropic key, OpenAI key | `OpencodeSecret` | K8s Secret → `envFrom` | Gateway `create_provider()` env injection |
+| AI Credentials | GCP Project, Vertex Location, ADC JSON, Gemini key | `OpencodeSecret` | K8s Secret → `envFrom` | Gateway `create_provider()` env injection |
 | Git Auth | PAT token, GitHub username | `GitHubPAT` | K8s Secret → `secretKeyRef` + init container credential store | Gateway credential injection + `clone_repos()` |
 | Git Repos | repo_url, branch, local_path (per repo) | `SessionRepo` | Init container git clone | `openshell_client.clone_repos()` |
 | MCP Tokens | Jira URL, Jira access token, Jira email | `McpServer` | K8s Secret → `envFrom` | Gateway env injection |
 | Agent Config | Tool-specific JSON + gitconfig | ConfigMap | Volume mount at `/tmp/agent-config-ro` | `write_agent_config()` into sandbox |
 | MCP Config | MCP server definitions in agent config JSON | `McpServer` | Startup script overwrites config | `write_file()` into sandbox |
-| Model Config | model.json (OpenCode) or crush.json (Crush) | `Session.model` | Startup script writes JSON file | `write_file()` into sandbox |
+| Model Config | model.json (OpenCode) | `Session.model` | Startup script writes JSON file | `write_file()` into sandbox |
 | Prompt | instruction_prompt + base_prompt + repo_context | `Session` + `WorkspacePrompt` | CLI arg (prompt mode) or `SWARMER_AGENT_MD` env → AGENTS.md (TUI/server) | `write_agents_md()` to `/sandbox/AGENTS.md` for **all modes**; prompt mode reads it via `$(</sandbox/AGENTS.md)` shell expansion; TUI/server agent reads it automatically |
 | Env Vars | HOME, NODE_OPTIONS, GOOGLE_APPLICATION_CREDENTIALS | Hardcoded | Pod env spec | Sandbox env vars via Gateway |
 | Extra Env | Arbitrary workspace key-value pairs | External K8s Secret | `envFrom` (`swarmer-agent-extra-env`, optional) | Gateway env injection |
@@ -277,17 +275,16 @@ Prompt-mode sessions record each completed execution (phase, timing, status deta
 
 **Dual output fields** — each run record stores two output fields:
 
-- `last_output` — the processed agent response. For OpenCode: the clean assistant conversation extracted from OpenCode's SQLite DB (`/sandbox/.opencode/opencode.db`) via `read_opencode_response()`. For Crush: same as `raw_output`.
+- `last_output` — the processed agent response: the clean assistant conversation extracted from OpenCode's SQLite DB (`/sandbox/.opencode/opencode.db`) via `read_opencode_response()`.
 - `raw_output` — the raw stdout+stderr streamed from the sandbox process (ANSI escape codes, tool call traces, progress output). Always preserved regardless of agent tool.
 
-The live Output tab in the session detail page shows both via a toggle (Output / Raw Log) when the fields differ. The History tab shows a second "View raw log" `<details>` expandable alongside "View output" when they differ. For Crush sessions the fields are identical and no toggle appears.
+The live Output tab in the session detail page shows both via a toggle (Output / Raw Log) when the fields differ. The History tab shows a second "View raw log" `<details>` expandable alongside "View output" when they differ.
 
 ## Chat Proxy
 
 `chat_proxy.py` handles server-mode session access. All sessions use `session.service_url` set by `expose_service()` after the server agent starts:
 
 - Routes HTTP/SSE/WebSocket to `session.service_url` — an OpenShell gateway domain URL (e.g. `https://<name>.openshell.localhost:<port>`). The port is rewritten in `expose_service` to match `OPENSHELL_GATEWAY_URL`. **DNS rewriting**: the gateway assigns virtual-host domain names (e.g. `oriented-lizardfish--agent.openshell.localhost`) that are not resolvable from the Swarmer pod. `_resolve_upstream()` rewrites the hostname to the gateway's real address (from `OPENSHELL_GATEWAY_URL`) at connect time, while setting the HTTP `Host` header to the original virtual domain so the gateway can route to the correct sandbox. The gateway requires **mutual TLS** — the proxy presents the client cert/key from `OPENSHELL_TLS_CERT`/`OPENSHELL_TLS_KEY` and skips server cert verification (`verify=False`) since the gateway uses a self-signed cert. Without the client cert the gateway returns `TLSV13_ALERT_CERTIFICATE_REQUIRED`.
-- **Crush sessions**: renders a custom `crush_chat.html` template; JS calls go through the same `/chat/{path}` proxy
 
 Server-mode lifecycle: session stays in `pending` until `expose_service` returns a URL, which is stored and the session transitions to `running` atomically — preventing the Chat tab from opening before the URL is set.
 
@@ -341,7 +338,7 @@ The session detail page (`sessions/detail.html`) uses a two-column grid inside t
 
 Launch pills are ordered TUI → CHAT → PROMPT (most-used first). TUI and CHAT use green fill (`.launch-pill-green`); PROMPT uses a dark charcoal fill with green border (`.launch-pill-muted`). Each pill POSTs the full config form to `/launch` with `mode` and `save_config=1` — no separate save step required.
 
-**Agent tool pills** replace the agent tool dropdown. The opencode pill renders the official block-pixel SVG logo inline at 78×14px. The Crush pill uses the Unicode box-drawing text `CR╚═╝SH`. Selecting a pill auto-saves the config and HTMX-reloads the model dropdown via `#model-select-wrapper`.
+**Agent tool pill** — OpenCode is currently the only supported agent tool, shown as a static, always-selected pill rendering the official block-pixel SVG logo inline at 78×14px with a rainbow gradient border. The underlying registry/strategy pattern supports adding more tools in the future without further UI changes.
 
 **Cluster capacity indicator** — a single pill labelled `Sessions: X / Y active` with optional `· N queued` appended. Colour escalates: outline (0 active) → green (healthy) → gold (near/at capacity: `active >= max-1` for `max > 2`, `active == max` for `max ≤ 2`) → red (any queued). Rendered in both `detail.html` and `_list_rows.html`.
 

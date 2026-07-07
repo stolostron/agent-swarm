@@ -1,6 +1,6 @@
 import asyncio
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from croniter import croniter
 from sqlalchemy import select, update
@@ -218,7 +218,7 @@ async def _collect_orphaned_sandboxes(db) -> None:
                 )
                 session.phase = "stopped"
                 session.sandbox_name = None
-                session.run_completed_at = datetime.utcnow()
+                session.run_completed_at = datetime.now(timezone.utc)
                 db_dirty = True
         if db_dirty:
             await db.commit()
@@ -241,7 +241,7 @@ async def _collect_orphaned_sandboxes(db) -> None:
                 s.id, s.phase,
             )
             s.phase = "stopped"
-            s.run_completed_at = datetime.utcnow()
+            s.run_completed_at = datetime.now(timezone.utc)
         await db.commit()
 
 
@@ -267,7 +267,7 @@ async def _check_and_launch(db=None) -> None:
     from swarmer.database import get_db
     from swarmer.models.session import Session
 
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
 
     async def _run(db) -> None:
         # Process the queue first (launch queued sessions if capacity is available)
@@ -373,7 +373,7 @@ async def _check_and_launch(db=None) -> None:
                     sched = await db.get(SessionSchedule, sched_id)
                     if sched:
                         sched.cron_next_run = croniter(
-                            sched.cron_schedule, datetime.utcnow()
+                            sched.cron_schedule, datetime.now(timezone.utc)
                         ).get_next(datetime)
                 await db.commit()
 
@@ -391,7 +391,7 @@ async def _check_and_launch(db=None) -> None:
                     sched = await db.get(SessionSchedule, sched_id)
                     if sched:
                         sched.cron_next_run = croniter(
-                            sched.cron_schedule, datetime.utcnow()
+                            sched.cron_schedule, datetime.now(timezone.utc)
                         ).get_next(datetime)
                 await db.commit()
 
@@ -406,7 +406,7 @@ async def _check_and_launch(db=None) -> None:
 async def _process_queue(db) -> None:
     """Launch queued sessions FIFO when capacity is available."""
     global _queue_next_check
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
 
     if _queue_next_check and now < _queue_next_check:
         return

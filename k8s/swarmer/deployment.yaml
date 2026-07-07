@@ -55,8 +55,6 @@ spec:
               value: "DEFAULT_AGENT_TOOL_VALUE"
             - name: AGENT_IMAGE_OPENCODE
               value: "AGENT_IMAGE_OPENCODE_VALUE"
-            - name: AGENT_IMAGE_CRUSH
-              value: "AGENT_IMAGE_CRUSH_VALUE"
             - name: MAX_CONCURRENT_AGENTS
               value: "MAX_CONCURRENT_AGENTS_VALUE"
             - name: OPENSHELL_GATEWAY_URL

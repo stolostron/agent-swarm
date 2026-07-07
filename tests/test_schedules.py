@@ -10,7 +10,7 @@ Covers:
 
 import os
 import sys
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
@@ -233,7 +233,7 @@ class TestSessionScheduleModel:
             await db.commit()
             await db.refresh(session)
 
-            now = datetime.utcnow()
+            now = datetime.now(timezone.utc)
             soon = now + timedelta(hours=1)
             later = now + timedelta(hours=5)
 
@@ -407,7 +407,7 @@ class TestSchedulerMultiSchedule:
             await db.commit()
             await db.refresh(session)
 
-            now = datetime.utcnow()
+            now = datetime.now(timezone.utc)
             # Both schedules are past-due (cron_next_run in the past).
             past1 = now - timedelta(minutes=10)
             past2 = now - timedelta(minutes=5)

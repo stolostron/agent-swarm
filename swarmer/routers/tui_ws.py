@@ -62,7 +62,7 @@ async def session_tui(
 
     tui_cmd_parts = [tool.get_tui_binary()]
     _tui_model = session.model or ""
-    if _tui_model and tool.name != "crush":
+    if _tui_model:
         tui_cmd_parts.extend(["--model", _tui_model])
     cmd_base = " ".join(shlex.quote(p) for p in tui_cmd_parts)
     tui_shell = (

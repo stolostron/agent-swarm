@@ -8,7 +8,7 @@ Validates that build_session_policy() returns a SandboxPolicy proto with:
   - Conditional Jira MCP block (present when Jira MCP enabled, absent otherwise)
   - Conditional Go development block (proxy.golang.org etc.)
   - Conditional Python development block (pypi.org etc.)
-  - Agent API block adapted to agent tool (opencode vs crush) and model provider
+  - Agent API block adapted to agent tool and model provider
   - No excess blocks for minimal sessions (single repo, no MCP)
 """
 import sys
@@ -268,18 +268,6 @@ def test_all_binary_entries_have_harness_true():
             )
 
 
-def test_crush_agent_api_binary_has_harness_true():
-    """Crush binary in agent_api block must also have harness=True."""
-    net = _bnet(agent_tool="crush", model="vertexai/claude-sonnet-5@default")
-    agent_block = net.get("agent_api", {})
-    for binary in agent_block.get("binaries", []):
-        path = binary.get("path", "?")
-        harness = binary.get("harness", False)
-        assert harness is True, (
-            f"agent_api binary '{path}' for crush has harness={harness!r}, expected True."
-        )
-
-
 def test_two_repos_generate_two_github_block_pairs():
     repo1 = _make_repo(org="stolostron", name="agent-swarm")
     repo2 = _make_repo(org="stolostron", name="agent-containers")
@@ -356,16 +344,6 @@ def test_agent_api_block_opencode_includes_gemini_endpoint():
     assert any("agent_api" in k.lower() for k in net)
     hosts = _bhosts()
     assert any("generativelanguage.googleapis.com" in h for h in hosts)
-
-
-def test_agent_api_block_crush_includes_crush_binary():
-    net = _bnet(agent_tool="crush", model="vertexai/claude-sonnet-5@default")
-    api_block = net.get("agent_api")
-    assert api_block is not None
-    # Crush block has no binaries restriction; opencode binary should not appear
-    binaries = api_block.get("binaries", [])
-    binary_paths = [b.get("path", "") if isinstance(b, dict) else getattr(b, "path", "") for b in binaries]
-    assert not any("opencode" in p for p in binary_paths), f"opencode binary in crush block: {binary_paths}"
 
 
 # ---------------------------------------------------------------------------

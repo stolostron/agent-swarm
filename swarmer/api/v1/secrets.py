@@ -106,10 +106,6 @@ async def save_credentials(
 
     if body.google_api_key.strip():
         secret.google_api_key = body.google_api_key.strip()
-    if body.anthropic_api_key.strip():
-        secret.anthropic_api_key = body.anthropic_api_key.strip()
-    if body.openai_api_key.strip():
-        secret.openai_api_key = body.openai_api_key.strip()
     adc = body.application_default_credentials.strip()
     if adc:
         try:

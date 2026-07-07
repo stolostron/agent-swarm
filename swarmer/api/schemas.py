@@ -193,8 +193,6 @@ class CredentialsSave(BaseModel):
     google_cloud_project: str = ""
     vertex_location: str = ""
     google_api_key: str = ""
-    anthropic_api_key: str = ""
-    openai_api_key: str = ""
     application_default_credentials: str = ""
     shared: bool = False
 
@@ -204,13 +202,9 @@ class CredentialsOut(BaseModel):
     workspace_id: int
     has_adc: bool
     has_vertex: bool
-    has_anthropic: bool
-    has_openai: bool
     google_cloud_project: str
     vertex_location: str
     masked_api_key: str
-    masked_anthropic_key: str
-    masked_openai_key: str
     shared: bool
     created_at: datetime
     updated_at: datetime

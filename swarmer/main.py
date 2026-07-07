@@ -129,12 +129,9 @@ async def _restart_prompt_pollers() -> None:
             # Reconstruct the same AGENTS.md-reading command used at initial launch
             # (ACM-35060).  build_main_cmd would embed a CLI arg that is unavailable
             # at restart time; AGENTS.md already exists in the sandbox from launch.
-            _tool_bin = {"opencode": "opencode run", "crush": "crush run"}.get(s.agent_tool, "opencode run")
-            if s.agent_tool == "crush":
-                _main_cmd = f"HOME=/sandbox {_tool_bin} \"$(</sandbox/AGENTS.md)\""
-            else:
-                _model_arg = _shlex.quote(_model) if _model else ""
-                _main_cmd = f"HOME=/sandbox {_tool_bin} --model {_model_arg} \"$(</sandbox/AGENTS.md)\""
+            _tool_bin = {"opencode": "opencode run"}.get(s.agent_tool, "opencode run")
+            _model_arg = _shlex.quote(_model) if _model else ""
+            _main_cmd = f"HOME=/sandbox {_tool_bin} --model {_model_arg} \"$(</sandbox/AGENTS.md)\""
             asyncio.create_task(
                 _run_openshell_agent(s.id, s.sandbox_name, ["sh", "-c", _main_cmd], s.mode, s.agent_tool),
                 name=f"openshell-agent-{s.id}",

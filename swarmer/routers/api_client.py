@@ -387,8 +387,6 @@ class APIClient:
         google_cloud_project: str = "",
         vertex_location: str = "",
         google_api_key: str = "",
-        anthropic_api_key: str = "",
-        openai_api_key: str = "",
         application_default_credentials: str = "",
         shared: bool = False,
     ) -> dict:
@@ -398,8 +396,6 @@ class APIClient:
                 "google_cloud_project": google_cloud_project,
                 "vertex_location": vertex_location,
                 "google_api_key": google_api_key,
-                "anthropic_api_key": anthropic_api_key,
-                "openai_api_key": openai_api_key,
                 "application_default_credentials": application_default_credentials,
                 "shared": shared,
             },

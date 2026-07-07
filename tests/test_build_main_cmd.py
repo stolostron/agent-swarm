@@ -1,4 +1,4 @@
-"""Unit tests for build_main_cmd() in OpenCodeStrategy and CrushStrategy.
+"""Unit tests for build_main_cmd() in OpenCodeStrategy.
 
 Verifies that prompt mode runs a clean direct invocation (no --continue, no ||
 fallback), server mode returns the correct serve subcommand, and TUI mode
@@ -10,7 +10,6 @@ import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from swarmer.agent_tools.opencode import OpenCodeStrategy  # noqa: E402
-from swarmer.agent_tools.crush import CrushStrategy  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -29,7 +28,6 @@ class _FakeSession:
 # ---------------------------------------------------------------------------
 
 _opencode = OpenCodeStrategy()
-_crush = CrushStrategy()
 
 
 # ---------------------------------------------------------------------------
@@ -97,70 +95,4 @@ def test_opencode_server_mode():
 def test_opencode_tui_mode():
     session = _FakeSession(mode="tui")
     cmd = _opencode.build_main_cmd(session, model="google-vertex-anthropic/claude-sonnet-5@default")
-    assert cmd == "sleep infinity"
-
-
-# ---------------------------------------------------------------------------
-# Crush: prompt mode
-# ---------------------------------------------------------------------------
-
-def test_crush_prompt_no_continue_flag():
-    session = _FakeSession(mode="prompt")
-    cmd = _crush.build_main_cmd(session, model="vertexai/claude-sonnet-5@default")
-    assert "--continue" not in cmd
-
-
-def test_crush_prompt_no_fallback_shell():
-    session = _FakeSession(mode="prompt")
-    cmd = _crush.build_main_cmd(session, model="vertexai/claude-sonnet-5@default")
-    assert "||" not in cmd
-
-
-def test_crush_prompt_with_prompt_text():
-    session = _FakeSession(mode="prompt", instruction_prompt="Add a feature")
-    cmd = _crush.build_main_cmd(session, model="vertexai/claude-sonnet-5@default")
-    assert "--continue" not in cmd
-    assert "||" not in cmd
-    assert "Add a feature" in cmd
-
-
-def test_crush_prompt_resolved_prompt_overrides_instruction():
-    session = _FakeSession(mode="prompt", instruction_prompt="session prompt")
-    cmd = _crush.build_main_cmd(
-        session,
-        model="vertexai/claude-sonnet-5@default",
-        resolved_prompt="resolved prompt",
-    )
-    assert "resolved prompt" in cmd
-    assert "session prompt" not in cmd
-    assert "--continue" not in cmd
-
-
-def test_crush_prompt_is_single_command():
-    session = _FakeSession(mode="prompt", instruction_prompt="do something")
-    cmd = _crush.build_main_cmd(session, model="vertexai/claude-sonnet-5@default")
-    assert cmd.startswith("crush")
-    assert "||" not in cmd
-    assert "&&" not in cmd
-
-
-# ---------------------------------------------------------------------------
-# Crush: server mode
-# ---------------------------------------------------------------------------
-
-def test_crush_server_mode():
-    session = _FakeSession(mode="server")
-    cmd = _crush.build_main_cmd(session, model="vertexai/claude-sonnet-5@default")
-    assert cmd.startswith("crush server")
-    assert "--continue" not in cmd
-    assert "||" not in cmd
-
-
-# ---------------------------------------------------------------------------
-# Crush: TUI mode
-# ---------------------------------------------------------------------------
-
-def test_crush_tui_mode():
-    session = _FakeSession(mode="tui")
-    cmd = _crush.build_main_cmd(session, model="vertexai/claude-sonnet-5@default")
     assert cmd == "sleep infinity"

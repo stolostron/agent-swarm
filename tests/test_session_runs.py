@@ -39,7 +39,7 @@ async def _make_prompt_session(db) -> Session:
     db.add(ws)
     await db.flush()
     session = Session(workspace_id=ws.id, name="my-session", mode="prompt")
-    session.run_started_at = datetime.utcnow() - timedelta(minutes=2)
+    session.run_started_at = datetime.now(timezone.utc) - timedelta(minutes=2)
     session.last_output = "agent finished"
     session.status_detail = "Completed"
     db.add(session)
@@ -52,7 +52,7 @@ async def _make_prompt_session(db) -> Session:
 async def test_record_session_run_persists_history():
     async with _TestSession() as db:
         session = await _make_prompt_session(db)
-        completed_at = datetime.utcnow()
+        completed_at = datetime.now(timezone.utc)
 
         run = await record_session_run(
             db,
@@ -91,7 +91,7 @@ async def test_record_session_run_skips_without_start_time():
             phase="succeeded",
             status_detail="",
             last_output="",
-            completed_at=datetime.utcnow(),
+            completed_at=datetime.now(timezone.utc),
         )
         assert run is None
 
@@ -101,7 +101,7 @@ async def test_record_session_run_stopped_by_user_detail():
     async with _TestSession() as db:
         session = await _make_prompt_session(db)
         session.status_detail = "Running"
-        completed_at = datetime.utcnow()
+        completed_at = datetime.now(timezone.utc)
 
         run = await record_session_run(
             db,
@@ -120,7 +120,7 @@ async def test_record_session_run_stopped_by_user_detail():
 def test_session_run_duration_active_with_naive_start():
     """Legacy naive run_started_at must not break live run_duration display."""
     session = Session(workspace_id=1, name="active", mode="prompt", phase="running")
-    session.run_started_at = datetime.utcnow() - timedelta(minutes=1)
+    session.run_started_at = datetime.now(timezone.utc) - timedelta(minutes=1)
     assert session.run_duration is not None
     assert session.run_duration.endswith("s")
 
@@ -130,7 +130,7 @@ async def test_record_session_run_normalizes_mixed_timezone_awareness():
     """Legacy naive run_started_at + aware completed_at must not break run_duration."""
     async with _TestSession() as db:
         session = await _make_prompt_session(db)
-        session.run_started_at = datetime.utcnow() - timedelta(minutes=1)
+        session.run_started_at = datetime.now(timezone.utc) - timedelta(minutes=1)
         completed_at = datetime.now(timezone.utc)
 
         run = await record_session_run(
@@ -164,7 +164,7 @@ async def test_record_session_run_prunes_old_runs(monkeypatch):
                 phase="succeeded",
                 status_detail=f"run-{i}",
                 last_output=f"log-{i}",
-                completed_at=datetime.utcnow() + timedelta(seconds=i),
+                completed_at=datetime.now(timezone.utc) + timedelta(seconds=i),
             )
         await db.commit()
 
@@ -188,7 +188,7 @@ async def test_record_session_run_stores_raw_output():
     """raw_output is preserved separately from last_output in session_runs."""
     async with _TestSession() as db:
         session = await _make_prompt_session(db)
-        completed_at = datetime.utcnow()
+        completed_at = datetime.now(timezone.utc)
 
         run = await record_session_run(
             db,
@@ -220,7 +220,7 @@ async def test_record_session_run_raw_output_defaults_empty():
             phase="succeeded",
             status_detail="",
             last_output="some output",
-            completed_at=datetime.utcnow(),
+            completed_at=datetime.now(timezone.utc),
             # raw_output not passed — should default to ""
         )
         await db.commit()

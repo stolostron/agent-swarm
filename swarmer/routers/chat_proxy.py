@@ -14,7 +14,7 @@ domain as the Host header so the gateway can route to the right sandbox.
 OpenCode sessions: the root /chat path proxies directly to OpenCode's
 native web UI running inside the sandbox on port 4096.  OpenCode's built-in
 UI is served as-is; HTML is rewritten so asset paths resolve through the
-proxy prefix.  Crush sessions continue to use the Swarmer-rendered template.
+proxy prefix.
 """
 import asyncio
 import contextlib
@@ -27,7 +27,6 @@ import httpx
 import websockets
 from fastapi import APIRouter, Depends, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import Response
-from fastapi.templating import Jinja2Templates
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from swarmer.database import get_db
@@ -41,7 +40,6 @@ log = logging.getLogger(__name__)
 # Pin this logger to WARNING so it stays quiet at the default INFO level.
 # Set LOG_LEVEL=DEBUG in the environment to enable full per-request tracing.
 log.setLevel(logging.WARNING)
-templates = Jinja2Templates(directory="swarmer/templates")
 
 _HOP_BY_HOP = frozenset({
     "connection", "keep-alive", "proxy-authenticate", "proxy-authorization",
@@ -264,25 +262,10 @@ async def _proxy_root(
 
     assert session is not None  # _session_ok returns error if session is None
 
-    # Crush sessions: Swarmer renders its own chat template; the JS inside
-    # makes API calls through the /chat/{path} proxy.  Do not touch Crush.
-    if session.agent_tool == "crush":
-        _model = session.model or ""
-        return templates.TemplateResponse(
-            request,
-            "sessions/crush_chat.html",
-            {
-                "ws": ws_obj,
-                "session": session,
-                "model_name": _model.split("/")[-1] if _model else "default",
-                "provider_name": _model.split("/")[0] if "/" in _model else "default",
-            },
-        )
-
-    # OpenCode sessions: proxy the root path directly to OpenCode's native
-    # web UI running inside the sandbox.  _rewrite_html() will inject a
-    # <base> tag and rewrite absolute asset paths so they load through the
-    # /chat/{path} proxy prefix.
+    # Proxy the root path directly to OpenCode's native web UI running
+    # inside the sandbox.  _rewrite_html() will inject a <base> tag and
+    # rewrite absolute asset paths so they load through the /chat/{path}
+    # proxy prefix.
     return await _chat_http_proxy(ws_id, sid, request, "", db)
 
 

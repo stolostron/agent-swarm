@@ -366,7 +366,7 @@ class TestSessions:
 
     @pytest.mark.asyncio
     async def test_list_session_runs(self, client):
-        from datetime import datetime
+        from datetime import datetime, timezone
 
         from swarmer.models.session import Session
         from swarmer.session_runs import record_session_run
@@ -375,14 +375,14 @@ class TestSessions:
         s = await _create_session(client, ws["id"])
         async with _TestSession() as db:
             session = await db.get(Session, s["id"])
-            session.run_started_at = datetime.utcnow()
+            session.run_started_at = datetime.now(timezone.utc)
             await record_session_run(
                 db,
                 session,
                 phase="succeeded",
                 status_detail="Completed",
                 last_output="done",
-                completed_at=datetime.utcnow(),
+                completed_at=datetime.now(timezone.utc),
             )
             await db.commit()
 
@@ -577,15 +577,14 @@ class TestSecrets:
             json={
                 "google_cloud_project": "my-project",
                 "vertex_location": "us-central1",
-                "anthropic_api_key": "sk-ant-test123456",
+                "google_api_key": "AIza-test123456",
             },
         )
         assert resp.status_code == 200
         cred = resp.json()
         assert cred["google_cloud_project"] == "my-project"
-        assert cred["has_anthropic"] is True
         assert cred["has_adc"] is False
-        assert "sk-ant" not in cred.get("masked_anthropic_key", "")  # key should be masked
+        assert "AIza-test123456" not in cred.get("masked_api_key", "")  # key should be masked
 
     @pytest.mark.asyncio
     async def test_save_adc_credentials(self, client):

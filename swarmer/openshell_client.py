@@ -798,7 +798,6 @@ async def import_provider_profiles(profiles: list[dict], client=None) -> None:
 
 async def create_provider_from_env(
     google_api_key: str,
-    anthropic_api_key: str,
     github_pat: str,
     client=None,
 ) -> dict[str, str]:
@@ -806,8 +805,6 @@ async def create_provider_from_env(
     env_vars: dict[str, str] = {}
     if google_api_key:
         env_vars["GOOGLE_API_KEY"] = google_api_key
-    if anthropic_api_key:
-        env_vars["ANTHROPIC_API_KEY"] = anthropic_api_key
     if github_pat:
         env_vars["GITHUB_PAT"] = github_pat
     return env_vars
@@ -977,23 +974,22 @@ async def write_agent_config(
     config_json: str,
     client=None,
 ) -> None:
-    """Write agent config JSON to /sandbox/{tool_name}.json, passed via --config at startup.
+    """Write agent config JSON to /sandbox/opencode.json, passed via --config at startup.
 
     Uses stdin to deliver file content so the gateway's no-newline-in-args
     restriction is never hit.
+
+    tool_name is currently unused (OpenCode is the only supported agent tool)
+    but kept in the signature for call-site stability.
     """
     if client is None:
         client = _get_client()
     sid = await _sandbox_id(sandbox_name, client)
     
-    if tool_name == "crush":
-        dest = shlex.quote("/sandbox/.config/crush/crush.json")
-        script = f"mkdir -p /sandbox/.config/crush && cat > {dest}"
-    else:
-        # Write to /sandbox/opencode.json — passed explicitly via --config so
-        # OpenCode loads it regardless of HOME or working directory.
-        dest = shlex.quote("/sandbox/opencode.json")
-        script = f"cat > {dest}"
+    # Write to /sandbox/opencode.json — passed explicitly via --config so
+    # OpenCode loads it regardless of HOME or working directory.
+    dest = shlex.quote("/sandbox/opencode.json")
+    script = f"cat > {dest}"
 
     def _do_write(s=sid):
         client.exec(s, ["sh", "-c", script], stdin=config_json.encode())

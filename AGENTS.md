@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code (claude.ai/code) and other AI agents when working with code in this repository. CLAUDE.md is a symlink to this file.
 
-A FastAPI + HTMX dashboard for managing AI coding agent workloads on Kubernetes. Supports multiple agent tools (OpenCode, Crush). Server-rendered UI with PatternFly 6 dark theme. Token-based auth via Kubernetes ServiceAccount bearer tokens (+ optional OpenShift OAuth).
+A FastAPI + HTMX dashboard for managing AI coding agent workloads on Kubernetes. Uses OpenCode as its agent tool, via a pluggable strategy interface that supports adding more tools in the future. Server-rendered UI with PatternFly 6 dark theme. Token-based auth via Kubernetes ServiceAccount bearer tokens (+ optional OpenShift OAuth).
 
 ## Tool Availability
 
@@ -47,7 +47,6 @@ make connect-openshell   # Port-forward OpenShell gateway gRPC port
 # Source credentials first: set -a && source ../jira-mcp-server/.env && set +a
 python3 scripts/openshell_smoke_test.py                          # OpenCode + Gemini (Google AI Studio)
 python3 scripts/openshell_smoke_test.py --vertex                 # OpenCode + Claude via VertexAI
-python3 scripts/openshell_smoke_test.py --vertex --agent crush   # Crush + Claude via VertexAI
 python3 scripts/openshell_smoke_test.py --policy-extract --repo https://github.com/org/repo  # git clone + policy
 python3 scripts/openshell_jira_smoke_test.py                     # Jira MCP: env → policy → binary → mcp-server
 # See docs/ARCHITECTURE.md "Adding a new MCP server" for how to write new smoke tests
@@ -119,7 +118,7 @@ Use placeholder patterns instead: `<YOUR_PROJECT>`, `example.com`, `your-registr
 - `pydantic-settings` with `.env` file support, `extra="ignore"` (unrecognized env vars silently ignored)
 - All settings have sensible defaults for local development
 - Key env vars: `DATABASE_URL`, `SWARMER_SECRET_KEY`, `K8S_IN_CLUSTER`, `K8S_API_URL`, `OPENSHIFT_OAUTH_URL`, `OPENSHELL_GATEWAY_URL`, `OPENSHELL_SUPERVISOR_URL`
-- Agent images: `AGENT_IMAGE_OPENCODE`, `AGENT_IMAGE_CRUSH`, `CRUSH_VERSION`, `DEFAULT_AGENT_TOOL`
+- Agent images: `AGENT_IMAGE_OPENCODE`, `DEFAULT_AGENT_TOOL`
 - Concurrency: `MAX_CONCURRENT_AGENTS` (default 5) — global cap on concurrent agent pods; set to 0 to disable
 
 ### Testing
@@ -135,7 +134,7 @@ Use placeholder patterns instead: `<YOUR_PROJECT>`, `example.com`, `your-registr
 
 2. **`auth.py` is dead code**: The file `swarmer/auth.py` contains only a comment "superseded by k8s_auth.py". All authentication logic is in `k8s_auth.py` and `routers/auth.py`.
 
-3. **Deployment image placeholder**: `k8s/swarmer/deployment.yaml` uses literal strings like `SWARMER_IMAGE`, `OPENSHIFT_OAUTH_URL_VALUE`, `AGENT_IMAGE_OPENCODE_VALUE`, `AGENT_IMAGE_CRUSH_VALUE` which are replaced at deploy time via `sed` in the Makefile. Don't replace them with actual values.
+3. **Deployment image placeholder**: `k8s/swarmer/deployment.yaml` uses literal strings like `SWARMER_IMAGE`, `OPENSHIFT_OAUTH_URL_VALUE`, `AGENT_IMAGE_OPENCODE_VALUE` which are replaced at deploy time via `sed` in the Makefile. Don't replace them with actual values.
 
 4. **SQLite single-writer**: The K8s Deployment uses `strategy: Recreate` (not RollingUpdate) because SQLite doesn't support concurrent writers. Only one replica is safe.
 
@@ -145,7 +144,7 @@ Use placeholder patterns instead: `<YOUR_PROJECT>`, `example.com`, `your-registr
    - `tui` mode: sandbox runs `sleep infinity`; browser connects via xterm.js → WebSocket → OpenShell `exec_interactive()` PTY
    - Stopping always calls `openshell_client.delete_sandbox()` (and `delete_service()` for server mode)
 
-6. **OpenCode model format quirk**: Model strings use `provider/model@version` format (e.g., `google-vertex-anthropic/claude-sonnet-5@default`). The `@version` suffix is part of the model ID. Crush also uses `provider/model@version` format (e.g., `vertexai/claude-sonnet-5@default`); Haiku uses a date suffix (`vertexai/claude-haiku-4-5@20251001`).
+6. **OpenCode model format quirk**: Model strings use `provider/model@version` format (e.g., `google-vertex-anthropic/claude-sonnet-5@default`). The `@version` suffix is part of the model ID; Haiku uses a date suffix (e.g., `@20251001`).
 
 7. **TUI auth tokens**: TUI WebSocket connections use one-time UUID tokens stored in the HTTP session. Tokens are generated on the session detail page and consumed on WebSocket connect. Invalid/reused tokens are rejected with close code 4001.
 
@@ -157,11 +156,11 @@ Use placeholder patterns instead: `<YOUR_PROJECT>`, `example.com`, `your-registr
 
 11. **Blocking K8s calls in async handlers**: The remaining synchronous `kubernetes` client calls (auth, pull secrets, env vars) inside async functions must be wrapped with `asyncio.to_thread()`. The TUI WebSocket handler uses a background thread with `threading.Event` for the OpenShell gRPC stream reader.
 
-12. **`OpencodeSecret` naming is misleading**: Despite the name, this model stores credentials for all agent tools (OpenCode, Crush), including Anthropic and OpenAI API keys. The table name `opencode_secrets` is a legacy artifact.
+12. **`OpencodeSecret` naming is misleading**: Despite the name, this model stores credentials for AI providers (Google AI Studio, Google Cloud/Vertex AI ADC), used by OpenCode. The table name `opencode_secrets` is a legacy artifact.
 
 13. **HX-Trigger pattern for repo management**: Repo add/delete endpoints return empty `HTMLResponse` with `HX-Trigger: repoListChanged` header. The template listens for this event to refresh the repo items partial via a separate GET endpoint.
 
-14. **Chat proxy HTML rewriting**: For in-cluster OpenCode server sessions, the proxy injects a `<base>` tag and rewrites absolute asset paths (`src="/..."` → `src="/workspaces/{ws_id}/sessions/{sid}/chat/..."`). Crush sessions skip this and render a custom chat template instead.
+14. **Chat proxy HTML rewriting**: For in-cluster OpenCode server sessions, the proxy injects a `<base>` tag and rewrites absolute asset paths (`src="/..."` → `src="/workspaces/{ws_id}/sessions/{sid}/chat/..."`).
 
 15. **`image-build` requires `sync-images`**: The `image-build` Makefile target depends on `sync-images`, which reads `../agent-containers/.push-defaults`. If that file doesn't exist, the build fails. Use `SILENT=1` to skip the interactive version prompt.
 

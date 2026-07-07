@@ -29,16 +29,14 @@ OAUTH_HOST=$(oc get route oauth-openshift -n openshift-authentication -o jsonpat
 OPENSHIFT_OAUTH_URL="https://${OAUTH_HOST}"
 SWARMER_IMAGE="quay.io/jpacker/swarmer:$(cat VERSION)"
 
-# Agent tool images — update these to match your registry
+# Agent tool image — update this to match your registry
 AGENT_IMAGE_OPENCODE="quay.io/jpacker/opencode:0.1.1"
-AGENT_IMAGE_CRUSH="ghcr.io/gurnben/crush-container:latest"
 
 echo "App domain:   ${APPS_DOMAIN}"
 echo "Swarmer URL:  https://${SWARMER_HOST}"
 echo "OAuth URL:    ${OPENSHIFT_OAUTH_URL}"
 echo "Image:        ${SWARMER_IMAGE}"
 echo "OpenCode img: ${AGENT_IMAGE_OPENCODE}"
-echo "Crush img:    ${AGENT_IMAGE_CRUSH}"
 ```
 
 Verify the output looks correct before continuing.
@@ -100,7 +98,6 @@ sed "s|SWARMER_HOST|${SWARMER_HOST}|g" k8s/openshift/oauth-client.yaml | oc appl
 sed -e "s|SWARMER_IMAGE|${SWARMER_IMAGE}|g" \
     -e "s|OPENSHIFT_OAUTH_URL_VALUE|${OPENSHIFT_OAUTH_URL}|g" \
     -e "s|AGENT_IMAGE_OPENCODE_VALUE|${AGENT_IMAGE_OPENCODE}|g" \
-    -e "s|AGENT_IMAGE_CRUSH_VALUE|${AGENT_IMAGE_CRUSH}|g" \
     k8s/openshift/deployment.yaml | oc apply -f -
 ```
 

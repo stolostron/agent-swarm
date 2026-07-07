@@ -42,10 +42,5 @@ patches:
       - op: add
         path: /spec/template/spec/containers/0/env/-
         value:
-          name: AGENT_IMAGE_CRUSH
-          value: "ghcr.io/gurnben/crush-container:latest"
-      - op: add
-        path: /spec/template/spec/containers/0/env/-
-        value:
           name: DEFAULT_AGENT_TOOL
           value: "opencode"

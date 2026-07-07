@@ -121,15 +121,14 @@ class TestBuggyBehaviour:
             # Seed the session with authenticated=True
             r1 = await client.get("/_seed_auth")
             assert r1.status_code == 200
-            session_cookies = r1.cookies
 
             # Trigger NotAuthenticated (simulates expired token)
-            r2 = await client.get("/_trigger_not_auth", cookies=session_cookies, follow_redirects=False)
+            r2 = await client.get("/_trigger_not_auth", follow_redirects=False)
             assert r2.status_code == 302
             assert r2.headers["location"] == "/login"
 
             # WITHOUT the fix: /login sees authenticated=True and loops back
-            r3 = await client.get("/login", cookies=r2.cookies, follow_redirects=False)
+            r3 = await client.get("/login", follow_redirects=False)
             # This would be 303 (redirect to /workspaces) — the loop trigger
             assert r3.status_code == 303, (
                 "Buggy app should redirect back to /workspaces, demonstrating the loop"
@@ -155,15 +154,14 @@ class TestRedirectLoopFix:
             # Seed the session with authenticated=True
             r1 = await client.get("/_seed_auth")
             assert r1.status_code == 200
-            session_cookies = r1.cookies
 
             # Trigger NotAuthenticated (simulates expired K8s token)
-            r2 = await client.get("/_trigger_not_auth", cookies=session_cookies, follow_redirects=False)
+            r2 = await client.get("/_trigger_not_auth", follow_redirects=False)
             assert r2.status_code == 302
             assert r2.headers["location"] == "/login"
 
             # WITH the fix: session is cleared, /login renders the login page (200)
-            r3 = await client.get("/login", cookies=r2.cookies, follow_redirects=False)
+            r3 = await client.get("/login", follow_redirects=False)
             assert r3.status_code == 200, (
                 f"Expected login page (200) but got {r3.status_code} — "
                 "session was not cleared properly, redirect loop would occur"
@@ -178,16 +176,15 @@ class TestRedirectLoopFix:
         transport = httpx.ASGITransport(app=fixed_app)
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
             # Seed the session first
-            r1 = await client.get("/_seed_auth")
-            session_cookies = r1.cookies
+            await client.get("/_seed_auth")
 
             # Hit protected /workspaces — always raises NotAuthenticated in this test app
-            r2 = await client.get("/workspaces", cookies=session_cookies, follow_redirects=False)
+            r2 = await client.get("/workspaces", follow_redirects=False)
             assert r2.status_code == 302
             assert r2.headers["location"] == "/login"
 
             # Follow the redirect — must get the login page, not another redirect
-            r3 = await client.get("/login", cookies=r2.cookies, follow_redirects=False)
+            r3 = await client.get("/login", follow_redirects=False)
             assert r3.status_code == 200
 
     @pytest.mark.asyncio
@@ -203,7 +200,7 @@ class TestRedirectLoopFix:
             assert r1.status_code == 200
 
             # /login with a valid session → 303 to /workspaces
-            r2 = await client.get("/login", cookies=r1.cookies, follow_redirects=False)
+            r2 = await client.get("/login", follow_redirects=False)
             assert r2.status_code == 303
             assert "/workspaces" in r2.headers["location"]
 
@@ -217,5 +214,5 @@ class TestRedirectLoopFix:
             assert r1.status_code == 302
             assert r1.headers["location"] == "/login"
 
-            r2 = await client.get("/login", cookies=r1.cookies, follow_redirects=False)
+            r2 = await client.get("/login", follow_redirects=False)
             assert r2.status_code == 200

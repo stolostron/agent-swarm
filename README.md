@@ -16,7 +16,7 @@ A FastAPI + HTMX dashboard for managing AI coding agent workloads on Kubernetes.
 - **Git cloning** — repos cloned into the sandbox via OpenShell API at session launch
 - **Live UI** — HTMX polling for session status and output; no page reloads needed
 - **Dual output capture** — prompt-mode sessions preserve both the processed agent response (`last_output`) and the raw console log (`raw_output`); an Output / Raw Log toggle appears in the UI when they differ
-- **Multi-agent support** — OpenCode (Go) and Crush (Rust) coding agents
+- **Agent tool support** — OpenCode (Go) coding agent, with pluggable tooling for future agents
 - **MCP server integration** — Model Context Protocol servers per workspace (e.g., Atlassian Jira)
 - **Prompt library** — workspace-level prompt library with git-backed folders and per-session picker
 - **Cron scheduling** — recurring prompt-mode sessions on a cron schedule
@@ -51,7 +51,6 @@ Key variables:
 | `K8S_IN_CLUSTER` | `false` | Set to `true` when running inside a pod |
 | `AGENT_IMAGE` | _(empty)_ | Fallback image used for session pods |
 | `AGENT_IMAGE_OPENCODE` | _(empty)_ | OpenCode agent image |
-| `AGENT_IMAGE_CRUSH` | _(empty)_ | Crush agent image |
 | `AGENT_IMAGE_PULL_SECRET` | _(empty)_ | Pull secret name in the workspace namespace |
 
 See [docs/USER_GUIDE.md](docs/USER_GUIDE.md) for the full environment variable reference.

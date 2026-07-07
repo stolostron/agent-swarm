@@ -135,8 +135,6 @@ async def opencode_secret_save(
     google_cloud_project: str = Form(""),
     vertex_location: str = Form(""),
     google_api_key: str = Form(""),
-    anthropic_api_key: str = Form(""),
-    openai_api_key: str = Form(""),
     shared: str = Form(""),
     adc_file: UploadFile | None = File(None),
 ):
@@ -183,8 +181,6 @@ async def opencode_secret_save(
                 google_cloud_project=google_cloud_project,
                 vertex_location=vertex_location,
                 google_api_key=google_api_key,
-                anthropic_api_key=anthropic_api_key,
-                openai_api_key=openai_api_key,
                 application_default_credentials="",  # intentionally empty — gateway is the store
                 shared=bool(shared),
             )

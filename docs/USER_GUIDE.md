@@ -7,12 +7,12 @@ Agent Swarm is a FastAPI + HTMX dashboard for managing AI coding agent workloads
 **Key capabilities:**
 
 - **Workspaces** — each workspace maps 1:1 to a Kubernetes namespace; create, rename, and delete from the UI
-- **Secrets** — Fernet-encrypted storage for provider credentials (GCP/Vertex AI, Gemini, Anthropic, OpenAI), GitHub PATs, and OCI pull secrets; auto-synced to Kubernetes Secrets
+- **Secrets** — Fernet-encrypted storage for provider credentials (GCP/Vertex AI, Gemini), GitHub PATs, and OCI pull secrets; auto-synced to Kubernetes Secrets
 - **Session lifecycle** — create → launch → monitor → stop → delete sessions backed by Kubernetes Pods and PVCs
 - **Three session modes** — Prompt (one-shot), Server (persistent web API), TUI (browser terminal)
 - **Git cloning** — init containers clone configured repos into PVC-backed workspaces before the agent starts
 - **Live UI** — HTMX polling for session status and output; no page reloads needed
-- **Multi-agent support** — OpenCode (Go-based) and Crush (Rust-based) coding agents
+- **Agent tool support** — OpenCode (Go-based) coding agent, with pluggable tooling for future agents
 - **MCP server integration** — Model Context Protocol servers per workspace (e.g., Atlassian Jira)
 - **Prompt library** — workspace-level prompt library with git-backed folders and per-session picker
 - **Cron scheduling** — recurring prompt-mode sessions on a cron schedule
@@ -51,16 +51,14 @@ OAUTH_HOST=$(oc get route oauth-openshift -n openshift-authentication -o jsonpat
 OPENSHIFT_OAUTH_URL="https://${OAUTH_HOST}"
 SWARMER_IMAGE="quay.io/jpacker/swarmer:$(cat VERSION)"
 
-# Agent tool images — update these to match your registry
+# Agent tool image — update this to match your registry
 AGENT_IMAGE_OPENCODE="quay.io/jpacker/opencode:0.2.8"
-AGENT_IMAGE_CRUSH="quay.io/jpacker/crush:0.2.8"
 
 echo "App domain:   ${APPS_DOMAIN}"
 echo "Swarmer URL:  https://${SWARMER_HOST}"
 echo "OAuth URL:    ${OPENSHIFT_OAUTH_URL}"
 echo "Image:        ${SWARMER_IMAGE}"
 echo "OpenCode img: ${AGENT_IMAGE_OPENCODE}"
-echo "Crush img:    ${AGENT_IMAGE_CRUSH}"
 ```
 
 Verify the output looks correct before continuing.
@@ -73,7 +71,7 @@ Verify the output looks correct before continuing.
 - `kubectl`
 - `kind`
 - Docker or Podman (`CONTAINER_CMD=podman` to use Podman)
-- Agent container images available locally (OpenCode and/or Crush)
+- OpenCode agent container image available locally
 
 #### Two development modes
 
@@ -135,7 +133,6 @@ sed "s|SWARMER_HOST|${SWARMER_HOST}|g" k8s/openshift/oauth-client.yaml | oc appl
 sed -e "s|SWARMER_IMAGE|${SWARMER_IMAGE}|g" \
     -e "s|OPENSHIFT_OAUTH_URL_VALUE|${OPENSHIFT_OAUTH_URL}|g" \
     -e "s|AGENT_IMAGE_OPENCODE_VALUE|${AGENT_IMAGE_OPENCODE}|g" \
-    -e "s|AGENT_IMAGE_CRUSH_VALUE|${AGENT_IMAGE_CRUSH}|g" \
     k8s/swarmer/deployment.yaml | oc apply -f -
 ```
 
@@ -247,10 +244,9 @@ oc apply -k kustomize/base/cluster-admin
 # 3. Set the image (replace SWARMER_IMAGE placeholder)
 oc set image deployment/swarmer swarmer=<your-image> -n swarmer
 
-# 4. Set agent images and OAuth URL
+# 4. Set agent image and OAuth URL
 oc set env deployment/swarmer -n swarmer \
   AGENT_IMAGE_OPENCODE=<your-opencode-image> \
-  AGENT_IMAGE_CRUSH=<your-crush-image> \
   OPENSHIFT_OAUTH_URL=https://$(oc get route oauth-openshift -n openshift-authentication -o jsonpath='{.spec.host}')
 
 # 5. Update OAuthClient redirect URI
@@ -320,7 +316,6 @@ cp .env.example .env
 | `PORT` | `8080` | Listen port |
 | `AGENT_IMAGE` | _(empty)_ | Fallback image for session pods |
 | `AGENT_IMAGE_OPENCODE` | _(empty)_ | OpenCode agent container image |
-| `AGENT_IMAGE_CRUSH` | _(empty)_ | Crush agent container image |
 | `DEFAULT_AGENT_TOOL` | `opencode` | Default agent tool when creating sessions |
 | `AGENT_IMAGE_PULL_SECRET` | _(empty)_ | Pull secret name in the workspace namespace |
 | `AGENT_IMAGE_PULL_POLICY` | `IfNotPresent` | Image pull policy for session pods |
@@ -370,7 +365,6 @@ Agent container images are built from the repository's Containerfiles:
 | Image | Containerfile | Base | UID |
 |---|---|---|---|
 | Swarmer dashboard | `Containerfile` | UBI10 `python-312-minimal` | 1001 |
-| Crush agent | `Containerfile.crush` | UBI9 `ubi-minimal` | root |
 
 **Building:**
 
@@ -378,7 +372,7 @@ Agent container images are built from the repository's Containerfiles:
 make image-build           # Build swarmer image (depends on sync-images)
 ```
 
-> **Note:** The Crush agent image is built from the `stolostron/agent-containers` repository, not this Makefile.
+> **Note:** The OpenCode agent image is built from the `stolostron/agent-containers` repository, not this Makefile.
 
 **Pushing:**
 
@@ -388,7 +382,7 @@ make image-push REGISTRY=your-registry.example.com
 
 **Syncing agent image refs into `.env`:**
 
-The `sync-images` target reads `REGISTRY` and `IMAGE_TAG` from `.push-defaults` and updates `AGENT_IMAGE_OPENCODE` and `AGENT_IMAGE_CRUSH` in `.env`:
+The `sync-images` target reads `REGISTRY` and `IMAGE_TAG` from `.push-defaults` and updates `AGENT_IMAGE_OPENCODE` in `.env`:
 
 ```sh
 make sync-images
@@ -477,7 +471,7 @@ Stores credentials for AI model providers. All values are Fernet-encrypted at re
 | Anthropic API Key | API key for Anthropic Claude (direct) |
 | OpenAI API Key | API key for OpenAI models |
 
-> **Note:** Despite the legacy model name `OpencodeSecret`, this stores credentials for all agent tools (OpenCode, Crush).
+> **Note:** Despite the legacy model name `OpencodeSecret`, this stores credentials for AI providers used by OpenCode.
 
 #### GitHub PATs
 
@@ -528,8 +522,7 @@ Persistent execution: the agent runs in server mode with an HTTP API.
 
 - `restartPolicy: Always` — pod runs indefinitely
 - Creates a ClusterIP Service (+ OpenShift Route if available)
-- Dashboard proxies HTTP/WS/SSE to the agent's web UI
-- Crush sessions get a custom chat UI rendered in the dashboard; OpenCode sessions redirect to the agent's own web UI (via Route on OpenShift, or sub-path proxy elsewhere)
+- Dashboard proxies HTTP/WS/SSE to the agent's own web UI (via Route on OpenShift, or sub-path proxy elsewhere)
 
 ##### TUI Mode
 
@@ -567,7 +560,7 @@ idle → pending → running → succeeded / failed / stopped
 
 ### Agent Tools
 
-Agent Swarm supports multiple AI coding agents via the Strategy pattern (`AgentToolStrategy` in `swarmer/agent_tools/__init__.py`). Each tool implements image selection, config generation, model options, pod command construction, and K8s resource layout.
+Agent Swarm uses OpenCode as its agent tool via the Strategy pattern (`AgentToolStrategy` in `swarmer/agent_tools/__init__.py`), which implements image selection, config generation, model options, pod command construction, and K8s resource layout. The strategy interface is pluggable, so additional agent tools can be added in the future.
 
 #### OpenCode
 
@@ -590,45 +583,13 @@ Go-based AI coding agent ([opencode.ai](https://opencode.ai)).
 
 Config written to `/workspace/.config/opencode/opencode.json` at pod startup.
 
-#### Crush
-
-Rust-based AI coding agent ([Crush](https://charm.land)).
-
-**Supported providers:**
-
-| Provider | Credential Required | Model Format |
-|---|---|---|
-| Vertex AI (Claude) | ADC JSON + GCP Project | `vertexai/claude-sonnet-5@default` |
-| Vertex AI (Gemini) | ADC JSON + GCP Project | `vertexai/gemini-3.5-flash` |
-| Anthropic (direct) | Anthropic API Key | `anthropic/claude-sonnet-5` |
-| OpenAI | OpenAI API Key | `openai/gpt-4o` |
-| Gemini (AI Studio) | Google API Key | `gemini/gemini-3.5-flash` |
-
-**Model format:** `provider/model@version` (e.g., `vertexai/claude-sonnet-5@default`)
-
-**Small model auto-derivation:**
-
-| Large Model | Small Model |
-|---|---|
-| Opus | Sonnet |
-| Sonnet | Haiku |
-| Gemini Pro | Gemini Flash |
-
-**Modes:**
-
-- **Prompt** — one-shot: `crush run --model <model> --continue <prompt>` (falls back without `--continue`)
-- **Server** — HTTP API: `crush server --host tcp://0.0.0.0:4096` (port configurable via `CRUSH_SERVER_PORT`)
-- **TUI** — interactive terminal: `crush` (launched via `sleep infinity` pod, user attaches)
-
-Config written to `/workspace/.config/crush/crush.json` at pod startup with MCP servers and LSP settings (gopls for Go, pyright for Python).
-
 #### Model Selection
 
 - Models are selected per-session from a dropdown in the UI
 - Available models depend on which credentials are configured in the workspace
 - Default model auto-selected based on available credentials:
-  - ADC configured → Vertex AI Claude Sonnet (OpenCode) or `vertexai/claude-sonnet-5@default` (Crush)
-  - Gemini API key only → `google/gemini-3.5-flash` (OpenCode) or `gemini/gemini-3.5-flash` (Crush)
+  - ADC configured → Vertex AI Claude Sonnet
+  - Gemini API key only → `google/gemini-3.5-flash`
 
 ### MCP Servers
 
@@ -636,9 +597,7 @@ MCP (Model Context Protocol) server configurations are managed per workspace.
 
 - **Pre-configured catalog** includes Atlassian Jira (Rovo) with API token authentication (server URL, token, email)
 - Tokens encrypted at rest via Fernet, mounted as K8s secret environment variables (`MCP_TOKEN_<SLUG>`)
-- Enabled MCP servers are injected into agent configs at launch:
-  - **OpenCode:** added to the `mcp` section of `opencode.json` as local command servers
-  - **Crush:** added to the `mcp` section of `crush.json` as stdio command servers
+- Enabled MCP servers are injected into agent configs at launch: added to the `mcp` section of `opencode.json` as local command servers
 - Jira MCP uses the `jira-mcp-server` binary with `JIRA_SERVER_URL`, `JIRA_ACCESS_TOKEN`, and `JIRA_EMAIL` environment variables
 
 ### Prompt Library

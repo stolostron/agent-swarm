@@ -111,7 +111,6 @@ def session():
 def workspace_secret():
     secret = MagicMock()
     secret.google_api_key = "<test-google-api-key>"
-    secret.anthropic_api_key = "<test-anthropic-api-key>"
     secret.google_cloud_project = "<test-gcp-project>"
     return secret
 

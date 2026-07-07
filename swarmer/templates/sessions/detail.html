@@ -38,7 +38,6 @@
     --pf-v6-c-label--Color: #fff;
   }
   .agent-pill-oc               { background: #2d2d2d; }
-  .agent-pill-crush            { background: #1a1a2e; color: #56b6c2; letter-spacing: 0.05em; }
   .agent-pill.selected {
     border: 2px solid transparent;
     background-origin: border-box;
@@ -47,12 +46,6 @@
   .agent-pill-oc.selected {
     background-image:
       linear-gradient(#1e1e1e, #1e1e1e),
-      linear-gradient(135deg, #e06c75, #e5c07b, #98c379, #56b6c2, #61afef, #c678dd);
-  }
-  .agent-pill-crush.selected {
-    color: #61dafb;
-    background-image:
-      linear-gradient(#0d1b2a, #0d1b2a),
       linear-gradient(135deg, #e06c75, #e5c07b, #98c379, #56b6c2, #61afef, #c678dd);
   }
   /* ── Log-view toggle pills (Output tab + History expanded rows) ── */
@@ -342,19 +335,11 @@
               </label>
               <div style="display:flex; gap:var(--pf-t--global--spacer--sm); align-items:center;
                           margin-top:var(--pf-t--global--spacer--xs);">
-                {% for tool in agent_tools %}
-                <button type="button"
-                        class="agent-pill agent-pill-{{ 'oc' if tool.name == 'opencode' else tool.name }}
-                               {% if canonical_agent_tool == tool.name %}selected{% endif %}"
-                        data-tool="{{ tool.name }}"
-                        onclick="selectAgentTool(this)"
-                        {% if session.is_active %}disabled{% endif %}>
-                  {% if tool.name == 'opencode' %}<svg width="78" height="14" viewBox="0 0 234 42" fill="none" xmlns="http://www.w3.org/2000/svg" style="display:block;"><path d="M18 30H6V18H18V30Z" fill="#4B4646"/><path d="M18 12H6V30H18V12ZM24 36H0V6H24V36Z" fill="#B7B1B1"/><path d="M48 30H36V18H48V30Z" fill="#4B4646"/><path d="M36 30H48V12H36V30ZM54 36H36V42H30V6H54V36Z" fill="#B7B1B1"/><path d="M84 24V30H66V24H84Z" fill="#4B4646"/><path d="M84 24H66V30H84V36H60V6H84V24ZM66 18H78V12H66V18Z" fill="#B7B1B1"/><path d="M108 36H96V18H108V36Z" fill="#4B4646"/><path d="M108 12H96V36H90V6H108V12ZM114 36H108V12H114V36Z" fill="#B7B1B1"/><path d="M144 30H126V18H144V30Z" fill="#4B4646"/><path d="M144 12H126V30H144V36H120V6H144V12Z" fill="#F1ECEC"/><path d="M168 30H156V18H168V30Z" fill="#4B4646"/><path d="M168 12H156V30H168V12ZM174 36H150V6H174V36Z" fill="#F1ECEC"/><path d="M198 30H186V18H198V30Z" fill="#4B4646"/><path d="M198 12H186V30H198V12ZM204 36H180V6H198V0H204V36Z" fill="#F1ECEC"/><path d="M234 24V30H216V24H234Z" fill="#4B4646"/><path d="M216 12V18H228V12H216ZM234 24H216V30H234V36H210V6H234V24Z" fill="#F1ECEC"/></svg>
-                  {% elif tool.name == 'crush' %}CR╚═╝SH
-                  {% else %}{{ tool.display_name }}{% endif %}
+                {# Only OpenCode is supported — shown as a static, always-selected pill. #}
+                <button type="button" class="agent-pill agent-pill-oc selected" disabled>
+                  <svg width="78" height="14" viewBox="0 0 234 42" fill="none" xmlns="http://www.w3.org/2000/svg" style="display:block;"><path d="M18 30H6V18H18V30Z" fill="#4B4646"/><path d="M18 12H6V30H18V12ZM24 36H0V6H24V36Z" fill="#B7B1B1"/><path d="M48 30H36V18H48V30Z" fill="#4B4646"/><path d="M36 30H48V12H36V30ZM54 36H36V42H30V6H54V36Z" fill="#B7B1B1"/><path d="M84 24V30H66V24H84Z" fill="#4B4646"/><path d="M84 24H66V30H84V36H60V6H84V24ZM66 18H78V12H66V18Z" fill="#B7B1B1"/><path d="M108 36H96V18H108V36Z" fill="#4B4646"/><path d="M108 12H96V36H90V6H108V12ZM114 36H108V12H114V36Z" fill="#B7B1B1"/><path d="M144 30H126V18H144V30Z" fill="#4B4646"/><path d="M144 12H126V30H144V36H120V6H144V12Z" fill="#F1ECEC"/><path d="M168 30H156V18H168V30Z" fill="#4B4646"/><path d="M168 12H156V30H168V12ZM174 36H150V6H174V36Z" fill="#F1ECEC"/><path d="M198 30H186V18H198V30Z" fill="#4B4646"/><path d="M198 12H186V30H198V12ZM204 36H180V6H198V0H204V36Z" fill="#F1ECEC"/><path d="M234 24V30H216V24H234Z" fill="#4B4646"/><path d="M216 12V18H228V12H216ZM234 24H216V30H234V36H210V6H234V24Z" fill="#F1ECEC"/></svg>
                 </button>
-                {% endfor %}
-                <input type="hidden" name="agent_tool" id="cfg_agent_tool" value="{{ canonical_agent_tool }}">
+                <input type="hidden" name="agent_tool" id="cfg_agent_tool" value="opencode">
               </div>
 
             </div>
@@ -938,17 +923,6 @@ document.getElementById('launch-pills') && document.getElementById('launch-pills
     if (window._cfgSave) await window._cfgSave();
   });
 })();
-
-function selectAgentTool(btn) {
-  document.querySelectorAll('.agent-pill').forEach(p => p.classList.remove('selected'));
-  btn.classList.add('selected');
-  document.getElementById('cfg_agent_tool').value = btn.dataset.tool;
-  htmx.ajax('GET',
-    '/workspaces/{{ ws.id }}/sessions/model-options?agent_tool=' + btn.dataset.tool,
-    { target: '#model-select-wrapper', swap: 'outerHTML' }
-  );
-  window._cfgSave();
-}
 
 // ── History expandable rows ──
 function toggleHistoryRow(runId) {

@@ -327,10 +327,10 @@ class TestSecretsOps:
             ws["id"],
             google_cloud_project="my-project",
             vertex_location="us-central1",
-            anthropic_api_key="sk-ant-test",
+            google_api_key="AIza-test",
         )
         assert cred["google_cloud_project"] == "my-project"
-        assert cred["has_anthropic"] is True
+        assert cred["masked_api_key"]
 
     @pytest.mark.asyncio
     async def test_pat_crud(self, api_client):

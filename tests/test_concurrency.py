@@ -11,7 +11,7 @@ Written test-first (TDD) before implementation. Tests cover:
 
 import os
 import sys
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, patch
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -136,7 +136,7 @@ async def _set_phase(session_id: int, phase: str, created_at: datetime | None = 
         if created_at:
             await db.execute(
                 text("UPDATE sessions SET phase=:ph, created_at=:ca WHERE id=:id"),
-                {"ph": phase, "ca": created_at, "id": session_id},
+                {"ph": phase, "ca": created_at.isoformat(sep=" "), "id": session_id},
             )
         else:
             await db.execute(
@@ -267,7 +267,7 @@ class TestGetQueuePosition:
         s1 = await _create_session(client, ws["id"], "first")
         s2 = await _create_session(client, ws["id"], "second")
         s3 = await _create_session(client, ws["id"], "third")
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         await _set_phase(s1["id"], "queued", created_at=now - timedelta(minutes=10))
         await _set_phase(s2["id"], "queued", created_at=now - timedelta(minutes=5))
         await _set_phase(s3["id"], "queued", created_at=now)
@@ -287,7 +287,7 @@ class TestGetQueuePosition:
         ws = await _create_workspace(client)
         s1 = await _create_session(client, ws["id"], "first")
         s2 = await _create_session(client, ws["id"], "second")
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         await _set_phase(s1["id"], "queued", created_at=now - timedelta(minutes=5))
         await _set_phase(s2["id"], "queued", created_at=now)
 
@@ -304,7 +304,7 @@ class TestGetQueuePosition:
     async def test_global_queue_includes_all_workspaces(self, client):
         ws1 = await _create_workspace(client, "WS 1")
         ws2 = await _create_workspace(client, "WS 2")
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         s1 = await _create_session(client, ws1["id"], "s1")
         s2 = await _create_session(client, ws2["id"], "s2")
         await _set_phase(s1["id"], "queued", created_at=now - timedelta(minutes=1))
@@ -582,7 +582,7 @@ class TestProcessQueue:
 
         assert sched._queue_next_check is not None
         # cooldown is approximately 2 minutes from now
-        diff = (sched._queue_next_check - datetime.utcnow()).total_seconds()
+        diff = (sched._queue_next_check - datetime.now(timezone.utc)).total_seconds()
         assert 100 < diff <= 125
 
     @pytest.mark.asyncio
@@ -594,7 +594,7 @@ class TestProcessQueue:
         settings.max_concurrent_agents = 3
 
         ws = await _create_workspace(client)
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         s1 = await _create_session(client, ws["id"], "first")
         s2 = await _create_session(client, ws["id"], "second")
         await _set_phase(s1["id"], "queued", created_at=now - timedelta(minutes=10))
@@ -624,7 +624,7 @@ class TestProcessQueue:
         settings.max_concurrent_agents = 3
 
         ws = await _create_workspace(client)
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         sessions = []
         for i in range(3):
             s = await _create_session(client, ws["id"], f"q{i}")
@@ -650,7 +650,7 @@ class TestProcessQueue:
         import swarmer.scheduler as sched
 
         # Cooldown already expired
-        sched._queue_next_check = datetime.utcnow() - timedelta(seconds=1)
+        sched._queue_next_check = datetime.now(timezone.utc) - timedelta(seconds=1)
         from swarmer.config import settings
         settings.max_concurrent_agents = 5
 

@@ -140,8 +140,8 @@ async def save_config(
     if valid:
         server.token_expires_at = None
     else:
-        from datetime import datetime
-        server.token_expires_at = datetime.utcnow()
+        from datetime import datetime, timezone
+        server.token_expires_at = datetime.now(timezone.utc)
 
     await db.commit()
     await db.refresh(server)
@@ -170,8 +170,8 @@ async def check_health(
             if valid and srv.token_expires_at is not None:
                 srv.token_expires_at = None
             elif not valid and srv.token_expires_at is None:
-                from datetime import datetime
-                srv.token_expires_at = datetime.utcnow()
+                from datetime import datetime, timezone
+                srv.token_expires_at = datetime.now(timezone.utc)
 
         statuses[str(srv.id)] = {
             "status": srv.auth_status,

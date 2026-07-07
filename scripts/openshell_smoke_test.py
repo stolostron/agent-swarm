@@ -389,7 +389,6 @@ conn.close()
 
 async def run_vertex_smoke_test(
     opencode_model: str = "google-vertex-anthropic/claude-sonnet-5@default",
-    crush_model: str = "vertexai/claude-sonnet-5@default",
     agent_tool: str = "opencode",
 ) -> bool:
     """E2e smoke test for the google-vertex-ai provider (ADC / VertexAI Anthropic Claude).
@@ -404,7 +403,6 @@ async def run_vertex_smoke_test(
 
     Usage:
       python3 scripts/openshell_smoke_test.py --vertex
-      python3 scripts/openshell_smoke_test.py --vertex --agent crush
     """
     from swarmer.crypto import init_crypto
     from swarmer.openshell_client import (
@@ -416,7 +414,7 @@ async def run_vertex_smoke_test(
 
     init_crypto("auth/secret.key")
 
-    model = crush_model if agent_tool == "crush" else opencode_model
+    model = opencode_model
 
     # ── 1. Read VertexAI credentials from DB ────────────────────────────────
     print(f"\n[1] Reading VertexAI credentials from DB (agent_tool={agent_tool}, model={model})")
@@ -517,12 +515,8 @@ async def run_vertex_smoke_test(
 
     # ── 3. Sandbox creation ──────────────────────────────────────────────────
     print("\n[3] Sandbox creation")
-    if agent_tool == "crush":
-        from swarmer.agent_tools.crush import CrushStrategy
-        tool = CrushStrategy()
-    else:
-        from swarmer.agent_tools.opencode import OpenCodeStrategy
-        tool = OpenCodeStrategy()
+    from swarmer.agent_tools.opencode import OpenCodeStrategy
+    tool = OpenCodeStrategy()
 
     _agent_tool = agent_tool
 
@@ -625,7 +619,7 @@ async def run_vertex_smoke_test(
         mode = "prompt"
         instruction_prompt = ""
 
-    tool_bin = {"opencode": "opencode run", "crush": "crush run"}.get(agent_tool, "opencode run")
+    tool_bin = {"opencode": "opencode run"}.get(agent_tool, "opencode run")
     prompt_arg = shlex.quote(prompt)
     main_cmd = f"{vertex_env_prefix}HOME=/sandbox {tool_bin} --model {model_arg} {prompt_arg}"
     print(f"     cmd: HOME=/sandbox {tool_bin} --model {model_arg} {prompt_arg}  (+ vertex env)")
@@ -634,13 +628,8 @@ async def run_vertex_smoke_test(
         ok_exit = step(f"{agent_tool} exits 0", r.exit_code == 0, f"exit={r.exit_code}")
         all_passed = all_passed and ok_exit
 
-        if agent_tool == "crush":
-            # CRUSH writes output to stdout
-            response = (r.stdout or "").strip()
-            ok_out = step("CRUSH response in stdout", bool(response), f"{len(response)} chars: {response[:100]!r}")
-        else:
-            # OpenCode writes to SQLite DB
-            db_reader = b"""
+        # OpenCode writes to SQLite DB
+        db_reader = b"""
 import sqlite3, json
 conn = sqlite3.connect('/sandbox/.opencode/opencode.db')
 conn.execute('PRAGMA wal_checkpoint(FULL)')
@@ -703,12 +692,12 @@ except Exception:
     pass
 conn.close()
 """
-            xec("cat > /tmp/get_output.py", stdin=db_reader)
-            r2 = client.exec(sid, ["python3", "/tmp/get_output.py"], timeout_seconds=10)
-            response = (r2.stdout or "").strip()
-            if not response:
-                # Dump message roles and parts to diagnose
-                diag = b"""
+        xec("cat > /tmp/get_output.py", stdin=db_reader)
+        r2 = client.exec(sid, ["python3", "/tmp/get_output.py"], timeout_seconds=10)
+        response = (r2.stdout or "").strip()
+        if not response:
+            # Dump message roles and parts to diagnose
+            diag = b"""
 import sqlite3, json
 conn = sqlite3.connect('/sandbox/.opencode/opencode.db')
 conn.execute('PRAGMA wal_checkpoint(FULL)')
@@ -740,15 +729,15 @@ for row in conn.execute('SELECT type, data FROM event ORDER BY id DESC LIMIT 3')
         print(f'  event {etype}: raw={str(d)[:80]}')
 conn.close()
 """
-                xec("cat > /tmp/diag.py", stdin=diag)
-                rd = client.exec(sid, ["python3", "/tmp/diag.py"], timeout_seconds=10)
-                if rd.stdout:
-                    print(f"  DB diagnostic:\n{rd.stdout[:1200]}")
-                if r.stdout and r.stdout.strip():
-                    print(f"  opencode stdout: {r.stdout.strip()[:400]}")
-                if r.stderr and r.stderr.strip():
-                    print(f"  opencode stderr: {r.stderr.strip()[:400]}")
-            ok_out = step("OpenCode response in DB", bool(response), f"{len(response)} chars")
+            xec("cat > /tmp/diag.py", stdin=diag)
+            rd = client.exec(sid, ["python3", "/tmp/diag.py"], timeout_seconds=10)
+            if rd.stdout:
+                print(f"  DB diagnostic:\n{rd.stdout[:1200]}")
+            if r.stdout and r.stdout.strip():
+                print(f"  opencode stdout: {r.stdout.strip()[:400]}")
+            if r.stderr and r.stderr.strip():
+                print(f"  opencode stderr: {r.stderr.strip()[:400]}")
+        ok_out = step("OpenCode response in DB", bool(response), f"{len(response)} chars")
 
         all_passed = all_passed and ok_out
         if response:
@@ -835,7 +824,6 @@ async def run_policy_extract(
     from swarmer.openshell_client import _get_client, ensure_provider, create_sandbox
     from swarmer.openshell_policy import build_session_policy, build_session_network_policies
     from swarmer.agent_tools.opencode import OpenCodeStrategy
-    from swarmer.agent_tools.crush import CrushStrategy
     from openshell._proto import openshell_pb2
 
     init_crypto("auth/secret.key")
@@ -862,7 +850,7 @@ async def run_policy_extract(
     if not step("Google API key present", bool(google_key)):
         return False
 
-    tool = CrushStrategy() if agent_tool == "crush" else OpenCodeStrategy()
+    tool = OpenCodeStrategy()
     client = _get_client()
     provider_name = "swarmer-policy-extract-google"
 
@@ -999,7 +987,7 @@ if __name__ == "__main__":
                         help="Model to use for Gemini smoke test (default: google/gemini-3.5-flash)")
     parser.add_argument("--vertex", action="store_true",
                         help="Run VertexAI / ADC smoke test (Anthropic Claude via Vertex)")
-    parser.add_argument("--agent", default="opencode", choices=["opencode", "crush"],
+    parser.add_argument("--agent", default="opencode", choices=["opencode"],
                         help="Agent tool to test in --vertex mode (default: opencode)")
     parser.add_argument("--policy-extract", action="store_true",
                         help="Run policy extraction harness: compute + pre-apply network policies, "

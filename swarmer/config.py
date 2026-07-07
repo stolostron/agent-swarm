@@ -11,9 +11,7 @@ class Settings(BaseSettings):
     host: str = "0.0.0.0"
     port: int = 8080
     agent_image_opencode: str = ""
-    agent_image_crush: str = ""
     default_agent_tool: str = "opencode"
-    crush_server_port: int = 4096
     k8s_namespace: str = ""
     max_concurrent_agents: int = 5
     # Completed prompt-mode runs kept per session (includes logs). 0 = unlimited.

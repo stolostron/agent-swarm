@@ -906,37 +906,6 @@ class TestChatHttpProxyErrors:
         assert resp.status_code == 503
 
 
-# ===========================================================================
-# 5. Crush /chat root serves Swarmer template
-# ===========================================================================
-
-
-class TestOpenCodeRootProxied:
-    """The /chat root path for Crush sessions renders the Swarmer template."""
-
-    @pytest.mark.asyncio
-    async def test_crush_root_still_serves_swarmer_template(self, client):
-        """Crush /chat root renders the Swarmer crush_chat.html template."""
-        ws = await _create_workspace(client)
-        s = await _create_session(client, ws["id"], mode="server", agent_tool="crush")
-
-        async with _TestSession() as db:
-            from swarmer.models.session import Session as _Session
-            session_obj = await db.get(_Session, s["id"])
-            session_obj.phase = "running"
-            session_obj.sandbox_name = "sandbox-test-abc"
-            session_obj.service_url = "http://agent.openshell.internal:4096"
-            await db.commit()
-
-        with patch("swarmer.routers.chat_proxy.httpx.AsyncClient") as mock_cls:
-            resp = await client.get(f"/workspaces/{ws['id']}/sessions/{s['id']}/chat")
-
-        # Crush root must NOT call the upstream proxy
-        mock_cls.assert_not_called()
-        # Response should be the Swarmer template (HTML rendered by FastAPI)
-        assert resp.status_code == 200
-        assert b"text/html" in resp.headers.get("content-type", "").encode()
-
 
 # ===========================================================================
 # 6. _restart_server_sessions() startup reconciliation
@@ -1128,7 +1097,7 @@ class TestTuiWsOpenshell:
         stream, input_q = oc.exec_interactive(
             sandbox_name="sandbox-x",
             sandbox_id="id-x",
-            command=["sh", "-c", "crush"],
+            command=["sh", "-c", "opencode"],
             cols=80,
             rows=24,
             client=sdk_client,
@@ -1166,8 +1135,6 @@ class TestE2eSmokeProxy:
       SWARMER_E2E_WS_ID         — workspace ID to use (required)
       SWARMER_E2E_SID           — session ID of a running server-mode OpenShell session
       SWARMER_E2E_TUI_SID       — session ID of a running opencode tui-mode session
-      SWARMER_E2E_CRUSH_SID     — session ID of a completed crush prompt-mode session
-      SWARMER_E2E_CRUSH_TUI_SID — session ID of a running crush tui-mode session
     """
 
     @pytest.fixture(autouse=True)
@@ -1192,20 +1159,6 @@ class TestE2eSmokeProxy:
         val = _os.environ.get("SWARMER_E2E_TUI_SID")
         if not val:
             pytest.skip("SWARMER_E2E_TUI_SID not set")
-        return int(val)
-
-    @property
-    def _crush_sid(self):
-        val = _os.environ.get("SWARMER_E2E_CRUSH_SID")
-        if not val:
-            pytest.skip("SWARMER_E2E_CRUSH_SID not set")
-        return int(val)
-
-    @property
-    def _crush_tui_sid(self):
-        val = _os.environ.get("SWARMER_E2E_CRUSH_TUI_SID")
-        if not val:
-            pytest.skip("SWARMER_E2E_CRUSH_TUI_SID not set")
         return int(val)
 
     @pytest.mark.asyncio
@@ -1296,58 +1249,6 @@ class TestE2eSmokeProxy:
             pytest.fail(f"WebSocket connection failed: {exc}")
 
         assert received, "Expected TUI to emit PTY output within 5s — got nothing"
-
-    @pytest.mark.asyncio
-    async def test_smoke_crush_env_vars_injected(self):
-        """Crush diagnostic: verify GOOGLE_API_KEY is injected into the sandbox.
-
-        Uses a completed crush prompt-mode session whose output should contain
-        the result of `env | grep GOOGLE`. Create a Crush prompt session with:
-          prompt: Run this shell command and print the output: env | grep GOOGLE
-        Then set SWARMER_E2E_CRUSH_SID to that session's ID.
-
-        To run:
-          SWARMER_E2E=1 SWARMER_E2E_WS_ID=1 SWARMER_E2E_CRUSH_SID=3 \\
-          pytest tests/test_openshell_proxy.py -k smoke_crush_env -v -s
-        """
-        import httpx
-        ws_id, sid = self._ws_id, self._crush_sid
-
-        async with httpx.AsyncClient(base_url=_E2E_BASE, follow_redirects=True) as hc:
-            resp = await hc.get(f"/api/v1/workspaces/{ws_id}/sessions/{sid}")
-        assert resp.status_code == 200
-        data = resp.json()
-
-        phase = data.get("phase", "")
-        last_output = data.get("last_output", "") or ""
-
-        print(f"\n--- Crush session phase: {phase} ---")
-        print(f"--- last_output ---\n{last_output}\n---")
-
-        assert phase in ("succeeded", "failed"), (
-            f"Session not complete yet (phase={phase}). Run crush prompt with env grep first."
-        )
-        assert "GOOGLE" in last_output, (
-            f"GOOGLE env var not found in crush output.\n"
-            f"This means GOOGLE_API_KEY is NOT injected into the sandbox.\n"
-            f"Output was:\n{last_output}"
-        )
-        assert "GOOGLE_API_KEY" in last_output, (
-            f"GOOGLE_API_KEY specifically missing from crush env output.\n"
-            f"Found GOOGLE vars: {[l for l in last_output.splitlines() if 'GOOGLE' in l]}"
-        )
-
-    @pytest.mark.asyncio
-    async def test_smoke_crush_tui_renders(self):
-        """Crush TUI: session detail page renders the terminal panel."""
-        import httpx
-        ws_id, sid = self._ws_id, self._crush_tui_sid
-        async with httpx.AsyncClient(base_url=_E2E_BASE, follow_redirects=True) as hc:
-            resp = await hc.get(f"/workspaces/{ws_id}/sessions/{sid}")
-        assert resp.status_code == 200
-        assert "terminal" in resp.text.lower() or "xterm" in resp.text.lower(), (
-            "Expected TUI terminal tab in session detail for crush tui-mode session"
-        )
 
     @pytest.mark.asyncio
     async def test_smoke_server_mode_service_url_reachable(self):

@@ -277,20 +277,16 @@ def _build_github_api_block(org: str, name: str) -> dict:
 #   - aiplatform.googleapis.com — Vertex AI API calls (Claude on Vertex, etc.)
 #   - api.github.com            — GitHub API access used by the agent binary
 #
-# Binaries: the agent binary varies by tool (opencode.exe / crush).
-# These entries are added per-tool in _build_google_cloud_provider_block().
+# Binaries: the agent binary is opencode.exe (npm-installed).
+# These entries are added in _build_google_cloud_provider_block().
 
 def _build_google_cloud_provider_block(agent_tool: str) -> dict:
     """Return the network policy block to add when the google-cloud provider is active."""
-    if agent_tool == "crush":
-        binaries = [_bin("/usr/local/bin/crush")]
-    else:
-        # opencode — same binary list as the agent-api block
-        binaries = [
-            _bin("/usr/local/share/npm-global/lib/node_modules/opencode-linux-x64/bin/opencode"),
-            _bin("/usr/local/share/npm-global/bin/opencode"),
-            _bin("/usr/local/share/npm-global/lib/node_modules/opencode-ai/bin/opencode.exe"),
-        ]
+    binaries = [
+        _bin("/usr/local/share/npm-global/lib/node_modules/opencode-linux-x64/bin/opencode"),
+        _bin("/usr/local/share/npm-global/bin/opencode"),
+        _bin("/usr/local/share/npm-global/lib/node_modules/opencode-ai/bin/opencode.exe"),
+    ]
     return {
         "name": "google-cloud-provider",
         "endpoints": [
@@ -317,43 +313,28 @@ def _build_agent_api_block(agent_tool: str, model: str) -> dict:
     _provider = model.split("/")[0] if "/" in model else ""
     _is_vertex = _provider in ("google-vertex-anthropic", "vertexai")
 
-    if agent_tool == "crush":
-        endpoints = [_endpoint("generativelanguage.googleapis.com")]
-        if _is_vertex:
-            endpoints.extend([
-                _endpoint("aiplatform.googleapis.com"),
-                _endpoint("oauth2.googleapis.com"),
-            ])
-        block = {
-            "name": "agent-api",
-            "endpoints": endpoints,
-            "binaries": [
-                _bin("/usr/local/bin/crush"),
-            ],
-        }
-    else:
-        endpoints = [
-            _endpoint("generativelanguage.googleapis.com"),
-            _endpoint("oauth2.googleapis.com"),
-            _endpoint("opencode.ai"),
-            _endpoint("models.dev"),
-        ]
-        if _is_vertex:
-            endpoints.append(_endpoint("aiplatform.googleapis.com"))
-        block = {
-            "name": "agent-api",
-            "endpoints": endpoints,
-            # opencode ships as a native binary installed via npm.
-            # The npm wrapper at /usr/local/share/npm-global/bin/opencode invokes
-            # the actual native binary at .../opencode-linux-x64/bin/opencode
-            # (copied to opencode.exe by the Containerfile).  OPA sees the native
-            # binary path, so both paths must be listed with harness=True.
-            "binaries": [
-                _bin("/usr/local/share/npm-global/lib/node_modules/opencode-linux-x64/bin/opencode"),
-                _bin("/usr/local/share/npm-global/bin/opencode"),
-                _bin("/usr/local/share/npm-global/lib/node_modules/opencode-ai/bin/opencode.exe"),
-            ],
-        }
+    endpoints = [
+        _endpoint("generativelanguage.googleapis.com"),
+        _endpoint("oauth2.googleapis.com"),
+        _endpoint("opencode.ai"),
+        _endpoint("models.dev"),
+    ]
+    if _is_vertex:
+        endpoints.append(_endpoint("aiplatform.googleapis.com"))
+    block = {
+        "name": "agent-api",
+        "endpoints": endpoints,
+        # opencode ships as a native binary installed via npm.
+        # The npm wrapper at /usr/local/share/npm-global/bin/opencode invokes
+        # the actual native binary at .../opencode-linux-x64/bin/opencode
+        # (copied to opencode.exe by the Containerfile).  OPA sees the native
+        # binary path, so both paths must be listed with harness=True.
+        "binaries": [
+            _bin("/usr/local/share/npm-global/lib/node_modules/opencode-linux-x64/bin/opencode"),
+            _bin("/usr/local/share/npm-global/bin/opencode"),
+            _bin("/usr/local/share/npm-global/lib/node_modules/opencode-ai/bin/opencode.exe"),
+        ],
+    }
     return {"agent_api": block}
 
 

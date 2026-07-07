@@ -48,9 +48,9 @@ reviews:
 
     - path: "swarmer/agent_tools/**/*.py"
       instructions: |
-        Agent tool strategies (OpenCode, Crush) implementing AgentToolStrategy ABC.
+        Agent tool strategies (OpenCode) implementing AgentToolStrategy ABC.
         - Each strategy must implement all abstract methods from __init__.py
-        - Model ID formats differ: OpenCode uses provider/model@version, Crush uses provider/model
+        - Model ID format: provider/model@version
         - Flag hardcoded image tags or registry URLs
 
     - path: "swarmer/templates/**/*.html"

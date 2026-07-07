@@ -27,14 +27,6 @@ class OpencodeSecret(Base):
     )
     # Fernet-encrypted Google AI Studio API key
     google_api_key_enc: Mapped[str] = mapped_column(Text, nullable=False, default="")
-    # Fernet-encrypted Anthropic direct API key (Crush only)
-    anthropic_api_key_enc: Mapped[str] = mapped_column(
-        Text, nullable=False, default="", server_default=""
-    )
-    # Fernet-encrypted OpenAI API key (Crush only)
-    openai_api_key_enc: Mapped[str] = mapped_column(
-        Text, nullable=False, default="", server_default=""
-    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, server_default=func.now()
     )
@@ -70,26 +62,6 @@ class OpencodeSecret(Base):
     def google_api_key(self, value: str) -> None:
         self.google_api_key_enc = crypto.encrypt(value) if value else ""
 
-    @property
-    def anthropic_api_key(self) -> str:
-        if not self.anthropic_api_key_enc:
-            return ""
-        return crypto.decrypt(self.anthropic_api_key_enc)
-
-    @anthropic_api_key.setter
-    def anthropic_api_key(self, value: str) -> None:
-        self.anthropic_api_key_enc = crypto.encrypt(value) if value else ""
-
-    @property
-    def openai_api_key(self) -> str:
-        if not self.openai_api_key_enc:
-            return ""
-        return crypto.decrypt(self.openai_api_key_enc)
-
-    @openai_api_key.setter
-    def openai_api_key(self, value: str) -> None:
-        self.openai_api_key_enc = crypto.encrypt(value) if value else ""
-
     # ---------- display helpers (safe to send to browser) ----------
 
     @property
@@ -101,36 +73,10 @@ class OpencodeSecret(Base):
         return bool(self.google_cloud_project and self.vertex_location)
 
     @property
-    def has_anthropic(self) -> bool:
-        return bool(self.anthropic_api_key_enc)
-
-    @property
-    def has_openai(self) -> bool:
-        return bool(self.openai_api_key_enc)
-
-    @property
     def masked_api_key(self) -> str:
         if not self.google_api_key_enc:
             return ""
         key = self.google_api_key
-        if len(key) <= 8:
-            return "****"
-        return "****" + key[-4:]
-
-    @property
-    def masked_anthropic_key(self) -> str:
-        if not self.anthropic_api_key_enc:
-            return ""
-        key = self.anthropic_api_key
-        if len(key) <= 8:
-            return "****"
-        return "****" + key[-4:]
-
-    @property
-    def masked_openai_key(self) -> str:
-        if not self.openai_api_key_enc:
-            return ""
-        key = self.openai_api_key
         if len(key) <= 8:
             return "****"
         return "****" + key[-4:]
