@@ -68,18 +68,20 @@ class CrushStrategy(AgentToolStrategy):
         # (keyed by provider ID), NOT an array.  Use $VAR references so values are
         # resolved at runtime from whatever the sandbox environment provides
         # (injected by the OpenShell provider mechanism).
-        providers = {
-            "gemini": {
+        # Only include the provider that matches the selected model — including a
+        # gemini provider with an unresolvable $GOOGLE_API_KEY when an Anthropic
+        # model is chosen causes Crush to fall back to the wrong provider.
+        providers: dict = {}
+        if model.startswith("gemini/"):
+            providers["gemini"] = {
                 "name": "Google Gemini",
                 "type": "gemini",
                 "api_key": "$GOOGLE_API_KEY",
-            },
-        }
-        # Add Vertex AI provider if the selected model uses it.
-        # The google-cloud OpenShell provider sets GCP_ADC_ACCESS_TOKEN; the GCE metadata
-        # emulator (127.0.0.1:8174) exposes it so the vertexai SDK obtains credentials
-        # without needing an explicit API key in the config.
-        if model.startswith("vertexai/"):
+            }
+        elif model.startswith("vertexai/"):
+            # The google-cloud OpenShell provider sets GCP_ADC_ACCESS_TOKEN; the GCE
+            # metadata emulator (127.0.0.1:8174) exposes it so the vertexai SDK
+            # obtains credentials without needing an explicit API key in the config.
             providers["vertexai"] = {
                 "name": "Vertex AI",
                 "type": "vertexai",

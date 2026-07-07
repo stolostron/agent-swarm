@@ -2220,11 +2220,16 @@ class TestCrushOpenshellSetup:
         )
 
     def test_crush_config_includes_providers_with_env_var_refs(self):
-        """build_config_data must include a providers array so Crush doesn't say 'No providers configured'."""
+        """build_config_data must include a providers map with only the provider matching the model.
+
+        Including a gemini provider with an unresolvable $GOOGLE_API_KEY when an Anthropic
+        model is chosen causes Crush to fall back to the wrong provider.
+        """
         import json as _json
         from swarmer.agent_tools.crush import CrushStrategy
 
-        config_data = CrushStrategy().build_config_data()
+        # --- Gemini model: only gemini provider ---
+        config_data = CrushStrategy().build_config_data(model="gemini/gemini-3.5-flash")
         config = _json.loads(config_data["crush.json"])
 
         assert "providers" in config, "crush.json must have a 'providers' key"
@@ -2232,15 +2237,21 @@ class TestCrushOpenshellSetup:
         assert isinstance(providers, dict), (
             "providers must be a map[string]ProviderConfig (dict), not an array"
         )
-        assert len(providers) > 0, "providers map must not be empty"
-
-        # Gemini is the only provider
-        assert "gemini" in providers, "Gemini provider must be present under key 'gemini'"
+        assert "gemini" in providers, "Gemini model must produce a 'gemini' provider entry"
         assert "$GOOGLE_API_KEY" in providers["gemini"].get("api_key", ""), (
             "Gemini provider api_key must reference $GOOGLE_API_KEY"
         )
-        assert "anthropic" not in providers, "Anthropic provider must not be present"
-        assert "vertexai" not in providers, "Vertex AI provider must not be present"
+        assert "vertexai" not in providers, "Gemini model must not include a vertexai provider"
+
+        # --- VertexAI model: only vertexai provider, no gemini ---
+        config_data_v = CrushStrategy().build_config_data(model="vertexai/claude-sonnet-5@default")
+        config_v = _json.loads(config_data_v["crush.json"])
+        providers_v = config_v["providers"]
+        assert "vertexai" in providers_v, "VertexAI model must produce a 'vertexai' provider entry"
+        assert "gemini" not in providers_v, (
+            "VertexAI model must not include a gemini provider — "
+            "an unresolvable $GOOGLE_API_KEY reference causes Crush to fall back to the wrong provider"
+        )
 
     @pytest.mark.asyncio
     async def test_write_agent_config_crush_uses_sandbox_path(self):
