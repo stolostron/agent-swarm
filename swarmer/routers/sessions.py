@@ -178,7 +178,17 @@ async def _get_model_options(
     ws_id: int, db: AsyncSession, agent_tool: str = "opencode"
 ) -> list[dict]:
     """Return the available model choices for this workspace's sessions."""
-    tool = get_tool(agent_tool)
+    try:
+        tool = get_tool(agent_tool)
+    except ValueError:
+        # Defensive fallback for legacy/removed tool names (e.g. "crush",
+        # ACM-37174) that may still be stored on old session rows if the
+        # startup migration hasn't run yet. Never 500 on a display path.
+        log.warning(
+            "_get_model_options: unknown agent_tool %r, falling back to opencode",
+            agent_tool,
+        )
+        tool = get_tool("opencode")
     result = await db.execute(
         select(OpencodeSecret).where(OpencodeSecret.workspace_id == ws_id)
     )

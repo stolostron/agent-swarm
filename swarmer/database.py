@@ -155,6 +155,10 @@ async def migrate_db() -> None:
             created_at DATETIME NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%S', 'now')),
             updated_at DATETIME NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%S', 'now'))
         )""",
+        # ACM-37190: CRUSH agent tool removed (ACM-37174) — normalize any existing
+        # sessions still carrying the retired 'crush' value so registry lookups
+        # (get_tool) don't raise ValueError when rendering session list/detail pages.
+        "UPDATE sessions SET agent_tool = 'opencode' WHERE agent_tool != 'opencode'",
     ]
     async with _engine.begin() as conn:
         for stmt in migrations:
