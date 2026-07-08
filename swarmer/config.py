@@ -15,7 +15,10 @@ class Settings(BaseSettings):
     k8s_namespace: str = ""
     max_concurrent_agents: int = 5
     # Completed prompt-mode runs kept per session (includes logs). 0 = unlimited.
-    session_run_history_limit: int = 20
+    session_run_history_limit: int = 100
+    # Max age (days) of completed prompt-mode runs kept per session. 0 = disabled.
+    # Applied together with session_run_history_limit — whichever prunes more wins.
+    session_run_history_max_age_days: int = 7
 
     # OpenShell integration — replaces K8s pod/Secret management (ACM-34850)
     openshell_gateway_url: str = ""

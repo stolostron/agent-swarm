@@ -271,7 +271,12 @@ The sessions list shows a workspace-scoped capacity summary ("N active | N slots
 
 Prompt-mode sessions record each completed execution (phase, timing, status detail, and output) in the `session_runs` table. The History tab on the session detail page and `GET /api/v1/workspaces/{ws_id}/sessions/{sid}/runs` expose this data.
 
-`SESSION_RUN_HISTORY_LIMIT` (default 20) caps how many completed runs are retained per session. When a new run is recorded, the oldest entries beyond the limit are deleted. Set to `0` to disable pruning (unlimited history; may grow SQLite storage quickly on scheduled sessions).
+Retention is hybrid — two independent pruning mechanisms run on every new record, and whichever removes more rows for a session wins:
+
+- `SESSION_RUN_HISTORY_LIMIT` (default 100) caps how many completed runs are retained per session, oldest first. Set to `0` to disable count-based pruning.
+- `SESSION_RUN_HISTORY_MAX_AGE_DAYS` (default 7) deletes completed runs older than N days regardless of count. Set to `0` to disable age-based pruning.
+
+Both set to `0` disables pruning entirely (unlimited history; may grow SQLite storage quickly on scheduled sessions). Pruning logic lives in `swarmer/session_runs.py` (`_prune_by_count` / `_prune_by_age`), called from `record_session_run()` after each new run is inserted.
 
 **Dual output fields** — each run record stores two output fields:
 

@@ -321,7 +321,8 @@ cp .env.example .env
 | `AGENT_IMAGE_PULL_POLICY` | `IfNotPresent` | Image pull policy for session pods |
 | `K8S_NAMESPACE` | _(empty)_ | Force all workspaces into a single K8s namespace (namespace-scoped mode) |
 | `MAX_CONCURRENT_AGENTS` | `5` | Global cap on concurrent agent pods; `0` disables the limit |
-| `SESSION_RUN_HISTORY_LIMIT` | `20` | Completed prompt-mode runs kept per session in history (with logs); oldest pruned when exceeded; `0` = unlimited |
+| `SESSION_RUN_HISTORY_LIMIT` | `100` | Completed prompt-mode runs kept per session in history (with logs); oldest pruned when exceeded; `0` = unlimited |
+| `SESSION_RUN_HISTORY_MAX_AGE_DAYS` | `7` | Max age (days) of completed runs kept per session; applied together with `SESSION_RUN_HISTORY_LIMIT` (whichever prunes more wins); `0` = disabled |
 
 ### Secret Key
 
