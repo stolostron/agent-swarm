@@ -15,7 +15,6 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import pytest
 import pytest_asyncio
-from sqlalchemy import text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from swarmer.database import Base
@@ -58,16 +57,21 @@ async def _make_session_with_tool(db, agent_tool: str):
 @pytest.mark.asyncio
 async def test_migrate_db_normalizes_legacy_crush_agent_tool():
     """The startup migration rewrites any non-opencode agent_tool to opencode."""
+    import swarmer.database as database_module
     from swarmer.models.session import Session
 
     async with _TestSession() as db:
         await _make_session_with_tool(db, "crush")
 
-    # Run the same UPDATE the real migrate_db() applies, against our test engine.
-    async with _engine.begin() as conn:
-        await conn.execute(
-            text("UPDATE sessions SET agent_tool = 'opencode' WHERE agent_tool != 'opencode'")
-        )
+    # Exercise the real production migration function (not a re-implementation
+    # of its SQL) against our in-memory test engine, so this test fails if
+    # migrate_db() ever stops applying the agent_tool normalization.
+    original_engine = database_module._engine
+    database_module._engine = _engine
+    try:
+        await database_module.migrate_db()
+    finally:
+        database_module._engine = original_engine
 
     async with _TestSession() as db:
         from sqlalchemy import select

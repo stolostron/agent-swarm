@@ -94,9 +94,8 @@ async def _prune_by_count(db: AsyncSession, session_id: int, limit: int) -> None
         return
     await db.execute(delete(SessionRun).where(SessionRun.id.in_(old_ids)))
     log.info(
-        "record_session_run: pruned %d old run(s) for session %d (limit=%d)",
+        "record_session_run: pruned %d old run(s) (limit=%d)",
         len(old_ids),
-        session_id,
         limit,
     )
 
@@ -116,8 +115,7 @@ async def _prune_by_age(db: AsyncSession, session_id: int, max_age_days: int) ->
         return
     await db.execute(delete(SessionRun).where(SessionRun.id.in_(old_ids)))
     log.info(
-        "record_session_run: pruned %d run(s) older than %d day(s) for session %d",
+        "record_session_run: pruned %d run(s) older than %d day(s)",
         len(old_ids),
         max_age_days,
-        session_id,
     )
