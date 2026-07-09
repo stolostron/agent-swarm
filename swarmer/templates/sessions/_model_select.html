@@ -1,29 +1,108 @@
-{# HTMX partial — model selector options for the chosen agent tool #}
+{# HTMX partial — model selector: family-level presets (Claude/Gemini) as the
+   primary UX, with an "Advanced" toggle revealing individual model choices
+   (ACM-37232). Options are always listed even when their backing provider
+   isn't configured — unavailable choices are disabled and show an inline
+   error instead of silently disappearing. #}
+{% set _disabled = model_select_disabled is defined and model_select_disabled %}
 <div id="model-select-wrapper">
 {% if model_options %}
+{% set presets = model_options | selectattr("type", "equalto", "preset") | list %}
+{% set advanced_options = model_options | rejectattr("type", "equalto", "preset") | list %}
+{% set _available_presets = presets | selectattr("available") | list %}
+{% set current = selected_model if selected_model else ((_available_presets[0].value if _available_presets else (presets[0].value if presets else (advanced_options[0].value if advanced_options else ""))) ) %}
+{% set _matching_advanced = advanced_options | selectattr("value", "equalto", current) | list %}
+{% set current_is_advanced = _matching_advanced | length > 0 %}
+
 <div class="pf-v6-c-form__group">
   <label class="pf-v6-c-form__label">
     <span class="pf-v6-c-form__label-text" style="font-weight:var(--pf-t--global--font--weight--heading--bold);">Model</span>
   </label>
-  <div class="pf-v6-c-form__group-control">
-    <select class="pf-v6-c-form-control" name="model">
-      {% set ns = namespace(prev_group="") %}
-      {% for opt in model_options %}
-        {% if opt.group != ns.prev_group %}
-          {% if ns.prev_group %}</optgroup>{% endif %}
-          <optgroup label="{{ opt.group }}">
-          {% set ns.prev_group = opt.group %}
-        {% endif %}
-        <option value="{{ opt.value }}"
-                {% if (selected_model and selected_model == opt.value) or (not selected_model and loop.first) %}selected{% endif %}>
-          {{ opt.label }}
-        </option>
-      {% endfor %}
-      {% if ns.prev_group %}</optgroup>{% endif %}
-    </select>
+  <div class="pf-v6-c-form__group-control" style="display:flex; gap:var(--pf-t--global--spacer--md); flex-wrap:wrap;">
+    {% for opt in presets %}
+    <label style="display:inline-flex; align-items:center; gap:6px; {% if not opt.available %}opacity:0.6;{% endif %}"
+           title="{{ opt.reason if not opt.available else '' }}">
+      <input type="radio"
+             class="model-preset-radio"
+             value="{{ opt.value }}"
+             {% if not current_is_advanced %}name="model"{% endif %}
+             {% if opt.value == current and not current_is_advanced %}checked{% endif %}
+             {% if not opt.available %}disabled{% endif %}
+             {% if _disabled %}disabled{% endif %}
+             onclick="_swarmerSelectModelPreset(this)">
+      <span>{{ opt.label }}{% if not opt.available %} <span style="color:var(--pf-t--global--icon--color--status--danger--default);">&#9888;</span>{% endif %}</span>
+    </label>
+    {% endfor %}
   </div>
+  {% for opt in presets %}
+    {% if not opt.available %}
+    <div class="pf-v6-c-form__helper-text">
+      <div class="pf-v6-c-helper-text__item pf-m-error">
+        <span class="pf-v6-c-helper-text__item-text">{{ opt.label }}: {{ opt.reason }}</span>
+      </div>
+    </div>
+    {% endif %}
+  {% endfor %}
 </div>
-{% else %}
-<input type="hidden" name="model" value="">
+
+{% if advanced_options %}
+<details id="model-advanced-toggle" {% if current_is_advanced %}open{% endif %}>
+  <summary style="cursor:pointer; color:var(--pf-t--global--text--color--subtle); font-size:var(--pf-t--global--font--size--sm); margin:var(--pf-t--global--spacer--xs) 0;">
+    Advanced: choose individual model
+  </summary>
+  <div class="pf-v6-c-form__group" style="margin-top:var(--pf-t--global--spacer--xs);">
+    <div class="pf-v6-c-form__group-control">
+      <select class="pf-v6-c-form-control" id="model-advanced-select"
+              {% if current_is_advanced %}name="model"{% endif %}
+              {% if _disabled %}disabled{% endif %}
+              onchange="_swarmerSelectAdvancedModel(this)">
+        {% set ns = namespace(prev_group="") %}
+        {% for opt in advanced_options %}
+          {% if opt.group != ns.prev_group %}
+            {% if ns.prev_group %}</optgroup>{% endif %}
+            <optgroup label="{{ opt.group }}">
+            {% set ns.prev_group = opt.group %}
+          {% endif %}
+          <option value="{{ opt.value }}"
+                  {% if not opt.available %}disabled{% endif %}
+                  {% if opt.value == current and current_is_advanced %}selected{% endif %}>
+            {{ opt.label }}{% if not opt.available %} — {{ opt.reason }}{% endif %}
+          </option>
+        {% endfor %}
+        {% if ns.prev_group %}</optgroup>{% endif %}
+      </select>
+    </div>
+  </div>
+</details>
 {% endif %}
+{% else %}
+<input type="hidden" name="model" value="{{ selected_model or '' }}">
+{% endif %}
+</div>
+
+<script>
+// Ensures only ONE control (either a preset radio or the advanced select)
+// submits under the shared "model" form field name at a time (ACM-37232).
+function _swarmerSetModelNameOwner(wrapper, owner) {
+  wrapper.querySelectorAll('.model-preset-radio').forEach(function (r) {
+    if (owner === 'preset') { r.setAttribute('name', 'model'); }
+    else { r.removeAttribute('name'); }
+  });
+  var select = wrapper.querySelector('#model-advanced-select');
+  if (select) {
+    if (owner === 'advanced') { select.setAttribute('name', 'model'); }
+    else { select.removeAttribute('name'); }
+  }
+}
+function _swarmerSelectModelPreset(radio) {
+  var wrapper = radio.closest('#model-select-wrapper');
+  _swarmerSetModelNameOwner(wrapper, 'preset');
+  var details = wrapper.querySelector('#model-advanced-toggle');
+  if (details) { details.open = false; }
+}
+function _swarmerSelectAdvancedModel(select) {
+  var wrapper = select.closest('#model-select-wrapper');
+  _swarmerSetModelNameOwner(wrapper, 'advanced');
+  wrapper.querySelectorAll('.model-preset-radio').forEach(function (r) { r.checked = false; });
+}
+</script>
 </div>

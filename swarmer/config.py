@@ -30,6 +30,21 @@ class Settings(BaseSettings):
     sandbox_gc_interval: int = 300      # seconds between sandbox GC sweeps
     log_level: str = "INFO"             # Python logging level: DEBUG, INFO, WARNING, ERROR
 
+    # Model preset mappings (ACM-37232) — configurable without code changes.
+    # Each preset maps a role (plan/build/small) to a provider/model@version ID.
+    # "plan" = interactive/stronger-reasoning model (used by the opencode plan agent)
+    # "build" = opencode run / coding agent model (also the model shown as "current")
+    # "small" = title generation / housekeeping model
+    claude_preset_plan_model: str = "google-vertex-anthropic/claude-opus-4-6@default"
+    claude_preset_build_model: str = "google-vertex-anthropic/claude-sonnet-5@default"
+    claude_preset_small_model: str = "google-vertex-anthropic/claude-haiku-4-5@20251001"
+    gemini_preset_plan_model: str = "google/gemini-3.1-pro-preview"
+    gemini_preset_build_model: str = "google/gemini-3.5-flash"
+    gemini_preset_small_model: str = "google/gemini-3.1-flash-lite"
+    # Enables the opencode plan agent so the preset "plan" model is actually used
+    # by `opencode run` (see docs/USER_GUIDE.md — Model Selection).
+    opencode_experimental_plan_mode: bool = True
+
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8", "extra": "ignore"}
 
 

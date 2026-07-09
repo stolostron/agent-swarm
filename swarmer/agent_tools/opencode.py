@@ -4,6 +4,12 @@ import shlex
 from swarmer.agent_tools import AgentToolStrategy
 from swarmer.config import settings
 
+# Family-level model presets (ACM-37232). Preset names are stored directly in
+# Session.model (e.g. "claude"/"gemini") in place of a raw provider/model@version
+# string. resolve_preset() maps a preset name to its {plan, build, small} model
+# IDs, sourced from Settings so they can be reconfigured without code changes.
+_PRESET_NAMES = ("claude", "gemini")
+
 
 class OpenCodeStrategy(AgentToolStrategy):
 
@@ -18,26 +24,56 @@ class OpenCodeStrategy(AgentToolStrategy):
     def get_image(self) -> str:
         return settings.agent_image_opencode
 
+    def resolve_preset(self, preset: str) -> dict[str, str] | None:
+        if preset == "claude":
+            return {
+                "plan": settings.claude_preset_plan_model,
+                "build": settings.claude_preset_build_model,
+                "small": settings.claude_preset_small_model,
+            }
+        if preset == "gemini":
+            return {
+                "plan": settings.gemini_preset_plan_model,
+                "build": settings.gemini_preset_build_model,
+                "small": settings.gemini_preset_small_model,
+            }
+        return None
+
     def build_config_data(self, secret=None, mcp_servers=None, use_inference_local: bool = False, model: str = "") -> dict[str, str]:  # noqa: ARG002 (use_inference_local retained for interface compat)
-        # Derive small_model from the chosen model: swap pro→flash / opus/sonnet→haiku
-        # within same provider. Fall back to fixed defaults if the model is unrecognised.
-        _model = model or "google/gemini-3.1-pro-preview"
-        _small_model = "google/gemini-3.5-flash"
-        if "/" in _model:
-            _provider, _mid = _model.split("/", 1)
-            # Strip @version suffix for comparison
-            _mid_base = _mid.split("@")[0]
-            if _provider == "google-vertex-anthropic":
-                # Claude on Vertex: use haiku as the small model
-                _small_model = "google-vertex-anthropic/claude-haiku-4-5@20251001"
-            elif "pro" in _mid_base:
-                _small_model = f"{_provider}/{_mid.replace('pro', 'flash')}"
-            elif "flash" in _mid_base:
-                _small_model = _model  # already the small model
+        preset = self.resolve_preset(model)
+        _plan_model = ""
+        if preset:
+            # Preset selected — plan/build/small all come from the configured mapping.
+            _model = preset["build"]
+            _small_model = preset["small"]
+            _plan_model = preset["plan"]
+        else:
+            # Advanced/individual model selected — derive small_model from the chosen
+            # model: swap pro→flash / opus/sonnet→haiku within same provider. Fall
+            # back to fixed defaults if the model is unrecognised.
+            _model = model or "google/gemini-3.1-pro-preview"
+            _small_model = "google/gemini-3.5-flash"
+            if "/" in _model:
+                _provider, _mid = _model.split("/", 1)
+                # Strip @version suffix for comparison
+                _mid_base = _mid.split("@")[0]
+                if _provider == "google-vertex-anthropic":
+                    # Claude on Vertex: use haiku as the small model
+                    _small_model = "google-vertex-anthropic/claude-haiku-4-5@20251001"
+                elif "pro" in _mid_base:
+                    _small_model = f"{_provider}/{_mid.replace('pro', 'flash')}"
+                elif "flash" in _mid_base:
+                    _small_model = _model  # already the small model
 
         _enabled_providers = ["google"]
-        if "/" in _model and _model.split("/")[0] == "google-vertex-anthropic":
-            _enabled_providers = ["google", "google-vertex-anthropic"]
+        for _candidate in (_model, _small_model, _plan_model):
+            if (
+                _candidate
+                and "/" in _candidate
+                and _candidate.split("/")[0] == "google-vertex-anthropic"
+                and "google-vertex-anthropic" not in _enabled_providers
+            ):
+                _enabled_providers.append("google-vertex-anthropic")
 
         config: dict = {
             "$schema": "https://opencode.ai/config.json",
@@ -53,6 +89,12 @@ class OpenCodeStrategy(AgentToolStrategy):
                 "port": 4096,
             },
         }
+
+        # Plan mode (ACM-37232): presets define a stronger-reasoning PLAN model.
+        # Only takes effect at runtime when OPENCODE_EXPERIMENTAL_PLAN_MODE=true
+        # is also set in the sandbox environment (see routers/sessions.py).
+        if _plan_model and settings.opencode_experimental_plan_mode:
+            config["agent"] = {"plan": {"model": _plan_model}}
 
         if mcp_servers:
             mcp_config = {}
@@ -122,24 +164,65 @@ class OpenCodeStrategy(AgentToolStrategy):
             return " ".join(shlex.quote(p) for p in base_parts + prompt_parts)
 
     def is_valid_model(self, model: str) -> bool:
-        return model.startswith(("google/", "google-vertex-anthropic/"))
+        return model in _PRESET_NAMES or model.startswith(("google/", "google-vertex-anthropic/"))
 
-    def get_model_options(self, secret=None, has_vertex: bool = False) -> list[dict]:
-        options = []
-        if has_vertex:
-            options.extend([
-                {"value": "google-vertex-anthropic/claude-opus-4-6@default", "label": "Claude Opus 4.6 (most capable)", "group": "Claude (Vertex AI)"},
-                {"value": "google-vertex-anthropic/claude-sonnet-5@default", "label": "Claude Sonnet 5 (balanced)", "group": "Claude (Vertex AI)"},
-                {"value": "google-vertex-anthropic/claude-haiku-4-5@20251001", "label": "Claude Haiku 4.5 (fast)", "group": "Claude (Vertex AI)"},
-            ])
-        if secret and getattr(secret, "google_api_key_enc", ""):
-            options.extend([
-                {"value": "google/gemini-3.5-flash", "label": "Gemini 3.5 Flash (fast)", "group": "Gemini"},
-                {"value": "google/gemini-3.1-pro-preview", "label": "Gemini 3.1 Pro", "group": "Gemini"},
-            ])
+    def get_model_options(self, secret=None, has_vertex: bool = False, has_gemini: bool = False) -> list[dict]:
+        # has_gemini can be passed explicitly by callers that already checked the
+        # OpenShell gateway/provider; fall back to the legacy DB-encrypted-key
+        # check for callers that only have the OpencodeSecret row (ACM-37263 will
+        # migrate this to a provider_exists() check like has_vertex).
+        _has_gemini = has_gemini or bool(secret and getattr(secret, "google_api_key_enc", ""))
+
+        _vertex_reason = "" if has_vertex else "Vertex AI not configured — add credentials in Secrets."
+        _gemini_reason = "" if _has_gemini else "Google AI Studio API key not set — add it in Secrets."
+
+        # Family-level presets (ACM-37232) — the primary UX. Always listed, even
+        # when the backing provider isn't configured, so missing credentials show
+        # up as a visible error in the dropdown instead of silently disappearing.
+        options: list[dict] = [
+            {
+                "value": "claude", "label": "Claude", "group": "Presets", "type": "preset",
+                "available": has_vertex, "reason": _vertex_reason,
+            },
+            {
+                "value": "gemini", "label": "Gemini", "group": "Presets", "type": "preset",
+                "available": _has_gemini, "reason": _gemini_reason,
+            },
+        ]
+
+        # Advanced / individual model choices — also always listed with an
+        # availability flag rather than omitted, for the same reason as above.
+        options.extend([
+            {
+                "value": "google-vertex-anthropic/claude-opus-4-6@default", "label": "Claude Opus 4.6 (most capable)",
+                "group": "Claude (Vertex AI)", "type": "model", "available": has_vertex, "reason": _vertex_reason,
+            },
+            {
+                "value": "google-vertex-anthropic/claude-sonnet-5@default", "label": "Claude Sonnet 5 (balanced)",
+                "group": "Claude (Vertex AI)", "type": "model", "available": has_vertex, "reason": _vertex_reason,
+            },
+            {
+                "value": "google-vertex-anthropic/claude-haiku-4-5@20251001", "label": "Claude Haiku 4.5 (fast)",
+                "group": "Claude (Vertex AI)", "type": "model", "available": has_vertex, "reason": _vertex_reason,
+            },
+            {
+                "value": "google/gemini-3.5-flash", "label": "Gemini 3.5 Flash (fast)",
+                "group": "Gemini", "type": "model", "available": _has_gemini, "reason": _gemini_reason,
+            },
+            {
+                "value": "google/gemini-3.1-pro-preview", "label": "Gemini 3.1 Pro",
+                "group": "Gemini", "type": "model", "available": _has_gemini, "reason": _gemini_reason,
+            },
+        ])
         return options
+
+    def get_preset_options(self, has_vertex: bool = False, has_gemini: bool = False) -> list[dict]:
+        return [
+            opt for opt in self.get_model_options(has_vertex=has_vertex, has_gemini=has_gemini)
+            if opt.get("type") == "preset"
+        ]
 
     def get_default_model(self, has_adc: bool) -> str:
         if has_adc:
-            return "google-vertex-anthropic/claude-sonnet-5@default"
-        return "google/gemini-3.1-pro-preview"
+            return "claude"
+        return "gemini"

@@ -200,7 +200,9 @@ async def _get_model_options(
         has_vertex = await openshell_client.provider_exists(f"swarmer-ws-{ws_id}-google-cloud")
     except Exception:
         pass
-    return tool.get_model_options(oc, has_vertex=has_vertex)
+    # Google AI Studio key still lives encrypted in the DB pending ACM-37263.
+    has_gemini = bool(oc and oc.google_api_key_enc)
+    return tool.get_model_options(oc, has_vertex=has_vertex, has_gemini=has_gemini)
 
 router = APIRouter()
 templates = Jinja2Templates(directory="swarmer/templates")
@@ -459,7 +461,11 @@ async def session_create(
 
     if not model.strip():
         opts = await _get_model_options(ws_id, db, agent_tool)
-        model = opts[0]["value"] if opts else ""
+        # Prefer the first option whose provider is actually configured; only
+        # fall back to opts[0] (which may be an unavailable preset) if nothing
+        # is available at all.
+        _available = [o for o in opts if o.get("available", True)]
+        model = (_available or opts or [{}])[0].get("value", "")
 
     wb = working_branch.strip()
     if wb and not _is_valid_ref_name(wb):
@@ -619,6 +625,8 @@ async def session_detail(
             "queue_position": queue_position,
             "capacity": capacity,
             "model_options": model_options,
+            "selected_model": session.model,
+            "model_select_disabled": session.is_active,
             "repo_info": repo_info,
             "has_github_app": bool(_ws_github_app),
             "agent_tools": _tools,
@@ -1001,21 +1009,26 @@ async def _do_launch_openshell(
 
     tool = get_tool(session.agent_tool)
 
-    # Resolve model first so it is available for provider registration and policy building
+    # Resolve model first so it is available for provider registration and policy building.
+    # raw_model may be a family preset name ("claude"/"gemini", ACM-37232) or a raw
+    # provider/model@version string. build_config_data() understands both. Everything
+    # else (network policy, CLI --model flag, model.json state) needs a concrete model
+    # ID, so it uses `model` — the preset resolved to its BUILD-role model — instead.
     if session.model and tool.is_valid_model(session.model):
-        model = session.model
+        raw_model = session.model
         log.info(
             "_do_launch_openshell: session %d using stored model %r (tool=%s)",
-            session.id, model, tool.name,
+            session.id, raw_model, tool.name,
         )
     else:
-        model = tool.get_default_model(has_adc)
+        raw_model = tool.get_default_model(has_adc)
         log.info(
             "_do_launch_openshell: session %d stored model %r invalid/empty — "
             "falling back to default %r (tool=%s, has_adc=%s)",
-            session.id, session.model, model, tool.name, has_adc,
+            session.id, session.model, raw_model, tool.name, has_adc,
         )
-    model = model.strip("\r\n")  # strip any stray line endings before embedding in shell commands
+    raw_model = raw_model.strip("\r\n")  # strip any stray line endings before embedding in shell commands
+    model = tool.resolve_build_model(raw_model)
 
     # Query workspace env vars from DB before releasing the connection.
     from sqlalchemy import select as sa_select
@@ -1082,6 +1095,11 @@ async def _do_launch_openshell(
     # OPENCODE_CONFIG env var (there is no --config CLI flag).
     if tool.name == "opencode":
         env_vars["OPENCODE_CONFIG"] = "/sandbox/opencode.json"
+        # Enables the opencode plan agent so a preset's PLAN model (written into
+        # opencode.json's agent.plan.model by build_config_data()) is actually
+        # used (ACM-37232). Without this flag the plan agent/tool never engages.
+        if settings.opencode_experimental_plan_mode:
+            env_vars["OPENCODE_EXPERIMENTAL_PLAN_MODE"] = "true"
 
     # 1b. Create/update gateway providers for each available credential.
     #     Must happen BEFORE sandbox creation: provider names go into SandboxSpec.providers
@@ -1195,7 +1213,7 @@ async def _do_launch_openshell(
     # ORM objects cannot be used across DB sessions.
     mcp_patch: dict = {}
     if mcp_servers:
-        config_data = tool.build_config_data(secret=oc_secret, mcp_servers=mcp_servers, model=model)
+        config_data = tool.build_config_data(secret=oc_secret, mcp_servers=mcp_servers, model=raw_model)
         config_json = config_data.get(f"{tool.name}.json", "{}")
         try:
             mcp_patch = _json.loads(config_json).get("mcp", {})
@@ -1268,6 +1286,7 @@ async def _do_launch_openshell(
             image=image,
             tool_name=tool.name,
             model=model,
+            config_model=raw_model,
             model_setup_cmd=model_setup_cmd,
             share_cmd=share_cmd,
             mcp_patch=mcp_patch,
@@ -1311,6 +1330,7 @@ async def _setup_openshell_sandbox(
     mode: str,
     main_cmd: str,
     resolved_prompt: str = "",
+    config_model: str = "",
     has_git_token: bool = False,
     # GitHub App IAT refresh loop params (all empty when using PAT fallback)
     iat_app_id: str = "",
@@ -1387,7 +1407,7 @@ async def _setup_openshell_sandbox(
         ] if mcp_patch else []
         _config_data = _tool.build_config_data(
             mcp_servers=_mcp_list,
-            model=model,
+            model=config_model or model,
         )
         _config_json = _config_data.get(f"{tool_name}.json", "{}")
         await openshell_client.write_agent_config(

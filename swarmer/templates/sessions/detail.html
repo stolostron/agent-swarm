@@ -347,35 +347,7 @@
             <input type="hidden" name="github_pat_id" id="cfg_pat"
                    value="{{ session.github_pat.id if session.github_pat else '' }}">
 
-            <div id="model-select-wrapper">
-            {% if model_options %}
-            <div class="pf-v6-c-form__group" style="margin-bottom:var(--pf-t--global--spacer--md);">
-              <label class="pf-v6-c-form__label" style="color:var(--pf-t--global--text--color--subtle); font-size:var(--pf-t--global--font--size--sm);">
-                <span class="pf-v6-c-form__label-text">Model</span>
-              </label>
-              <div class="pf-v6-c-form__group-control">
-                <select class="pf-v6-c-form-control" name="model" style="width:auto;"
-                        {% if session.is_active %}disabled{% endif %}>
-                  {% set ns = namespace(prev_group="") %}
-                  {% for opt in model_options %}
-                    {% if opt.group != ns.prev_group %}
-                      {% if ns.prev_group %}</optgroup>{% endif %}
-                      <optgroup label="{{ opt.group }}">
-                      {% set ns.prev_group = opt.group %}
-                    {% endif %}
-                    <option value="{{ opt.value }}"
-                            {{ 'selected' if session.model == opt.value or (loop.first and not session.model) }}>
-                      {{ opt.label }}
-                    </option>
-                  {% endfor %}
-                  {% if ns.prev_group %}</optgroup>{% endif %}
-                </select>
-              </div>
-            </div>
-            {% else %}
-            <input type="hidden" name="model" value="{{ session.model }}">
-            {% endif %}
-            </div>
+            {% include "sessions/_model_select.html" with context %}
 
             <div class="pf-v6-c-form__group" style="margin-bottom:var(--pf-t--global--spacer--md);">
               <div style="display:flex; align-items:center;">
