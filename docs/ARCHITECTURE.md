@@ -221,6 +221,27 @@ All settings live in `swarmer/config.py` (`Settings` class) and are read from en
 | `openshell_bearer_token` | `OPENSHELL_BEARER_TOKEN` | `str` | `""` | Bearer token for Gateway/Supervisor authentication |
 | `sandbox_gc_interval` | `SANDBOX_GC_INTERVAL` | `int` | `300` | Seconds between sandbox garbage-collection sweeps |
 
+### Model Preset Settings (ACM-37232)
+
+Claude/Gemini preset → model-ID mappings, also read from env vars (`swarmer/config.py`). Also
+set directly in `k8s/swarmer/deployment.yaml`'s `env:` list (plain values, not Makefile sed
+placeholders) so an operator can bump a model ID by editing the manifest and re-applying it —
+no code change or image rebuild needed when Vertex AI / Google ship new model versions.
+
+| Setting | Env Var | Default | Purpose |
+|---|---|---|---|
+| `claude_preset_plan_model` | `CLAUDE_PRESET_PLAN_MODEL` | `google-vertex-anthropic/claude-opus-4-6@default` | Claude preset's PLAN-role model |
+| `claude_preset_build_model` | `CLAUDE_PRESET_BUILD_MODEL` | `google-vertex-anthropic/claude-sonnet-5@default` | Claude preset's BUILD-role model |
+| `claude_preset_small_model` | `CLAUDE_PRESET_SMALL_MODEL` | `google-vertex-anthropic/claude-haiku-4-5@20251001` | Claude preset's small/housekeeping model |
+| `gemini_preset_plan_model` | `GEMINI_PRESET_PLAN_MODEL` | `google/gemini-3.1-pro-preview` | Gemini preset's PLAN-role model |
+| `gemini_preset_build_model` | `GEMINI_PRESET_BUILD_MODEL` | `google/gemini-3.5-flash` | Gemini preset's BUILD-role model |
+| `gemini_preset_small_model` | `GEMINI_PRESET_SMALL_MODEL` | `google/gemini-3.1-flash-lite` | Gemini preset's small/housekeeping model |
+| `opencode_experimental_plan_mode` | `OPENCODE_EXPERIMENTAL_PLAN_MODE` | `true` | Enables the opencode plan agent so the PLAN-role model above is actually used |
+
+Changing any of these in `k8s/swarmer/deployment.yaml` requires a pod restart (`strategy: Recreate`)
+to take effect — same as any other env var change — but no `make image-build`/redeploy of a new
+container image.
+
 ## Agent Container Data Interface
 
 Every data item Swarmer currently pushes into agent pods, its source model, the current K8s mechanism, and the target OpenShell API call. This table is the migration contract for ACM-34850.
