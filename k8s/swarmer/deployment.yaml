@@ -65,24 +65,14 @@ spec:
               value: "/auth/openshell/tls.crt"
             - name: OPENSHELL_TLS_KEY
               value: "/auth/openshell/tls.key"
-            # Model preset mappings (ACM-37232) — edit these values directly (no code
-            # change or image rebuild needed) when Vertex AI / Google ship new model
-            # versions. Falls back to the swarmer/config.py Settings defaults if this
-            # whole block is removed.
-            - name: CLAUDE_PRESET_PLAN_MODEL
-              value: "google-vertex-anthropic/claude-opus-4-6@default"
-            - name: CLAUDE_PRESET_BUILD_MODEL
-              value: "google-vertex-anthropic/claude-sonnet-5@default"
-            - name: CLAUDE_PRESET_SMALL_MODEL
-              value: "google-vertex-anthropic/claude-haiku-4-5@20251001"
-            - name: GEMINI_PRESET_PLAN_MODEL
-              value: "google/gemini-3.1-pro-preview"
-            - name: GEMINI_PRESET_BUILD_MODEL
-              value: "google/gemini-3.5-flash"
-            - name: GEMINI_PRESET_SMALL_MODEL
-              value: "google/gemini-3.1-flash-lite"
-            - name: OPENCODE_EXPERIMENTAL_PLAN_MODE
-              value: "true"
+
+          # Model preset mappings (ACM-37232) — see k8s/swarmer/configmap.yaml.
+          # Edit that file directly and re-apply + restart the deployment
+          # (no code change or image rebuild needed) when Vertex AI / Google
+          # ship new model versions.
+          envFrom:
+            - configMapRef:
+                name: swarmer-model-presets
 
           volumeMounts:
             - name: swarmer-data

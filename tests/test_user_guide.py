@@ -181,6 +181,7 @@ REFERENCED_PATHS = [
     "k8s/swarmer/namespace.yaml",
     "k8s/swarmer/rbac.yaml",
     "k8s/swarmer/pvc.yaml",
+    "k8s/swarmer/configmap.yaml",
     "k8s/openshift/route.yaml",
     "k8s/openshift/oauth-client.yaml",
     "k8s/kind-config.yaml",

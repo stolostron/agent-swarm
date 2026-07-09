@@ -88,13 +88,18 @@ Verify the output looks correct before continuing.
 
 This is the manual step-by-step procedure. For an automated approach, see `make deploy`.
 
-#### Step 1 — Apply shared resources (namespace, RBAC, PVC)
+#### Step 1 — Apply shared resources (namespace, RBAC, PVC, model presets)
 
 ```bash
 oc apply -f k8s/swarmer/namespace.yaml
 oc apply -f k8s/swarmer/rbac.yaml
 oc apply -f k8s/swarmer/pvc.yaml
+oc apply -f k8s/swarmer/configmap.yaml
 ```
+
+> `configmap.yaml` holds the Claude/Gemini model preset mappings (ACM-37232). Edit it directly
+> and re-apply + `oc rollout restart deployment/swarmer -n swarmer` to bump a model ID when
+> Vertex AI / Google ship new versions — no code change or image rebuild needed.
 
 #### Step 2 — Create the swarmer secret
 
@@ -655,6 +660,7 @@ Or manually with `oc`:
 
 ```bash
 oc delete -f k8s/swarmer/deployment.yaml --ignore-not-found
+oc delete -f k8s/swarmer/configmap.yaml --ignore-not-found
 oc delete -f k8s/openshift/service.yaml --ignore-not-found
 oc delete route swarmer -n swarmer --ignore-not-found
 oc delete oauthclient swarmer --ignore-not-found

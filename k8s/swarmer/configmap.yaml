@@ -1,0 +1,21 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: swarmer-model-presets
+  namespace: swarmer
+  labels:
+    app: swarmer
+data:
+  # Claude/Gemini preset -> model-ID mappings (ACM-37232). Edit these values
+  # directly and re-apply this file, then restart the swarmer deployment
+  # (kubectl rollout restart deployment/swarmer -n swarmer) to pick up new
+  # Vertex AI / Google model versions — no code change or image rebuild
+  # needed. Falls back to the swarmer/config.py Settings defaults (which
+  # match the values below) if this ConfigMap is removed.
+  CLAUDE_PRESET_PLAN_MODEL: "google-vertex-anthropic/claude-opus-4-6@default"
+  CLAUDE_PRESET_BUILD_MODEL: "google-vertex-anthropic/claude-sonnet-5@default"
+  CLAUDE_PRESET_SMALL_MODEL: "google-vertex-anthropic/claude-haiku-4-5@20251001"
+  GEMINI_PRESET_PLAN_MODEL: "google/gemini-3.1-pro-preview"
+  GEMINI_PRESET_BUILD_MODEL: "google/gemini-3.5-flash"
+  GEMINI_PRESET_SMALL_MODEL: "google/gemini-3.1-flash-lite"
+  OPENCODE_EXPERIMENTAL_PLAN_MODE: "true"

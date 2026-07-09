@@ -223,10 +223,20 @@ All settings live in `swarmer/config.py` (`Settings` class) and are read from en
 
 ### Model Preset Settings (ACM-37232)
 
-Claude/Gemini preset → model-ID mappings, also read from env vars (`swarmer/config.py`). Also
-set directly in `k8s/swarmer/deployment.yaml`'s `env:` list (plain values, not Makefile sed
-placeholders) so an operator can bump a model ID by editing the manifest and re-applying it —
-no code change or image rebuild needed when Vertex AI / Google ship new model versions.
+Claude/Gemini preset → model-ID mappings, read from env vars via `swarmer/config.py`'s `Settings`
+class. In a cluster deployment these are sourced from a dedicated `ConfigMap`
+(`k8s/swarmer/configmap.yaml`, name `swarmer-model-presets`), referenced by the `swarmer`
+Deployment via `envFrom: configMapRef` — kept separate from the Deployment's own env vars
+(image, URLs, credentials) so it can be edited independently:
+
+```sh
+kubectl edit configmap swarmer-model-presets -n swarmer   # or: kubectl apply -f k8s/swarmer/configmap.yaml
+kubectl rollout restart deployment/swarmer -n swarmer     # env vars are only read at container start
+```
+
+No code change or image rebuild needed when Vertex AI / Google ship new model versions — just
+edit the ConfigMap and restart the deployment. `make deploy` applies it automatically before the
+Deployment; `make delete` removes it.
 
 | Setting | Env Var | Default | Purpose |
 |---|---|---|---|
@@ -238,9 +248,8 @@ no code change or image rebuild needed when Vertex AI / Google ship new model ve
 | `gemini_preset_small_model` | `GEMINI_PRESET_SMALL_MODEL` | `google/gemini-3.1-flash-lite` | Gemini preset's small/housekeeping model |
 | `opencode_experimental_plan_mode` | `OPENCODE_EXPERIMENTAL_PLAN_MODE` | `true` | Enables the opencode plan agent so the PLAN-role model above is actually used |
 
-Changing any of these in `k8s/swarmer/deployment.yaml` requires a pod restart (`strategy: Recreate`)
-to take effect — same as any other env var change — but no `make image-build`/redeploy of a new
-container image.
+For local dev (`make dev`), the same env vars are set via `.env` (see `.env.example`) — no
+ConfigMap involved outside a real cluster deployment.
 
 ## Agent Container Data Interface
 

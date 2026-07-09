@@ -164,6 +164,7 @@ deploy:  ## Deploy swarmer to the current kubectl context  (SILENT=1 for non-int
 	kubectl apply -f k8s/swarmer/namespace.yaml
 	kubectl apply -f k8s/swarmer/rbac.yaml
 	kubectl apply -f k8s/swarmer/pvc.yaml
+	kubectl apply -f k8s/swarmer/configmap.yaml
 	@# ── 2. OpenShell (install if not already present) ──────────────────────
 	@set -e; \
 	HELM_VER=$$(helm version --short 2>/dev/null | grep -oP 'v\K[0-9]+\.[0-9]+' | head -1); \
@@ -339,6 +340,7 @@ deploy:  ## Deploy swarmer to the current kubectl context  (SILENT=1 for non-int
 delete:  ## Remove swarmer and OpenShell from the current kubectl context
 	@echo "Removing swarmer from namespace $(NAMESPACE)..."
 	kubectl delete -f k8s/swarmer/deployment.yaml --ignore-not-found 2>/dev/null || true
+	kubectl delete -f k8s/swarmer/configmap.yaml --ignore-not-found
 	kubectl delete -f k8s/swarmer/service.yaml --ignore-not-found
 	kubectl delete -f k8s/openshift/service.yaml --ignore-not-found 2>/dev/null || true
 	kubectl delete -f k8s/openshift/route.yaml --ignore-not-found 2>/dev/null || true
