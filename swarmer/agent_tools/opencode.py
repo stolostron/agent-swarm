@@ -5,7 +5,7 @@ from swarmer.agent_tools import AgentToolStrategy
 from swarmer.config import settings
 
 # Family-level model presets (ACM-37232). Preset names are stored directly in
-# Session.model (e.g. "claude"/"gemini") in place of a raw provider/model@version
+# Session.provider (e.g. "claude"/"gemini") in place of a raw provider/model@version
 # string. resolve_preset() maps a preset name to its {plan, build, small} model
 # IDs, sourced from Settings so they can be reconfigured without code changes.
 _PRESET_NAMES = ("claude", "gemini")
@@ -48,9 +48,10 @@ class OpenCodeStrategy(AgentToolStrategy):
             _small_model = preset["small"]
             _plan_model = preset["plan"]
         else:
-            # Advanced/individual model selected — derive small_model from the chosen
-            # model: swap pro→flash / opus/sonnet→haiku within same provider. Fall
-            # back to fixed defaults if the model is unrecognised.
+            # Raw provider/model string (not a preset) — derive small_model from the
+            # chosen model: swap pro→flash / opus/sonnet→haiku within same provider.
+            # Fall back to fixed defaults if the model is unrecognised. Kept for
+            # backward compatibility with sessions created before presets existed.
             _model = model or "google/gemini-3.1-pro-preview"
             _small_model = "google/gemini-3.5-flash"
             if "/" in _model:
@@ -176,10 +177,10 @@ class OpenCodeStrategy(AgentToolStrategy):
         _vertex_reason = "" if has_vertex else "Vertex AI not configured — add credentials in Secrets."
         _gemini_reason = "" if _has_gemini else "Google AI Studio API key not set — add it in Secrets."
 
-        # Family-level presets (ACM-37232) — the primary UX. Always listed, even
+        # Family-level presets (ACM-37232) — the only UX. Always listed, even
         # when the backing provider isn't configured, so missing credentials show
         # up as a visible error in the dropdown instead of silently disappearing.
-        options: list[dict] = [
+        return [
             {
                 "value": "claude", "label": "Claude", "group": "Presets", "type": "preset",
                 "available": has_vertex, "reason": _vertex_reason,
@@ -189,32 +190,6 @@ class OpenCodeStrategy(AgentToolStrategy):
                 "available": _has_gemini, "reason": _gemini_reason,
             },
         ]
-
-        # Advanced / individual model choices — also always listed with an
-        # availability flag rather than omitted, for the same reason as above.
-        options.extend([
-            {
-                "value": "google-vertex-anthropic/claude-opus-4-6@default", "label": "Claude Opus 4.6 (most capable)",
-                "group": "Claude (Vertex AI)", "type": "model", "available": has_vertex, "reason": _vertex_reason,
-            },
-            {
-                "value": "google-vertex-anthropic/claude-sonnet-5@default", "label": "Claude Sonnet 5 (balanced)",
-                "group": "Claude (Vertex AI)", "type": "model", "available": has_vertex, "reason": _vertex_reason,
-            },
-            {
-                "value": "google-vertex-anthropic/claude-haiku-4-5@20251001", "label": "Claude Haiku 4.5 (fast)",
-                "group": "Claude (Vertex AI)", "type": "model", "available": has_vertex, "reason": _vertex_reason,
-            },
-            {
-                "value": "google/gemini-3.5-flash", "label": "Gemini 3.5 Flash (fast)",
-                "group": "Gemini", "type": "model", "available": _has_gemini, "reason": _gemini_reason,
-            },
-            {
-                "value": "google/gemini-3.1-pro-preview", "label": "Gemini 3.1 Pro",
-                "group": "Gemini", "type": "model", "available": _has_gemini, "reason": _gemini_reason,
-            },
-        ])
-        return options
 
     def get_preset_options(self, has_vertex: bool = False, has_gemini: bool = False) -> list[dict]:
         return [

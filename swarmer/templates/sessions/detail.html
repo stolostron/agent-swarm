@@ -347,7 +347,7 @@
             <input type="hidden" name="github_pat_id" id="cfg_pat"
                    value="{{ session.github_pat.id if session.github_pat else '' }}">
 
-            {% include "sessions/_model_select.html" with context %}
+            {% include "sessions/_provider_select.html" with context %}
 
             <div class="pf-v6-c-form__group" style="margin-bottom:var(--pf-t--global--spacer--md);">
               <div style="display:flex; align-items:center;">
@@ -820,7 +820,10 @@ function copyCommitMsg(btn) { _copyBlock('commit-msg', btn); }
 
   window._cfgSave = doSave;
 
-  form.querySelectorAll('select, input[type=checkbox]').forEach(el => {
+  // input[type=radio] covers the AI Provider preset pills (ACM-37232) — a
+  // <select>-only selector here would silently drop provider changes from
+  // auto-save now that the "Advanced" model <select> has been removed.
+  form.querySelectorAll('select, input[type=checkbox], input[type=radio]').forEach(el => {
     el.addEventListener('change', doSave);
   });
 

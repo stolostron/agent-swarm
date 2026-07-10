@@ -146,7 +146,7 @@ class TestSessionScheduleModel:
             await db.refresh(ws)
 
             session = Session(workspace_id=ws.id, name="sess", mode="prompt",
-                              model="", agent_tool="opencode", instruction_prompt="")
+                              provider="", agent_tool="opencode", instruction_prompt="")
             db.add(session)
             await db.commit()
             await db.refresh(session)
@@ -185,7 +185,7 @@ class TestSessionScheduleModel:
             await db.refresh(ws)
 
             session = Session(workspace_id=ws.id, name="s2", mode="prompt",
-                              model="", agent_tool="opencode", instruction_prompt="")
+                              provider="", agent_tool="opencode", instruction_prompt="")
             db.add(session)
             await db.commit()
             await db.refresh(session)
@@ -228,7 +228,7 @@ class TestSessionScheduleModel:
             await db.refresh(ws)
 
             session = Session(workspace_id=ws.id, name="s3", mode="prompt",
-                              model="", agent_tool="opencode", instruction_prompt="")
+                              provider="", agent_tool="opencode", instruction_prompt="")
             db.add(session)
             await db.commit()
             await db.refresh(session)
@@ -251,6 +251,70 @@ class TestSessionScheduleModel:
 # ===========================================================================
 # API tests: /schedules sub-resource
 # ===========================================================================
+
+
+class TestSessionDetailPageWithSchedulePrompt:
+    """Regression test for a MissingGreenlet 500 on the session detail page.
+
+    SessionSchedule.prompt is a many-to-one relationship that defaulted to
+    lazy loading. sessions/_schedule_items.html accesses `sched.prompt`
+    synchronously during Jinja rendering, which only avoided a crash by
+    accident when the referenced WorkspacePrompt happened to already be in
+    the AsyncSession identity map (e.g. loaded earlier via
+    _get_prompt_sources()). A schedule whose prompt isn't otherwise
+    preloaded — e.g. its source was deleted — hit a real lazy load outside
+    the async greenlet context and raised MissingGreenlet, 500ing the page.
+    """
+
+    @pytest_asyncio.fixture(autouse=True)
+    async def _patch_auth(self):
+        from swarmer.deps import require_auth
+        from swarmer.main import app
+        app.dependency_overrides[require_auth] = lambda: None
+        yield
+        app.dependency_overrides.pop(require_auth, None)
+
+    @pytest.mark.asyncio
+    async def test_detail_page_renders_with_orphaned_schedule_prompt(self, client):
+        from swarmer.models.workspace_prompt import WorkspacePrompt, WorkspacePromptSource
+        from swarmer.models.session_schedule import SessionSchedule
+
+        ws = await _create_workspace(client)
+        s = await _create_session(client, ws["id"])
+        # A second, unrelated workspace — its prompt source/prompt won't be
+        # covered by _get_prompt_sources(ws_id=ws["id"], ...), which only
+        # queries WorkspacePromptSource rows scoped to the session's own
+        # workspace. This reproduces the real-world condition (source
+        # deleted / prompt reassigned) without needing to violate the
+        # FK constraint enforced in this test's engine.
+        other_ws = await _create_workspace(client, name="Other WS")
+
+        async with _TestSession() as db:
+            source = WorkspacePromptSource(
+                workspace_id=other_ws["id"], name="src1",
+                repo_url="https://github.com/x/y", branch="main",
+            )
+            db.add(source)
+            await db.commit()
+            await db.refresh(source)
+
+            prompt = WorkspacePrompt(
+                source_id=source.id, filename="p.md", display_name="ORPHANPROMPT",
+                content="hi", content_hash="h1",
+            )
+            db.add(prompt)
+            await db.commit()
+            await db.refresh(prompt)
+
+            sched = SessionSchedule(
+                session_id=s["id"], cron_schedule="0 * * * *",
+                enabled=True, label="hourly", prompt_id=prompt.id,
+            )
+            db.add(sched)
+            await db.commit()
+
+        resp = await client.get(f"/workspaces/{ws['id']}/sessions/{s['id']}")
+        assert resp.status_code == 200, resp.text
 
 
 class TestScheduleAPI:
@@ -401,7 +465,7 @@ class TestSchedulerMultiSchedule:
             await db.refresh(ws)
 
             session = Session(workspace_id=ws.id, name="multi-sched", mode="prompt",
-                              model="", agent_tool="opencode", instruction_prompt="",
+                              provider="", agent_tool="opencode", instruction_prompt="",
                               phase="idle")
             db.add(session)
             await db.commit()

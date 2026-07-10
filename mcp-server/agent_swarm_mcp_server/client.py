@@ -120,7 +120,7 @@ class AgentSwarmClient:
         name: str,
         *,
         mode: str = "prompt",
-        model: str = "",
+        provider: str = "",
         agent_tool: str = "opencode",
         instruction_prompt: str = "",
         github_pat_id: int | None = None,
@@ -132,7 +132,7 @@ class AgentSwarmClient:
         body: dict[str, Any] = {
             "name": name,
             "mode": mode,
-            "model": model,
+            "provider": provider,
             "agent_tool": agent_tool,
             "instruction_prompt": instruction_prompt,
             "persist": persist,

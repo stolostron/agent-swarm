@@ -59,7 +59,7 @@ async def test_create_session_sends_correct_body(client):
             return_value=httpx.Response(201, json={"id": 5, "name": "my-session"})
         )
         result = await client.create_session(
-            1, "my-session", mode="prompt", model="", agent_tool="opencode"
+            1, "my-session", mode="prompt", provider="", agent_tool="opencode"
         )
         assert route.called
         sent_body = route.calls[0].request

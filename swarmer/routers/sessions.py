@@ -174,10 +174,10 @@ def _build_repo_context(repos, base_path: str = "/sandbox") -> str:
     return "\n".join(lines) + "\n"
 
 
-async def _get_model_options(
+async def _get_provider_options(
     ws_id: int, db: AsyncSession, agent_tool: str = "opencode"
 ) -> list[dict]:
-    """Return the available model choices for this workspace's sessions."""
+    """Return the available AI provider choices for this workspace's sessions."""
     try:
         tool = get_tool(agent_tool)
     except ValueError:
@@ -185,7 +185,7 @@ async def _get_model_options(
         # ACM-37174) that may still be stored on old session rows if the
         # startup migration hasn't run yet. Never 500 on a display path.
         log.warning(
-            "_get_model_options: unknown agent_tool %r, falling back to opencode",
+            "_get_provider_options: unknown agent_tool %r, falling back to opencode",
             agent_tool,
         )
         tool = get_tool("opencode")
@@ -248,28 +248,28 @@ async def _get_prompt_sources(ws_id: int, db: AsyncSession) -> list[WorkspacePro
 
 
 # ============================================================
-# Model options (HTMX partial — reloads when agent tool changes)
+# Provider options (HTMX partial — reloads when agent tool changes)
 # ============================================================
 
 @router.get(
-    "/workspaces/{ws_id}/sessions/model-options",
+    "/workspaces/{ws_id}/sessions/provider-options",
     dependencies=[Depends(require_auth)],
     response_class=HTMLResponse,
 )
-async def model_options_partial(
+async def provider_options_partial(
     ws_id: int,
     request: Request,
     agent_tool: str = "opencode",
-    selected_model: str = "",
+    selected_provider: str = "",
     db: AsyncSession = Depends(get_db),
 ):
-    model_options = await _get_model_options(ws_id, db, agent_tool)
+    provider_options = await _get_provider_options(ws_id, db, agent_tool)
     return templates.TemplateResponse(
         request,
-        "sessions/_model_select.html",
+        "sessions/_provider_select.html",
         {
-            "model_options": model_options,
-            "selected_model": selected_model,
+            "provider_options": provider_options,
+            "selected_provider": selected_provider,
         },
     )
 
@@ -388,7 +388,7 @@ async def session_new(
         default_agent_tool = get_tool(settings.default_agent_tool).name
     except ValueError:
         default_agent_tool = "opencode"
-    model_options = await _get_model_options(ws_id, db, default_agent_tool)
+    provider_options = await _get_provider_options(ws_id, db, default_agent_tool)
     _avail = await asyncio.gather(
         *[k8s.get_image_available(t.get_image(), ws.k8s_namespace) for t in _tools]
     )
@@ -401,8 +401,8 @@ async def session_new(
         {
             "ws": ws,
             "pats": pats,
-            "model_options": model_options,
-            "selected_model": "",
+            "provider_options": provider_options,
+            "selected_provider": "",
             "agent_tools": _tools,
             "default_agent_tool": default_agent_tool,
             "tool_image_available": dict(zip([t.name for t in _tools], _avail, strict=False)),
@@ -420,7 +420,7 @@ async def session_create(
     github_pat_id: str = Form(""),
     prompt_id: str = Form(""),
     instruction_prompt: str = Form(""),
-    model: str = Form(""),
+    provider: str = Form(""),
     agent_tool: str = Form("opencode"),
     working_branch: str = Form(""),
     db: AsyncSession = Depends(get_db),
@@ -459,13 +459,13 @@ async def session_create(
     except ValueError:
         agent_tool = "opencode"
 
-    if not model.strip():
-        opts = await _get_model_options(ws_id, db, agent_tool)
-        # Prefer the first option whose provider is actually configured; only
-        # fall back to opts[0] (which may be an unavailable preset) if nothing
-        # is available at all.
+    if not provider.strip():
+        opts = await _get_provider_options(ws_id, db, agent_tool)
+        # Always select an available provider when at least one AI token/credential
+        # is configured. Only leave the selection empty when NO provider is
+        # available at all — there is nothing usable to default to.
         _available = [o for o in opts if o.get("available", True)]
-        model = (_available or opts or [{}])[0].get("value", "")
+        provider = _available[0].get("value", "") if _available else ""
 
     wb = working_branch.strip()
     if wb and not _is_valid_ref_name(wb):
@@ -477,7 +477,7 @@ async def session_create(
         github_pat_id=pat_id,
         prompt_id=pid,
         name=name.strip(),
-        model=model.strip(),
+        provider=provider.strip(),
         instruction_prompt=instruction_prompt.strip(),
         agent_tool=agent_tool,
         working_branch=wb,
@@ -508,7 +508,7 @@ async def session_create(
             default_agent_tool = get_tool(settings.default_agent_tool).name
         except ValueError:
             default_agent_tool = "opencode"
-        model_options = await _get_model_options(ws_id, db, default_agent_tool)
+        provider_options = await _get_provider_options(ws_id, db, default_agent_tool)
         _avail = await asyncio.gather(
             *[k8s.get_image_available(t.get_image(), ws.k8s_namespace) for t in _tools]
         )
@@ -523,8 +523,8 @@ async def session_create(
                 "pats": pats,
                 "error": f"A session named '{name}' already exists in this workspace.",
                 "form": {"name": name, "instruction_prompt": instruction_prompt},
-                "model_options": model_options,
-                "selected_model": model,
+                "provider_options": provider_options,
+                "selected_provider": provider,
                 "agent_tools": _tools,
                 "default_agent_tool": default_agent_tool,
                 "tool_image_available": dict(zip([t.name for t in _tools], _avail, strict=False)),
@@ -572,7 +572,7 @@ async def session_detail(
         tokens.append(tui_token)
         request.session["tui_tokens"] = tokens
 
-    model_options = await _get_model_options(ws_id, db, session.agent_tool)
+    provider_options = await _get_provider_options(ws_id, db, session.agent_tool)
     # Resolve repo check token BEFORE any additional DB queries — extra queries
     # on the same async session can interfere with loaded relationship attributes.
     _repo_check_token = await _resolve_token_for_repo_check(
@@ -624,9 +624,9 @@ async def session_detail(
             "status_detail": status_detail,
             "queue_position": queue_position,
             "capacity": capacity,
-            "model_options": model_options,
-            "selected_model": session.model,
-            "model_select_disabled": session.is_active,
+            "provider_options": provider_options,
+            "selected_provider": session.provider,
+            "provider_select_disabled": session.is_active,
             "repo_info": repo_info,
             "has_github_app": bool(_ws_github_app),
             "agent_tools": _tools,
@@ -664,7 +664,7 @@ async def session_edit(
     prompt_id: str = Form(""),
     instruction_prompt: str = Form(""),
     mode: str = Form("prompt"),
-    model: str = Form(""),
+    provider: str = Form(""),
     agent_tool: str = Form("opencode"),
     db: AsyncSession = Depends(get_db),
 ):
@@ -705,7 +705,7 @@ async def session_edit(
     session.instruction_prompt = instruction_prompt.strip()
     if mode in ("tui", "server", "prompt"):
         session.mode = mode
-    session.model = model.strip()
+    session.provider = provider.strip()
     try:
         session.agent_tool = get_tool(agent_tool).name
     except ValueError:
@@ -1009,23 +1009,25 @@ async def _do_launch_openshell(
 
     tool = get_tool(session.agent_tool)
 
-    # Resolve model first so it is available for provider registration and policy building.
-    # raw_model may be a family preset name ("claude"/"gemini", ACM-37232) or a raw
-    # provider/model@version string. build_config_data() understands both. Everything
-    # else (network policy, CLI --model flag, model.json state) needs a concrete model
-    # ID, so it uses `model` — the preset resolved to its BUILD-role model — instead.
-    if session.model and tool.is_valid_model(session.model):
-        raw_model = session.model
+    # Resolve the provider first so it is available for provider registration and
+    # policy building. session.provider is a family preset name ("claude"/"gemini",
+    # ACM-37232) — build_config_data() understands it directly. Everything else
+    # (network policy, CLI --model flag, model.json state) needs a concrete model
+    # ID, so it uses `model` — the provider resolved to its BUILD-role model —
+    # instead. Raw provider/model@version strings from pre-ACM-37232 sessions are
+    # also still accepted for backward compatibility.
+    if session.provider and tool.is_valid_model(session.provider):
+        raw_model = session.provider
         log.info(
-            "_do_launch_openshell: session %d using stored model %r (tool=%s)",
+            "_do_launch_openshell: session %d using stored provider %r (tool=%s)",
             session.id, raw_model, tool.name,
         )
     else:
         raw_model = tool.get_default_model(has_adc)
         log.info(
-            "_do_launch_openshell: session %d stored model %r invalid/empty — "
+            "_do_launch_openshell: session %d stored provider %r invalid/empty — "
             "falling back to default %r (tool=%s, has_adc=%s)",
-            session.id, session.model, raw_model, tool.name, has_adc,
+            session.id, session.provider, raw_model, tool.name, has_adc,
         )
     raw_model = raw_model.strip("\r\n")  # strip any stray line endings before embedding in shell commands
     model = tool.resolve_build_model(raw_model)
@@ -1755,7 +1757,7 @@ async def session_launch(
     prompt_id: str = Form(""),
     instruction_prompt: str = Form(""),
     mode: str = Form(""),
-    model: str = Form(""),
+    provider: str = Form(""),
     redirect_to: str = Form(""),
     db: AsyncSession = Depends(get_db),
 ):
@@ -1798,8 +1800,8 @@ async def session_launch(
         session.instruction_prompt = instruction_prompt.strip()
         if mode in ("tui", "server", "prompt"):
             session.mode = mode
-        if model.strip():
-            session.model = model.strip()
+        if provider.strip():
+            session.provider = provider.strip()
     else:
         # List-page launch: no explicit mode chosen — default to prompt so the
         # session runs once and exits rather than starting a TUI or server.
@@ -1810,7 +1812,7 @@ async def session_launch(
             canonical = get_tool(agent_tool).name
             if canonical != session.agent_tool:
                 session.agent_tool = canonical
-                session.model = ""  # stale model from previous tool may be incompatible
+                session.provider = ""  # stale provider from previous tool may be incompatible
         except ValueError:
             pass
 
@@ -2655,18 +2657,18 @@ async def session_set_mode(
 
 
 # ============================================================
-# Set model (server / TUI modes — works while running)
+# Set provider (server / TUI modes — works while running)
 # ============================================================
 
 @router.post(
-    "/workspaces/{ws_id}/sessions/{sid}/set-model",
+    "/workspaces/{ws_id}/sessions/{sid}/set-provider",
     dependencies=[Depends(require_auth)],
 )
-async def session_set_model(
+async def session_set_provider(
     ws_id: int,
     sid: int,
     request: Request,
-    model: str = Form(""),
+    provider: str = Form(""),
     db: AsyncSession = Depends(get_db),
 ):
     ws = await _get_workspace(ws_id, db)
@@ -2674,10 +2676,10 @@ async def session_set_model(
     if ws is None or session is None or session.workspace_id != ws_id:
         return RedirectResponse(url=f"/workspaces/{ws_id}/sessions", status_code=302)
 
-    session.model = model.strip()
+    session.provider = provider.strip()
     await db.commit()
 
-    flash(request, "Model saved; will apply on next launch.", "success")
+    flash(request, "Provider saved; will apply on next launch.", "success")
 
     return RedirectResponse(url=f"/workspaces/{ws_id}/sessions/{sid}", status_code=302)
 

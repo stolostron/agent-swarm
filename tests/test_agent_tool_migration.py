@@ -3,7 +3,7 @@
 Covers:
   - migrate_db() normalizes any session with a stale/removed agent_tool
     value (e.g. "crush") to "opencode"
-  - _get_model_options() falls back to "opencode" instead of raising
+  - _get_provider_options() falls back to "opencode" instead of raising
     ValueError when given an unknown agent_tool, so session list/detail
     pages never 500 on legacy data
 """
@@ -83,11 +83,11 @@ async def test_migrate_db_normalizes_legacy_crush_agent_tool():
 
 
 @pytest.mark.asyncio
-async def test_get_model_options_falls_back_for_unknown_agent_tool(monkeypatch, caplog):
-    """_get_model_options() must not raise for a removed tool name like 'crush'."""
+async def test_get_provider_options_falls_back_for_unknown_agent_tool(monkeypatch, caplog):
+    """_get_provider_options() must not raise for a removed tool name like 'crush'."""
     import logging
 
-    from swarmer.routers.sessions import _get_model_options
+    from swarmer.routers.sessions import _get_provider_options
 
     async def _no_vertex(*args, **kwargs):
         return False
@@ -102,7 +102,7 @@ async def test_get_model_options_falls_back_for_unknown_agent_tool(monkeypatch, 
 
         # Must not raise ValueError — falls back to the opencode tool's options.
         with caplog.at_level(logging.WARNING, logger="swarmer.routers.sessions"):
-            options = await _get_model_options(ws.id, db, "crush")
+            options = await _get_provider_options(ws.id, db, "crush")
         assert isinstance(options, list)
         assert any(
             "unknown agent_tool" in rec.message and "'crush'" in rec.message
@@ -111,11 +111,11 @@ async def test_get_model_options_falls_back_for_unknown_agent_tool(monkeypatch, 
 
 
 @pytest.mark.asyncio
-async def test_get_model_options_still_works_for_valid_tool(monkeypatch, caplog):
+async def test_get_provider_options_still_works_for_valid_tool(monkeypatch, caplog):
     """Sanity check: valid agent_tool values are unaffected by the fallback."""
     import logging
 
-    from swarmer.routers.sessions import _get_model_options
+    from swarmer.routers.sessions import _get_provider_options
 
     async def _no_vertex(*args, **kwargs):
         return False
@@ -129,6 +129,6 @@ async def test_get_model_options_still_works_for_valid_tool(monkeypatch, caplog)
         ws, _session = await _make_session_with_tool(db, "opencode")
 
         with caplog.at_level(logging.WARNING, logger="swarmer.routers.sessions"):
-            options = await _get_model_options(ws.id, db, "opencode")
+            options = await _get_provider_options(ws.id, db, "opencode")
         assert isinstance(options, list)
         assert not any("unknown agent_tool" in rec.message for rec in caplog.records)

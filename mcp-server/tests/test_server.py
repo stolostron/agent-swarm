@@ -187,7 +187,7 @@ async def test_find_sessions_by_repo_matches_normalized():
     sessions = [
         {
             "id": 1, "name": "agent-swarm-session", "phase": "idle",
-            "mode": "prompt", "model": "", "agent_tool": "opencode",
+            "mode": "prompt", "provider": "", "agent_tool": "opencode",
             "persist": False, "working_branch": "", "prompt_id": None,
             "instruction_prompt": "", "status_detail": "", "run_duration": None,
             "run_started_at": None, "run_completed_at": None,
@@ -195,7 +195,7 @@ async def test_find_sessions_by_repo_matches_normalized():
         },
         {
             "id": 2, "name": "other-session", "phase": "idle",
-            "mode": "prompt", "model": "", "agent_tool": "opencode",
+            "mode": "prompt", "provider": "", "agent_tool": "opencode",
             "persist": False, "working_branch": "", "prompt_id": None,
             "instruction_prompt": "", "status_detail": "", "run_duration": None,
             "run_started_at": None, "run_completed_at": None,
@@ -229,7 +229,7 @@ async def test_find_sessions_by_repo_no_match():
     server = make_server()
     server.client.list_sessions = AsyncMock(return_value=[
         {
-            "id": 1, "name": "s", "phase": "idle", "mode": "prompt", "model": "",
+            "id": 1, "name": "s", "phase": "idle", "mode": "prompt", "provider": "",
             "agent_tool": "opencode", "persist": False, "working_branch": "",
             "prompt_id": None, "instruction_prompt": "", "status_detail": "",
             "run_duration": None, "run_started_at": None, "run_completed_at": None,

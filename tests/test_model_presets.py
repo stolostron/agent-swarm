@@ -6,9 +6,9 @@ Covers:
     model, and passes through raw model IDs unchanged
   - OpenCodeStrategy.is_valid_model() accepts preset names
   - OpenCodeStrategy.get_default_model() returns preset names
-  - OpenCodeStrategy.get_model_options() always lists both presets (and all
-    individual models) with an "available" flag + human-readable "reason",
-    instead of omitting options when a provider isn't configured
+  - OpenCodeStrategy.get_model_options() always lists both presets with an
+    "available" flag + human-readable "reason", instead of omitting options
+    when a provider isn't configured
   - OpenCodeStrategy.get_preset_options() filters to just the preset entries
   - OpenCodeStrategy.build_config_data() resolves a preset to build/small/plan
     models, derives enabled_providers correctly, and emits the agent.plan.model
@@ -131,15 +131,12 @@ class TestGetModelOptions:
         assert presets["gemini"]["available"] is False
         assert "Google AI Studio" in presets["gemini"]["reason"]
 
-    def test_individual_models_always_present_with_availability_flag(self):
-        """Advanced/individual model choices are also always listed (not
-        omitted), with available=False + reason when unconfigured."""
-        options = _opencode.get_model_options(has_vertex=False, has_gemini=False)
-        models = [o for o in options if o["type"] == "model"]
-        # All 3 Claude + 2 Gemini individual entries are present regardless.
-        assert len(models) == 5
-        assert all(m["available"] is False for m in models)
-        assert all(m["reason"] for m in models)
+    def test_only_presets_are_returned(self):
+        """The Advanced individual-model picker has been removed — only the
+        two family-level presets are ever listed."""
+        options = _opencode.get_model_options(has_vertex=True, has_gemini=True)
+        assert len(options) == 2
+        assert all(o["type"] == "preset" for o in options)
 
     def test_has_gemini_from_legacy_secret_fallback(self):
         """Callers that only pass the OpencodeSecret row (not an explicit
@@ -206,8 +203,9 @@ class TestBuildConfigDataPresets:
         assert config["enabled_providers"] == ["google"]
 
     def test_non_preset_model_unaffected(self):
-        """Advanced/individual model selection keeps the pre-existing
-        pro->flash / opus-sonnet->haiku small-model derivation logic."""
+        """A raw provider/model string (e.g. from a session created before
+        presets existed) keeps the pre-existing pro->flash / opus-sonnet->haiku
+        small-model derivation logic."""
         data = _opencode.build_config_data(model="google-vertex-anthropic/claude-sonnet-5@default")
         config = json.loads(data["opencode.json"])
         assert config["model"] == "google-vertex-anthropic/claude-sonnet-5@default"

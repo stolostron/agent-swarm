@@ -61,9 +61,9 @@ async def session_tui(
     tool = get_tool(session.agent_tool)
 
     tui_cmd_parts = [tool.get_tui_binary()]
-    # session.model may be a family preset name ("claude"/"gemini", ACM-37232);
+    # session.provider is a family preset name ("claude"/"gemini", ACM-37232);
     # resolve it to a concrete provider/model@version ID for the CLI flag.
-    _tui_model = tool.resolve_build_model(session.model) if session.model else ""
+    _tui_model = tool.resolve_build_model(session.provider) if session.provider else ""
     if _tui_model:
         tui_cmd_parts.extend(["--model", _tui_model])
     cmd_base = " ".join(shlex.quote(p) for p in tui_cmd_parts)

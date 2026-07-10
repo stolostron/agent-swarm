@@ -77,7 +77,7 @@ class ScheduleEntryOut(BaseModel):
 class SessionCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=255)
     mode: str = Field("prompt", pattern=r"^(tui|server|prompt)$")
-    model: str = ""
+    provider: str = ""
     agent_tool: str = "opencode"
     instruction_prompt: str = ""
     github_pat_id: int | None = None
@@ -89,7 +89,7 @@ class SessionCreate(BaseModel):
 class SessionUpdate(BaseModel):
     name: str | None = Field(None, min_length=1, max_length=255)
     mode: str | None = Field(None, pattern=r"^(tui|server|prompt)$")
-    model: str | None = None
+    provider: str | None = None
     agent_tool: str | None = None
     instruction_prompt: str | None = None
     github_pat_id: int | None = None
@@ -103,7 +103,7 @@ class SessionOut(BaseModel):
     workspace_id: int
     name: str
     mode: str
-    model: str
+    provider: str
     agent_tool: str
     instruction_prompt: str
     github_pat_id: int | None
@@ -158,8 +158,8 @@ class SetModeRequest(BaseModel):
     mode: str = Field(..., pattern=r"^(tui|server|prompt)$")
 
 
-class SetModelRequest(BaseModel):
-    model: str = ""
+class SetProviderRequest(BaseModel):
+    provider: str = ""
 
 
 # ============================================================

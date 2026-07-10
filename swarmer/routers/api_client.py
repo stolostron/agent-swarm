@@ -239,7 +239,7 @@ class APIClient:
         name: str,
          *,
          mode: str = "prompt",
-         model: str = "",
+         provider: str = "",
          agent_tool: str = "opencode",
          instruction_prompt: str = "",
         github_pat_id: int | None = None,
@@ -250,7 +250,7 @@ class APIClient:
         body: dict[str, Any] = {
             "name": name,
             "mode": mode,
-            "model": model,
+            "provider": provider,
             "agent_tool": agent_tool,
             "instruction_prompt": instruction_prompt,
             "working_branch": working_branch,
@@ -298,12 +298,12 @@ class APIClient:
             json={"mode": mode},
         )
 
-    async def set_session_model(
-        self, ws_id: int, sid: int, model: str
+    async def set_session_provider(
+        self, ws_id: int, sid: int, provider: str
     ) -> dict:
         return await self._post(
-            f"/api/v1/workspaces/{ws_id}/sessions/{sid}/set-model",
-            json={"model": model},
+            f"/api/v1/workspaces/{ws_id}/sessions/{sid}/set-provider",
+            json={"provider": provider},
         )
 
     async def schedule_session(

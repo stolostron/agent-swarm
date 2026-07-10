@@ -30,8 +30,8 @@ from swarmer.api.schemas import (
     SessionRunOut,
     SessionUpdate,
     SetModeRequest,
-    SetModelRequest,
     SetNameRequest,
+    SetProviderRequest,
 )
 from swarmer.models.session import Session
 from swarmer.models.session_run import SessionRun
@@ -123,7 +123,7 @@ async def create_session(
         prompt_id=body.prompt_id,
         name=body.name.strip(),
         mode=body.mode,
-        model=body.model.strip(),
+        provider=body.provider.strip(),
         instruction_prompt=body.instruction_prompt.strip(),
         agent_tool=agent_tool,
         working_branch=wb,
@@ -178,8 +178,8 @@ async def update_session(
         session.name = body.name.strip()
     if body.mode is not None and body.mode in ("tui", "server", "prompt"):
         session.mode = body.mode
-    if body.model is not None:
-        session.model = body.model.strip()
+    if body.provider is not None:
+        session.provider = body.provider.strip()
     if body.agent_tool is not None:
         try:
             session.agent_tool = get_tool(body.agent_tool).name
@@ -403,18 +403,18 @@ async def set_mode(
     return session
 
 
-@router.post("/{sid}/set-model", response_model=SessionOut)
-async def set_model(
+@router.post("/{sid}/set-provider", response_model=SessionOut)
+async def set_provider(
     ws_id: int,
     sid: int,
-    body: SetModelRequest,
+    body: SetProviderRequest,
     ws: Workspace = Depends(get_workspace_or_404),
     db: AsyncSession = Depends(get_db),
 ):
     session = await _get_session_or_404(ws_id, sid, db)
-    new_model = body.model.strip()
+    new_provider = body.provider.strip()
 
-    session.model = new_model
+    session.provider = new_provider
     await db.commit()
     await db.refresh(session)
     return session

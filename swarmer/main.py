@@ -125,8 +125,8 @@ async def _restart_prompt_pollers() -> None:
             from swarmer.routers.sessions import _run_openshell_agent
             from swarmer.agent_tools.registry import get as _get_tool
             _tool = _get_tool(s.agent_tool)
-            _raw_model = s.model or _tool.get_default_model(False)
-            # s.model may be a family preset name ("claude"/"gemini", ACM-37232);
+            _raw_model = s.provider or _tool.get_default_model(False)
+            # s.provider is a family preset name ("claude"/"gemini", ACM-37232);
             # resolve it to a concrete provider/model@version ID for the CLI flag.
             _model = _tool.resolve_build_model(_raw_model)
             # Reconstruct the same AGENTS.md-reading command used at initial launch

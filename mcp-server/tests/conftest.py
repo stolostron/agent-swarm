@@ -84,7 +84,7 @@ def sample_session() -> dict:
         "name": "my-session",
         "phase": "idle",
         "mode": "prompt",
-        "model": "google-vertex-anthropic/claude-sonnet-5@default",
+        "provider": "claude",
         "agent_tool": "opencode",
         "persist": False,
         "working_branch": "swarmer/session-10-abc",

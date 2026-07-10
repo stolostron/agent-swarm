@@ -52,7 +52,13 @@ class Session(Base):
     mode: Mapped[str] = mapped_column(
         String(16), nullable=False, default="prompt", server_default="prompt"
     )
-    model: Mapped[str] = mapped_column(String(128), nullable=False, default="", server_default="")
+    # Stores the selected AI provider ("claude"/"gemini" family preset — the
+    # only UX since ACM-37232 removed individual model selection). Named
+    # "provider" (not "model") because it identifies which backing AI
+    # provider/credential (Vertex AI vs. Google AI Studio) the session uses,
+    # not a specific model ID — those are resolved at launch time via
+    # AgentToolStrategy.resolve_build_model().
+    provider: Mapped[str] = mapped_column(String(128), nullable=False, default="", server_default="")
     language: Mapped[str] = mapped_column(String(32), nullable=False, default="golang", server_default="golang")
     agent_tool: Mapped[str] = mapped_column(String(32), nullable=False, default="opencode", server_default="opencode")
     instruction_prompt: Mapped[str] = mapped_column(Text, nullable=False, default="")

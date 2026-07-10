@@ -1,0 +1,57 @@
+{# HTMX partial — AI provider selector: family-level presets (Claude/Gemini).
+   Options are always listed even when their backing credential isn't
+   configured — unavailable choices are disabled and show an inline error
+   instead of silently disappearing.
+
+   Selection rule (ACM-37232 follow-up): an available preset is always
+   pre-selected (preferring the session's previously-saved provider, then
+   falling back to the first available preset) UNLESS no AI provider is
+   configured at all — in that case nothing is auto-checked. #}
+{% set _disabled = provider_select_disabled is defined and provider_select_disabled %}
+<div id="provider-select-wrapper">
+{% if provider_options %}
+{% set presets = provider_options | selectattr("type", "equalto", "preset") | list %}
+{% set _available_presets = presets | selectattr("available") | list %}
+{% set _saved_is_available = selected_provider and (_available_presets | selectattr("value", "equalto", selected_provider) | list) %}
+{% set current = selected_provider if _saved_is_available else (_available_presets[0].value if _available_presets else "") %}
+
+<div class="pf-v6-c-form__group">
+  <label class="pf-v6-c-form__label">
+    <span class="pf-v6-c-form__label-text" style="font-weight:var(--pf-t--global--font--weight--heading--bold);">AI Provider</span>
+  </label>
+  <div class="pf-v6-c-form__group-control" style="display:flex; gap:var(--pf-t--global--spacer--md); flex-wrap:wrap;">
+    {% for opt in presets %}
+    <label style="display:inline-flex; align-items:center; gap:6px; {% if not opt.available %}opacity:0.6;{% endif %}"
+           title="{{ opt.reason if not opt.available else '' }}">
+      <input type="radio"
+             class="provider-preset-radio"
+             name="provider"
+             value="{{ opt.value }}"
+             {% if opt.value == current %}checked{% endif %}
+             {% if not opt.available %}disabled{% endif %}
+             {% if _disabled %}disabled{% endif %}>
+      <span>{{ opt.label }}{% if not opt.available %} <span style="color:var(--pf-t--global--icon--color--status--danger--default);">&#9888;</span>{% endif %}</span>
+    </label>
+    {% endfor %}
+  </div>
+  {% for opt in presets %}
+    {% if not opt.available %}
+    <div class="pf-v6-c-form__helper-text">
+      <div class="pf-v6-c-helper-text__item pf-m-error">
+        <span class="pf-v6-c-helper-text__item-text">{{ opt.label }}: {{ opt.reason }}</span>
+      </div>
+    </div>
+    {% endif %}
+  {% endfor %}
+  {% if not _available_presets %}
+    <div class="pf-v6-c-form__helper-text">
+      <div class="pf-v6-c-helper-text__item pf-m-error">
+        <span class="pf-v6-c-helper-text__item-text">No AI provider is configured for this workspace — add credentials in Secrets before launching.</span>
+      </div>
+    </div>
+  {% endif %}
+</div>
+{% else %}
+<input type="hidden" name="provider" value="{{ selected_provider or '' }}">
+{% endif %}
+</div>

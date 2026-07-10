@@ -49,7 +49,7 @@ def _fmt_session(s: dict, repos: list[dict] | None = None) -> dict:
         "name": s.get("name"),
         "phase": s.get("phase"),
         "mode": s.get("mode"),
-        "model": s.get("model"),
+        "provider": s.get("provider"),
         "agent_tool": s.get("agent_tool"),
         "persist": s.get("persist"),
         "working_branch": s.get("working_branch"),
@@ -149,7 +149,7 @@ class AgentSwarmMCPServer:
         name: str,
         agent_tool: str = "opencode",
         mode: str = "prompt",
-        model: str = "",
+        provider: str = "",
         persist: bool = False,
         working_branch: str = "",
         instruction_prompt: str = "",
@@ -160,7 +160,7 @@ class AgentSwarmMCPServer:
             workspace_id,
             name,
             mode=mode,
-            model=model,
+            provider=provider,
             agent_tool=agent_tool,
             instruction_prompt=instruction_prompt,
             github_pat_id=github_pat_id,
@@ -176,7 +176,7 @@ class AgentSwarmMCPServer:
         session_id: int,
         name: Optional[str] = None,
         mode: Optional[str] = None,
-        model: Optional[str] = None,
+        provider: Optional[str] = None,
         instruction_prompt: Optional[str] = None,
         prompt_id: Optional[int] = None,
         persist: Optional[bool] = None,
@@ -188,8 +188,8 @@ class AgentSwarmMCPServer:
             fields["name"] = name
         if mode is not None:
             fields["mode"] = mode
-        if model is not None:
-            fields["model"] = model
+        if provider is not None:
+            fields["provider"] = provider
         if instruction_prompt is not None:
             fields["instruction_prompt"] = instruction_prompt
         if prompt_id is not None:
@@ -442,7 +442,7 @@ class AgentSwarmMCPServer:
             name: str,
             agent_tool: str = "opencode",
             mode: str = "prompt",
-            model: str = "",
+            provider: str = "",
             persist: bool = False,
             working_branch: str = "",
             instruction_prompt: str = "",
@@ -456,8 +456,8 @@ class AgentSwarmMCPServer:
                 name: Unique session name within the workspace.
                 agent_tool: Agent tool. One of: opencode. Default: opencode.
                 mode: Execution mode. One of: prompt, tui, server. Default: prompt.
-                model: LLM model identifier. Empty string uses the tool default.
-                       OpenCode: google-vertex-anthropic/claude-sonnet-5@default
+                provider: AI provider preset. One of: claude, gemini. Empty string
+                          uses the tool default (based on configured credentials).
                 persist: Keep workspace PVC between runs. Default: false.
                 working_branch: Git branch to create/checkout in the pod.
                 instruction_prompt: Additional instructions prepended to the base prompt.
@@ -465,7 +465,7 @@ class AgentSwarmMCPServer:
                 prompt_id: Base prompt id (from list_workspace_prompts).
             """
             return await self._create_session(
-                workspace_id, name, agent_tool, mode, model,
+                workspace_id, name, agent_tool, mode, provider,
                 persist, working_branch, instruction_prompt, github_pat_id, prompt_id,
             )
 
@@ -475,7 +475,7 @@ class AgentSwarmMCPServer:
             session_id: int,
             name: Optional[str] = None,
             mode: Optional[str] = None,
-            model: Optional[str] = None,
+            provider: Optional[str] = None,
             instruction_prompt: Optional[str] = None,
             prompt_id: Optional[int] = None,
             persist: Optional[bool] = None,
@@ -489,7 +489,7 @@ class AgentSwarmMCPServer:
                 session_id: The session id.
                 name: New session name.
                 mode: New mode (prompt/tui/server).
-                model: New model identifier.
+                provider: New AI provider preset (claude/gemini).
                 instruction_prompt: New additional instructions.
                 prompt_id: New base prompt id.
                 persist: New persistence setting.
@@ -497,7 +497,7 @@ class AgentSwarmMCPServer:
                 github_pat_id: New GitHub PAT id.
             """
             return await self._update_session(
-                workspace_id, session_id, name, mode, model,
+                workspace_id, session_id, name, mode, provider,
                 instruction_prompt, prompt_id, persist, working_branch, github_pat_id,
             )
 

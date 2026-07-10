@@ -31,4 +31,8 @@ class SessionSchedule(Base):
     session: Mapped["Session"] = relationship(  # noqa: F821
         back_populates="schedules"
     )
-    prompt: Mapped["WorkspacePrompt | None"] = relationship()  # noqa: F821
+    # eager (selectin) — sessions/_schedule_items.html accesses sched.prompt
+    # synchronously during Jinja rendering; a lazy default would raise
+    # MissingGreenlet outside the async context (only triggers for sessions
+    # that have at least one schedule, which is why this surfaced late).
+    prompt: Mapped["WorkspacePrompt | None"] = relationship(lazy="selectin")  # noqa: F821
