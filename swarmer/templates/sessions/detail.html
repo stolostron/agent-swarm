@@ -270,20 +270,11 @@
       </button>
     </li>
     {% endif %}
-    {% if session.mode == 'prompt' %}
     <li class="pf-v6-c-tabs__item" id="tab-history">
       <button class="pf-v6-c-tabs__link" role="tab" aria-selected="false" aria-controls="panel-history" tabindex="-1" onclick="switchTab('history')">
         <span class="pf-v6-c-tabs__item-text" id="history-tab-text"><span id="history-tab-dot" style="display:none;">● </span>History{% if session_runs %}&nbsp;<span style="display:inline-flex;align-items:center;justify-content:center;min-width:1.75em;height:1.75em;padding:0 0.45em;background:#111;color:#ccc;border:1px solid #444;border-radius:999px;font-size:0.875em;font-family:monospace;font-weight:700;line-height:1;vertical-align:middle;">{{ session_runs | length }}</span>{% endif %}</span>
       </button>
     </li>
-    {% endif %}
-    {% if session.mode == 'prompt' %}
-    <li class="pf-v6-c-tabs__item" id="tab-history">
-      <button class="pf-v6-c-tabs__link" role="tab" aria-selected="false" aria-controls="panel-history" tabindex="-1" onclick="switchTab('history')">
-        <span class="pf-v6-c-tabs__item-text">History{% if session_runs %} ({{ session_runs | length }}){% endif %}</span>
-      </button>
-    </li>
-    {% endif %}
     {% if session.repos %}
     <li class="pf-v6-c-tabs__item" id="tab-patch">
       <button class="pf-v6-c-tabs__link" role="tab" aria-selected="false" aria-controls="panel-patch" tabindex="-1" onclick="switchTab('patch')">
@@ -476,9 +467,8 @@
 {% endif %}
 
 {# ════════════════════════════════════════════════════════════
-   Tab panel: History (prompt mode)
+   Tab panel: History (all modes)
    ════════════════════════════════════════════════════════════ #}
-{% if session.mode == 'prompt' %}
 <div id="panel-history" class="pf-v6-c-tab-content" role="tabpanel" aria-labelledby="tab-history" hidden style="margin-top:var(--pf-t--global--spacer--lg);">
   <div class="pf-v6-c-card">
     <div class="pf-v6-c-card__header">
@@ -499,7 +489,6 @@
     </div>
   </div>
 </div>
-{% endif %}
 
 {# ════════════════════════════════════════════════════════════
    Tab panel: Patch (sessions with repos)

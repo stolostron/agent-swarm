@@ -597,17 +597,15 @@ async def session_detail(
     if session.phase == "queued":
         queue_position = await _get_queue_position(session.id, db)
     capacity = await _get_capacity_summary(ws_id, db)
-    session_runs: list = []
-    if session.mode == "prompt":
-        from swarmer.models.session_run import SessionRun
+    from swarmer.models.session_run import SessionRun
 
-        runs_result = await db.execute(
-            select(SessionRun)
-            .where(SessionRun.session_id == sid)
-            .order_by(desc(SessionRun.completed_at))
-            .limit(100)
-        )
-        session_runs = list(runs_result.scalars().all())
+    runs_result = await db.execute(
+        select(SessionRun)
+        .where(SessionRun.session_id == sid)
+        .order_by(desc(SessionRun.completed_at))
+        .limit(100)
+    )
+    session_runs = list(runs_result.scalars().all())
     return templates.TemplateResponse(
         request,
         "sessions/detail.html",
