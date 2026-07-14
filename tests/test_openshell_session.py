@@ -824,6 +824,131 @@ class TestDoLaunchOpenshell:
         )
 
     @pytest.mark.asyncio
+    async def test_repo_branch_checked_out_before_working_branch(self, client):
+        """Per-repo branch must be checked out before the working branch is created.
+
+        When a repo is configured with branch="develop", the sandbox setup must
+        run `git checkout develop` after cloning (which lands on the default branch)
+        and before creating/checking-out the session-level working branch.  This
+        ensures the working branch is based on the correct upstream ref.
+        """
+        from swarmer.routers.sessions import _setup_openshell_sandbox
+
+        ws = await _create_workspace(client)
+        s = await _create_session(client, ws["id"], mode="prompt")
+
+        async with _TestSession() as db:
+            await db.execute(
+                text("UPDATE sessions SET phase='pending' WHERE id=:id"), {"id": s["id"]}
+            )
+            await db.commit()
+
+        exec_calls: list[list[str]] = []
+
+        async def _capture_exec(sandbox_name, cmd, client=None, stdin=None, timeout_seconds=None, env=None):
+            exec_calls.append(list(cmd))
+            return MagicMock(exit_code=0, stdout="", stderr="")
+
+        ref = _fake_sandbox_ref("sandbox-branch-test")
+        repos = [
+            {"url": "https://github.com/org/repo-a.git", "local_path": "repo-a", "branch": "develop"},
+            {"url": "https://github.com/org/repo-b.git", "local_path": "repo-b", "branch": "main"},
+        ]
+        with patch("swarmer.database.get_db", new=_make_test_db_provider()), \
+             patch("swarmer.openshell_client.create_sandbox", new=AsyncMock(return_value=ref)), \
+             patch("swarmer.openshell_client.write_agent_config", new=AsyncMock()), \
+             patch("swarmer.openshell_client.write_agents_md", new=AsyncMock()), \
+             patch("swarmer.openshell_client.approve_draft_policy_chunks", new=AsyncMock(return_value=[])), \
+             patch("swarmer.routers.sessions._run_openshell_agent", new=AsyncMock()), \
+             patch("swarmer.openshell_client.exec_command", new=_capture_exec):
+            await _setup_openshell_sandbox(
+                session_id=s["id"],
+                workspace_id=ws["id"],
+                provider_names=[],
+                env_vars={},
+                policy=None,
+                image="quay.io/opencode:latest",
+                tool_name="opencode",
+                model="google-vertex-anthropic/claude-sonnet-5@default",
+                model_setup_cmd="",
+                share_cmd="",
+                mcp_patch={},
+                repos_data=repos,
+                git_username="octocat",
+                pat_token="ghp_testtoken123",
+                working_branch="swarmer/session-99-abcd1234",
+                agents_md="",
+                mode="prompt",
+                main_cmd="opencode run",
+                resolved_prompt="",
+                has_git_token=True,
+            )
+
+        all_cmds = [" ".join(c) for c in exec_calls]
+
+        # Verify both repos were cloned
+        clone_cmds = [c for c in all_cmds if "git clone" in c]
+        assert len(clone_cmds) == 2, (
+            f"Expected 2 git clone calls, got {len(clone_cmds)}. "
+            f"All exec calls:\n" + "\n".join(all_cmds)
+        )
+
+        # Verify per-repo branch checkouts exist
+        branch_checkout_cmds = [
+            c for c in all_cmds
+            if "git checkout" in c and "git checkout -b" not in c
+        ]
+        assert len(branch_checkout_cmds) >= 2, (
+            f"Expected at least 2 per-repo branch checkout calls, got {len(branch_checkout_cmds)}. "
+            f"All exec calls:\n" + "\n".join(all_cmds)
+        )
+        # Verify specific branch names appear in checkout commands
+        assert any("develop" in c for c in branch_checkout_cmds), (
+            f"Expected a 'git checkout develop' call. "
+            f"Branch checkout calls:\n" + "\n".join(branch_checkout_cmds)
+        )
+        assert any("main" in c for c in branch_checkout_cmds), (
+            f"Expected a 'git checkout main' call. "
+            f"Branch checkout calls:\n" + "\n".join(branch_checkout_cmds)
+        )
+
+        # Verify working branch checkout exists
+        working_branch_cmds = [c for c in all_cmds if "git checkout -b" in c]
+        assert len(working_branch_cmds) == 2, (
+            f"Expected 2 working branch checkout calls (one per repo), got {len(working_branch_cmds)}. "
+            f"All exec calls:\n" + "\n".join(all_cmds)
+        )
+        assert all("swarmer/session-99-abcd1234" in c for c in working_branch_cmds), (
+            f"Working branch checkout should use session working branch. "
+            f"Working branch calls:\n" + "\n".join(working_branch_cmds)
+        )
+
+        # Verify ordering: clone < safe.directory < per-repo checkout < working branch
+        safe_dir_idx = next(i for i, c in enumerate(all_cmds) if "safe.directory" in c)
+        repo_branch_idxs = [
+            i for i, c in enumerate(all_cmds)
+            if "git checkout" in c and "git checkout -b" not in c
+        ]
+        working_branch_idxs = [i for i, c in enumerate(all_cmds) if "git checkout -b" in c]
+
+        for ci in clone_cmds:
+            clone_idx = all_cmds.index(ci)
+            assert clone_idx < safe_dir_idx, (
+                f"git clone must come before safe.directory config"
+            )
+        for bi in repo_branch_idxs:
+            assert safe_dir_idx < bi, (
+                f"safe.directory config (idx {safe_dir_idx}) must come before "
+                f"per-repo branch checkout (idx {bi})"
+            )
+        for wi in working_branch_idxs:
+            for bi in repo_branch_idxs:
+                assert bi < wi, (
+                    f"per-repo branch checkout (idx {bi}) must come before "
+                    f"working branch checkout (idx {wi})"
+                )
+
+    @pytest.mark.asyncio
     async def test_jira_provider_registered_when_mcp_configured(self, client):
         """When a Jira MCP server is configured and valid, ensure_provider is called with all three credentials."""
         from unittest.mock import patch as _patch, AsyncMock as _AsyncMock

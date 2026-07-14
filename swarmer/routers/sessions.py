@@ -1481,14 +1481,49 @@ async def _setup_openshell_sandbox(
             await openshell_client.exec_command(
                 ref.name, ["sh", "-c", "git config --global --add safe.directory '*'"], client=None
             )
+            # Checkout each repo's configured branch before creating the working
+            # branch so the working branch is based on the correct upstream ref
+            # (e.g. "develop") rather than always the repository default branch.
+            for rd in repos_data:
+                repo_branch = rd.get("branch", "")
+                if repo_branch:
+                    checkout_base_cmd = (
+                        f"cd /sandbox/{shlex.quote(rd['local_path'])} && "
+                        f"git checkout {shlex.quote(repo_branch)}"
+                    )
+                    result = await openshell_client.exec_command(
+                        ref.name, ["sh", "-c", checkout_base_cmd], client=None
+                    )
+                    if getattr(result, "exit_code", 0) != 0:
+                        _stdout = getattr(result, "stdout", "") or ""
+                        _stderr = getattr(result, "stderr", "") or ""
+                        log.warning(
+                            "sandbox setup: git checkout %s failed for %s (exit %s):\n%s",
+                            repo_branch,
+                            rd["local_path"],
+                            getattr(result, "exit_code", "?"),
+                            (_stdout + _stderr).strip(),
+                        )
             if working_branch:
                 for rd in repos_data:
                     branch_cmd = (
-                        f"cd /sandbox/{rd['local_path']} && "
+                        f"cd /sandbox/{shlex.quote(rd['local_path'])} && "
                         f"git checkout -b {shlex.quote(working_branch)} 2>/dev/null "
                         f"|| git checkout {shlex.quote(working_branch)}"
                     )
-                    await openshell_client.exec_command(ref.name, ["sh", "-c", branch_cmd], client=None)
+                    result = await openshell_client.exec_command(
+                        ref.name, ["sh", "-c", branch_cmd], client=None
+                    )
+                    if getattr(result, "exit_code", 0) != 0:
+                        _stdout = getattr(result, "stdout", "") or ""
+                        _stderr = getattr(result, "stderr", "") or ""
+                        log.warning(
+                            "sandbox setup: git checkout working branch %s failed for %s (exit %s):\n%s",
+                            working_branch,
+                            rd["local_path"],
+                            getattr(result, "exit_code", "?"),
+                            (_stdout + _stderr).strip(),
+                        )
 
         # Build the agent command.
         # Prompt mode: AGENTS.md was written above (prompt + repo context); read it at
