@@ -113,6 +113,22 @@ print(f"{prefix}-{slug}-{digest}")
 endef
 export K8S_SAFE_NAME_PY
 
+# WORKSPACE_NS/NAMESPACE are used as Kubernetes namespace names, which must
+# be a valid DNS-1123 label: lowercase alphanumeric or '-', starting and
+# ending with an alphanumeric character, max 63 characters. A character-set
+# only check (as previously used) still lets through values with leading or
+# trailing hyphens (e.g. "-ns" or "ns-") or over-length values, which the
+# Kubernetes API would reject anyway but only after invoking kubectl with a
+# less helpful error. Enforce the full label format up front instead.
+define K8S_DNS_LABEL_CHECK_PY
+import re, sys
+name, value = sys.argv[1], sys.argv[2]
+if not re.fullmatch(r"[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?", value):
+    print(f"Error: {name} must be a valid Kubernetes namespace name (lowercase alphanumeric or '-', must start and end with an alphanumeric character, max 63 characters)", file=sys.stderr)
+    sys.exit(1)
+endef
+export K8S_DNS_LABEL_CHECK_PY
+
 grant-workspace-access: export _SA_USER := $(value SA_USER)
 grant-workspace-access: export _OIDC_USER := $(value OIDC_USER)
 grant-workspace-access: export _WORKSPACE_NS := $(value WORKSPACE_NS)
@@ -124,12 +140,8 @@ grant-workspace-access:  ## Grant a user access to a specific workspace namespac
 	@case "$$_SA_USER$$_OIDC_USER" in \
 	  *[!A-Za-z0-9._:@-]*) echo "Error: SA_USER/OIDC_USER may only contain letters, digits, and . _ - : @" >&2; exit 1 ;; \
 	esac
-	@case "$$_WORKSPACE_NS" in \
-	  *[!a-z0-9-]*) echo "Error: WORKSPACE_NS may only contain lowercase letters, digits, and -" >&2; exit 1 ;; \
-	esac
-	@case "$$_NAMESPACE" in \
-	  *[!a-z0-9-]*) echo "Error: NAMESPACE may only contain lowercase letters, digits, and -" >&2; exit 1 ;; \
-	esac
+	@python3 -c "$$K8S_DNS_LABEL_CHECK_PY" WORKSPACE_NS "$$_WORKSPACE_NS"
+	@python3 -c "$$K8S_DNS_LABEL_CHECK_PY" NAMESPACE "$$_NAMESPACE"
 	@if [ -n "$$_SA_USER" ]; then \
 	  _BIND_NAME=$$(python3 -c "$$K8S_SAFE_NAME_PY" swarmer-user "$$_SA_USER"); \
 	  kubectl create rolebinding "$$_BIND_NAME" \
@@ -157,9 +169,7 @@ grant-workspace-create:  ## Allow a user to create new workspaces  (SA_USER=alic
 	@case "$$_SA_USER$$_OIDC_USER" in \
 	  *[!A-Za-z0-9._:@-]*) echo "Error: SA_USER/OIDC_USER may only contain letters, digits, and . _ - : @" >&2; exit 1 ;; \
 	esac
-	@case "$$_NAMESPACE" in \
-	  *[!a-z0-9-]*) echo "Error: NAMESPACE may only contain lowercase letters, digits, and -" >&2; exit 1 ;; \
-	esac
+	@python3 -c "$$K8S_DNS_LABEL_CHECK_PY" NAMESPACE "$$_NAMESPACE"
 	@if [ -n "$$_SA_USER" ]; then \
 	  _BIND_NAME=$$(python3 -c "$$K8S_SAFE_NAME_PY" swarmer-workspace-creator "$$_SA_USER"); \
 	  kubectl create clusterrolebinding "$$_BIND_NAME" \

@@ -371,3 +371,85 @@ class TestGrantWorkspaceAccessExecution:
         assert result.returncode != 0, combined
         assert "KUBECTL_CALL" not in combined
         assert not marker.exists()
+
+
+class TestNamespaceDnsLabelValidation:
+    """Regression tests: a character-set-only check on WORKSPACE_NS/NAMESPACE
+    still lets through values with leading/trailing hyphens or over-length
+    values, which the Kubernetes API would reject anyway but only after
+    kubectl is invoked. Both must be validated as a full DNS-1123 label
+    (lowercase alphanumeric or '-', start/end alphanumeric, max 63 chars)
+    before any kubectl invocation."""
+
+    @pytest.mark.parametrize(
+        "invalid_workspace_ns",
+        ["-team-a", "team-a-", "a" * 64],
+        ids=["leading-hyphen", "trailing-hyphen", "too-long"],
+    )
+    def test_rejects_invalid_workspace_ns_without_invoking_kubectl(
+        self, fake_kubectl_path, invalid_workspace_ns
+    ):
+        result = _run_make(
+            [
+                "grant-workspace-access",
+                "SA_USER=alice",
+                f"WORKSPACE_NS={invalid_workspace_ns}",
+            ],
+            path_prefix=fake_kubectl_path,
+        )
+        combined = result.stdout + result.stderr
+        assert result.returncode != 0, combined
+        assert "KUBECTL_CALL" not in combined
+
+    @pytest.mark.parametrize(
+        "invalid_namespace",
+        ["-swarmer", "swarmer-", "a" * 64, ""],
+        ids=["leading-hyphen", "trailing-hyphen", "too-long", "empty"],
+    )
+    def test_rejects_invalid_namespace_on_grant_workspace_access(
+        self, fake_kubectl_path, invalid_namespace
+    ):
+        result = _run_make(
+            [
+                "grant-workspace-access",
+                "SA_USER=alice",
+                "WORKSPACE_NS=team-a",
+                f"NAMESPACE={invalid_namespace}",
+            ],
+            path_prefix=fake_kubectl_path,
+        )
+        combined = result.stdout + result.stderr
+        assert result.returncode != 0, combined
+        assert "KUBECTL_CALL" not in combined
+
+    @pytest.mark.parametrize(
+        "invalid_namespace",
+        ["-swarmer", "swarmer-", "a" * 64, ""],
+        ids=["leading-hyphen", "trailing-hyphen", "too-long", "empty"],
+    )
+    def test_rejects_invalid_namespace_on_grant_workspace_create(
+        self, fake_kubectl_path, invalid_namespace
+    ):
+        result = _run_make(
+            ["grant-workspace-create", "SA_USER=alice", f"NAMESPACE={invalid_namespace}"],
+            path_prefix=fake_kubectl_path,
+        )
+        combined = result.stdout + result.stderr
+        assert result.returncode != 0, combined
+        assert "KUBECTL_CALL" not in combined
+
+    def test_accepts_valid_hyphenated_namespace_and_workspace_ns(self, fake_kubectl_path):
+        """Sanity check that the tightened validation still accepts
+        legitimate internally-hyphenated values."""
+        result = _run_make(
+            [
+                "grant-workspace-access",
+                "SA_USER=alice",
+                "WORKSPACE_NS=team-a",
+                "NAMESPACE=my-namespace",
+            ],
+            path_prefix=fake_kubectl_path,
+        )
+        combined = result.stdout + result.stderr
+        assert result.returncode == 0, combined
+        assert "--serviceaccount=my-namespace:alice" in combined
