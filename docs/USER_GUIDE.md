@@ -423,6 +423,17 @@ make grant-workspace-access SA_USER=alice WORKSPACE_NS=my-project
 
 Run this once per user per namespace. A user with no workspace grants can log in but will see no workspaces.
 
+**OpenShift OAuth / OIDC users** (e.g. logging in via a GitHub identity provider) are a
+different Kubernetes RBAC principal (`User`) than a ServiceAccount (`system:serviceaccount:...`).
+A `SA_USER=` grant does **not** apply to them. Use `OIDC_USER=` instead, with the exact
+username shown by `kubectl get users` (OpenShift) or the `sub` claim of their token:
+
+```sh
+make grant-workspace-access OIDC_USER=alice WORKSPACE_NS=my-project
+```
+
+`SA_USER` and `OIDC_USER` are mutually exclusive — specify exactly one.
+
 #### Allowing a user to create new workspaces
 
 Grants cluster-scoped `create namespaces` permission so the user sees the **Create Workspace** button.
@@ -430,6 +441,7 @@ Users can only see workspaces they have been explicitly granted access to — th
 
 ```sh
 make grant-workspace-create SA_USER=alice
+make grant-workspace-create OIDC_USER=alice   # for OpenShift OAuth / OIDC users
 ```
 
 #### Typical onboarding flow
@@ -442,9 +454,16 @@ make grant-workspace-access SA_USER=alice WORKSPACE_NS=team-b  # 3. repeat for a
 make grant-workspace-create SA_USER=alice                      # 4. allow self-service workspace creation
 ```
 
+For OpenShift OAuth / OIDC users, substitute `OIDC_USER=<name>` for `SA_USER=<name>` in
+steps 2–4 above and skip `make user-token` (OIDC users authenticate via the OAuth flow,
+not a ServiceAccount token).
+
 #### OpenShift OAuth
 
 When `OPENSHIFT_OAUTH_URL` is set, a "Sign in with OpenShift" button appears on the login page. Users authenticate via the OpenShift OAuth implicit grant flow — no token pasting required. The callback captures the token from the URL fragment client-side via `/auth/callback`.
+
+Grants made with `SA_USER=` (Kubernetes ServiceAccount) do not apply to these users — use
+`OIDC_USER=` for `grant-workspace-access` and `grant-workspace-create` instead (see above).
 
 ---
 
@@ -744,9 +763,9 @@ All targets can be listed with `make help`. Run `make lint` to check code style 
 | Target | Description | Key Variables |
 |---|---|---|
 | `user-token` | Issue a K8s login token for a user | `SA_USER`, `TOKEN_DURATION` (default `8h`) |
-| `grant-workspace-access` | Grant a user access to a specific workspace namespace | `SA_USER`, `WORKSPACE_NS` |
-| `grant-workspace-create` | Allow a user to create new workspaces | `SA_USER` |
-| `grant-workspace` | Deprecated alias for `grant-workspace-access` | `SA_USER`, `WORKSPACE_NS` |
+| `grant-workspace-access` | Grant a user access to a specific workspace namespace | `SA_USER` or `OIDC_USER`, `WORKSPACE_NS` |
+| `grant-workspace-create` | Allow a user to create new workspaces | `SA_USER` or `OIDC_USER` |
+| `grant-workspace` | Deprecated alias for `grant-workspace-access` | `SA_USER` or `OIDC_USER`, `WORKSPACE_NS` |
 
 #### Key overridable variables
 
@@ -758,7 +777,8 @@ All targets can be listed with `make help`. Run `make lint` to check code style 
 | `CONTAINER_CMD` | `podman` | Container runtime (`podman` or `docker`) |
 | `KIND_CLUSTER` | `swarmer` | Kind cluster name |
 | `NAMESPACE` | `swarmer` | Kubernetes namespace |
-| `SA_USER` | _(required)_ | ServiceAccount username for token/grant targets |
+| `SA_USER` | _(required)_ | ServiceAccount username for token/grant targets (mutually exclusive with `OIDC_USER`) |
+| `OIDC_USER` | _(required)_ | OpenShift OAuth/OIDC `User` name for grant targets — use instead of `SA_USER` for users who don't log in with a ServiceAccount token (mutually exclusive with `SA_USER`) |
 | `WORKSPACE_NS` | _(required)_ | Workspace namespace for grant-workspace-access |
 | `TOKEN_DURATION` | `8h` | Token validity duration |
 | `SILENT` | _(empty)_ | Set to `1` to skip interactive prompts |

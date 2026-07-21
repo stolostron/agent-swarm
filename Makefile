@@ -81,23 +81,42 @@ user-token:  ## Issue a login token for a K8s user  (SA_USER=alice, TOKEN_DURATI
 	@echo "Paste this token into the Swarmer login page."
 	@echo "Grant workspace access with: make grant-workspace-access SA_USER=$(SA_USER) WORKSPACE_NS=<ns>"
 
-grant-workspace-access:  ## Grant a user access to a specific workspace namespace  (SA_USER=alice, WORKSPACE_NS=my-project)
-	@test -n "$(SA_USER)"      || (echo "Usage: make grant-workspace-access SA_USER=<name> WORKSPACE_NS=<ns>" && exit 1)
-	@test -n "$(WORKSPACE_NS)" || (echo "Usage: make grant-workspace-access SA_USER=<name> WORKSPACE_NS=<ns>" && exit 1)
-	kubectl create rolebinding swarmer-user-$(SA_USER) \
-	  --clusterrole=swarmer-user \
-	  --serviceaccount=$(NAMESPACE):$(SA_USER) \
-	  --namespace=$(WORKSPACE_NS) \
-	  --dry-run=client -o yaml | kubectl apply -f -
-	@echo "$(SA_USER) can now access workspace namespace '$(WORKSPACE_NS)'."
+grant-workspace-access:  ## Grant a user access to a specific workspace namespace  (SA_USER=alice OR OIDC_USER=alice, WORKSPACE_NS=my-project)
+	@test -n "$(SA_USER)$(OIDC_USER)" || (echo "Usage: make grant-workspace-access SA_USER=<name> WORKSPACE_NS=<ns>  (or OIDC_USER=<name> for OpenShift/OIDC users)" && exit 1)
+	@test -z "$(SA_USER)" -o -z "$(OIDC_USER)" || (echo "Error: specify only one of SA_USER or OIDC_USER, not both" && exit 1)
+	@test -n "$(WORKSPACE_NS)" || (echo "Usage: make grant-workspace-access SA_USER=<name>|OIDC_USER=<name> WORKSPACE_NS=<ns>" && exit 1)
+	@if [ -n "$(SA_USER)" ]; then \
+	  kubectl create rolebinding swarmer-user-$(SA_USER) \
+	    --clusterrole=swarmer-user \
+	    --serviceaccount=$(NAMESPACE):$(SA_USER) \
+	    --namespace=$(WORKSPACE_NS) \
+	    --dry-run=client -o yaml | kubectl apply -f -; \
+	  echo "$(SA_USER) (ServiceAccount) can now access workspace namespace '$(WORKSPACE_NS)'."; \
+	else \
+	  kubectl create rolebinding swarmer-user-$(OIDC_USER) \
+	    --clusterrole=swarmer-user \
+	    --user=$(OIDC_USER) \
+	    --namespace=$(WORKSPACE_NS) \
+	    --dry-run=client -o yaml | kubectl apply -f -; \
+	  echo "$(OIDC_USER) (OpenShift/OIDC User) can now access workspace namespace '$(WORKSPACE_NS)'."; \
+	fi
 
-grant-workspace-create:  ## Allow a user to create new workspaces  (SA_USER=alice)
-	@test -n "$(SA_USER)" || (echo "Usage: make grant-workspace-create SA_USER=<name>" && exit 1)
-	kubectl create clusterrolebinding swarmer-workspace-creator-$(SA_USER) \
-	  --clusterrole=swarmer-workspace-creator \
-	  --serviceaccount=$(NAMESPACE):$(SA_USER) \
-	  --dry-run=client -o yaml | kubectl apply -f -
-	@echo "$(SA_USER) can now create new workspaces (but cannot see others' workspaces without grant-workspace-access)."
+grant-workspace-create:  ## Allow a user to create new workspaces  (SA_USER=alice OR OIDC_USER=alice)
+	@test -n "$(SA_USER)$(OIDC_USER)" || (echo "Usage: make grant-workspace-create SA_USER=<name>  (or OIDC_USER=<name> for OpenShift/OIDC users)" && exit 1)
+	@test -z "$(SA_USER)" -o -z "$(OIDC_USER)" || (echo "Error: specify only one of SA_USER or OIDC_USER, not both" && exit 1)
+	@if [ -n "$(SA_USER)" ]; then \
+	  kubectl create clusterrolebinding swarmer-workspace-creator-$(SA_USER) \
+	    --clusterrole=swarmer-workspace-creator \
+	    --serviceaccount=$(NAMESPACE):$(SA_USER) \
+	    --dry-run=client -o yaml | kubectl apply -f -; \
+	  echo "$(SA_USER) (ServiceAccount) can now create new workspaces (but cannot see others' workspaces without grant-workspace-access)."; \
+	else \
+	  kubectl create clusterrolebinding swarmer-workspace-creator-$(OIDC_USER) \
+	    --clusterrole=swarmer-workspace-creator \
+	    --user=$(OIDC_USER) \
+	    --dry-run=client -o yaml | kubectl apply -f -; \
+	  echo "$(OIDC_USER) (OpenShift/OIDC User) can now create new workspaces (but cannot see others' workspaces without grant-workspace-access)."; \
+	fi
 
 grant-workspace: grant-workspace-access  ## Deprecated alias for grant-workspace-access
 

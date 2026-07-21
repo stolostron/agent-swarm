@@ -89,6 +89,11 @@ make grant-workspace-access SA_USER=alice WORKSPACE_NS=team-a  # grant workspace
 make grant-workspace-create SA_USER=alice                      # allow self-service workspace creation (optional)
 ```
 
+For users authenticating via OpenShift OAuth / OIDC (e.g. a GitHub identity provider)
+instead of a ServiceAccount token, use `OIDC_USER=<name>` in place of `SA_USER=<name>`
+for `grant-workspace-access` and `grant-workspace-create` — these are different RBAC
+principals (`User` vs `ServiceAccount`) and grants for one do not apply to the other.
+
 ## Deploying with namespace-scoped (no cluster-admin)
 
 ### Quick start

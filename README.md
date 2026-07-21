@@ -80,6 +80,15 @@ make grant-workspace-access SA_USER=alice WORKSPACE_NS=my-project
 
 Run this once per user per namespace. A user with no workspace grants can log in but will see no workspaces.
 
+Use `OIDC_USER=` instead of `SA_USER=` for users who log in via OpenShift OAuth / OIDC
+(e.g. GitHub identity provider) rather than a Kubernetes ServiceAccount token — these
+are different Kubernetes RBAC principals (`User` vs `ServiceAccount`) and a binding for
+one does not grant access for the other:
+
+```sh
+make grant-workspace-access OIDC_USER=alice WORKSPACE_NS=my-project
+```
+
 ### Allow a user to create new workspaces
 
 Grants cluster-scoped `create namespaces` permission so the user sees the **Create Workspace** button.
@@ -87,6 +96,7 @@ Users can only see workspaces they have been explicitly granted access to — th
 
 ```sh
 make grant-workspace-create SA_USER=alice
+make grant-workspace-create OIDC_USER=alice   # for OpenShift OAuth / OIDC users
 ```
 
 ### Typical onboarding flow
@@ -98,6 +108,10 @@ make grant-workspace-access SA_USER=alice WORKSPACE_NS=team-b  # 3. repeat for a
 # Optionally allow the user to create their own workspaces:
 make grant-workspace-create SA_USER=alice                      # 4. allow self-service workspace creation
 ```
+
+For users authenticating via OpenShift OAuth / OIDC instead of a token-based ServiceAccount,
+substitute `OIDC_USER=<name>` for `SA_USER=<name>` in the `grant-workspace-access` and
+`grant-workspace-create` steps above (skip `make user-token`, since OIDC users don't need one).
 
 ## Other useful targets
 
