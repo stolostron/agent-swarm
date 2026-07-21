@@ -19,7 +19,6 @@ uses `OIDC_USER`, never bare `USER`.
 """
 
 import os
-import re
 import stat
 import subprocess
 import sys
@@ -112,12 +111,25 @@ def test_oidc_user_variable_present(makefile_content):
 
 
 def _extract_target_body(makefile_content: str, target: str) -> str:
-    """Return the recipe lines for a given Makefile target (up to the next
-    top-level target or EOF)."""
-    pattern = rf"^{re.escape(target)}:.*?\n(.*?)(?=^\S.*:|\Z)"
-    match = re.search(pattern, makefile_content, re.MULTILINE | re.DOTALL)
-    assert match, f"Could not locate target '{target}' in Makefile"
-    return match.group(1)
+    """Return all lines associated with a given Makefile target, including
+    target-specific variable assignments (e.g. `target: export VAR := ...`)
+    that precede the recipe, up to the next unrelated top-level line or EOF.
+    """
+    prefix = f"{target}:"
+    collected = []
+    started = False
+    for line in makefile_content.split("\n"):
+        if line.startswith(prefix):
+            started = True
+            collected.append(line[len(prefix):])
+            continue
+        if started:
+            if line.startswith("\t") or line.strip() == "":
+                collected.append(line)
+                continue
+            break
+    assert collected, f"Could not locate target '{target}' in Makefile"
+    return "\n".join(collected)
 
 
 def test_grant_workspace_create_supports_sa_user_and_oidc_user(makefile_content):
@@ -125,7 +137,7 @@ def test_grant_workspace_create_supports_sa_user_and_oidc_user(makefile_content)
     assert "SA_USER" in target_body
     assert "OIDC_USER" in target_body
     assert "--serviceaccount=" in target_body
-    assert "--user=$(OIDC_USER)" in target_body
+    assert '--user="$$_OIDC_USER"' in target_body
 
 
 def test_grant_workspace_access_supports_sa_user_and_oidc_user(makefile_content):
@@ -133,7 +145,21 @@ def test_grant_workspace_access_supports_sa_user_and_oidc_user(makefile_content)
     assert "SA_USER" in target_body
     assert "OIDC_USER" in target_body
     assert "--serviceaccount=" in target_body
-    assert "--user=$(OIDC_USER)" in target_body
+    assert '--user="$$_OIDC_USER"' in target_body
+
+
+def test_exported_shell_vars_use_distinct_names_from_source_vars(makefile_content):
+    """Regression test for a GNU Make quirk: `target: export SA_USER :=
+    $(value SA_USER)` (reusing the same name) creates a self-referential
+    target-specific variable that silently truncates any value containing
+    '$(...)' sequences before it ever reaches the allow-list check. The
+    exported shell variables must use distinct names (e.g. _SA_USER)."""
+    for target in ("grant-workspace-access", "grant-workspace-create"):
+        body = _extract_target_body(makefile_content, target)
+        assert "export SA_USER := $(value SA_USER)" not in body
+        assert "export OIDC_USER := $(value OIDC_USER)" not in body
+        assert "export _SA_USER := $(value SA_USER)" in body
+        assert "export _OIDC_USER := $(value OIDC_USER)" in body
 
 
 # ---------------------------------------------------------------------------
@@ -193,6 +219,46 @@ class TestGrantWorkspaceCreateExecution:
         assert result.returncode != 0
         combined = result.stdout + result.stderr
         assert "specify only one" in combined.lower()
+
+    @pytest.mark.parametrize(
+        "malicious_sa_user",
+        [
+            "alice; rm -rf /tmp/pwned",
+            "alice`touch /tmp/pwned`",
+            "alice$(touch /tmp/pwned)",
+            "alice' && touch /tmp/pwned && echo '",
+            'alice" && touch /tmp/pwned && echo "',
+            "alice\ntouch /tmp/pwned",
+            "alice|touch /tmp/pwned",
+            "alice && touch /tmp/pwned",
+        ],
+    )
+    def test_rejects_shell_metacharacters_in_sa_user_without_invoking_kubectl(
+        self, fake_kubectl_path, malicious_sa_user
+    ):
+        """Security regression: a value containing shell metacharacters must
+        be rejected by the allow-list check before any kubectl invocation,
+        never executed as shell syntax."""
+        result = _run_make(
+            ["grant-workspace-create", f"SA_USER={malicious_sa_user}"],
+            path_prefix=fake_kubectl_path,
+        )
+        combined = result.stdout + result.stderr
+        assert result.returncode != 0, combined
+        assert "KUBECTL_CALL" not in combined
+        assert not os.path.exists("/tmp/pwned")
+
+    def test_rejects_shell_metacharacters_in_oidc_user_without_invoking_kubectl(
+        self, fake_kubectl_path
+    ):
+        result = _run_make(
+            ["grant-workspace-create", "OIDC_USER=bob; touch /tmp/pwned"],
+            path_prefix=fake_kubectl_path,
+        )
+        combined = result.stdout + result.stderr
+        assert result.returncode != 0, combined
+        assert "KUBECTL_CALL" not in combined
+        assert not os.path.exists("/tmp/pwned")
 
 
 class TestGrantWorkspaceAccessExecution:
@@ -256,3 +322,48 @@ class TestGrantWorkspaceAccessExecution:
         assert result.returncode != 0
         combined = result.stdout + result.stderr
         assert "specify only one" in combined.lower()
+
+    @pytest.mark.parametrize(
+        "malicious_sa_user",
+        [
+            "alice; rm -rf /tmp/pwned",
+            "alice`touch /tmp/pwned`",
+            "alice$(touch /tmp/pwned)",
+            "alice' && touch /tmp/pwned && echo '",
+            'alice" && touch /tmp/pwned && echo "',
+        ],
+    )
+    def test_rejects_shell_metacharacters_in_sa_user_without_invoking_kubectl(
+        self, fake_kubectl_path, malicious_sa_user
+    ):
+        result = _run_make(
+            [
+                "grant-workspace-access",
+                f"SA_USER={malicious_sa_user}",
+                "WORKSPACE_NS=team-a",
+            ],
+            path_prefix=fake_kubectl_path,
+        )
+        combined = result.stdout + result.stderr
+        assert result.returncode != 0, combined
+        assert "KUBECTL_CALL" not in combined
+        assert not os.path.exists("/tmp/pwned")
+
+    def test_rejects_shell_metacharacters_in_workspace_ns_without_invoking_kubectl(
+        self, fake_kubectl_path
+    ):
+        """Security regression: WORKSPACE_NS is also allow-list validated —
+        a value containing shell metacharacters must be rejected before any
+        kubectl invocation."""
+        result = _run_make(
+            [
+                "grant-workspace-access",
+                "SA_USER=alice",
+                "WORKSPACE_NS=team-a; touch /tmp/pwned",
+            ],
+            path_prefix=fake_kubectl_path,
+        )
+        combined = result.stdout + result.stderr
+        assert result.returncode != 0, combined
+        assert "KUBECTL_CALL" not in combined
+        assert not os.path.exists("/tmp/pwned")

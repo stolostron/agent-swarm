@@ -58,8 +58,8 @@ make grant-workspace-create SA_USER=alice                          # Allow user 
 # For OpenShift OAuth/OIDC users (e.g. GitHub identity provider) instead of a ServiceAccount
 # token, use OIDC_USER=<name> in place of SA_USER=<name> — these are different RBAC
 # principals (User vs ServiceAccount) and a grant for one does not apply to the other.
-make grant-workspace-access OIDC_USER=alice WORKSPACE_NS=my-proj
-make grant-workspace-create OIDC_USER=alice
+make grant-workspace-access OIDC_USER=<name> WORKSPACE_NS=my-proj
+make grant-workspace-create OIDC_USER=<name>
 ```
 
 ## Architecture

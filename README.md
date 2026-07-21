@@ -86,7 +86,7 @@ are different Kubernetes RBAC principals (`User` vs `ServiceAccount`) and a bind
 one does not grant access for the other:
 
 ```sh
-make grant-workspace-access OIDC_USER=alice WORKSPACE_NS=my-project
+make grant-workspace-access OIDC_USER=<name> WORKSPACE_NS=my-project
 ```
 
 ### Allow a user to create new workspaces
@@ -95,8 +95,8 @@ Grants cluster-scoped `create namespaces` permission so the user sees the **Crea
 Users can only see workspaces they have been explicitly granted access to — this does not expose other users' workspaces:
 
 ```sh
-make grant-workspace-create SA_USER=alice
-make grant-workspace-create OIDC_USER=alice   # for OpenShift OAuth / OIDC users
+make grant-workspace-create SA_USER=<name>
+make grant-workspace-create OIDC_USER=<name>   # for OpenShift OAuth / OIDC users
 ```
 
 ### Typical onboarding flow

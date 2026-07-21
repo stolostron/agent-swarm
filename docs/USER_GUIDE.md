@@ -425,11 +425,16 @@ Run this once per user per namespace. A user with no workspace grants can log in
 
 **OpenShift OAuth / OIDC users** (e.g. logging in via a GitHub identity provider) are a
 different Kubernetes RBAC principal (`User`) than a ServiceAccount (`system:serviceaccount:...`).
-A `SA_USER=` grant does **not** apply to them. Use `OIDC_USER=` instead, with the exact
-username shown by `kubectl get users` (OpenShift) or the `sub` claim of their token:
+A `SA_USER=` grant does **not** apply to them. Use `OIDC_USER=` instead, with the *effective*
+RBAC username — on OpenShift, list it with `kubectl get users`; on vanilla Kubernetes with an
+OIDC authenticator, use the username your cluster's `--oidc-username-claim` /
+`--oidc-username-prefix` flags (or structured `AuthenticationConfiguration`) produce. Do not
+assume this is the raw `sub` claim from the token — the API server may remap or prefix it
+(commonly `<issuer-url>#<sub>` unless a prefix is explicitly configured), so relying on the
+unprocessed claim value can silently grant the wrong identity or fail to match anyone:
 
 ```sh
-make grant-workspace-access OIDC_USER=alice WORKSPACE_NS=my-project
+make grant-workspace-access OIDC_USER=<name> WORKSPACE_NS=my-project
 ```
 
 `SA_USER` and `OIDC_USER` are mutually exclusive — specify exactly one.
@@ -440,8 +445,8 @@ Grants cluster-scoped `create namespaces` permission so the user sees the **Crea
 Users can only see workspaces they have been explicitly granted access to — this does not expose other users' workspaces:
 
 ```sh
-make grant-workspace-create SA_USER=alice
-make grant-workspace-create OIDC_USER=alice   # for OpenShift OAuth / OIDC users
+make grant-workspace-create SA_USER=<name>
+make grant-workspace-create OIDC_USER=<name>   # for OpenShift OAuth / OIDC users
 ```
 
 #### Typical onboarding flow
