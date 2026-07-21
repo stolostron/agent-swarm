@@ -221,44 +221,46 @@ class TestGrantWorkspaceCreateExecution:
         assert "specify only one" in combined.lower()
 
     @pytest.mark.parametrize(
-        "malicious_sa_user",
+        "malicious_sa_user_template",
         [
-            "alice; rm -rf /tmp/pwned",
-            "alice`touch /tmp/pwned`",
-            "alice$(touch /tmp/pwned)",
-            "alice' && touch /tmp/pwned && echo '",
-            'alice" && touch /tmp/pwned && echo "',
-            "alice\ntouch /tmp/pwned",
-            "alice|touch /tmp/pwned",
-            "alice && touch /tmp/pwned",
+            "alice; rm -rf {marker}",
+            "alice`touch {marker}`",
+            "alice$(touch {marker})",
+            "alice' && touch {marker} && echo '",
+            'alice" && touch {marker} && echo "',
+            "alice\ntouch {marker}",
+            "alice|touch {marker}",
+            "alice && touch {marker}",
         ],
     )
     def test_rejects_shell_metacharacters_in_sa_user_without_invoking_kubectl(
-        self, fake_kubectl_path, malicious_sa_user
+        self, fake_kubectl_path, tmp_path, malicious_sa_user_template
     ):
         """Security regression: a value containing shell metacharacters must
         be rejected by the allow-list check before any kubectl invocation,
         never executed as shell syntax."""
+        marker = tmp_path / "pwned"
         result = _run_make(
-            ["grant-workspace-create", f"SA_USER={malicious_sa_user}"],
+            ["grant-workspace-create", f"SA_USER={malicious_sa_user_template.format(marker=marker)}"],
             path_prefix=fake_kubectl_path,
         )
         combined = result.stdout + result.stderr
         assert result.returncode != 0, combined
         assert "KUBECTL_CALL" not in combined
-        assert not os.path.exists("/tmp/pwned")
+        assert not marker.exists()
 
     def test_rejects_shell_metacharacters_in_oidc_user_without_invoking_kubectl(
-        self, fake_kubectl_path
+        self, fake_kubectl_path, tmp_path
     ):
+        marker = tmp_path / "pwned"
         result = _run_make(
-            ["grant-workspace-create", "OIDC_USER=bob; touch /tmp/pwned"],
+            ["grant-workspace-create", f"OIDC_USER=bob; touch {marker}"],
             path_prefix=fake_kubectl_path,
         )
         combined = result.stdout + result.stderr
         assert result.returncode != 0, combined
         assert "KUBECTL_CALL" not in combined
-        assert not os.path.exists("/tmp/pwned")
+        assert not marker.exists()
 
 
 class TestGrantWorkspaceAccessExecution:
@@ -324,22 +326,23 @@ class TestGrantWorkspaceAccessExecution:
         assert "specify only one" in combined.lower()
 
     @pytest.mark.parametrize(
-        "malicious_sa_user",
+        "malicious_sa_user_template",
         [
-            "alice; rm -rf /tmp/pwned",
-            "alice`touch /tmp/pwned`",
-            "alice$(touch /tmp/pwned)",
-            "alice' && touch /tmp/pwned && echo '",
-            'alice" && touch /tmp/pwned && echo "',
+            "alice; rm -rf {marker}",
+            "alice`touch {marker}`",
+            "alice$(touch {marker})",
+            "alice' && touch {marker} && echo '",
+            'alice" && touch {marker} && echo "',
         ],
     )
     def test_rejects_shell_metacharacters_in_sa_user_without_invoking_kubectl(
-        self, fake_kubectl_path, malicious_sa_user
+        self, fake_kubectl_path, tmp_path, malicious_sa_user_template
     ):
+        marker = tmp_path / "pwned"
         result = _run_make(
             [
                 "grant-workspace-access",
-                f"SA_USER={malicious_sa_user}",
+                f"SA_USER={malicious_sa_user_template.format(marker=marker)}",
                 "WORKSPACE_NS=team-a",
             ],
             path_prefix=fake_kubectl_path,
@@ -347,23 +350,24 @@ class TestGrantWorkspaceAccessExecution:
         combined = result.stdout + result.stderr
         assert result.returncode != 0, combined
         assert "KUBECTL_CALL" not in combined
-        assert not os.path.exists("/tmp/pwned")
+        assert not marker.exists()
 
     def test_rejects_shell_metacharacters_in_workspace_ns_without_invoking_kubectl(
-        self, fake_kubectl_path
+        self, fake_kubectl_path, tmp_path
     ):
         """Security regression: WORKSPACE_NS is also allow-list validated —
         a value containing shell metacharacters must be rejected before any
         kubectl invocation."""
+        marker = tmp_path / "pwned"
         result = _run_make(
             [
                 "grant-workspace-access",
                 "SA_USER=alice",
-                "WORKSPACE_NS=team-a; touch /tmp/pwned",
+                f"WORKSPACE_NS=team-a; touch {marker}",
             ],
             path_prefix=fake_kubectl_path,
         )
         combined = result.stdout + result.stderr
         assert result.returncode != 0, combined
         assert "KUBECTL_CALL" not in combined
-        assert not os.path.exists("/tmp/pwned")
+        assert not marker.exists()
