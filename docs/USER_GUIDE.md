@@ -601,7 +601,7 @@ Go-based AI coding agent ([opencode.ai](https://opencode.ai)).
 | Provider | Credential Required | Model Format |
 |---|---|---|
 | Google Vertex AI (Anthropic Claude) | ADC JSON + GCP Project | `google-vertex-anthropic/claude-sonnet-5@default` |
-| Google Gemini (AI Studio) | Google API Key | `google/gemini-3.5-flash` |
+| Google Gemini (AI Studio) | Google API Key | `google/gemini-3.6-flash` |
 
 **Model format:** `provider/model@version` (e.g., `google-vertex-anthropic/claude-sonnet-5@default`)
 

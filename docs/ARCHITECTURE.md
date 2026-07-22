@@ -244,8 +244,8 @@ Deployment; `make delete` removes it.
 | `claude_preset_build_model` | `CLAUDE_PRESET_BUILD_MODEL` | `google-vertex-anthropic/claude-sonnet-5@default` | Claude preset's BUILD-role model |
 | `claude_preset_small_model` | `CLAUDE_PRESET_SMALL_MODEL` | `google-vertex-anthropic/claude-haiku-4-5@20251001` | Claude preset's small/housekeeping model |
 | `gemini_preset_plan_model` | `GEMINI_PRESET_PLAN_MODEL` | `google/gemini-3.1-pro-preview` | Gemini preset's PLAN-role model |
-| `gemini_preset_build_model` | `GEMINI_PRESET_BUILD_MODEL` | `google/gemini-3.5-flash` | Gemini preset's BUILD-role model |
-| `gemini_preset_small_model` | `GEMINI_PRESET_SMALL_MODEL` | `google/gemini-3.1-flash-lite` | Gemini preset's small/housekeeping model |
+| `gemini_preset_build_model` | `GEMINI_PRESET_BUILD_MODEL` | `google/gemini-3.6-flash` | Gemini preset's BUILD-role model |
+| `gemini_preset_small_model` | `GEMINI_PRESET_SMALL_MODEL` | `google/gemini-3.5-flash-lite` | Gemini preset's small/housekeeping model |
 | `opencode_experimental_plan_mode` | `OPENCODE_EXPERIMENTAL_PLAN_MODE` | `true` | Enables the opencode plan agent so the PLAN-role model above is actually used |
 
 For local dev (`make dev`), the same env vars are set via `.env` (see `.env.example`) — no

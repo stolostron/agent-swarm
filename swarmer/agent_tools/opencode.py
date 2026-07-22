@@ -53,7 +53,7 @@ class OpenCodeStrategy(AgentToolStrategy):
             # Fall back to fixed defaults if the model is unrecognised. Kept for
             # backward compatibility with sessions created before presets existed.
             _model = model or "google/gemini-3.1-pro-preview"
-            _small_model = "google/gemini-3.5-flash"
+            _small_model = "google/gemini-3.5-flash-lite"
             if "/" in _model:
                 _provider, _mid = _model.split("/", 1)
                 # Strip @version suffix for comparison
