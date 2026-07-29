@@ -21,6 +21,7 @@ from swarmer.routers import auth as auth_router
 from swarmer.routers import chat_proxy as chat_proxy_router
 from swarmer.routers import env_vars as env_vars_router
 from swarmer.routers import mcp_servers as mcp_servers_router
+from swarmer.routers import office as office_router
 from swarmer.routers import prompts as prompts_router
 from swarmer.routers import sessions as sessions_router
 from swarmer.routers import secrets as secrets_router
@@ -344,6 +345,7 @@ app.include_router(env_vars_router.router)
 app.include_router(mcp_servers_router.router)
 app.include_router(prompts_router.router)
 app.include_router(sessions_router.router)
+app.include_router(office_router.router)
 app.include_router(chat_proxy_router.router)
 app.include_router(tui_router.router)
 
