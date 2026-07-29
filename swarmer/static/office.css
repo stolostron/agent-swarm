@@ -17,6 +17,10 @@
   max-width: 1400px;
 }
 
+.office-breadcrumb {
+  margin-bottom: var(--pf-t--global--spacer--md);
+}
+
 .office-hero {
   display: flex;
   justify-content: space-between;
@@ -34,6 +38,26 @@
   font-size: var(--pf-t--global--font--size--sm);
   max-width: 42rem;
 }
+
+.office-hero__actions {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.6rem;
+}
+
+.office-hero__buttons {
+  display: flex;
+  gap: var(--pf-t--global--spacer--sm);
+}
+
+/* Predefined character palettes — used instead of inline CSS variables (CSP). */
+.desk-station--look-0 { --skin: #f2c9a0; --hair: #3b2a1a; --shirt: #5b8def; }
+.desk-station--look-1 { --skin: #d9a06a; --hair: #1a1a1a; --shirt: #e35d6a; }
+.desk-station--look-2 { --skin: #f6d7b0; --hair: #8b5a2b; --shirt: #46b07a; }
+.desk-station--look-3 { --skin: #c68642; --hair: #2c1810; --shirt: #9b7bdb; }
+.desk-station--look-4 { --skin: #ffe0bd; --hair: #c45c26; --shirt: #f0a202; }
+.desk-station--look-5 { --skin: #e0ac69; --hair: #4a3728; --shirt: #2a9d8f; }
 
 .office-legend {
   display: flex;

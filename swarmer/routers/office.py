@@ -6,6 +6,8 @@ so operators can watch swarm activity in near real time.
 
 from __future__ import annotations
 
+import asyncio
+
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
@@ -16,6 +18,10 @@ from swarmer.routers.api_client import get_api_client
 
 router = APIRouter()
 templates = Jinja2Templates(directory="swarmer/templates")
+
+# Cap concurrent list_sessions calls on the global office floor so a large
+# workspace count does not fan out into an unbounded N+1 storm.
+_SESSION_FETCH_CONCURRENCY = 5
 
 # phase → visual activity used by the office scene CSS
 _PHASE_ACTIVITY: dict[str, str] = {
@@ -39,15 +45,9 @@ _PHASE_LABEL: dict[str, str] = {
     "stopped": "Stopped",
 }
 
-# Skin / outfit palettes rotated by session id for variety
-_LOOKS = (
-    {"skin": "#f2c9a0", "hair": "#3b2a1a", "shirt": "#5b8def"},
-    {"skin": "#d9a06a", "hair": "#1a1a1a", "shirt": "#e35d6a"},
-    {"skin": "#f6d7b0", "hair": "#8b5a2b", "shirt": "#46b07a"},
-    {"skin": "#c68642", "hair": "#2c1810", "shirt": "#9b7bdb"},
-    {"skin": "#ffe0bd", "hair": "#c45c26", "shirt": "#f0a202"},
-    {"skin": "#e0ac69", "hair": "#4a3728", "shirt": "#2a9d8f"},
-)
+# Predefined palette class suffixes (desk-station--look-N) defined in office.css.
+# Avoid inline style=/CSS variables so strict CSP can disallow unsafe-inline.
+_LOOK_COUNT = 6
 
 
 def _cron_label(cron_expr: str) -> str:
@@ -104,7 +104,6 @@ def _session_card(session: dict) -> dict:
     """Normalize a session dict into office-scene card data."""
     phase = session.get("phase") or "idle"
     sid = int(session["id"])
-    look = _LOOKS[sid % len(_LOOKS)]
     schedules = _schedule_summaries(session)
     enabled = [s for s in schedules if s["enabled"]]
     return {
@@ -117,9 +116,7 @@ def _session_card(session: dict) -> dict:
         "status_detail": session.get("status_detail") or "",
         "activity": _PHASE_ACTIVITY.get(phase, "idle"),
         "label": _PHASE_LABEL.get(phase, phase.title()),
-        "skin": look["skin"],
-        "hair": look["hair"],
-        "shirt": look["shirt"],
+        "look": f"look-{sid % _LOOK_COUNT}",
         "in_restroom": phase == "succeeded",
         "schedules": schedules,
         "schedule_count": len(enabled),
@@ -127,7 +124,11 @@ def _session_card(session: dict) -> dict:
 
 
 async def _build_offices(request: Request, ws_id: int | None = None) -> list[dict]:
-    """Load workspaces + sessions and shape them for the office scene."""
+    """Load workspaces + sessions and shape them for the office scene.
+
+    Session lists for the global floor are fetched with bounded concurrency
+    so many workspaces do not each wait on a serial N+1 round-trip.
+    """
     async with get_api_client(request) as api:
         if ws_id is not None:
             ws = await api.get_workspace(ws_id)
@@ -135,9 +136,20 @@ async def _build_offices(request: Request, ws_id: int | None = None) -> list[dic
         else:
             workspaces = await api.list_workspaces()
 
+        if not workspaces:
+            return []
+
+        sem = asyncio.Semaphore(_SESSION_FETCH_CONCURRENCY)
+
+        async def _sessions_for(ws: dict) -> tuple[dict, list]:
+            async with sem:
+                sessions = await api.list_sessions(ws["id"])
+            return ws, sessions
+
+        loaded = await asyncio.gather(*[_sessions_for(ws) for ws in workspaces])
+
         offices: list[dict] = []
-        for ws in workspaces:
-            sessions = await api.list_sessions(ws["id"])
+        for ws, sessions in loaded:
             cards = [_session_card(s) for s in sessions]
             workers = [c for c in cards if not c["in_restroom"]]
             resters = [c for c in cards if c["in_restroom"]]
@@ -156,7 +168,7 @@ async def _build_offices(request: Request, ws_id: int | None = None) -> list[dic
 
 
 @router.get("/office", dependencies=[Depends(require_auth)])
-async def office_index(request: Request):
+async def office_index(request: Request) -> HTMLResponse:
     """Global office floor — one room per workspace."""
     offices = await _build_offices(request)
     return templates.TemplateResponse(
@@ -176,8 +188,8 @@ async def office_index(request: Request):
     dependencies=[Depends(require_auth)],
     response_class=HTMLResponse,
 )
-async def office_scene(request: Request):
-    """HTMX partial — polled every few seconds for live animation state."""
+async def office_scene(request: Request) -> HTMLResponse:
+    """HTMX partial — polled periodically for live animation state."""
     offices = await _build_offices(request)
     return templates.TemplateResponse(
         request,
@@ -190,7 +202,7 @@ async def office_scene(request: Request):
     "/workspaces/{ws_id}/office",
     dependencies=[Depends(require_auth)],
 )
-async def workspace_office(request: Request, ws_id: int):
+async def workspace_office(request: Request, ws_id: int) -> HTMLResponse:
     """Single-workspace office view."""
     offices = await _build_offices(request, ws_id=ws_id)
     ws = offices[0]["workspace"] if offices else None
@@ -211,7 +223,8 @@ async def workspace_office(request: Request, ws_id: int):
     dependencies=[Depends(require_auth)],
     response_class=HTMLResponse,
 )
-async def workspace_office_scene(request: Request, ws_id: int):
+async def workspace_office_scene(request: Request, ws_id: int) -> HTMLResponse:
+    """HTMX partial for a single-workspace office scene."""
     offices = await _build_offices(request, ws_id=ws_id)
     ws = offices[0]["workspace"] if offices else None
     return templates.TemplateResponse(

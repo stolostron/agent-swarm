@@ -27,8 +27,7 @@ def test_session_card_maps_running_phase():
     assert card["is_active"] is True
     assert card["name"] == "cve-scan"
     assert card["in_restroom"] is False
-    assert card["skin"]
-    assert card["shirt"]
+    assert card["look"] == "look-1"  # 7 % 6
     assert card["schedules"] == []
     assert card["schedule_count"] == 0
 
@@ -96,3 +95,9 @@ def test_all_known_phases_have_activities():
     assert _PHASE_ACTIVITY == expected
     for phase, activity in expected.items():
         assert _session_card({"id": 2, "phase": phase})["activity"] == activity
+
+
+def test_session_card_look_rotates_by_id():
+    assert _session_card({"id": 0, "phase": "idle"})["look"] == "look-0"
+    assert _session_card({"id": 6, "phase": "idle"})["look"] == "look-0"
+    assert _session_card({"id": 5, "phase": "idle"})["look"] == "look-5"

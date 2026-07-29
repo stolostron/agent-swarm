@@ -1,7 +1,6 @@
 {# Cute human worker for one session. Expects: session, ws_id, rest_mode #}
-<a class="desk-station desk-station--{{ session.activity }}{% if rest_mode %} desk-station--rest{% endif %}"
-   href="/workspaces/{{ ws_id }}/sessions/{{ session.id }}"
-   style="--skin: {{ session.skin }}; --hair: {{ session.hair }}; --shirt: {{ session.shirt }};">
+<a class="desk-station desk-station--{{ session.activity }} desk-station--{{ session.look }}{% if rest_mode %} desk-station--rest{% endif %}"
+   href="/workspaces/{{ ws_id }}/sessions/{{ session.id }}">
   <div class="human-tip" role="tooltip">
     <div class="human-tip__title">{{ session.name }}</div>
     <div class="human-tip__status">{{ session.label }} · {{ session.mode }}</div>
