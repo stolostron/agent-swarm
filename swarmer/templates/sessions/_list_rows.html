@@ -38,7 +38,7 @@
         <a href="/workspaces/{{ ws.id }}/sessions/{{ s.id }}"
            style="font-weight:var(--pf-t--global--font--weight--heading--bold); text-decoration:none;">{{ s.name }}</a>
         {% if s.has_pending_chunks %}
-        <span class="pending-net-rules-dot" title="Pending net rules need review"></span>
+        <span class="pending-net-rules-dot" role="img" aria-label="Pending net rules need review" title="Pending net rules need review"></span>
         {% endif %}
       </td>
       <td class="pf-v6-c-table__td" role="cell" data-label="Tool">

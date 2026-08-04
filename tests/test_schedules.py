@@ -308,6 +308,22 @@ class TestSessionHasPendingChunks:
     def test_invalid_json_is_falsy(self):
         assert self._session(policy_chunks="not json").has_pending_chunks is False
 
+    def test_malformed_chunk_ignored(self):
+        """If policy_chunks parses to a list containing non-dicts, it should not raise AttributeError."""
+        import json
+        chunks = json.dumps(["not a dict", {"status": "pending", "rule_name": "r1", "binaries": []}])
+        assert self._session(policy_chunks=chunks).has_pending_chunks is True
+
+    def test_null_binaries_in_chunk_does_not_crash(self):
+        """A chunk with `"binaries": null` must not abort the loop via TypeError."""
+        import json
+        chunks = json.dumps([
+            {"status": "pending", "rule_name": "r1", "binaries": None},
+            {"status": "pending", "rule_name": "r2", "binaries": [{"path": "/usr/bin/curl"}]},
+        ])
+        # r1's null binaries yields an empty set → fully covered by nothing → pending.
+        assert self._session(policy_chunks=chunks).has_pending_chunks is True
+
     def test_pending_chunk_not_yet_promoted(self):
         import json
         chunks = json.dumps([

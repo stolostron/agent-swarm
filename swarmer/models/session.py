@@ -219,22 +219,29 @@ class Session(Base):
         if self.custom_policies:
             try:
                 for rule in json.loads(self.custom_policies):
+                    if not isinstance(rule, dict):
+                        continue
                     name = rule.get("name")
                     if name:
                         promoted_binaries[name] = {
-                            b.get("path", "") for b in rule.get("binaries", [])
+                            b.get("path", "") for b in (rule.get("binaries") or []) if isinstance(b, dict)
                         }
             except (ValueError, TypeError):
                 pass
 
-        for chunk in chunks:
-            if chunk.get("status") != "pending":
-                continue
-            chunk_bins = {b.get("path", "") for b in chunk.get("binaries", [])}
-            rule_bins = promoted_binaries.get(chunk.get("rule_name"))
-            if rule_bins is None or not chunk_bins.issubset(rule_bins):
-                return True
-        return False
+        try:
+            for chunk in chunks:
+                if not isinstance(chunk, dict):
+                    continue
+                if chunk.get("status") != "pending":
+                    continue
+                chunk_bins = {b.get("path", "") for b in (chunk.get("binaries") or []) if isinstance(b, dict)}
+                rule_bins = promoted_binaries.get(chunk.get("rule_name"))
+                if rule_bins is None or not chunk_bins.issubset(rule_bins):
+                    return True
+            return False
+        except (ValueError, TypeError, AttributeError):
+            return False
 
     @property
     def phase_badge_class(self) -> str:
