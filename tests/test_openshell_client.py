@@ -277,14 +277,14 @@ async def test_create_sandbox_sets_hardcoded_ephemeral_storage(sdk_client):
     with patch.object(oc, "_get_client", return_value=sdk_client), \
          patch.object(oc, "_wait_sandbox_ready", new=AsyncMock()):
         await oc.create_sandbox(
-            image="your-registry.example.com/opencode:latest",
+            image="opencode:test",
             env_vars={},
             policy=None,
         )
     spec = sdk_client.create.call_args.kwargs["spec"]
     resources = dict(spec.template.resources)
-    assert dict(resources["requests"])["ephemeral-storage"] == oc.SANDBOX_EPHEMERAL_STORAGE
-    assert dict(resources["limits"])["ephemeral-storage"] == oc.SANDBOX_EPHEMERAL_STORAGE
+    assert dict(resources["requests"])["ephemeral-storage"] == "10Gi"
+    assert dict(resources["limits"])["ephemeral-storage"] == "10Gi"
 
 
 # ---------------------------------------------------------------------------

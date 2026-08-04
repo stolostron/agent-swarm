@@ -177,7 +177,17 @@ async def migrate_db() -> None:
                 await conn.execute(text(stmt))
             except Exception as e:
                 msg = str(e).lower()
-                if "duplicate column" in msg or "already exists" in msg or "no such column" in msg:
+                if "duplicate column" in msg or "already exists" in msg:
+                    continue
+                # "no such column" only indicates safe idempotence for legacy
+                # DROP/RENAME COLUMN statements (already-dropped or
+                # already-renamed column on a re-run) — scoped to those
+                # statements so an ADD COLUMN/CREATE TABLE failure that
+                # happens to mention "no such column" (e.g. a bad column
+                # reference elsewhere in the statement) is never swallowed.
+                stmt_upper = stmt.upper()
+                is_legacy_drop_or_rename = "DROP COLUMN" in stmt_upper or "RENAME COLUMN" in stmt_upper
+                if is_legacy_drop_or_rename and "no such column" in msg:
                     continue
                 log.error("Migration failed for %r: %s", stmt, e)
                 raise

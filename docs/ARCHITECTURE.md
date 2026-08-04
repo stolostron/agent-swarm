@@ -160,7 +160,7 @@ All kubernetes client imports remain lazy (inside functions) to avoid import err
 - **Gateway** -- credential injection API; Swarmer sends AI tokens, PATs, and MCP tokens to the Gateway, which injects them as env vars into the sandbox. No K8s Secrets written for session credentials.
 - **Supervisor** -- sandboxed agent runtime; `create_sandbox()` provisions the sandbox, `delete_sandbox()` tears it down.
 - **Sandbox lifecycle** -- fully managed by OpenShell. No K8s pods, PVCs, or Services created for sessions.
-- **No PVCs** -- sandbox filesystem is ephemeral; repos are cloned fresh each launch via OpenShell API.
+- **`/sandbox` PVC** -- OpenShell creates a per-sandbox PVC (`workspace-{sandbox-name}`) for `/sandbox`, sized by the gateway's `server.workspaceDefaultStorageSize` Helm value; Swarmer does not create this PVC directly (see the OpenShell Client API table below for the distinct, hardcoded `10Gi` pod `ephemeral-storage` compute resource). Repos are cloned fresh each launch via OpenShell API.
 - **No session K8s Secrets** -- all credential injection goes through the Gateway provider mechanism.
 - **`session.sandbox_name`** -- stores the OpenShell sandbox identifier (nullable `VARCHAR(255)`, `NULL` when session is idle).
 - **Network policy** -- `openshell_policy.py` builds per-sandbox YAML policies controlling outbound access (AI provider endpoints, per-repo GitHub, Jira MCP)
@@ -269,7 +269,7 @@ Every data item Swarmer currently pushes into agent pods, its source model, the 
 | Prompt | instruction_prompt + base_prompt + repo_context | `Session` + `WorkspacePrompt` | CLI arg (prompt mode) or `SWARMER_AGENT_MD` env → AGENTS.md (TUI/server) | `write_agents_md()` to `/sandbox/AGENTS.md` for **all modes**; prompt mode reads it via `$(</sandbox/AGENTS.md)` shell expansion; TUI/server agent reads it automatically |
 | Env Vars | HOME, NODE_OPTIONS, GOOGLE_APPLICATION_CREDENTIALS | Hardcoded | Pod env spec | Sandbox env vars via Gateway |
 | Extra Env | Arbitrary workspace key-value pairs | External K8s Secret | `envFrom` (`swarmer-agent-extra-env`, optional) | Gateway env injection |
-| Volumes | PVC → /workspace, ConfigMap → /tmp/agent-config-ro, ADC → /app/gcloud | N/A | Pod volume spec | Sandbox filesystem (no separate volumes) |
+| Volumes | PVC → /workspace, ConfigMap → /tmp/agent-config-ro, ADC → /app/gcloud | N/A | Pod volume spec | Sandbox filesystem — `/sandbox` is backed by an OpenShell-managed PVC (`workspace-{sandbox-name}`, sized by `server.workspaceDefaultStorageSize`), not a Swarmer-created volume; no ConfigMap/ADC volume mounts |
 | Startup Script | Config copy, safe dir, git creds, symlinks, AGENTS.md write, model write, branch checkout | N/A | `sh -c` command chain | Simplified script — removes credential setup and git clone stages |
 | Pod Config | Resources (1Gi-8Gi/500m-2000m), fsGroup, runAsUser, imagePullPolicy, restartPolicy | `Session` + `Settings` | Pod spec | Sandbox resource config — ephemeral storage hardcoded to `10Gi` for every sandbox (`openshell_client.SANDBOX_EPHEMERAL_STORAGE`, ACM-39804; no longer per-session, see ACM-38184). The OpenShell gateway's `workspaceDefaultStorageSize` Helm value (`OPENSHELL_WORKSPACE_STORAGE` in the Makefile) is a separate, gateway-wide ceiling for the `/sandbox` PVC — only applied on first OpenShell install |
 | Networking | Container port 4096 (server mode), ClusterIP Service, OpenShift Route | `Session.mode` | K8s Service/Route | OpenShell network endpoint |

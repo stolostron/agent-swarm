@@ -33,7 +33,8 @@ _provider_cache: dict[str, tuple[bool, float]] = {}  # name → (exists, expires
 # per-session UI setting (ACM-38184), removed because it only bounded this
 # compute resource, not the `/sandbox` working directory PVC users actually
 # cared about (a separate, gateway-wide setting — see
-# docs/OPENSHELL_LOCAL_SETUP.md `workspaceDefaultStorageSize`, currently 5Gi).
+# docs/OPENSHELL_LOCAL_SETUP.md `workspaceDefaultStorageSize`, `10Gi` by
+# Makefile default but overridable per-cluster via OPENSHELL_WORKSPACE_STORAGE).
 # Hardcoded to the max of the old dropdown range; cost delta vs. smaller
 # values is negligible (~$0.40/mo per long-lived sandbox on AWS gp3).
 SANDBOX_EPHEMERAL_STORAGE = "10Gi"
