@@ -247,6 +247,103 @@ class TestSessionScheduleModel:
             await db.refresh(session)
             assert session.earliest_next_run == soon
 
+    @pytest.mark.asyncio
+    async def test_active_schedule_property(self):
+        """Session.active_schedule resolves active_schedule_id to the
+        matching (eager-loaded) SessionSchedule, or None."""
+        from swarmer.models.session import Session
+        from swarmer.models.session_schedule import SessionSchedule
+        from swarmer.models.workspace import Workspace
+
+        async with _TestSession() as db:
+            ws = Workspace(display_name="WS4", namespace="ws4", description="")
+            db.add(ws)
+            await db.commit()
+            await db.refresh(ws)
+
+            session = Session(workspace_id=ws.id, name="s4", mode="prompt",
+                              provider="", agent_tool="opencode", instruction_prompt="")
+            db.add(session)
+            await db.commit()
+            await db.refresh(session)
+
+            s1 = SessionSchedule(session_id=session.id, cron_schedule="0 * * * *", label="hourly")
+            s2 = SessionSchedule(session_id=session.id, cron_schedule="0 0 * * *", label="daily")
+            db.add_all([s1, s2])
+            await db.commit()
+            await db.refresh(s2)
+
+            # No active schedule yet.
+            await db.refresh(session)
+            assert session.active_schedule is None
+
+            session.active_schedule_id = s2.id
+            await db.commit()
+            await db.refresh(session)
+            assert session.active_schedule is not None
+            assert session.active_schedule.id == s2.id
+            assert session.active_schedule.label == "daily"
+
+            # Stale/unknown id resolves to None rather than raising.
+            session.active_schedule_id = 999999
+            await db.commit()
+            await db.refresh(session)
+            assert session.active_schedule is None
+
+
+class TestSessionHasPendingChunks:
+    """Unit tests for Session.has_pending_chunks (ACM-39209)."""
+
+    def _session(self, *, policy_chunks: str = "", custom_policies: str = ""):
+        from swarmer.models.session import Session
+        return Session(
+            workspace_id=1, name="s", mode="prompt", provider="",
+            agent_tool="opencode", instruction_prompt="",
+            policy_chunks=policy_chunks, custom_policies=custom_policies,
+        )
+
+    def test_no_chunks_recorded(self):
+        assert self._session().has_pending_chunks is False
+
+    def test_invalid_json_is_falsy(self):
+        assert self._session(policy_chunks="not json").has_pending_chunks is False
+
+    def test_pending_chunk_not_yet_promoted(self):
+        import json
+        chunks = json.dumps([
+            {"status": "pending", "rule_name": "r1", "binaries": [{"path": "/usr/bin/curl"}]},
+        ])
+        assert self._session(policy_chunks=chunks).has_pending_chunks is True
+
+    def test_approved_chunk_not_pending(self):
+        import json
+        chunks = json.dumps([
+            {"status": "approved", "rule_name": "r1", "binaries": [{"path": "/usr/bin/curl"}]},
+        ])
+        assert self._session(policy_chunks=chunks).has_pending_chunks is False
+
+    def test_pending_chunk_fully_promoted_not_pending(self):
+        import json
+        chunks = json.dumps([
+            {"status": "pending", "rule_name": "r1", "binaries": [{"path": "/usr/bin/curl"}]},
+        ])
+        custom = json.dumps([
+            {"name": "r1", "binaries": [{"path": "/usr/bin/curl"}]},
+        ])
+        assert self._session(policy_chunks=chunks, custom_policies=custom).has_pending_chunks is False
+
+    def test_pending_chunk_partially_promoted_still_pending(self):
+        """Same rule_name promoted for a different binary — chunk's binary
+        isn't covered, so it's still pending."""
+        import json
+        chunks = json.dumps([
+            {"status": "pending", "rule_name": "r1", "binaries": [{"path": "/usr/bin/curl"}]},
+        ])
+        custom = json.dumps([
+            {"name": "r1", "binaries": [{"path": "/usr/bin/wget"}]},
+        ])
+        assert self._session(policy_chunks=chunks, custom_policies=custom).has_pending_chunks is True
+
 
 # ===========================================================================
 # API tests: /schedules sub-resource
@@ -315,6 +412,173 @@ class TestSessionDetailPageWithSchedulePrompt:
 
         resp = await client.get(f"/workspaces/{ws['id']}/sessions/{s['id']}")
         assert resp.status_code == 200, resp.text
+
+
+class TestScheduleAndPendingChunksIndicators:
+    """Regression coverage for ACM-39209 UI indicators:
+    - running-from-schedule badge (session name/prompt) on the session
+      list rows and workspace-scoped session table
+    - pending net rules dot on the same views
+    """
+
+    @pytest_asyncio.fixture(autouse=True)
+    async def _patch_auth(self):
+        from swarmer.deps import require_auth
+        from swarmer.main import app
+        app.dependency_overrides[require_auth] = lambda: None
+        yield
+        app.dependency_overrides.pop(require_auth, None)
+
+    @pytest.mark.asyncio
+    async def test_list_rows_shows_active_schedule_badge_and_pending_dot(self, client):
+        import json
+        from swarmer.models.session import Session
+        from swarmer.models.session_schedule import SessionSchedule
+        from swarmer.models.workspace_prompt import WorkspacePrompt, WorkspacePromptSource
+
+        ws = await _create_workspace(client)
+        s = await _create_session(client, ws["id"])
+        ws_id, sid = ws["id"], s["id"]
+
+        async with _TestSession() as db:
+            source = WorkspacePromptSource(
+                workspace_id=ws_id, name="src1",
+                repo_url="https://github.com/x/y", branch="main",
+            )
+            db.add(source)
+            await db.commit()
+            await db.refresh(source)
+
+            prompt = WorkspacePrompt(
+                source_id=source.id, filename="p.md", display_name="Nightly CVE Scan",
+                content="hi", content_hash="h1",
+            )
+            db.add(prompt)
+            await db.commit()
+            await db.refresh(prompt)
+
+            sched = SessionSchedule(
+                session_id=sid, cron_schedule="0 2 * * *",
+                enabled=True, label="Nightly", prompt_id=prompt.id,
+            )
+            db.add(sched)
+            await db.commit()
+            await db.refresh(sched)
+
+            session = await db.get(Session, sid)
+            session.phase = "running"
+            session.active_schedule_id = sched.id
+            session.policy_chunks = json.dumps([
+                {"status": "pending", "rule_name": "r1", "binaries": [{"path": "/usr/bin/curl"}]},
+            ])
+            await db.commit()
+
+        resp = await client.get(f"/workspaces/{ws_id}/sessions/rows")
+        assert resp.status_code == 200, resp.text
+        html = resp.text
+        assert "Nightly" in html
+        assert "Nightly CVE Scan" in html
+        assert "pending-net-rules-dot" in html
+
+    @pytest.mark.asyncio
+    async def test_list_rows_no_indicators_when_idle_and_no_pending(self, client):
+        ws = await _create_workspace(client)
+        await _create_session(client, ws["id"])
+        ws_id = ws["id"]
+
+        resp = await client.get(f"/workspaces/{ws_id}/sessions/rows")
+        assert resp.status_code == 200, resp.text
+        html = resp.text
+        assert "pending-net-rules-dot" not in html
+        assert "Triggered by scheduled run" not in html
+
+
+class TestScheduleEditHTMXEndpoint:
+    """Regression test for ACM-39209.
+
+    The HTMX inline-edit form (sessions/_schedule_items.html) has no
+    `enabled` checkbox — enable/disable is handled exclusively by the
+    separate `schedule_toggle` endpoint. `schedule_edit()` previously
+    declared `enabled: str = Form("")` and unconditionally set
+    `sched.enabled = (enabled == "on")`, which forced every edit to
+    silently disable the schedule regardless of its prior state.
+    """
+
+    @pytest_asyncio.fixture(autouse=True)
+    async def _patch_auth(self):
+        from swarmer.deps import require_auth
+        from swarmer.main import app
+        app.dependency_overrides[require_auth] = lambda: None
+        yield
+        app.dependency_overrides.pop(require_auth, None)
+
+    @pytest.mark.asyncio
+    async def test_edit_preserves_enabled_state(self, client):
+        from swarmer.models.session_schedule import SessionSchedule
+
+        ws = await _create_workspace(client)
+        s = await _create_session(client, ws["id"])
+        ws_id, sid = ws["id"], s["id"]
+
+        async with _TestSession() as db:
+            sched = SessionSchedule(
+                session_id=sid, cron_schedule="0 * * * *",
+                enabled=True, label="hourly",
+            )
+            db.add(sched)
+            await db.commit()
+            await db.refresh(sched)
+            sched_id = sched.id
+
+        resp = await client.post(
+            f"/workspaces/{ws_id}/sessions/{sid}/schedules/{sched_id}/edit",
+            data={
+                "cron_expr": "0 0 * * *",
+                "label": "daily",
+                "prompt_id": "",
+                "instruction_prompt": "",
+            },
+        )
+        assert resp.status_code == 200, resp.text
+
+        async with _TestSession() as db:
+            updated = await db.get(SessionSchedule, sched_id)
+            assert updated.cron_schedule == "0 0 * * *"
+            assert updated.label == "daily"
+            assert updated.enabled is True
+
+    @pytest.mark.asyncio
+    async def test_edit_preserves_disabled_state(self, client):
+        from swarmer.models.session_schedule import SessionSchedule
+
+        ws = await _create_workspace(client)
+        s = await _create_session(client, ws["id"])
+        ws_id, sid = ws["id"], s["id"]
+
+        async with _TestSession() as db:
+            sched = SessionSchedule(
+                session_id=sid, cron_schedule="0 * * * *",
+                enabled=False, label="hourly",
+            )
+            db.add(sched)
+            await db.commit()
+            await db.refresh(sched)
+            sched_id = sched.id
+
+        resp = await client.post(
+            f"/workspaces/{ws_id}/sessions/{sid}/schedules/{sched_id}/edit",
+            data={
+                "cron_expr": "0 0 * * *",
+                "label": "daily",
+                "prompt_id": "",
+                "instruction_prompt": "",
+            },
+        )
+        assert resp.status_code == 200, resp.text
+
+        async with _TestSession() as db:
+            updated = await db.get(SessionSchedule, sched_id)
+            assert updated.enabled is False
 
 
 class TestScheduleAPI:

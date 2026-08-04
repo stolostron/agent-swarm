@@ -35,6 +35,17 @@
     .phase-stopped   { color: var(--pf-t--global--color--status--custom--default); }
     pre.last-output  { font-size: var(--pf-t--global--font--size--xs); }
     .namespace-badge { font-family: var(--pf-t--global--font--family--mono); font-size: var(--pf-t--global--font--size--sm); }
+    /* Orange dot — session/workspace level indicator for unreviewed draft
+       policy chunks (pending net rules). See Session.has_pending_chunks. */
+    .pending-net-rules-dot {
+      display: inline-block;
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--pf-t--global--color--status--warning--default);
+      margin-left: 6px;
+      vertical-align: middle;
+    }
     .pf-v6-c-breadcrumb__list { display: flex; flex-wrap: wrap; align-items: center; list-style: none; padding: 0; margin: 0; }
     .pf-v6-c-breadcrumb__item { display: flex; align-items: center; }
     .pf-v6-c-breadcrumb__item-divider { margin: 0 0.4rem; }

@@ -1,3 +1,4 @@
+import json
 from datetime import datetime, timezone
 
 from sqlalchemy import (
@@ -178,6 +179,62 @@ class Session(Base):
         if not enabled:
             return None
         return min(s.cron_next_run for s in enabled)
+
+    @property
+    def active_schedule(self) -> "SessionSchedule | None":  # noqa: F821
+        """The SessionSchedule currently driving this run, if any.
+
+        `active_schedule_id` is set by the scheduler at launch time and
+        cleared on completion/stop. `schedules` is eager-loaded
+        (lazy="selectin"), so this never triggers a lazy DB call.
+        """
+        if not self.active_schedule_id:
+            return None
+        for sched in self.schedules or []:
+            if sched.id == self.active_schedule_id:
+                return sched
+        return None
+
+    @property
+    def has_pending_chunks(self) -> bool:
+        """True if session.policy_chunks has at least one draft chunk not
+        yet promoted into custom_policies (i.e. needs review on the Net
+        Rules tab).
+
+        Mirrors the "is_pending" matching logic in
+        sessions/_policy_chunks.html / session_policy_chunks(): a chunk is
+        pending unless its rule_name exists in custom_policies AND every
+        one of its binary paths is already covered by that rule.
+        """
+        if not self.policy_chunks:
+            return False
+        try:
+            chunks = json.loads(self.policy_chunks)
+        except (ValueError, TypeError):
+            return False
+        if not chunks:
+            return False
+
+        promoted_binaries: dict[str, set[str]] = {}
+        if self.custom_policies:
+            try:
+                for rule in json.loads(self.custom_policies):
+                    name = rule.get("name")
+                    if name:
+                        promoted_binaries[name] = {
+                            b.get("path", "") for b in rule.get("binaries", [])
+                        }
+            except (ValueError, TypeError):
+                pass
+
+        for chunk in chunks:
+            if chunk.get("status") != "pending":
+                continue
+            chunk_bins = {b.get("path", "") for b in chunk.get("binaries", [])}
+            rule_bins = promoted_binaries.get(chunk.get("rule_name"))
+            if rule_bins is None or not chunk_bins.issubset(rule_bins):
+                return True
+        return False
 
     @property
     def phase_badge_class(self) -> str:

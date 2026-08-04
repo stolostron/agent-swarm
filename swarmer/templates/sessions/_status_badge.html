@@ -40,6 +40,14 @@
       <span class="pf-v6-c-label pf-m-grey"><span class="pf-v6-c-label__content">○ Idle</span></span>
     {% endif %}
 
+    {% set _asched = session.active_schedule %}
+    {% if _asched %}
+      <span class="pf-v6-c-label pf-m-purple pf-m-compact" title="Triggered by scheduled run">
+        <span class="pf-v6-c-label__content">
+          &#128197; {{ _asched.label or _asched.cron_label }}{% if _asched.prompt %} &middot; {{ _asched.prompt.display_name }}{% endif %}
+        </span>
+      </span>
+    {% endif %}
 
   </div>
 

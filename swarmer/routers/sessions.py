@@ -2151,7 +2151,6 @@ async def schedule_edit(
     label: str = Form(""),
     prompt_id: str = Form(""),
     instruction_prompt: str = Form(""),
-    enabled: str = Form(""),
     db: AsyncSession = Depends(get_db),
 ):
     from croniter import croniter as _croniter
@@ -2172,7 +2171,10 @@ async def schedule_edit(
     sched.label = label.strip()
     sched.prompt_id = int(prompt_id) if prompt_id.strip().isdigit() else None
     sched.instruction_prompt = instruction_prompt
-    sched.enabled = (enabled == "on")
+    # Enabled/disabled state is managed exclusively by the schedule_toggle
+    # endpoint. The inline edit form has no `enabled` field, so this handler
+    # must never touch sched.enabled — doing so previously forced every edit
+    # to silently disable the schedule (ACM-39209).
     await db.commit()
     return HTMLResponse("", headers={"HX-Trigger": "scheduleListChanged"})
 

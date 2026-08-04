@@ -4,6 +4,7 @@ from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, fun
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from swarmer.database import Base
+from swarmer.models.session import CRON_PRESETS
 
 
 class SessionSchedule(Base):
@@ -36,3 +37,8 @@ class SessionSchedule(Base):
     # MissingGreenlet outside the async context (only triggers for sessions
     # that have at least one schedule, which is why this surfaced late).
     prompt: Mapped["WorkspacePrompt | None"] = relationship(lazy="selectin")  # noqa: F821
+
+    @property
+    def cron_label(self) -> str:
+        """Human-readable label for common cron expressions."""
+        return CRON_PRESETS.get(self.cron_schedule, self.cron_schedule) if self.cron_schedule else ""

@@ -37,6 +37,9 @@
       <td class="pf-v6-c-table__td" role="cell" data-label="Name">
         <a href="/workspaces/{{ ws.id }}/sessions/{{ s.id }}"
            style="font-weight:var(--pf-t--global--font--weight--heading--bold); text-decoration:none;">{{ s.name }}</a>
+        {% if s.has_pending_chunks %}
+        <span class="pending-net-rules-dot" title="Pending net rules need review"></span>
+        {% endif %}
       </td>
       <td class="pf-v6-c-table__td" role="cell" data-label="Tool">
         <span class="pf-v6-c-label pf-m-outline"><span class="pf-v6-c-label__content">{{ s.agent_tool | capitalize }}</span></span>
@@ -67,6 +70,15 @@
           <span class="pf-v6-c-label pf-m-grey"><span class="pf-v6-c-label__content">■ Stopped</span></span>
         {% else %}
           <span class="pf-v6-c-label pf-m-grey"><span class="pf-v6-c-label__content">○ Idle</span></span>
+        {% endif %}
+        {% set _asched = s.active_schedule %}
+        {% if _asched %}
+        <br>
+        <span class="pf-v6-c-label pf-m-purple pf-m-compact" title="Triggered by scheduled run">
+          <span class="pf-v6-c-label__content">
+            &#128197; {{ _asched.label or _asched.cron_label }}{% if _asched.prompt %} &middot; {{ _asched.prompt.display_name }}{% endif %}
+          </span>
+        </span>
         {% endif %}
       </td>
       <td class="pf-v6-c-table__td" role="cell" data-label="Last Run" style="color:var(--pf-t--global--text--color--subtle); font-size:var(--pf-t--global--font--size--sm); white-space:nowrap;">
