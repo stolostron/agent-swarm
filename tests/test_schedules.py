@@ -308,14 +308,32 @@ class TestSessionHasPendingChunks:
     def test_invalid_json_is_falsy(self):
         assert self._session(policy_chunks="not json").has_pending_chunks is False
 
+    def test_malformed_chunk_alone_is_not_pending(self):
+        """A list containing only non-dict entries must not raise AttributeError,
+        and with nothing valid to flag, must not be considered pending."""
+        import json
+        chunks = json.dumps(["not a dict"])
+        assert self._session(policy_chunks=chunks).has_pending_chunks is False
+
     def test_malformed_chunk_ignored(self):
-        """If policy_chunks parses to a list containing non-dicts, it should not raise AttributeError."""
+        """A non-dict entry mixed with a valid pending chunk must not raise
+        AttributeError, and traversal must continue to detect the valid entry."""
         import json
         chunks = json.dumps(["not a dict", {"status": "pending", "rule_name": "r1", "binaries": []}])
         assert self._session(policy_chunks=chunks).has_pending_chunks is True
 
+    def test_null_binaries_chunk_alone_is_pending(self):
+        """A chunk with `"binaries": null` must not raise TypeError. Its null
+        binaries are treated as empty, which is fully uncovered → pending."""
+        import json
+        chunks = json.dumps([
+            {"status": "pending", "rule_name": "r1", "binaries": None},
+        ])
+        assert self._session(policy_chunks=chunks).has_pending_chunks is True
+
     def test_null_binaries_in_chunk_does_not_crash(self):
-        """A chunk with `"binaries": null` must not abort the loop via TypeError."""
+        """A chunk with `"binaries": null` mixed with another valid pending
+        chunk must not abort the loop via TypeError."""
         import json
         chunks = json.dumps([
             {"status": "pending", "rule_name": "r1", "binaries": None},
@@ -405,7 +423,7 @@ class TestSessionDetailPageWithSchedulePrompt:
         async with _TestSession() as db:
             source = WorkspacePromptSource(
                 workspace_id=other_ws["id"], name="src1",
-                repo_url="https://github.com/x/y", branch="main",
+                repo_url="https://example.com/repo", branch="main",
             )
             db.add(source)
             await db.commit()
@@ -459,7 +477,7 @@ class TestScheduleAndPendingChunksIndicators:
         async with _TestSession() as db:
             source = WorkspacePromptSource(
                 workspace_id=ws_id, name="src1",
-                repo_url="https://github.com/x/y", branch="main",
+                repo_url="https://example.com/repo", branch="main",
             )
             db.add(source)
             await db.commit()
