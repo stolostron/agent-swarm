@@ -352,22 +352,6 @@
               </div>
             </div>
 
-            <div class="pf-v6-c-form__group" style="margin-bottom:var(--pf-t--global--spacer--md);">
-              <div style="display:flex; align-items:center;">
-                <div style="flex:0 0 40%; color:var(--pf-t--global--text--color--subtle); font-size:var(--pf-t--global--font--size--sm);">Ephemeral disk</div>
-                <div style="flex:1;">
-                  <select class="pf-v6-c-form-control" name="ephemeral_disk"
-                          aria-label="Ephemeral disk size"
-                          style="font-size:var(--pf-t--global--font--size--sm);"
-                          {% if session.is_active %}disabled{% endif %}>
-                    {% for opt in ephemeral_disk_options %}
-                    <option value="{{ opt }}" {{ 'selected' if session.ephemeral_disk == opt }}>{{ opt }}</option>
-                    {% endfor %}
-                  </select>
-                </div>
-              </div>
-            </div>
-
             {% if mcp_servers %}
             <div class="pf-v6-c-form__group" style="margin-bottom:var(--pf-t--global--spacer--md);">
               <label class="pf-v6-c-form__label" style="color:var(--pf-t--global--text--color--subtle); font-size:var(--pf-t--global--font--size--sm);">

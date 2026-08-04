@@ -411,53 +411,6 @@ class TestSessions:
         assert resp.status_code == 422
 
     @pytest.mark.asyncio
-    async def test_create_session_default_ephemeral_disk(self, client):
-        """ephemeral_disk defaults to 2Gi when not specified (ACM-38184)."""
-        ws = await _create_workspace(client)
-        s = await _create_session(client, ws["id"])
-        assert s["ephemeral_disk"] == "2Gi"
-
-    @pytest.mark.asyncio
-    async def test_create_session_custom_ephemeral_disk(self, client):
-        ws = await _create_workspace(client)
-        resp = await client.post(
-            f"/api/v1/workspaces/{ws['id']}/sessions",
-            json={"name": "big-disk", "ephemeral_disk": "10Gi"},
-        )
-        assert resp.status_code == 201
-        assert resp.json()["ephemeral_disk"] == "10Gi"
-
-    @pytest.mark.asyncio
-    async def test_create_session_invalid_ephemeral_disk(self, client):
-        ws = await _create_workspace(client)
-        resp = await client.post(
-            f"/api/v1/workspaces/{ws['id']}/sessions",
-            json={"name": "bad-disk", "ephemeral_disk": "3Gi"},
-        )
-        assert resp.status_code == 422
-
-    @pytest.mark.asyncio
-    async def test_update_session_ephemeral_disk(self, client):
-        ws = await _create_workspace(client)
-        s = await _create_session(client, ws["id"])
-        resp = await client.put(
-            f"/api/v1/workspaces/{ws['id']}/sessions/{s['id']}",
-            json={"ephemeral_disk": "5Gi"},
-        )
-        assert resp.status_code == 200
-        assert resp.json()["ephemeral_disk"] == "5Gi"
-
-    @pytest.mark.asyncio
-    async def test_update_session_invalid_ephemeral_disk(self, client):
-        ws = await _create_workspace(client)
-        s = await _create_session(client, ws["id"])
-        resp = await client.put(
-            f"/api/v1/workspaces/{ws['id']}/sessions/{s['id']}",
-            json={"ephemeral_disk": "100Gi"},
-        )
-        assert resp.status_code == 422
-
-    @pytest.mark.asyncio
     async def test_update_session_invalid_mode(self, client):
         ws = await _create_workspace(client)
         s = await _create_session(client, ws["id"])

@@ -42,10 +42,9 @@ AGENT_SANDBOX_VERSION    ?= v0.4.6
 OPENSHELL_NAMESPACE      ?= openshell
 OPENSHELL_TLS_DIR        ?= auth/openshell
 # Default size of the workspace PVC (backing each sandbox's /sandbox mount) at the
-# OpenShell gateway level. Per-session ephemeral disk selection (ACM-38184) only
-# controls the sandbox pod's ephemeral-storage COMPUTE resource, not this PVC — so
-# this is set to the largest per-session dropdown option (2Gi/5Gi/10Gi) as a ceiling
-# that comfortably fits any session. Override with OPENSHELL_WORKSPACE_STORAGE=<val>
+# OpenShell gateway level. Distinct from the sandbox pod's ephemeral-storage COMPUTE
+# resource, which is hardcoded to 10Gi in openshell_client.create_sandbox() (ACM-39804)
+# and not configurable via this variable. Override with OPENSHELL_WORKSPACE_STORAGE=<val>
 # if needed; only applied on first OpenShell install (see the deploy target).
 OPENSHELL_WORKSPACE_STORAGE ?= 10Gi
 

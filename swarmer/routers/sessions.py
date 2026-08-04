@@ -29,7 +29,7 @@ from swarmer.github import list_repos_for_github_app as _list_repos_for_github_a
 from swarmer.github_url_validator import GitHubURLError, validate_github_url
 from swarmer.models.github_pat import GitHubPAT
 from swarmer.models.opencode_secret import OpencodeSecret
-from swarmer.models.session import CRON_PRESETS, DEFAULT_EPHEMERAL_DISK, EPHEMERAL_DISK_OPTIONS, Session
+from swarmer.models.session import CRON_PRESETS, Session
 from swarmer.models.session_repo import SessionRepo
 from swarmer.models.workspace import Workspace
 from swarmer.models.workspace_prompt import WorkspacePrompt, WorkspacePromptSource
@@ -411,8 +411,6 @@ async def session_new(
             "tool_image_available": dict(zip([t.name for t in _tools], _avail, strict=False)),
             "mcp_servers": mcp_servers,
             "prompt_sources": prompt_sources,
-            "ephemeral_disk_options": EPHEMERAL_DISK_OPTIONS,
-            "default_ephemeral_disk": DEFAULT_EPHEMERAL_DISK,
         },
     )
 
@@ -428,7 +426,6 @@ async def session_create(
     provider: str = Form(""),
     agent_tool: str = Form("opencode"),
     working_branch: str = Form(""),
-    ephemeral_disk: str = Form(DEFAULT_EPHEMERAL_DISK),
     db: AsyncSession = Depends(get_db),
 ):
     ws = await _get_workspace(ws_id, db)
@@ -478,9 +475,6 @@ async def session_create(
         flash(request, "Invalid working branch name.", "danger")
         return RedirectResponse(url=f"/workspaces/{ws_id}/sessions/new", status_code=302)
 
-    if ephemeral_disk not in EPHEMERAL_DISK_OPTIONS:
-        ephemeral_disk = DEFAULT_EPHEMERAL_DISK
-
     session = Session(
         workspace_id=ws_id,
         github_pat_id=pat_id,
@@ -490,7 +484,6 @@ async def session_create(
         instruction_prompt=instruction_prompt.strip(),
         agent_tool=agent_tool,
         working_branch=wb,
-        ephemeral_disk=ephemeral_disk,
     )
     # Gather MCP server checkbox selections from the multi-value form field
     form_data = await request.form()
@@ -535,7 +528,7 @@ async def session_create(
                 "pats": pats,
                 "has_github_app": bool(_ws_github_app),
                 "error": f"A session named '{name}' already exists in this workspace.",
-                "form": {"name": name, "instruction_prompt": instruction_prompt, "working_branch": wb, "ephemeral_disk": ephemeral_disk},
+                "form": {"name": name, "instruction_prompt": instruction_prompt, "working_branch": wb},
                 "provider_options": provider_options,
                 "selected_provider": provider,
                 "agent_tools": _tools,
@@ -543,8 +536,6 @@ async def session_create(
                 "tool_image_available": dict(zip([t.name for t in _tools], _avail, strict=False)),
                 "mcp_servers": mcp_servers,
                 "prompt_sources": prompt_sources,
-                "ephemeral_disk_options": EPHEMERAL_DISK_OPTIONS,
-                "default_ephemeral_disk": DEFAULT_EPHEMERAL_DISK,
             },
             status_code=422,
         )
@@ -656,7 +647,6 @@ async def session_detail(
                 or session.custom_policies
             ),
             "schedules": session.schedules or [],
-            "ephemeral_disk_options": EPHEMERAL_DISK_OPTIONS,
         },
     )
 
@@ -732,11 +722,6 @@ async def session_edit(
             flash(request, "Invalid working branch name.", "danger")
             return RedirectResponse(url=f"/workspaces/{ws_id}/sessions/{sid}", status_code=302)
         session.working_branch = branch_val
-
-    if "ephemeral_disk" in form_data:
-        disk_val = str(form_data["ephemeral_disk"]).strip()
-        if disk_val in EPHEMERAL_DISK_OPTIONS:
-            session.ephemeral_disk = disk_val
 
     selected_mcp_ids = [int(v) for v in form_data.getlist("mcp_server_ids") if str(v).isdigit()]
     if selected_mcp_ids:
@@ -1320,7 +1305,6 @@ async def _do_launch_openshell(
             mode=session.mode,
             main_cmd=main_cmd,
             resolved_prompt=resolved_prompt_safe,
-            ephemeral_disk=session.ephemeral_disk or DEFAULT_EPHEMERAL_DISK,
             iat_app_id=_iat_app_id,
             iat_installation_id=_iat_installation_id,
             iat_private_key=_iat_private_key,
@@ -1361,7 +1345,6 @@ async def _setup_openshell_sandbox(
     iat_provider_name: str = "",
     iat_repo_names: list[str] | None = None,
     pat_id: int | None = None,  # PAT DB ID for provider cleanup on completion
-    ephemeral_disk: str = DEFAULT_EPHEMERAL_DISK,
 ) -> None:
     """Background task: create sandbox and run all setup steps, then launch agent."""
     from swarmer import openshell_client
@@ -1393,7 +1376,6 @@ async def _setup_openshell_sandbox(
             env_vars=env_vars,
             policy=policy,
             provider_names=provider_names,
-            ephemeral_storage=ephemeral_disk,
         )
         await _update_db(sandbox_name=ref.name, status_detail="Applying network policies…")
 

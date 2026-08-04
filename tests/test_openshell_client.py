@@ -270,32 +270,21 @@ async def test_create_sandbox_does_not_create_pvc(sdk_client):
 
 
 @pytest.mark.asyncio
-async def test_create_sandbox_sets_ephemeral_storage_when_provided(sdk_client):
-    """ephemeral_storage populates spec.template.resources requests/limits."""
+async def test_create_sandbox_sets_hardcoded_ephemeral_storage(sdk_client):
+    """Every sandbox gets a hardcoded ephemeral-storage compute resource (ACM-39804) —
+    no longer a per-session/caller-provided value (removed per-session dropdown only
+    ever bounded this compute resource, not the `/sandbox` PVC users cared about)."""
     with patch.object(oc, "_get_client", return_value=sdk_client), \
          patch.object(oc, "_wait_sandbox_ready", new=AsyncMock()):
         await oc.create_sandbox(
             image="your-registry.example.com/opencode:latest",
             env_vars={},
             policy=None,
-            ephemeral_storage="5Gi",
         )
     spec = sdk_client.create.call_args.kwargs["spec"]
     resources = dict(spec.template.resources)
-    assert dict(resources["requests"])["ephemeral-storage"] == "5Gi"
-    assert dict(resources["limits"])["ephemeral-storage"] == "5Gi"
-
-
-@pytest.mark.asyncio
-async def test_create_sandbox_omits_resources_when_ephemeral_storage_empty(sdk_client):
-    """Default (empty string) ephemeral_storage leaves resources unset — OpenShell default applies."""
-    with patch.object(oc, "_get_client", return_value=sdk_client), \
-         patch.object(oc, "_wait_sandbox_ready", new=AsyncMock()):
-        await oc.create_sandbox(
-            image="your-registry.example.com/opencode:latest", env_vars={}, policy=None
-        )
-    spec = sdk_client.create.call_args.kwargs["spec"]
-    assert not spec.template.resources.ListFields()
+    assert dict(resources["requests"])["ephemeral-storage"] == oc.SANDBOX_EPHEMERAL_STORAGE
+    assert dict(resources["limits"])["ephemeral-storage"] == oc.SANDBOX_EPHEMERAL_STORAGE
 
 
 # ---------------------------------------------------------------------------

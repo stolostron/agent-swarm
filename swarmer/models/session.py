@@ -33,12 +33,7 @@ CRON_PRESETS: dict[str, str] = {
 #   prompt — sandbox runs, exits on completion; sandbox deleted on success
 MODES = ("tui", "server", "prompt")
 
-# Valid ephemeral_disk values (Kubernetes quantity strings) — sets the sandbox pod's
-# ephemeral-storage compute resource requests/limits (container writable layer /
-# unsized emptyDirs). Configurable per-session since one size doesn't fit both quick
-# sessions and large-repo CVE scans (ACM-38172, ACM-38184).
-EPHEMERAL_DISK_OPTIONS = ("2Gi", "5Gi", "10Gi")
-DEFAULT_EPHEMERAL_DISK = "2Gi"
+
 
 
 class Session(Base):
@@ -78,11 +73,15 @@ class Session(Base):
     # Which SessionSchedule triggered the current run; cleared on stop/completion.
     active_schedule_id: Mapped[int | None] = mapped_column(Integer, nullable=True, default=None)
     mcp_server_ids: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
-    # Ephemeral disk size for the sandbox pod's ephemeral-storage compute resource
-    # (Kubernetes quantity string — one of EPHEMERAL_DISK_OPTIONS). Per-session
-    # replacement for the old global SANDBOX_EPHEMERAL_STORAGE env var (ACM-38184).
+    # Vestigial (ACM-39804): was a per-session UI control for the sandbox pod's
+    # ephemeral-storage compute resource (ACM-38184), but that resource only bounds
+    # the container writable layer / unsized emptyDirs — not the `/sandbox` working
+    # directory, which is a gateway-wide PVC (`workspaceDefaultStorageSize`). The
+    # dropdown was removed as misleading; ephemeral-storage is now hardcoded to 10Gi
+    # in openshell_client.create_sandbox(). Column/migration kept to avoid a
+    # destructive schema change; no longer read anywhere.
     ephemeral_disk: Mapped[str] = mapped_column(
-        String(32), nullable=False, default=DEFAULT_EPHEMERAL_DISK, server_default=DEFAULT_EPHEMERAL_DISK
+        String(32), nullable=False, default="2Gi", server_default="2Gi"
     )
     # Runtime state — managed by dashboard
     sandbox_name: Mapped[str | None] = mapped_column(String(255), nullable=True)

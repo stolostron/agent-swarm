@@ -165,8 +165,10 @@ async def migrate_db() -> None:
         # created with "provider", or already migrated) is safely suppressed.
         "ALTER TABLE sessions RENAME COLUMN model TO provider",
         # ACM-38184: per-session ephemeral disk size, replacing the global
-        # SANDBOX_EPHEMERAL_STORAGE env var. Default matches OpenShell's own
-        # built-in default (2Gi) so existing sessions are a no-op until edited.
+        # SANDBOX_EPHEMERAL_STORAGE env var. Vestigial as of ACM-39804 — the
+        # per-session UI/API was removed (it only bounded the pod's ephemeral-storage
+        # compute resource, not the `/sandbox` PVC users actually cared about).
+        # Migration kept so existing DBs don't break; column is no longer read.
         "ALTER TABLE sessions ADD COLUMN ephemeral_disk VARCHAR(32) NOT NULL DEFAULT '2Gi'",
     ]
     async with _engine.begin() as conn:

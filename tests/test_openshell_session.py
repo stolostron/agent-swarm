@@ -176,11 +176,8 @@ async def _create_session(
     name: str = "s1",
     mode: str = "prompt",
     agent_tool: str = "opencode",
-    ephemeral_disk: str | None = None,
 ) -> dict:
     body = {"name": name, "mode": mode, "agent_tool": agent_tool}
-    if ephemeral_disk is not None:
-        body["ephemeral_disk"] = ephemeral_disk
     resp = await client.post(
         f"/api/v1/workspaces/{ws_id}/sessions",
         json=body,
@@ -396,111 +393,6 @@ class TestDoLaunchOpenshell:
         mock_setup.assert_called_once()
         call_kwargs = mock_setup.call_args[1] if mock_setup.call_args else {}
         assert "image" in call_kwargs
-
-    @pytest.mark.asyncio
-    async def test_ephemeral_disk_default_passed_to_setup_sandbox(self, client):
-        """A session created without specifying ephemeral_disk defaults to 2Gi
-        and that value is threaded into _setup_openshell_sandbox (ACM-38184)."""
-        ws = await _create_workspace(client)
-        s = await _create_session(client, ws["id"])
-        assert s["ephemeral_disk"] == "2Gi"
-
-        patches = self._patch_openshell()
-        with patches["create_provider"], patches["ensure_provider"], \
-             patches["configure_provider_credential"], patches["attach_sandbox_provider"], \
-             patches["create_sandbox"], \
-             patches["write_agent_config"], \
-             patches["write_agents_md"], patches["exec_command"], \
-             patches["start_agent"], patches["delete_sandbox"], \
-             patches["build_policy"], patches["run_agent"], \
-             patches["setup_sandbox"] as mock_setup, \
-             patches["provider_exists"], patches["get_image"]:
-            resp = await client.post(
-                f"/api/v1/workspaces/{ws['id']}/sessions/{s['id']}/launch"
-            )
-            await asyncio.sleep(0)
-
-        assert resp.status_code == 200
-        mock_setup.assert_called_once()
-        call_kwargs = mock_setup.call_args[1] if mock_setup.call_args else {}
-        assert call_kwargs.get("ephemeral_disk") == "2Gi"
-
-    @pytest.mark.asyncio
-    async def test_ephemeral_disk_custom_value_passed_to_setup_sandbox(self, client):
-        """A session created with ephemeral_disk='10Gi' threads that value through
-        to _setup_openshell_sandbox instead of the removed global setting (ACM-38184)."""
-        ws = await _create_workspace(client)
-        s = await _create_session(client, ws["id"], ephemeral_disk="10Gi")
-        assert s["ephemeral_disk"] == "10Gi"
-
-        patches = self._patch_openshell()
-        with patches["create_provider"], patches["ensure_provider"], \
-             patches["configure_provider_credential"], patches["attach_sandbox_provider"], \
-             patches["create_sandbox"], \
-             patches["write_agent_config"], \
-             patches["write_agents_md"], patches["exec_command"], \
-             patches["start_agent"], patches["delete_sandbox"], \
-             patches["build_policy"], patches["run_agent"], \
-             patches["setup_sandbox"] as mock_setup, \
-             patches["provider_exists"], patches["get_image"]:
-            resp = await client.post(
-                f"/api/v1/workspaces/{ws['id']}/sessions/{s['id']}/launch"
-            )
-            await asyncio.sleep(0)
-
-        assert resp.status_code == 200
-        mock_setup.assert_called_once()
-        call_kwargs = mock_setup.call_args[1] if mock_setup.call_args else {}
-        assert call_kwargs.get("ephemeral_disk") == "10Gi"
-
-    @pytest.mark.asyncio
-    async def test_setup_sandbox_passes_ephemeral_disk_to_create_sandbox(self, client):
-        """_setup_openshell_sandbox forwards ephemeral_disk to
-        openshell_client.create_sandbox(ephemeral_storage=...) (ACM-38184)."""
-        from swarmer.routers.sessions import _setup_openshell_sandbox
-
-        ws = await _create_workspace(client)
-        s = await _create_session(client, ws["id"], ephemeral_disk="5Gi")
-
-        async with _TestSession() as db:
-            await db.execute(
-                text("UPDATE sessions SET phase='pending' WHERE id=:id"), {"id": s["id"]}
-            )
-            await db.commit()
-
-        ref = _fake_sandbox_ref("sandbox-ephemeral-disk-test")
-        with patch("swarmer.database.get_db", new=_make_test_db_provider()), \
-             patch("swarmer.openshell_client.create_sandbox", new=AsyncMock(return_value=ref)) as mock_create, \
-             patch("swarmer.openshell_client.write_agent_config", new=AsyncMock()), \
-             patch("swarmer.openshell_client.write_agents_md", new=AsyncMock()), \
-             patch("swarmer.openshell_client.approve_draft_policy_chunks", new=AsyncMock(return_value=[])), \
-             patch("swarmer.routers.sessions._run_openshell_agent", new=AsyncMock()), \
-             patch("swarmer.openshell_client.exec_command", new=AsyncMock()):
-            await _setup_openshell_sandbox(
-                session_id=s["id"],
-                workspace_id=ws["id"],
-                provider_names=[],
-                env_vars={},
-                policy=None,
-                image="your-registry.example.com/opencode:latest",
-                tool_name="opencode",
-                model="google-vertex-anthropic/claude-sonnet-5@default",
-                model_setup_cmd="",
-                share_cmd="",
-                mcp_patch={},
-                repos_data=[],
-                git_username="",
-                pat_token="",
-                working_branch="",
-                agents_md="",
-                mode="prompt",
-                main_cmd="opencode run",
-                resolved_prompt="",
-                ephemeral_disk="5Gi",
-            )
-
-        call_kwargs = mock_create.call_args[1] if mock_create.call_args else {}
-        assert call_kwargs.get("ephemeral_storage") == "5Gi"
 
     @pytest.mark.asyncio
     async def test_sets_sandbox_name_on_session(self, client):

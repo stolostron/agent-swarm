@@ -138,25 +138,6 @@
         </div>
       </div>
 
-      {# Ephemeral disk card #}
-      <div class="pf-v6-c-card" style="margin-bottom:var(--pf-t--global--spacer--md);">
-        <div class="pf-v6-c-card__header">
-          <h3 class="pf-v6-c-card__header-main" style="font-weight:var(--pf-t--global--font--weight--heading--bold);">Ephemeral Disk</h3>
-        </div>
-        <div class="pf-v6-c-card__body">
-          <select class="pf-v6-c-form-control" name="ephemeral_disk" aria-label="Ephemeral disk size" aria-describedby="ephemeral_disk_helper">
-            {% for opt in ephemeral_disk_options %}
-            <option value="{{ opt }}" {{ 'selected' if (form.ephemeral_disk if form and form.ephemeral_disk else default_ephemeral_disk) == opt }}>{{ opt }}</option>
-            {% endfor %}
-          </select>
-          <div class="pf-v6-c-form__helper-text" id="ephemeral_disk_helper" style="margin-top:var(--pf-t--global--spacer--xs);">
-            <div class="pf-v6-c-helper-text__item">
-              <span class="pf-v6-c-helper-text__item-text">Sandbox disk size. Increase for large repos or dependency-heavy CVE scans.</span>
-            </div>
-          </div>
-        </div>
-      </div>
-
       {# MCP Servers card #}
       {% if mcp_servers %}
       <div class="pf-v6-c-card" style="margin-top:var(--pf-t--global--spacer--md);">

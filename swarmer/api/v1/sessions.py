@@ -127,7 +127,6 @@ async def create_session(
         instruction_prompt=body.instruction_prompt.strip(),
         agent_tool=agent_tool,
         working_branch=wb,
-        ephemeral_disk=body.ephemeral_disk,
     )
     if body.mcp_server_ids:
         session.enabled_mcp_ids = body.mcp_server_ids
@@ -197,8 +196,6 @@ async def update_session(
         if wb and not _is_valid_ref_name(wb):
             raise HTTPException(status_code=422, detail="Invalid working branch name")
         session.working_branch = wb
-    if body.ephemeral_disk is not None:
-        session.ephemeral_disk = body.ephemeral_disk
     if body.mcp_server_ids is not None:
         if body.mcp_server_ids:
             session.enabled_mcp_ids = body.mcp_server_ids

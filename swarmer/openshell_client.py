@@ -28,6 +28,16 @@ log = logging.getLogger(__name__)
 _PROVIDER_CACHE_TTL: float = 30.0
 _provider_cache: dict[str, tuple[bool, float]] = {}  # name → (exists, expires_at)
 
+# Sandbox pod ephemeral-storage compute resource (container writable layer /
+# unsized emptyDirs) applied to every sandbox (ACM-39804). Previously a
+# per-session UI setting (ACM-38184), removed because it only bounded this
+# compute resource, not the `/sandbox` working directory PVC users actually
+# cared about (a separate, gateway-wide setting — see
+# docs/OPENSHELL_LOCAL_SETUP.md `workspaceDefaultStorageSize`, currently 5Gi).
+# Hardcoded to the max of the old dropdown range; cost delta vs. smaller
+# values is negligible (~$0.40/mo per long-lived sandbox on AWS gp3).
+SANDBOX_EPHEMERAL_STORAGE = "10Gi"
+
 
 def _get_client():
     """Internal factory — reads settings and returns a configured SandboxClient."""
@@ -815,7 +825,6 @@ async def create_sandbox(
     env_vars: dict[str, str] | None,
     policy,
     provider_names: list[str] | None = None,
-    ephemeral_storage: str = "",
     client=None,
 ):
     """Create an OpenShell sandbox and wait for it to be ready.
@@ -824,9 +833,10 @@ async def create_sandbox(
     time so the supervisor can call GetSandboxProviderEnvironment at startup
     and receive injected reference tokens before any exec commands run.
 
-    ephemeral_storage, when set (Kubernetes quantity string, e.g. "5Gi"), is applied
-    as both the request and limit for the sandbox's ephemeral disk — overriding the
-    OpenShell default (2Gi), which is too small for Go module caches on large repos.
+    Every sandbox's ephemeral-storage compute resource (container writable layer /
+    unsized emptyDirs) is set to SANDBOX_EPHEMERAL_STORAGE (ACM-39804). This is
+    distinct from the `/sandbox` working directory, which is a separate PVC sized
+    gateway-wide (see docs/OPENSHELL_LOCAL_SETUP.md).
 
     Returns the SandboxRef; caller stores ref.name as session.sandbox_name.
     """
@@ -844,15 +854,15 @@ async def create_sandbox(
         spec.providers.append(pname)
     if policy is not None:
         spec.policy.CopyFrom(policy)
-    if ephemeral_storage:
-        from google.protobuf import struct_pb2
 
-        resources = struct_pb2.Struct()
-        resources.update({
-            "requests": {"ephemeral-storage": ephemeral_storage},
-            "limits": {"ephemeral-storage": ephemeral_storage},
-        })
-        spec.template.resources.CopyFrom(resources)
+    from google.protobuf import struct_pb2
+
+    resources = struct_pb2.Struct()
+    resources.update({
+        "requests": {"ephemeral-storage": SANDBOX_EPHEMERAL_STORAGE},
+        "limits": {"ephemeral-storage": SANDBOX_EPHEMERAL_STORAGE},
+    })
+    spec.template.resources.CopyFrom(resources)
 
     def _do_create():
         return client.create(spec=spec)
