@@ -21,6 +21,12 @@ class SessionRun(Base):
     completed_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     last_output: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
     raw_output: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
+    # Denormalized snapshot of what triggered this run, captured at record time
+    # so history stays accurate even after the schedule/prompt is later
+    # edited or deleted. Empty schedule_label means the run was not scheduled.
+    schedule_label: Mapped[str] = mapped_column(String(255), nullable=False, default="", server_default="")
+    prompt_name: Mapped[str] = mapped_column(String(255), nullable=False, default="", server_default="")
+    mode: Mapped[str] = mapped_column(String(16), nullable=False, default="prompt", server_default="prompt")
     created_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, server_default=func.now()
     )

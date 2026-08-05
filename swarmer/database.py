@@ -170,6 +170,12 @@ async def migrate_db() -> None:
         # compute resource, not the `/sandbox` PVC users actually cared about).
         # Migration kept so existing DBs don't break; column is no longer read.
         "ALTER TABLE sessions ADD COLUMN ephemeral_disk VARCHAR(32) NOT NULL DEFAULT '2Gi'",
+        # ACM-39876: snapshot what triggered each run (schedule/prompt/mode) so
+        # Run History can show a source pill even after the schedule/prompt
+        # is later edited or deleted.
+        "ALTER TABLE session_runs ADD COLUMN schedule_label VARCHAR(255) NOT NULL DEFAULT ''",
+        "ALTER TABLE session_runs ADD COLUMN prompt_name VARCHAR(255) NOT NULL DEFAULT ''",
+        "ALTER TABLE session_runs ADD COLUMN mode VARCHAR(16) NOT NULL DEFAULT 'prompt'",
     ]
     async with _engine.begin() as conn:
         for stmt in migrations:

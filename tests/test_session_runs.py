@@ -303,3 +303,159 @@ async def test_record_session_run_raw_output_defaults_empty():
 
         assert run is not None
         assert run.raw_output == ""
+
+
+async def _make_prompt(db, *, source_id: int, display_name: str) -> "WorkspacePrompt":
+    from swarmer.models.workspace_prompt import WorkspacePrompt
+
+    prompt = WorkspacePrompt(
+        source_id=source_id,
+        filename=f"{display_name}.md",
+        display_name=display_name,
+        content="do the thing",
+        content_hash="abc123",
+    )
+    db.add(prompt)
+    await db.flush()
+    return prompt
+
+
+async def _make_prompt_source(db, ws_id: int) -> int:
+    from swarmer.models.workspace_prompt import WorkspacePromptSource
+
+    source = WorkspacePromptSource(
+        workspace_id=ws_id,
+        name="prompts-repo",
+        repo_url="https://example.com/prompts.git",
+    )
+    db.add(source)
+    await db.flush()
+    return source.id
+
+
+@pytest.mark.asyncio
+async def test_record_session_run_persists_mode():
+    """mode is snapshotted from the session at record time."""
+    async with _TestSession() as db:
+        session = await _make_prompt_session(db)
+        session.mode = "tui"
+
+        run = await record_session_run(
+            db,
+            session,
+            phase="stopped",
+            status_detail=STOPPED_BY_USER_DETAIL,
+            last_output="",
+            completed_at=datetime.now(timezone.utc),
+        )
+        await db.commit()
+
+        assert run is not None
+        assert run.mode == "tui"
+
+
+@pytest.mark.asyncio
+async def test_record_session_run_mode_defaults_prompt():
+    """mode defaults to 'prompt' when the session has no mode set."""
+    async with _TestSession() as db:
+        session = await _make_prompt_session(db)
+        session.mode = ""
+
+        run = await record_session_run(
+            db,
+            session,
+            phase="succeeded",
+            status_detail="",
+            last_output="done",
+            completed_at=datetime.now(timezone.utc),
+        )
+        await db.commit()
+
+        assert run is not None
+        assert run.mode == "prompt"
+
+
+@pytest.mark.asyncio
+async def test_record_session_run_captures_session_prompt_when_no_schedule():
+    """Non-scheduled runs snapshot the session's own configured prompt."""
+    async with _TestSession() as db:
+        session = await _make_prompt_session(db)
+        source_id = await _make_prompt_source(db, session.workspace_id)
+        prompt = await _make_prompt(db, source_id=source_id, display_name="Nightly Cleanup")
+        session.prompt_id = prompt.id
+        await db.flush()
+
+        run = await record_session_run(
+            db,
+            session,
+            phase="succeeded",
+            status_detail="",
+            last_output="done",
+            completed_at=datetime.now(timezone.utc),
+        )
+        await db.commit()
+
+        assert run is not None
+        assert run.schedule_label == ""
+        assert run.prompt_name == "Nightly Cleanup"
+
+
+@pytest.mark.asyncio
+async def test_record_session_run_captures_active_schedule():
+    """Scheduled runs snapshot the schedule's label and its own prompt (overriding the session prompt)."""
+    from swarmer.models.session_schedule import SessionSchedule
+
+    async with _TestSession() as db:
+        session = await _make_prompt_session(db)
+        source_id = await _make_prompt_source(db, session.workspace_id)
+        session_prompt = await _make_prompt(db, source_id=source_id, display_name="Default Prompt")
+        schedule_prompt = await _make_prompt(db, source_id=source_id, display_name="Nightly Prompt")
+        session.prompt_id = session_prompt.id
+
+        schedule = SessionSchedule(
+            session_id=session.id,
+            prompt_id=schedule_prompt.id,
+            cron_schedule="0 0 * * *",
+            label="Nightly Run",
+            enabled=True,
+        )
+        db.add(schedule)
+        await db.flush()
+        session.active_schedule_id = schedule.id
+        await db.commit()
+        await db.refresh(session)
+
+        run = await record_session_run(
+            db,
+            session,
+            phase="succeeded",
+            status_detail="",
+            last_output="done",
+            completed_at=datetime.now(timezone.utc),
+        )
+        await db.commit()
+
+        assert run is not None
+        assert run.schedule_label == "Nightly Run"
+        assert run.prompt_name == "Nightly Prompt"
+
+
+@pytest.mark.asyncio
+async def test_record_session_run_no_prompt_or_schedule():
+    """Manual runs with no configured prompt leave schedule_label/prompt_name empty."""
+    async with _TestSession() as db:
+        session = await _make_prompt_session(db)
+
+        run = await record_session_run(
+            db,
+            session,
+            phase="succeeded",
+            status_detail="",
+            last_output="done",
+            completed_at=datetime.now(timezone.utc),
+        )
+        await db.commit()
+
+        assert run is not None
+        assert run.schedule_label == ""
+        assert run.prompt_name == ""

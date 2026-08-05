@@ -142,6 +142,9 @@ class SessionRunOut(BaseModel):
     run_duration: str
     last_output: str
     raw_output: str = ""
+    schedule_label: str = ""
+    prompt_name: str = ""
+    mode: str = "prompt"
 
     model_config = {"from_attributes": True}
 

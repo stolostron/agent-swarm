@@ -24,6 +24,35 @@ def _as_utc(dt: datetime) -> datetime:
     return dt.astimezone(timezone.utc)
 
 
+async def _run_source_snapshot(db: AsyncSession, session: Session) -> tuple[str, str]:
+    """Resolve the (schedule_label, prompt_name) snapshot for a session at run time.
+
+    Prefers the active schedule's label/prompt (the run was triggered by a
+    schedule); falls back to the session's own configured prompt otherwise.
+
+    `session.schedules` (and each schedule's `.prompt`) is eager-loaded via
+    `lazy="selectin"` on the model, so `active_schedule`/`active_schedule.prompt`
+    are safe to access synchronously here. `session.prompt` is NOT eager-loaded
+    by default (callers fetch sessions via plain `db.get()`), so it is resolved
+    with an explicit query instead of touching the lazy relationship directly —
+    that would otherwise risk a MissingGreenlet error in async code.
+    """
+    from swarmer.models.workspace_prompt import WorkspacePrompt
+
+    schedule_label = ""
+    prompt_name = ""
+    active_schedule = session.active_schedule
+    if active_schedule:
+        schedule_label = active_schedule.label or active_schedule.cron_label
+        if active_schedule.prompt:
+            prompt_name = active_schedule.prompt.display_name
+    if not prompt_name and session.prompt_id:
+        prompt = await db.get(WorkspacePrompt, session.prompt_id)
+        if prompt:
+            prompt_name = prompt.display_name
+    return schedule_label, prompt_name
+
+
 async def record_session_run(
     db: AsyncSession,
     session: Session,
@@ -44,6 +73,8 @@ async def record_session_run(
         )
         return None
 
+    schedule_label, prompt_name = await _run_source_snapshot(db, session)
+
     run = SessionRun(
         session_id=session.id,
         phase=phase,
@@ -52,6 +83,9 @@ async def record_session_run(
         completed_at=_as_utc(completed_at),
         last_output=last_output or "",
         raw_output=raw_output or "",
+        schedule_label=schedule_label,
+        prompt_name=prompt_name,
+        mode=session.mode or "prompt",
     )
     db.add(run)
     await _prune_old_runs(

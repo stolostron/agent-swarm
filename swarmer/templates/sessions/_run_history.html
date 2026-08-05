@@ -5,6 +5,7 @@
     <col>
     <col style="width:7rem;">
     <col style="width:9rem;">
+    <col style="width:14rem;">
     <col>
   </colgroup>
   <thead class="pf-v6-c-table__thead">
@@ -13,6 +14,7 @@
       <th class="pf-v6-c-table__th" role="columnheader">Started</th>
       <th class="pf-v6-c-table__th" role="columnheader">Duration</th>
       <th class="pf-v6-c-table__th" role="columnheader">Status</th>
+      <th class="pf-v6-c-table__th" role="columnheader">Source</th>
       <th class="pf-v6-c-table__th" role="columnheader">Detail</th>
     </tr>
   </thead>
@@ -57,6 +59,23 @@
         <span class="pf-v6-c-label pf-m-outline"><span class="pf-v6-c-label__content">{{ run.phase }}</span></span>
       {% endif %}
     </td>
+    <td class="pf-v6-c-table__td" role="cell" data-label="Source">
+      {% if run.schedule_label %}
+        <span class="pf-v6-c-label pf-m-purple pf-m-compact" title="Triggered by scheduled run">
+          <span class="pf-v6-c-label__content">
+            &#128197; {{ run.schedule_label }}{% if run.prompt_name %} &middot; {{ run.prompt_name }}{% endif %}
+          </span>
+        </span>
+      {% elif run.mode == 'tui' %}
+        <span class="pf-v6-c-label pf-m-blue pf-m-compact"><span class="pf-v6-c-label__content">TERM.UI</span></span>
+      {% elif run.mode == 'server' %}
+        <span class="pf-v6-c-label pf-m-cyan pf-m-compact"><span class="pf-v6-c-label__content">CHAT</span></span>
+      {% elif run.prompt_name %}
+        <span class="pf-v6-c-label pf-m-outline pf-m-compact"><span class="pf-v6-c-label__content">{{ run.prompt_name }}</span></span>
+      {% else %}
+        <span style="color:var(--pf-t--global--text--color--subtle);">&#x2014;</span>
+      {% endif %}
+    </td>
     <td class="pf-v6-c-table__td" role="cell" data-label="Detail">
       {% if run.status_detail %}
         <span class="pf-v6-c-label pf-m-outline">
@@ -72,7 +91,7 @@
   <tr class="pf-v6-c-table__tr" id="hist-expand-{{ run.id }}"
       role="row" style="display:none;">
     <td class="pf-v6-c-table__td pf-v6-c-table__toggle" style="padding:0; border-bottom:none;"></td>
-    <td class="pf-v6-c-table__td" colspan="4" style="padding:0;">
+    <td class="pf-v6-c-table__td" colspan="5" style="padding:0;">
       {# Header bar: completed timestamp left, log-pills right #}
       <div style="display:flex; align-items:center; gap:var(--pf-t--global--spacer--sm);
                   width:100%; box-sizing:border-box;
