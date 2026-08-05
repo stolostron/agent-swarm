@@ -6,7 +6,7 @@ python-multipart==0.0.32
 sqlalchemy[asyncio]==2.0.50
 aiosqlite==0.22.1
 argon2-cffi==25.1.0
-cryptography==48.0.1
+cryptography==50.0.0
 pydantic-settings==2.14.2
 PyJWT==2.13.0
 kubernetes==36.0.2
