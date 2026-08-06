@@ -8,6 +8,12 @@ environment.
 Configure Slack by setting that variable on the **workspace**. Every session launched in that
 workspace inherits it automatically.
 
+When `SLACK_WEBHOOK_URL` is set, Swarmer also adds an OpenShell network-policy rule allowing
+egress to `hooks.slack.com:443` (curl/python). Without that rule the sandbox egress proxy
+returns `403 … CONNECT hooks.slack.com:443 not permitted by policy` even if the webhook URL
+is correct. Re-launch the session after adding or changing the env var so the new policy is
+applied.
+
 ---
 
 ## How it works
@@ -116,6 +122,7 @@ channel.
 | `invalid_payload` (HTTP 400) | Malformed JSON from the agent script | Check session raw log for the payload script error |
 | Message never arrives, HTTP 200 | Wrong channel or webhook for another workspace | Confirm the webhook’s channel in Slack app settings |
 | TUI shows `NOT SET` but UI has the var | Stale sandbox from before the var was added | Stop the session and launch again |
+| `403` / `CONNECT hooks.slack.com:443 not permitted by policy` | Sandbox egress policy missing Slack host | Ensure `SLACK_WEBHOOK_URL` is set on the workspace, redeploy a Swarmer build that includes the Slack webhook policy block, then **re-launch** the session |
 
 ---
 

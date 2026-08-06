@@ -106,6 +106,31 @@ _JIRA_MCP_BLOCK = {
     ],
 }
 
+# Added when the workspace has SLACK_WEBHOOK_URL set. Agent prompts post
+# digests via curl or Python urllib; without this block the egress proxy
+# returns 403: CONNECT hooks.slack.com:443 not permitted by policy.
+_SLACK_WEBHOOK_BLOCK = {
+    "name": "slack-webhook",
+    "endpoints": [
+        {
+            # Literal host required at the CONNECT proxy layer (same pattern as
+            # redhat.atlassian.net — wildcards alone are unreliable there).
+            "host": "hooks.slack.com",
+            "port": 443,
+            "protocol": "rest",
+            "enforcement": "enforce",
+            "access": "full",
+        },
+    ],
+    "binaries": [
+        _bin("/usr/bin/curl"),
+        _bin("/usr/local/bin/python3.14"),
+        _bin("/usr/local/bin/python3"),
+        _bin("/usr/bin/python3"),
+        _bin("/sandbox/.venv/bin/python*"),
+    ],
+}
+
 
 # ── Per-repo dynamic blocks ───────────────────────────────────────────────────
 
@@ -349,6 +374,7 @@ def build_session_policy(
     prompt_sources: list | None = None,
     custom_policies: list[dict] | None = None,
     has_google_cloud_provider: bool = False,
+    has_slack_webhook: bool = False,
 ):
     """Assemble a complete OpenShell SandboxPolicy proto for this session.
 
@@ -363,6 +389,9 @@ def build_session_policy(
     draft chunks.  These are merged into the static policy so approved rules
     take effect on the next sandbox launch without any code change.
 
+    has_slack_webhook: when True (workspace has SLACK_WEBHOOK_URL), grant
+    egress to hooks.slack.com for curl/python digest posts.
+
     Returns a SandboxPolicy proto object to be set on SandboxSpec.policy.
     """
     from google.protobuf.json_format import ParseDict
@@ -373,6 +402,7 @@ def build_session_policy(
         prompt_sources=prompt_sources,
         custom_policies=custom_policies,
         has_google_cloud_provider=has_google_cloud_provider,
+        has_slack_webhook=has_slack_webhook,
     )
 
     policy_dict = {
@@ -398,6 +428,7 @@ def build_session_network_policies(
     prompt_sources: list | None = None,
     custom_policies: list[dict] | None = None,
     has_google_cloud_provider: bool = False,
+    has_slack_webhook: bool = False,
 ) -> dict:
     """Return the computed network_policies dict for this session.
 
@@ -408,6 +439,9 @@ def build_session_network_policies(
     custom_policies: optional list of session-level rule dicts promoted from
     draft chunks.  Each entry is merged into the dict keyed by a slugified
     version of its "name" field (or "custom_{i}" as a fallback).
+
+    has_slack_webhook: when True, include hooks.slack.com egress for workspace
+    Slack Incoming Webhook posts (SLACK_WEBHOOK_URL).
     """
     network_policies_dict: dict = {}
     network_policies_dict.update(_build_agent_api_block(agent_tool, model))
@@ -425,6 +459,9 @@ def build_session_network_policies(
 
     if any("jira" in getattr(mcp, "slug", "") for mcp in (mcp_servers or [])):
         network_policies_dict["jira_mcp"] = _JIRA_MCP_BLOCK
+
+    if has_slack_webhook:
+        network_policies_dict["slack_webhook"] = _SLACK_WEBHOOK_BLOCK
 
     # Per-prompt-source raw.githubusercontent.com access.
     # Agents may curl prompt documents or files referenced within them from the
