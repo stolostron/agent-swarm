@@ -10,6 +10,7 @@ from swarmer.routers.office import _PHASE_ACTIVITY, _build_offices, _session_car
 
 
 def test_session_card_maps_running_phase():
+    """Running sessions map to typing activity and Running label."""
     card = _session_card(
         {
             "id": 7,
@@ -32,6 +33,7 @@ def test_session_card_maps_running_phase():
 
 
 def test_session_card_includes_schedule_summaries():
+    """Schedule rows become hover-tooltip summaries with labels and next run."""
     next_run = datetime(2026, 7, 30, 9, 0, tzinfo=timezone.utc)
     card = _session_card(
         {
@@ -62,6 +64,7 @@ def test_session_card_includes_schedule_summaries():
 
 
 def test_session_card_succeeded_goes_to_restroom_for_coffee():
+    """Succeeded sessions go to the break room with coffee activity."""
     card = _session_card({"id": 3, "phase": "succeeded", "name": "done-job"})
     assert card["activity"] == "coffee"
     assert card["label"] == "Succeeded"
@@ -69,12 +72,14 @@ def test_session_card_succeeded_goes_to_restroom_for_coffee():
 
 
 def test_session_card_failed_is_crying():
+    """Failed sessions stay at the desk with crying activity."""
     card = _session_card({"id": 4, "phase": "failed"})
     assert card["activity"] == "crying"
     assert card["in_restroom"] is False
 
 
 def test_session_card_defaults_unknown_phase_to_idle():
+    """Unknown phases fall back to idle activity and default fields."""
     card = _session_card({"id": 1, "phase": "mystery"})
     assert card["activity"] == "idle"
     assert card["name"] == "session-1"
@@ -82,6 +87,7 @@ def test_session_card_defaults_unknown_phase_to_idle():
 
 
 def test_all_known_phases_have_activities():
+    """Every session phase has a dedicated office activity mapping."""
     expected = {
         "idle": "idle",
         "queued": "waiting",
@@ -97,6 +103,7 @@ def test_all_known_phases_have_activities():
 
 
 def test_session_card_look_rotates_by_id():
+    """Palette look class rotates by session id modulo look count."""
     assert _session_card({"id": 0, "phase": "idle"})["look"] == "look-0"
     assert _session_card({"id": 6, "phase": "idle"})["look"] == "look-0"
     assert _session_card({"id": 5, "phase": "idle"})["look"] == "look-5"
@@ -109,6 +116,7 @@ async def test_build_offices_isolates_list_sessions_api_error():
     ws_bad = {"id": 2, "display_name": "bad"}
 
     async def _list_sessions(wid: int):
+        """Return sessions for workspace 1; raise APIError for others."""
         if wid == 1:
             return [{"id": 10, "phase": "running", "name": "alive", "is_active": True}]
         raise APIError(500, "boom")
