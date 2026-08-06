@@ -6,7 +6,26 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from swarmer.routers.api_client import APIError
-from swarmer.routers.office import _PHASE_ACTIVITY, _build_offices, _session_card
+from swarmer.routers.office import (
+    _PHASE_ACTIVITY,
+    _build_offices,
+    _format_next_run,
+    _session_card,
+)
+
+
+def test_format_next_run_iso_strings_keep_utc_label():
+    """Raw ISO strings with +00:00 or Z both keep a UTC label after truncation."""
+    assert _format_next_run("2026-07-30T09:00:00+00:00") == "2026-07-30 09:00 UTC"
+    assert _format_next_run("2026-07-30T09:00:00Z") == "2026-07-30 09:00 UTC"
+
+
+def test_format_next_run_datetime_object():
+    """Datetime values use the strftime tooltip format."""
+    value = datetime(2026, 7, 30, 9, 0, tzinfo=timezone.utc)
+    assert _format_next_run(value) == "Jul 30, 2026 09:00 UTC"
+    assert _format_next_run(None) == ""
+    assert _format_next_run("") == ""
 
 
 def test_session_card_maps_running_phase():
