@@ -219,9 +219,7 @@ async def office_scene(request: Request) -> HTMLResponse:
     "/workspaces/{ws_id}/office",
     dependencies=[Depends(require_auth)],
 )
-async def workspace_office(
-    request: Request, ws_id: int
-) -> HTMLResponse | RedirectResponse:
+async def workspace_office(request: Request, ws_id: int) -> HTMLResponse:
     """Single-workspace office view."""
     try:
         offices = await _build_offices(request, ws_id=ws_id)
