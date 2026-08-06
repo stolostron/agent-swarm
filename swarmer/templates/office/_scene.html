@@ -17,7 +17,12 @@
     </header>
     <div class="office-room__window" aria-hidden="true"></div>
     <div class="office-room__body">
-      {% if office.sessions %}
+      {% if office.unavailable %}
+      <div class="office-room__empty office-room__unavailable" role="status">
+        <div>Session list unavailable for this workspace.</div>
+        <div class="office-room__unavailable-hint">Other offices are still shown — try again shortly.</div>
+      </div>
+      {% elif office.sessions %}
       <div class="office-desks">
         {% for session in office.workers %}
           {% with ws_id=office.workspace.id, rest_mode=False %}
@@ -53,7 +58,7 @@
       </aside>
       {% else %}
       <div class="office-room__empty">
-        <div style="font-size:2rem;" aria-hidden="true">🧑‍💻</div>
+        <div class="office-room__empty-icon" aria-hidden="true">🧑‍💻</div>
         <div>This office is empty.</div>
         <a href="/workspaces/{{ office.workspace.id }}/sessions/new" class="pf-v6-c-button pf-m-link pf-m-inline">
           Hire someone (new session)

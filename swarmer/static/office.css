@@ -219,6 +219,14 @@
   font-size: var(--pf-t--global--font--size--sm);
 }
 
+.office-room__empty-icon {
+  font-size: 2rem;
+}
+
+.office-room__unavailable-hint {
+  font-size: var(--pf-t--global--font--size--xs);
+}
+
 .office-desks,
 .rest-room__people {
   display: flex;

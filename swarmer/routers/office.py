@@ -7,6 +7,7 @@ so operators can watch swarm activity in near real time.
 from __future__ import annotations
 
 import asyncio
+import logging
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import HTMLResponse
@@ -14,7 +15,9 @@ from fastapi.templating import Jinja2Templates
 
 from swarmer.deps import require_auth
 from swarmer.models.session import CRON_PRESETS
-from swarmer.routers.api_client import get_api_client
+from swarmer.routers.api_client import APIError, get_api_client
+
+log = logging.getLogger(__name__)
 
 router = APIRouter()
 templates = Jinja2Templates(directory="swarmer/templates")
@@ -141,15 +144,28 @@ async def _build_offices(request: Request, ws_id: int | None = None) -> list[dic
 
         sem = asyncio.Semaphore(_SESSION_FETCH_CONCURRENCY)
 
-        async def _sessions_for(ws: dict) -> tuple[dict, list]:
+        async def _sessions_for(ws: dict) -> tuple[dict, list, bool]:
+            """Return (workspace, sessions, unavailable).
+
+            Isolate per-workspace list_sessions failures so one bad workspace
+            does not abort the whole office floor / HTMX poll.
+            """
             async with sem:
-                sessions = await api.list_sessions(ws["id"])
-            return ws, sessions
+                try:
+                    sessions = await api.list_sessions(ws["id"])
+                    return ws, sessions, False
+                except APIError as exc:
+                    log.warning(
+                        "office: list_sessions failed for workspace %s: %s",
+                        ws.get("id"),
+                        exc,
+                    )
+                    return ws, [], True
 
         loaded = await asyncio.gather(*[_sessions_for(ws) for ws in workspaces])
 
         offices: list[dict] = []
-        for ws, sessions in loaded:
+        for ws, sessions, unavailable in loaded:
             cards = [_session_card(s) for s in sessions]
             workers = [c for c in cards if not c["in_restroom"]]
             resters = [c for c in cards if c["in_restroom"]]
@@ -162,6 +178,7 @@ async def _build_offices(request: Request, ws_id: int | None = None) -> list[dic
                     "resters": resters,
                     "active_count": active,
                     "total_count": len(cards),
+                    "unavailable": unavailable,
                 }
             )
     return offices

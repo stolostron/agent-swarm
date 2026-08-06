@@ -2,12 +2,15 @@
 
 import os
 import sys
+from datetime import datetime, timezone
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from datetime import datetime, timezone
-
-from swarmer.routers.office import _PHASE_ACTIVITY, _session_card
+from swarmer.routers.api_client import APIError
+from swarmer.routers.office import _PHASE_ACTIVITY, _build_offices, _session_card
 
 
 def test_session_card_maps_running_phase():
@@ -101,3 +104,36 @@ def test_session_card_look_rotates_by_id():
     assert _session_card({"id": 0, "phase": "idle"})["look"] == "look-0"
     assert _session_card({"id": 6, "phase": "idle"})["look"] == "look-0"
     assert _session_card({"id": 5, "phase": "idle"})["look"] == "look-5"
+
+
+@pytest.mark.asyncio
+async def test_build_offices_isolates_list_sessions_api_error():
+    """One workspace list_sessions failure must not abort the whole floor."""
+    ws_ok = {"id": 1, "display_name": "ok"}
+    ws_bad = {"id": 2, "display_name": "bad"}
+
+    async def _list_sessions(wid: int):
+        if wid == 1:
+            return [{"id": 10, "phase": "running", "name": "alive", "is_active": True}]
+        raise APIError(500, "boom")
+
+    api = AsyncMock()
+    api.list_workspaces = AsyncMock(return_value=[ws_ok, ws_bad])
+    api.list_sessions = AsyncMock(side_effect=_list_sessions)
+
+    ctx = MagicMock()
+    ctx.__aenter__ = AsyncMock(return_value=api)
+    ctx.__aexit__ = AsyncMock(return_value=None)
+
+    request = MagicMock()
+    with patch("swarmer.routers.office.get_api_client", return_value=ctx):
+        offices = await _build_offices(request)
+
+    assert len(offices) == 2
+    by_id = {o["workspace"]["id"]: o for o in offices}
+    assert by_id[1]["unavailable"] is False
+    assert by_id[1]["total_count"] == 1
+    assert by_id[1]["sessions"][0]["name"] == "alive"
+    assert by_id[2]["unavailable"] is True
+    assert by_id[2]["sessions"] == []
+    assert by_id[2]["total_count"] == 0
