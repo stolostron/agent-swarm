@@ -155,10 +155,10 @@ async def _build_offices(request: Request, ws_id: int | None = None) -> list[dic
                     sessions = await api.list_sessions(ws["id"])
                     return ws, sessions, False
                 except APIError as exc:
+                    # Log status only — avoid workspace IDs and API detail strings.
                     log.warning(
-                        "office: list_sessions failed for workspace %s: %s",
-                        ws.get("id"),
-                        exc,
+                        "office: list_sessions failed (HTTP %s)",
+                        exc.status_code,
                     )
                     return ws, [], True
 
@@ -190,7 +190,7 @@ async def office_index(request: Request) -> HTMLResponse:
     offices = await _build_offices(request)
     return templates.TemplateResponse(
         request,
-        "office/index.html",
+        "offices/index.html",
         {
             "offices": offices,
             "scope": "all",
@@ -210,7 +210,7 @@ async def office_scene(request: Request) -> HTMLResponse:
     offices = await _build_offices(request)
     return templates.TemplateResponse(
         request,
-        "office/_scene.html",
+        "offices/_scene.html",
         {"offices": offices, "scope": "all", "ws": None},
     )
 
@@ -228,7 +228,7 @@ async def workspace_office(request: Request, ws_id: int) -> HTMLResponse:
     ws = offices[0]["workspace"] if offices else None
     return templates.TemplateResponse(
         request,
-        "office/index.html",
+        "offices/index.html",
         {
             "offices": offices,
             "scope": "workspace",
@@ -252,6 +252,6 @@ async def workspace_office_scene(request: Request, ws_id: int) -> HTMLResponse:
     ws = offices[0]["workspace"] if offices else None
     return templates.TemplateResponse(
         request,
-        "office/_scene.html",
+        "offices/_scene.html",
         {"offices": offices, "scope": "workspace", "ws": ws},
     )

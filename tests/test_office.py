@@ -1,13 +1,9 @@
 """Unit tests for the Swarm Office Visualizer helpers."""
 
-import os
-import sys
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from swarmer.routers.api_client import APIError
 from swarmer.routers.office import _PHASE_ACTIVITY, _build_offices, _session_card
