@@ -70,7 +70,8 @@ def _format_next_run(value: object) -> str:
     # ISO strings from the API client before/without datetime parsing
     if "T" in text:
         text = text.replace("T", " ").replace("+00:00", " UTC").rstrip("Z")
-        return text[:16] + (" UTC" if "UTC" not in text else "")
+        truncated = text[:16]
+        return truncated + ("" if "UTC" in truncated else " UTC")
     return text
 
 
