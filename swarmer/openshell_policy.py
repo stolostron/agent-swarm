@@ -365,6 +365,17 @@ def _build_agent_api_block(agent_tool: str, model: str) -> dict:
 
 # ── Public API ────────────────────────────────────────────────────────────────
 
+def slack_webhook_enabled(extra_env: dict[str, str] | None = None) -> bool:
+    """Return True when workspace env has a non-blank SLACK_WEBHOOK_URL.
+
+    Used by session launch to decide whether to attach the Slack webhook
+    egress block. Missing, empty, and whitespace-only values are False.
+    """
+    if not extra_env:
+        return False
+    return bool((extra_env.get("SLACK_WEBHOOK_URL") or "").strip())
+
+
 def build_session_policy(
     session,
     repos: list,
