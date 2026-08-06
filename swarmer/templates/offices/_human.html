@@ -1,7 +1,8 @@
 {# Cute human worker for one session. Expects: session, ws_id, rest_mode #}
 <a class="desk-station desk-station--{{ session.activity }} desk-station--{{ session.look }}{% if rest_mode %} desk-station--rest{% endif %}"
-   href="/workspaces/{{ ws_id }}/sessions/{{ session.id }}">
-  <div class="human-tip" role="tooltip">
+   href="/workspaces/{{ ws_id }}/sessions/{{ session.id }}"
+   aria-describedby="office-tip-{{ ws_id }}-{{ session.id }}{% if rest_mode %}-rest{% endif %}">
+  <div class="human-tip" id="office-tip-{{ ws_id }}-{{ session.id }}{% if rest_mode %}-rest{% endif %}" role="tooltip">
     <div class="human-tip__title">{{ session.name }}</div>
     <div class="human-tip__status">{{ session.label }} · {{ session.mode }}</div>
     <div class="human-tip__section">Schedule</div>
