@@ -340,7 +340,7 @@ def test_slack_webhook_all_binaries_have_harness():
         ({}, False),
         ({"SLACK_WEBHOOK_URL": ""}, False),
         ({"SLACK_WEBHOOK_URL": "   "}, False),
-        ({"SLACK_WEBHOOK_URL": "https://hooks.slack.com/services/T/B/X"}, True),
+        ({"SLACK_WEBHOOK_URL": "configured"}, True),
     ],
 )
 def test_slack_webhook_enabled_from_workspace_env(extra_env, expected):
