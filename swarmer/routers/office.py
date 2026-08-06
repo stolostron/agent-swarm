@@ -10,7 +10,7 @@ import asyncio
 import logging
 
 from fastapi import APIRouter, Depends, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
 from swarmer.deps import require_auth
@@ -221,7 +221,10 @@ async def office_scene(request: Request) -> HTMLResponse:
 )
 async def workspace_office(request: Request, ws_id: int) -> HTMLResponse:
     """Single-workspace office view."""
-    offices = await _build_offices(request, ws_id=ws_id)
+    try:
+        offices = await _build_offices(request, ws_id=ws_id)
+    except APIError:
+        return RedirectResponse(url="/workspaces", status_code=302)
     ws = offices[0]["workspace"] if offices else None
     return templates.TemplateResponse(
         request,
@@ -242,7 +245,10 @@ async def workspace_office(request: Request, ws_id: int) -> HTMLResponse:
 )
 async def workspace_office_scene(request: Request, ws_id: int) -> HTMLResponse:
     """HTMX partial for a single-workspace office scene."""
-    offices = await _build_offices(request, ws_id=ws_id)
+    try:
+        offices = await _build_offices(request, ws_id=ws_id)
+    except APIError:
+        return HTMLResponse("")
     ws = offices[0]["workspace"] if offices else None
     return templates.TemplateResponse(
         request,
