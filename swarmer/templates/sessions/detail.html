@@ -327,10 +327,15 @@
               <div style="display:flex; gap:var(--pf-t--global--spacer--sm); align-items:center; flex-wrap:wrap;
                           margin-top:var(--pf-t--global--spacer--xs);">
                 {% for tool in agent_tools %}
-                <label style="display:inline-flex;align-items:center;gap:var(--pf-t--global--spacer--xs);cursor:pointer;">
+                {% set _tool_disabled = tool.name == 'shell' and session.mode == 'server' %}
+                <label style="display:inline-flex;align-items:center;gap:var(--pf-t--global--spacer--xs);
+                              cursor:{{ 'not-allowed' if _tool_disabled else 'pointer' }};
+                              opacity:{{ '0.5' if _tool_disabled else '1' }};"
+                       {% if _tool_disabled %}title="Shell does not support server mode"{% endif %}>
                   <input type="radio" name="agent_tool" value="{{ tool.name }}"
                          id="cfg_agent_tool_{{ tool.name }}"
                          {% if tool.name == canonical_agent_tool %}checked{% endif %}
+                         {% if _tool_disabled %}disabled{% endif %}
                          onchange="handleDetailAgentToolChange(this.value)">
                   <span class="pf-v6-c-badge pf-m-read" style="font-size:0.85rem;">{{ tool.display_name }}</span>
                 </label>
@@ -342,6 +347,9 @@
                     Shell: runs the prompt as a raw command — no AI agent, no token cost.
                   {% else %}
                     OpenCode: AI coding agent powered by Claude or Gemini.
+                  {% endif %}
+                  {% if session.mode == 'server' %}
+                    (Shell is unavailable in server mode.)
                   {% endif %}
                 </span>
               </div>

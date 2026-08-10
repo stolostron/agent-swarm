@@ -528,7 +528,12 @@ async def session_create(
                 "pats": pats,
                 "has_github_app": bool(_ws_github_app),
                 "error": f"A session named '{name}' already exists in this workspace.",
-                "form": {"name": name, "instruction_prompt": instruction_prompt, "working_branch": wb},
+                "form": {
+                    "name": name,
+                    "instruction_prompt": instruction_prompt,
+                    "working_branch": wb,
+                    "agent_tool": agent_tool,
+                },
                 "provider_options": provider_options,
                 "selected_provider": provider,
                 "agent_tools": _tools,
@@ -711,9 +716,18 @@ async def session_edit(
         session.mode = mode
     session.provider = provider.strip()
     try:
-        session.agent_tool = get_tool(agent_tool).name
+        _new_agent_tool = get_tool(agent_tool).name
     except ValueError:
-        pass
+        _new_agent_tool = session.agent_tool
+
+    # Shell agent tool does not support server mode (see ShellStrategy.build_main_cmd).
+    # The UI hides/disables this combination, but reject it server-side too in
+    # case of a direct request.
+    if _new_agent_tool == "shell" and session.mode == "server":
+        flash(request, "Shell agent tool does not support server mode.", "danger")
+        return RedirectResponse(url=f"/workspaces/{ws_id}/sessions/{sid}", status_code=302)
+
+    session.agent_tool = _new_agent_tool
 
     form_data = await request.form()
     if "working_branch" in form_data:
@@ -1113,7 +1127,10 @@ async def _do_launch_openshell(
     #     the injected env vars (GOOGLE_API_KEY, ANTHROPIC_API_KEY, GH_TOKEN, etc.).
     provider_names: list[str] = []
     ws_id = session.workspace_id
-    if oc_secret and oc_secret.google_api_key:
+    # Shell tool never calls an AI model — don't create or attach AI provider
+    # credentials (Google AI Studio, Vertex/google-cloud) to its sandbox. Only
+    # GitHub, Jira, Slack, and other non-AI providers below apply to it.
+    if tool.name != "shell" and oc_secret and oc_secret.google_api_key:
         pname = f"swarmer-ws-{ws_id}-google-ai-studio"
         await openshell_client.ensure_provider(pname, "google-ai-studio", {}, credentials={
                 "GOOGLE_API_KEY": oc_secret.google_api_key,
@@ -1124,15 +1141,16 @@ async def _do_launch_openshell(
     # Attach the provider if it already exists (created via the secrets UI).
     _vertex_pname = f"swarmer-ws-{ws_id}-google-cloud"
     _has_google_cloud_provider = False
-    try:
-        if await openshell_client.provider_exists(_vertex_pname):
-            provider_names.append(_vertex_pname)
-            _has_google_cloud_provider = True
-    except Exception:
-        log.warning(
-            "_do_launch_openshell: could not check google-cloud provider for session %d",
-            session.id, exc_info=True,
-        )
+    if tool.name != "shell":
+        try:
+            if await openshell_client.provider_exists(_vertex_pname):
+                provider_names.append(_vertex_pname)
+                _has_google_cloud_provider = True
+        except Exception:
+            log.warning(
+                "_do_launch_openshell: could not check google-cloud provider for session %d",
+                session.id, exc_info=True,
+            )
     # 1b cont. GitHub App IAT — minted above before commit; now register the provider.
     _app_pname: str | None = None
 

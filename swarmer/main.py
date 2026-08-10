@@ -137,13 +137,25 @@ async def _restart_prompt_pollers() -> None:
         )
         for s in result.scalars().all():
             import shlex as _shlex
-            from swarmer.routers.sessions import _run_openshell_agent
+            from swarmer.routers.sessions import (
+                _resolve_schedule_prompt,
+                _resolve_session_prompt,
+                _run_openshell_agent,
+            )
             from swarmer.agent_tools.registry import get as _get_tool
             _tool = _get_tool(s.agent_tool)
             if s.agent_tool == "shell":
-                # Shell tool: reconstruct the raw command from the instruction_prompt.
-                # No AI agent, no model, no AGENTS.md — just re-run the command.
-                _raw_cmd = (s.instruction_prompt or "").strip()
+                # Shell tool: reconstruct the command exactly as it was resolved
+                # at initial launch. build_main_cmd() at launch time is passed
+                # resolved_prompt (instruction_prompt layered with any
+                # prompt_id/schedule override — see _resolve_session_prompt /
+                # _resolve_schedule_prompt), which can differ from the raw
+                # instruction_prompt. Re-resolve the same way here so a restart
+                # reruns the identical command rather than a stale or empty one.
+                if s.active_schedule_id:
+                    _raw_cmd = (await _resolve_schedule_prompt(s.active_schedule_id, s, db)).strip()
+                else:
+                    _raw_cmd = (await _resolve_session_prompt(s, db)).strip()
                 _main_cmd = (
                     f"export HOME=/sandbox PATH=\"/sandbox/.local/bin:$PATH\" && "
                     f"cd /sandbox && {_raw_cmd}"

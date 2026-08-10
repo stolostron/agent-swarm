@@ -19,10 +19,15 @@ image with Python 3, bash, and git is recommended — the same image used for
 the OpenCode sandbox also works and is the default fallback.
 """
 
-import shlex
+from typing import TYPE_CHECKING
 
 from swarmer.agent_tools import AgentToolStrategy
 from swarmer.config import settings
+
+if TYPE_CHECKING:
+    from swarmer.models.mcp_server import McpServer
+    from swarmer.models.opencode_secret import OpencodeSecret
+    from swarmer.models.session import Session
 
 
 class ShellStrategy(AgentToolStrategy):
@@ -43,8 +48,8 @@ class ShellStrategy(AgentToolStrategy):
 
     def build_config_data(
         self,
-        secret=None,
-        mcp_servers=None,
+        secret: "OpencodeSecret | None" = None,
+        mcp_servers: "list[McpServer] | None" = None,
         use_inference_local: bool = False,
         model: str = "",
     ) -> dict[str, str]:
@@ -54,6 +59,14 @@ class ShellStrategy(AgentToolStrategy):
 
     def get_container_name(self) -> str:
         return "shell"
+
+    def get_tui_binary(self) -> str:
+        # The inherited default returns self.name ("shell"), which is not an
+        # installed binary in the sandbox image. Use bash — an installed
+        # interactive shell. `tui_ws.py` tries `bash --continue` first (which
+        # fails, as bash has no such flag) and falls back to a plain
+        # `exec bash`, giving the user an interactive shell.
+        return "bash"
 
     def get_server_port(self) -> int | None:
         # Shell tool has no persistent server port.
@@ -70,7 +83,7 @@ class ShellStrategy(AgentToolStrategy):
         # No model initialisation — shell tool doesn't use an AI model.
         return ""
 
-    def build_main_cmd(self, session, model: str, resolved_prompt: str = "") -> str:
+    def build_main_cmd(self, session: "Session", model: str, resolved_prompt: str = "") -> str:
         """Return the raw command to execute.
 
         In prompt mode the command is the session's ``instruction_prompt``
@@ -107,7 +120,7 @@ class ShellStrategy(AgentToolStrategy):
 
     def get_model_options(
         self,
-        secret=None,
+        secret: "OpencodeSecret | None" = None,
         has_vertex: bool = False,
         has_gemini: bool = False,
     ) -> list[dict]:
