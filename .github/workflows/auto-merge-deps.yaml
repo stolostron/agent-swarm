@@ -1,0 +1,100 @@
+name: Auto-merge Dependency Updates
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Every 30 min, 13:30-17:00 UTC, Mon-Fri.
+    # Covers 9:30am-12pm ET across both EDT (UTC-4) and EST (UTC-5), since
+    # GitHub Actions cron is UTC-only and does not observe DST.
+    - cron: "30 13 * * 1-5" # 13:30 UTC
+    - cron: "0,30 14-16 * * 1-5" # 14:00, 14:30, 15:00, 15:30, 16:00, 16:30 UTC
+    - cron: "0 17 * * 1-5" # 17:00 UTC
+
+jobs:
+  auto-merge:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Get eligible dependency PRs
+        id: get_prs
+        run: |
+          # Only PRs authored by the trusted swarmer-jnpacker[bot] GitHub App
+          # identity, targeting main, on a dependency-update branch (created
+          # by the swarm-deps-agent bot), are eligible for auto-merge. Also
+          # require the PR to be mergeable and every non-tide check to have
+          # completed successfully (not just "at least one success" - a
+          # pending check must not count as passing).
+          prs=$(gh pr list --state open --base main --json number,title,url,author,headRefName,headRefOid,statusCheckRollup,mergeable --jq '
+            .[] | select(
+              (.author.login == "swarmer-jnpacker[bot]") and
+              (.headRefName | test("^(fix|build)/(go|python)-deps-")) and
+              (.mergeable == "MERGEABLE") and
+              ([.statusCheckRollup[] | select(.context != "tide" and .name != "tide")] as $checks |
+                ($checks | length > 0) and
+                ($checks | all(.state == "SUCCESS" or .conclusion == "SUCCESS")))
+            )')
+
+          if [ -z "$prs" ]; then
+            echo "No PRs ready for auto-merge"
+            echo "ready_prs=[]" >> "$GITHUB_OUTPUT"
+          else
+            echo "Found PRs ready for auto-merge:"
+            echo "$prs" | jq -r '.number'
+            echo "ready_prs<<EOF" >> "$GITHUB_OUTPUT"
+            echo "$prs" | jq -s '.' >> "$GITHUB_OUTPUT"
+            echo "EOF" >> "$GITHUB_OUTPUT"
+          fi
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - name: Auto-merge ready PRs
+        if: steps.get_prs.outputs.ready_prs != '[]'
+        run: |
+          # Read the PR list from an environment variable rather than
+          # interpolating it directly into the script, since it contains
+          # contributor-controlled PR titles that could otherwise break out
+          # of the quoted assignment and inject shell commands.
+          ready_prs="$READY_PRS"
+
+          echo "Processing PRs for auto-merge..."
+          echo "$ready_prs" | jq -r '.[] | .number' | while read -r pr_number; do
+            echo "Processing PR #$pr_number"
+
+            pr_info=$(echo "$ready_prs" | jq -r ".[] | select(.number == $pr_number)")
+            pr_title=$(echo "$pr_info" | jq -r '.title')
+            pr_branch=$(echo "$pr_info" | jq -r '.headRefName')
+            pr_head_oid=$(echo "$pr_info" | jq -r '.headRefOid')
+
+            echo "Attempting to merge PR #$pr_number: $pr_title (branch: $pr_branch)"
+
+            # --match-head-commit binds the merge to the exact commit that
+            # was evaluated for eligibility, so a push landing between the
+            # eligibility check and this merge cannot slip in unreviewed.
+            if gh pr merge "$pr_number" --squash --delete-branch --match-head-commit "$pr_head_oid"; then
+              echo "Successfully merged PR #$pr_number"
+
+              gh pr comment "$pr_number" --body "This PR was automatically merged because all checks passed and it matched the trusted dependency update pattern (author: swarmer-jnpacker[bot], branch: $pr_branch)."
+            else
+              echo "Failed to merge PR #$pr_number"
+
+              gh pr comment "$pr_number" --body "Auto-merge failed for this PR. Please check for conflicts or other issues."
+            fi
+
+            echo "---"
+          done
+        env:
+          GH_TOKEN: ${{ github.token }}
+          READY_PRS: ${{ steps.get_prs.outputs.ready_prs }}
+
+      - name: Summary
+        run: |
+          echo "Auto-merge workflow completed"
+          echo "Checked for dependency PRs authored by swarmer-jnpacker[bot] on branches matching"
+          echo "fix/{go,python}-deps-* or build/{go,python}-deps-* that have:"
+          echo "- All status checks passing (SUCCESS)"
+          echo "- Mergeable state (no conflicts)"
