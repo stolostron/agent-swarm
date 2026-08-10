@@ -18,18 +18,22 @@ jobs:
       pull-requests: write
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Get eligible dependency PRs
         id: get_prs
         run: |
+          set -euo pipefail
+
           # Only PRs authored by the trusted swarmer-jnpacker[bot] GitHub App
           # identity, targeting main, on a dependency-update branch (created
           # by the swarm-deps-agent bot), are eligible for auto-merge. Also
           # require the PR to be mergeable and every non-tide check to have
           # completed successfully (not just "at least one success" - a
           # pending check must not count as passing).
-          prs=$(gh pr list --state open --base main --json number,title,url,author,headRefName,headRefOid,statusCheckRollup,mergeable --jq '
+          prs=$(gh pr list --state open --base main --limit 100 --json number,title,url,author,headRefName,headRefOid,statusCheckRollup,mergeable --jq '
             .[] | select(
               (.author.login == "swarmer-jnpacker[bot]") and
               (.headRefName | test("^(fix|build)/(go|python)-deps-")) and
@@ -53,16 +57,26 @@ jobs:
           GH_TOKEN: ${{ github.token }}
 
       - name: Auto-merge ready PRs
+        id: merge_prs
         if: steps.get_prs.outputs.ready_prs != '[]'
         run: |
+          set -uo pipefail
+
           # Read the PR list from an environment variable rather than
           # interpolating it directly into the script, since it contains
           # contributor-controlled PR titles that could otherwise break out
           # of the quoted assignment and inject shell commands.
           ready_prs="$READY_PRS"
 
+          merged_count=0
+          queued_count=0
+          failed_count=0
+
           echo "Processing PRs for auto-merge..."
-          echo "$ready_prs" | jq -r '.[] | .number' | while read -r pr_number; do
+          # Feed the loop via process substitution (not a pipe) so it runs
+          # in the current shell, letting merged_count/queued_count/failed_count
+          # survive past the loop for the step outputs below.
+          while read -r pr_number; do
             echo "Processing PR #$pr_number"
 
             pr_info=$(echo "$ready_prs" | jq -r ".[] | select(.number == $pr_number)")
@@ -76,25 +90,55 @@ jobs:
             # was evaluated for eligibility, so a push landing between the
             # eligibility check and this merge cannot slip in unreviewed.
             if gh pr merge "$pr_number" --squash --delete-branch --match-head-commit "$pr_head_oid"; then
-              echo "Successfully merged PR #$pr_number"
+              # gh pr merge can exit successfully after only queuing the PR
+              # (e.g. behind a merge queue), so confirm the actual state
+              # before reporting it as merged.
+              pr_state=$(gh pr view "$pr_number" --json state --jq '.state')
 
-              gh pr comment "$pr_number" --body "This PR was automatically merged because all checks passed and it matched the trusted dependency update pattern (author: swarmer-jnpacker[bot], branch: $pr_branch)."
+              if [ "$pr_state" = "MERGED" ]; then
+                echo "Successfully merged PR #$pr_number"
+                merged_count=$((merged_count + 1))
+
+                gh pr comment "$pr_number" --body "This PR was automatically merged because all checks passed and it matched the trusted dependency update pattern (author: swarmer-jnpacker[bot], branch: $pr_branch)."
+              else
+                echo "PR #$pr_number was queued for merge (state: $pr_state), not yet merged"
+                queued_count=$((queued_count + 1))
+
+                gh pr comment "$pr_number" --body "This PR passed all checks and matched the trusted dependency update pattern (author: swarmer-jnpacker[bot], branch: $pr_branch); it has been queued for merge."
+              fi
             else
               echo "Failed to merge PR #$pr_number"
+              failed_count=$((failed_count + 1))
 
               gh pr comment "$pr_number" --body "Auto-merge failed for this PR. Please check for conflicts or other issues."
             fi
 
             echo "---"
-          done
+          done < <(echo "$ready_prs" | jq -r '.[] | .number')
+
+          echo "merged_count=$merged_count" >> "$GITHUB_OUTPUT"
+          echo "queued_count=$queued_count" >> "$GITHUB_OUTPUT"
+          echo "failed_count=$failed_count" >> "$GITHUB_OUTPUT"
         env:
           GH_TOKEN: ${{ github.token }}
           READY_PRS: ${{ steps.get_prs.outputs.ready_prs }}
 
       - name: Summary
+        if: always()
         run: |
-          echo "Auto-merge workflow completed"
-          echo "Checked for dependency PRs authored by swarmer-jnpacker[bot] on branches matching"
-          echo "fix/{go,python}-deps-* or build/{go,python}-deps-* that have:"
-          echo "- All status checks passing (SUCCESS)"
-          echo "- Mergeable state (no conflicts)"
+          {
+            echo "## Auto-merge workflow summary"
+            echo ""
+            echo "Checked for dependency PRs authored by swarmer-jnpacker[bot] on branches"
+            echo "matching \`fix/{go,python}-deps-*\` or \`build/{go,python}-deps-*\` that have:"
+            echo "- All status checks passing (SUCCESS)"
+            echo "- Mergeable state (no conflicts)"
+            echo ""
+            echo "| Merged | Queued | Failed |"
+            echo "|---|---|---|"
+            echo "| ${MERGED_COUNT:-0} | ${QUEUED_COUNT:-0} | ${FAILED_COUNT:-0} |"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+        env:
+          MERGED_COUNT: ${{ steps.merge_prs.outputs.merged_count }}
+          QUEUED_COUNT: ${{ steps.merge_prs.outputs.queued_count }}
+          FAILED_COUNT: ${{ steps.merge_prs.outputs.failed_count }}
