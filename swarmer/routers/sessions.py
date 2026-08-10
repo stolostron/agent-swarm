@@ -1537,20 +1537,26 @@ async def _setup_openshell_sandbox(
                         )
 
         # Build the agent command.
-        # Prompt mode: AGENTS.md was written above (prompt + repo context); read it at
-        # runtime via "$(</sandbox/AGENTS.md)" shell expansion — no newlines in args,
-        # full context identical to TUI mode.
+        # Prompt mode:
+        #   - AI-based tools (opencode): AGENTS.md was written above (prompt + repo
+        #     context); read it at runtime via "$(</sandbox/AGENTS.md)" shell expansion.
+        #   - Shell tool: instruction_prompt IS the command — run it directly, no AI hop.
         # TUI/server: main_cmd is "sleep infinity" / "opencode serve …"; agent is
         # started later by the WebSocket handler or start_agent().
         if mode == "prompt":
-            _tool_bin = {"opencode": "opencode run"}.get(tool_name, "opencode run")
-            if agents_md:
-                # Read the full AGENTS.md (prompt + repo context) as the CLI argument.
-                _model_arg = shlex.quote(model) if model else ""
-                agent_cmd = f"HOME=/sandbox {_tool_bin} --model {_model_arg} \"$(</sandbox/AGENTS.md)\""
+            if tool_name == "shell":
+                # Shell tool: run the raw command directly — no AI agent involved.
+                # main_cmd is already the verbatim instruction_prompt from build_main_cmd().
+                agent_cmd = f"export HOME=/sandbox PATH=\"/sandbox/.local/bin:$PATH\" && cd /sandbox && {main_cmd}"
             else:
-                # No prompt configured — launch without a message argument.
-                agent_cmd = f"HOME=/sandbox {main_cmd}"
+                _tool_bin = {"opencode": "opencode run"}.get(tool_name, "opencode run")
+                if agents_md:
+                    # Read the full AGENTS.md (prompt + repo context) as the CLI argument.
+                    _model_arg = shlex.quote(model) if model else ""
+                    agent_cmd = f"HOME=/sandbox {_tool_bin} --model {_model_arg} \"$(</sandbox/AGENTS.md)\""
+                else:
+                    # No prompt configured — launch without a message argument.
+                    agent_cmd = f"HOME=/sandbox {main_cmd}"
         else:
             # Server and TUI modes: export HOME and PATH, cd into /sandbox/.
             # Mirrors tui_ws.py exactly: HOME=/sandbox, PATH includes /sandbox/.local/bin.

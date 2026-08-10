@@ -11,6 +11,9 @@ class Settings(BaseSettings):
     host: str = "0.0.0.0"
     port: int = 8080
     agent_image_opencode: str = ""
+    # Container image for the shell agent tool. Falls back to agent_image_opencode
+    # if unset — the OpenCode image already contains Python 3, bash, and git.
+    agent_image_shell: str = ""
     default_agent_tool: str = "opencode"
     k8s_namespace: str = ""
     max_concurrent_agents: int = 5

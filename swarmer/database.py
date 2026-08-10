@@ -158,7 +158,8 @@ async def migrate_db() -> None:
         # ACM-37190: CRUSH agent tool removed (ACM-37174) — normalize any existing
         # sessions still carrying the retired 'crush' value so registry lookups
         # (get_tool) don't raise ValueError when rendering session list/detail pages.
-        "UPDATE sessions SET agent_tool = 'opencode' WHERE agent_tool != 'opencode'",
+        # 'shell' is an additional supported tool and must NOT be normalised to 'opencode'.
+        "UPDATE sessions SET agent_tool = 'opencode' WHERE agent_tool NOT IN ('opencode', 'shell')",
         # ACM-37232 follow-up: Session.model renamed to Session.provider — the
         # column now stores an AI provider selection ("claude"/"gemini" preset)
         # rather than a specific model ID. "no such column" (fresh DB already

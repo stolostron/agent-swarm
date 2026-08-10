@@ -17,7 +17,7 @@ from swarmer.database import Base
 # Valid phase values
 PHASES = ("idle", "queued", "pending", "running", "succeeded", "failed", "stopped")
 
-AGENT_TOOLS = ("opencode",)
+AGENT_TOOLS = ("opencode", "shell")
 
 CRON_PRESETS: dict[str, str] = {
     "*/30 * * * *": "Every 30 min",

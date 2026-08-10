@@ -455,12 +455,17 @@ def build_session_network_policies(
     Slack Incoming Webhook posts (SLACK_WEBHOOK_URL).
     """
     network_policies_dict: dict = {}
-    network_policies_dict.update(_build_agent_api_block(agent_tool, model))
 
-    # Google Cloud provider: grant aiplatform.googleapis.com + api.github.com
-    # when the workspace's google-cloud provider is attached to this sandbox.
-    if has_google_cloud_provider:
-        network_policies_dict["google_cloud_provider"] = _build_google_cloud_provider_block(agent_tool)
+    # Shell tool: no AI agent, no model API calls needed — skip the agent API
+    # and Google Cloud egress blocks entirely.  Git, Jira, Slack, and any
+    # custom rules still apply below.
+    if agent_tool != "shell":
+        network_policies_dict.update(_build_agent_api_block(agent_tool, model))
+
+        # Google Cloud provider: grant aiplatform.googleapis.com + api.github.com
+        # when the workspace's google-cloud provider is attached to this sandbox.
+        if has_google_cloud_provider:
+            network_policies_dict["google_cloud_provider"] = _build_google_cloud_provider_block(agent_tool)
 
     for repo in repos:
         slug = _repo_slug(repo)
