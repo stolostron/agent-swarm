@@ -1712,18 +1712,25 @@ async def _run_openshell_agent(
             stderr = getattr(result, "stderr", "") or ""
             phase = "succeeded" if exit_code == 0 else "failed"
 
-            # OpenCode stores the response in its SQLite DB, not stdout.
+            # OpenCode stores the response in its SQLite DB, not stdout, so we
+            # do a final read_opencode_response call after the exec completes.
             # On success: prefer the SQLite response (full conversation).
             # On failure: SQLite may be empty; prefer the accumulated streaming
             # output over the sparse ExecResult.stdout (which is the same
             # incremental stdout that on_output already captured, but only the
             # last chunk — the accumulated buffer has everything).
+            # Shell tool runs a raw command directly — there is no OpenCode
+            # SQLite DB to read, so skip that call entirely and use the
+            # streamed stdout/stderr as the result.
             _streamed_text = _streamed[0] if _streamed else ""
-            output = (
-                await openshell_client.read_opencode_response(sandbox_name)
-                or _streamed_text
-                or stderr
-            )
+            if agent_tool == "shell":
+                output = _streamed_text or stderr
+            else:
+                output = (
+                    await openshell_client.read_opencode_response(sandbox_name)
+                    or _streamed_text
+                    or stderr
+                )
 
             # Snapshot draft policy chunks before any sandbox deletion so the
             # Policy tab can show what was denied/proposed during this run.
