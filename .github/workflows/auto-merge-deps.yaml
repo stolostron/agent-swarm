@@ -3,12 +3,10 @@ name: Auto-merge Dependency Updates
 on:
   workflow_dispatch:
   schedule:
-    # Every 30 min, 13:30-17:00 UTC, Mon-Fri.
-    # Covers 9:30am-12pm ET across both EDT (UTC-4) and EST (UTC-5), since
+    # Every 30 min, 12:00-17:00 UTC, Mon-Fri.
+    # Covers 8am-1pm ET across both EDT (UTC-4) and EST (UTC-5), since
     # GitHub Actions cron is UTC-only and does not observe DST.
-    - cron: "30 13 * * 1-5" # 13:30 UTC
-    - cron: "0,30 14-16 * * 1-5" # 14:00, 14:30, 15:00, 15:30, 16:00, 16:30 UTC
-    - cron: "0 17 * * 1-5" # 17:00 UTC
+    - cron: "0,30 12-17 * * 1-5" # 12:00, 12:30, ..., 16:30, 17:00 UTC
 
 jobs:
   auto-merge:
@@ -28,19 +26,32 @@ jobs:
           set -euo pipefail
 
           # Only PRs authored by the trusted swarmer-jnpacker[bot] GitHub App
-          # identity, targeting main, on a dependency-update branch (created
-          # by the swarm-deps-agent bot), are eligible for auto-merge. Also
-          # require the PR to be mergeable and every non-tide check to have
-          # completed successfully (not just "at least one success" - a
-          # pending check must not count as passing).
-          prs=$(gh pr list --state open --base main --limit 100 --json number,title,url,author,headRefName,headRefOid,statusCheckRollup,mergeable --jq '
+          # identity, targeting main, are eligible for auto-merge. gh pr
+          # list's GraphQL-backed --json author renders bot logins as
+          # "app/swarmer-jnpacker" (not the "swarmer-jnpacker[bot]" form
+          # used by the REST API and web UI), so match both spellings.
+          # In addition, the PR must either be on a dependency-update
+          # branch (created by the swarm-deps-agent bot) or carry the
+          # "automated-update" label. Also require the PR to be mergeable
+          # and every non-tide check to have completed successfully (not
+          # just "at least one success" - a pending check must not count as
+          # passing). Note: GitHub computes `mergeable` asynchronously, so
+          # a PR can transiently report "UNKNOWN" on one API call and
+          # "MERGEABLE" moments later once GitHub finishes the check - this
+          # is expected and not something to special-case here.
+          prs=$(gh pr list --state open --base main --limit 100 --json number,title,url,author,headRefName,headRefOid,statusCheckRollup,mergeable,labels --jq '
             .[] | select(
-              (.author.login == "swarmer-jnpacker[bot]") and
-              (.headRefName | test("^(fix|build)/(go|python)-deps-")) and
+              (.author.login == "swarmer-jnpacker[bot]" or .author.login == "app/swarmer-jnpacker") and
+              (
+                (.headRefName | test("^(fix|build|deps)/(go|python)-(deps|update)-")) or
+                (.labels // [] | any(.name == "automated-update"))
+              ) and
               (.mergeable == "MERGEABLE") and
               ([.statusCheckRollup[] | select(.context != "tide" and .name != "tide")] as $checks |
                 ($checks | length > 0) and
-                ($checks | all(.state == "SUCCESS" or .conclusion == "SUCCESS")))
+                ($checks | all(
+                  ((.state // "" | ascii_upcase) == "SUCCESS") or
+                  ((.conclusion // "" | ascii_upcase) == "SUCCESS"))))
             )')
 
           if [ -z "$prs" ]; then
@@ -84,6 +95,14 @@ jobs:
             pr_branch=$(echo "$pr_info" | jq -r '.headRefName')
             pr_head_oid=$(echo "$pr_info" | jq -r '.headRefOid')
 
+            # Note in the merge comment which eligibility path matched, so
+            # it's clear from the audit trail why the PR qualified.
+            if echo "$pr_branch" | grep -qE "^(fix|build|deps)/(go|python)-(deps|update)-"; then
+              pr_match_reason="branch: $pr_branch"
+            else
+              pr_match_reason="label: automated-update, branch: $pr_branch"
+            fi
+
             echo "Attempting to merge PR #$pr_number: $pr_title (branch: $pr_branch)"
 
             # --match-head-commit binds the merge to the exact commit that
@@ -99,12 +118,12 @@ jobs:
                 echo "Successfully merged PR #$pr_number"
                 merged_count=$((merged_count + 1))
 
-                gh pr comment "$pr_number" --body "This PR was automatically merged because all checks passed and it matched the trusted dependency update pattern (author: swarmer-jnpacker[bot], branch: $pr_branch)."
+                gh pr comment "$pr_number" --body "This PR was automatically merged because all checks passed and it matched the trusted dependency update pattern (author: swarmer-jnpacker[bot], $pr_match_reason)."
               else
                 echo "PR #$pr_number was queued for merge (state: $pr_state), not yet merged"
                 queued_count=$((queued_count + 1))
 
-                gh pr comment "$pr_number" --body "This PR passed all checks and matched the trusted dependency update pattern (author: swarmer-jnpacker[bot], branch: $pr_branch); it has been queued for merge."
+                gh pr comment "$pr_number" --body "This PR passed all checks and matched the trusted dependency update pattern (author: swarmer-jnpacker[bot], $pr_match_reason); it has been queued for merge."
               fi
             else
               echo "Failed to merge PR #$pr_number"
@@ -129,8 +148,9 @@ jobs:
           {
             echo "## Auto-merge workflow summary"
             echo ""
-            echo "Checked for dependency PRs authored by swarmer-jnpacker[bot] on branches"
-            echo "matching \`fix/{go,python}-deps-*\` or \`build/{go,python}-deps-*\` that have:"
+            echo "Checked for dependency PRs authored by swarmer-jnpacker[bot] that either match"
+            echo "branches like \`fix/{go,python}-deps-*\`, \`build/{go,python}-deps-*\`, or"
+            echo "\`deps/{go,python}-update-*\`, or carry the \`automated-update\` label, and have:"
             echo "- All status checks passing (SUCCESS)"
             echo "- Mergeable state (no conflicts)"
             echo ""
