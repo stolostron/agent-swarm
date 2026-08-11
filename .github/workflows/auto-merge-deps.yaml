@@ -46,7 +46,7 @@ jobs:
           # "MERGEABLE" moments later once GitHub finishes the check - this
           # is expected and not something to special-case here.
           prs=$(gh pr list --state open --base main --limit 100 --json number,title,url,author,headRefName,headRefOid,statusCheckRollup,mergeable,labels --jq '
-            def branch_match: .headRefName | test("^(fix|build|deps)/(deps-)?(go|python)(-deps)?(-update)?-");
+            def branch_match: .headRefName | test("^(fix|build|deps)/(deps-(go|python)(-update)?-|(go|python)(-deps|-update)-)");
             .[] | select(
               (.author.login == "swarmer-jnpacker[bot]" or .author.login == "app/swarmer-jnpacker") and
               (
