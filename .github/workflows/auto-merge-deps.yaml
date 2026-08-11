@@ -3,10 +3,16 @@ name: Auto-merge Dependency Updates
 on:
   workflow_dispatch:
   schedule:
-    # Every 30 min, 12:00-17:00 UTC, Mon-Fri.
-    # Covers 8am-1pm ET across both EDT (UTC-4) and EST (UTC-5), since
-    # GitHub Actions cron is UTC-only and does not observe DST.
-    - cron: "0,30 12-17 * * 1-5" # 12:00, 12:30, ..., 16:30, 17:00 UTC
+    # Every 30 min, 12:00-17:00 UTC, Mon-Fri. The two cron entries below
+    # together cover this window exactly - a single "12-17" hour range
+    # would also fire at 17:30, one run past the intended end time.
+    # In EDT (UTC-4) this is 8:00am-1:00pm ET; in EST (UTC-5) this is
+    # 7:00am-12:00pm ET. GitHub Actions cron is UTC-only and does not
+    # observe DST, so the fixed UTC window shifts by an hour of local
+    # time between the two seasons - this is intentional, to keep the
+    # window simple and unambiguous rather than timezone-aware.
+    - cron: "0,30 12-16 * * 1-5" # 12:00, 12:30, 13:00, ..., 16:00, 16:30 UTC
+    - cron: "0 17 * * 1-5" # 17:00 UTC
 
 jobs:
   auto-merge:
@@ -40,19 +46,25 @@ jobs:
           # "MERGEABLE" moments later once GitHub finishes the check - this
           # is expected and not something to special-case here.
           prs=$(gh pr list --state open --base main --limit 100 --json number,title,url,author,headRefName,headRefOid,statusCheckRollup,mergeable,labels --jq '
+            def branch_match: .headRefName | test("^(fix|build|deps)/(deps-)?(go|python)(-deps)?(-update)?-");
             .[] | select(
               (.author.login == "swarmer-jnpacker[bot]" or .author.login == "app/swarmer-jnpacker") and
               (
-                (.headRefName | test("^(fix|build|deps)/(deps-)?(go|python)(-deps)?(-update)?-")) or
+                branch_match or
                 (.labels // [] | any(.name == "automated-update"))
               ) and
               (.mergeable == "MERGEABLE") and
-              ([.statusCheckRollup[] | select(.context != "tide" and .name != "tide")] as $checks |
+              ([.statusCheckRollup[] | select(
+                ((.context // "" | ascii_upcase) != "TIDE") and
+                ((.name // "" | ascii_upcase) != "TIDE")
+              )] as $checks |
                 ($checks | length > 0) and
                 ($checks | all(
                   ((.state // "" | ascii_upcase) == "SUCCESS") or
                   ((.conclusion // "" | ascii_upcase) == "SUCCESS"))))
-            )')
+            ) | . + {
+              match_reason: (if branch_match then "branch: \(.headRefName)" else "label: automated-update, branch: \(.headRefName)" end)
+            }')
 
           if [ -z "$prs" ]; then
             echo "No PRs ready for auto-merge"
@@ -95,13 +107,11 @@ jobs:
             pr_branch=$(echo "$pr_info" | jq -r '.headRefName')
             pr_head_oid=$(echo "$pr_info" | jq -r '.headRefOid')
 
-            # Note in the merge comment which eligibility path matched, so
-            # it's clear from the audit trail why the PR qualified.
-            if echo "$pr_branch" | grep -qE "^(fix|build|deps)/(deps-)?(go|python)(-deps)?(-update)?-"; then
-              pr_match_reason="branch: $pr_branch"
-            else
-              pr_match_reason="label: automated-update, branch: $pr_branch"
-            fi
+            # match_reason was computed once, in the same jq predicate used
+            # for selection above, so the audit trail can never drift from
+            # the actual eligibility logic (previously this branch pattern
+            # was duplicated here via a separate grep -qE check).
+            pr_match_reason=$(echo "$pr_info" | jq -r '.match_reason')
 
             echo "Attempting to merge PR #$pr_number: $pr_title (branch: $pr_branch)"
 
