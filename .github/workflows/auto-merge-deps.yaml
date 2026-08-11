@@ -43,7 +43,7 @@ jobs:
             .[] | select(
               (.author.login == "swarmer-jnpacker[bot]" or .author.login == "app/swarmer-jnpacker") and
               (
-                (.headRefName | test("^(fix|build|deps)/(go|python)-(deps|update)-")) or
+                (.headRefName | test("^(fix|build|deps)/(deps-)?(go|python)(-deps)?(-update)?-")) or
                 (.labels // [] | any(.name == "automated-update"))
               ) and
               (.mergeable == "MERGEABLE") and
@@ -97,7 +97,7 @@ jobs:
 
             # Note in the merge comment which eligibility path matched, so
             # it's clear from the audit trail why the PR qualified.
-            if echo "$pr_branch" | grep -qE "^(fix|build|deps)/(go|python)-(deps|update)-"; then
+            if echo "$pr_branch" | grep -qE "^(fix|build|deps)/(deps-)?(go|python)(-deps)?(-update)?-"; then
               pr_match_reason="branch: $pr_branch"
             else
               pr_match_reason="label: automated-update, branch: $pr_branch"
@@ -149,8 +149,9 @@ jobs:
             echo "## Auto-merge workflow summary"
             echo ""
             echo "Checked for dependency PRs authored by swarmer-jnpacker[bot] that either match"
-            echo "branches like \`fix/{go,python}-deps-*\`, \`build/{go,python}-deps-*\`, or"
-            echo "\`deps/{go,python}-update-*\`, or carry the \`automated-update\` label, and have:"
+            echo "branches matching \`(fix|build|deps)/[deps-]{go,python}[-deps][-update]-*\`"
+            echo "(the deps- prefix, -deps suffix, and -update suffix are each optional), or"
+            echo "carry the \`automated-update\` label, and have:"
             echo "- All status checks passing (SUCCESS)"
             echo "- Mergeable state (no conflicts)"
             echo ""
