@@ -51,9 +51,9 @@ _INVALID_REF_RE = re.compile(
 # through OpenCode's response pipeline).
 #
 # Each pattern targets a key=value, KEY: value, or JSON-style credential
-# assignment where the value is likely a credential (long opaque string,
-# bearer token, etc.).  We match conservatively to avoid false positives on
-# legitimate debug output.
+# assignment where the value is likely a credential (opaque string, bearer
+# token, short password, etc.).  We match conservatively to avoid false
+# positives on legitimate debug output.
 #
 # The key name may be wrapped in quotes (JSON/YAML ``"api_key": ...``) and the
 # value may be quoted (``API_KEY="..."``).  The whole assignment is matched so
@@ -70,7 +70,7 @@ _SECRET_KEY_RE = re.compile(
     r"[\"']?\s*[=:]\s*"                             # optional key quote + separator
     r"(?P<q>[\"']?)"                                # optional value quote
     r")"
-    r"(?:[^\"'\s]{6,})"                             # opaque value, no quotes/spaces
+    r"(?:[^\"'\s]{4,})"                             # opaque value, no quotes/spaces
     r"(?P<q2>(?P=q))",                              # matching closing value quote
 )
 _REDACTED = "[REDACTED]"
