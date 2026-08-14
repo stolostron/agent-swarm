@@ -124,6 +124,7 @@ async def _restart_prompt_pollers() -> None:
     from sqlalchemy import select
 
     from swarmer.database import get_db
+    from swarmer.models.sandbox_env_var import SandboxEnvVar
     from swarmer.models.session import Session
 
     async for db in get_db():
@@ -137,12 +138,26 @@ async def _restart_prompt_pollers() -> None:
         )
         for s in result.scalars().all():
             import shlex as _shlex
+
+            from swarmer.agent_tools.registry import get as _get_tool
             from swarmer.routers.sessions import (
                 _resolve_schedule_prompt,
                 _resolve_session_prompt,
                 _run_openshell_agent,
             )
-            from swarmer.agent_tools.registry import get as _get_tool
+
+            # Reconstruct workspace extra env vars (arbitrary key-value pairs stored
+            # in the DB and injected into the sandbox at initial launch via
+            # exec_command_streaming(env=...).  These are NOT the AI credentials
+            # (those live in the OpenShell gateway provider layer, which persists
+            # across Swarmer restarts).  Without this, shell/prompt sessions that
+            # rely on JIRA_SERVER_URL, GOOGLE_API_KEY, or any other workspace env
+            # var would restart with an empty environment and silently fail.
+            _ev_result = await db.execute(
+                select(SandboxEnvVar).where(SandboxEnvVar.workspace_id == s.workspace_id)
+            )
+            _env_vars: dict[str, str] = {row.key: row.value for row in _ev_result.scalars().all()}
+
             _tool = _get_tool(s.agent_tool)
             if s.agent_tool == "shell":
                 # Shell tool: reconstruct the command exactly as it was resolved
@@ -156,6 +171,9 @@ async def _restart_prompt_pollers() -> None:
                     _raw_cmd = (await _resolve_schedule_prompt(s.active_schedule_id, s, db)).strip()
                 else:
                     _raw_cmd = (await _resolve_session_prompt(s, db)).strip()
+                # Security note: _raw_cmd is the re-resolved instruction_prompt injected
+                # into a compound sh -c string without sanitisation — intentional by
+                # design (sandbox is the security boundary; see sessions.py equivalent).
                 _main_cmd = (
                     f"export HOME=/sandbox PATH=\"/sandbox/.local/bin:$PATH\" && "
                     f"cd /sandbox && {_raw_cmd}"
@@ -173,7 +191,9 @@ async def _restart_prompt_pollers() -> None:
                 _main_cmd = f"HOME=/sandbox {_tool_bin} --model {_model_arg} \"$(</sandbox/AGENTS.md)\""
             asyncio.create_task(
                 _run_openshell_agent(
-                    s.id, s.workspace_id, s.sandbox_name, ["sh", "-c", _main_cmd], s.mode, s.agent_tool
+                    s.id, s.workspace_id, s.sandbox_name, ["sh", "-c", _main_cmd], s.mode, s.agent_tool,
+                    env_vars=_env_vars,
+                    pat_id=s.github_pat_id,
                 ),
                 name=f"openshell-agent-{s.id}",
             )

@@ -35,15 +35,21 @@ class ShellStrategy(AgentToolStrategy):
 
     @property
     def name(self) -> str:
+        """Return the canonical tool identifier used in DB and config."""
         return "shell"
 
     @property
     def display_name(self) -> str:
+        """Return the human-readable tool name shown in the UI."""
         return "Shell"
 
     def get_image(self) -> str:
-        # Fall back to the OpenCode image if no dedicated shell image is set —
-        # it already contains Python 3, bash, git, and common CLI tools.
+        """Return the container image to use for shell sessions.
+
+        Reads ``AGENT_IMAGE_SHELL`` from config and falls back to the OpenCode
+        image if unset — that image already contains Python 3, bash, git, and
+        common CLI tools so no separate image is required to get started.
+        """
         return settings.agent_image_shell or settings.agent_image_opencode
 
     def build_config_data(
@@ -53,34 +59,43 @@ class ShellStrategy(AgentToolStrategy):
         use_inference_local: bool = False,
         model: str = "",
     ) -> dict[str, str]:
-        # No config files needed — the shell tool doesn't use opencode.json
-        # or any other agent configuration.
+        """Return an empty config dict — shell tool needs no agent config files.
+
+        The shell tool does not use ``opencode.json`` or any other agent
+        configuration, so no files need to be written to the sandbox.
+        """
         return {}
 
     def get_container_name(self) -> str:
+        """Return the logical container name for the shell sandbox."""
         return "shell"
 
     def get_tui_binary(self) -> str:
-        # The inherited default returns self.name ("shell"), which is not an
-        # installed binary in the sandbox image. Use bash — an installed
-        # interactive shell. `tui_ws.py` tries `bash --continue` first (which
-        # fails, as bash has no such flag) and falls back to a plain
-        # `exec bash`, giving the user an interactive shell.
+        """Return the binary launched by the TUI WebSocket handler.
+
+        The inherited default would return ``self.name`` ("shell"), which is
+        not an installed binary in the sandbox image.  Override to return
+        ``bash`` — an installed interactive shell.  The TUI handler tries
+        ``bash --continue`` first (which fails; bash has no such flag) and
+        falls back to a plain ``exec bash``, giving the user an interactive
+        shell prompt.
+        """
         return "bash"
 
     def get_server_port(self) -> int | None:
-        # Shell tool has no persistent server port.
+        """Return ``None`` — shell tool has no persistent server port."""
         return None
 
     def get_share_dir(self) -> str:
+        """Return the shared workspace directory path inside the sandbox."""
         return "/workspace"
 
     def build_share_setup_cmd(self) -> str:
-        # No agent-specific share directory setup needed.
+        """Return an empty string — no agent-specific share setup is needed."""
         return ""
 
     def build_model_setup_cmd(self, model: str) -> str:
-        # No model initialisation — shell tool doesn't use an AI model.
+        """Return an empty string — shell tool does not use an AI model."""
         return ""
 
     def build_main_cmd(self, session: "Session", model: str, resolved_prompt: str = "") -> str:
@@ -114,8 +129,20 @@ class ShellStrategy(AgentToolStrategy):
             )
         return cmd
 
+    def requires_ai_model(self) -> bool:
+        """Return False — shell tool needs no AI model or provider credentials."""
+        return False
+
+    def supports_server_mode(self) -> bool:
+        """Return False — shell tool does not support server mode."""
+        return False
+
     def is_valid_model(self, model: str) -> bool:
-        # No model required — any value (including empty string) is valid.
+        """Return ``True`` unconditionally — shell tool requires no AI model.
+
+        Any value (including empty string) is accepted; the model field is
+        ignored at runtime.
+        """
         return True
 
     def get_model_options(
@@ -124,10 +151,13 @@ class ShellStrategy(AgentToolStrategy):
         has_vertex: bool = False,
         has_gemini: bool = False,
     ) -> list[dict]:
-        # Shell tool needs no AI provider — return empty list so the UI
-        # hides the model/provider selector for this tool.
+        """Return an empty list — shell tool needs no AI provider.
+
+        An empty list signals to the UI that the model/provider selector
+        should be hidden when the shell tool is selected.
+        """
         return []
 
     def get_default_model(self, has_adc: bool) -> str:
-        # No model needed.
+        """Return an empty string — shell tool uses no AI model."""
         return ""

@@ -45,6 +45,43 @@ _INVALID_REF_RE = re.compile(
     r"|//"
 )
 
+# Patterns for common secret material that should not be persisted verbatim in
+# session output.  Applied only to shell-tool output, where the raw command's
+# stdout/stderr is stored directly (unlike AI-tool output, which is filtered
+# through OpenCode's response pipeline).
+#
+# Each pattern targets a key=value or KEY: value assignment where the value is
+# likely a credential (long opaque string, bearer token, etc.).  We match
+# conservatively to avoid false positives on legitimate debug output.
+_SECRET_KEY_RE = re.compile(
+    r"(?i)"                                         # case-insensitive
+    r"(?P<prefix>"
+    r"(?:api[_-]?key|access[_-]?token|auth[_-]?token|bearer|password|passwd|secret|"
+    r"private[_-]?key|gh_token|github_token|gh_token|google_api_key|jira_access_token|"
+    r"jira_api_token|openai_api_key|anthropic_api_key|slack_token|slack_webhook|"
+    r"aws_secret_access_key|aws_session_token|service_account_key"
+    r")"
+    r"(?:\s*[=:]\s*)"
+    r")"
+    r"(?P<value>[A-Za-z0-9+/._\-]{8,})",
+)
+_REDACTED = "[REDACTED]"
+
+
+def _redact_secrets(text: str) -> str:
+    """Replace likely secret values in *text* with ``[REDACTED]``.
+
+    Applied to shell-tool stdout/stderr before it is written to the DB so that
+    accidental ``printenv``, ``env``, or credential-echoing scripts don't
+    persist secrets in plaintext in the session output columns.
+
+    The redaction is best-effort and pattern-based — it targets common
+    credential key names (TOKEN, API_KEY, PASSWORD, etc.) followed by an
+    ``=`` or ``:`` assignment.  Legitimate log lines are not affected as long
+    as they don't look like key=value credential assignments.
+    """
+    return _SECRET_KEY_RE.sub(lambda m: m.group("prefix") + _REDACTED, text)
+
 
 def _is_valid_ref_name(name: str) -> bool:
     """Check whether *name* is a legal git ref component."""
@@ -723,11 +760,11 @@ async def session_edit(
     except ValueError:
         _new_agent_tool = session.agent_tool
 
-    # Shell agent tool does not support server mode (see ShellStrategy.build_main_cmd).
-    # The UI hides/disables this combination, but reject it server-side too in
-    # case of a direct request.
-    if _new_agent_tool == "shell" and session.mode == "server":
-        flash(request, "Shell agent tool does not support server mode.", "danger")
+    # Some agent tools don't support server mode (e.g. shell). The UI hides/disables
+    # this combination, but reject it server-side too in case of a direct request.
+    _new_tool_strategy = get_tool(_new_agent_tool)
+    if not _new_tool_strategy.supports_server_mode() and session.mode == "server":
+        flash(request, f"{_new_tool_strategy.display_name} agent tool does not support server mode.", "danger")
         return RedirectResponse(url=f"/workspaces/{ws_id}/sessions/{sid}", status_code=302)
 
     session.agent_tool = _new_agent_tool
@@ -1130,10 +1167,10 @@ async def _do_launch_openshell(
     #     the injected env vars (GOOGLE_API_KEY, ANTHROPIC_API_KEY, GH_TOKEN, etc.).
     provider_names: list[str] = []
     ws_id = session.workspace_id
-    # Shell tool never calls an AI model — don't create or attach AI provider
-    # credentials (Google AI Studio, Vertex/google-cloud) to its sandbox. Only
-    # GitHub, Jira, Slack, and other non-AI providers below apply to it.
-    if tool.name != "shell" and oc_secret and oc_secret.google_api_key:
+    # Non-AI tools (e.g. shell) never call an AI model — skip AI provider
+    # credentials (Google AI Studio, Vertex/google-cloud) for their sandboxes.
+    # Only GitHub, Jira, Slack, and other non-AI providers below apply to them.
+    if tool.requires_ai_model() and oc_secret and oc_secret.google_api_key:
         pname = f"swarmer-ws-{ws_id}-google-ai-studio"
         await openshell_client.ensure_provider(pname, "google-ai-studio", {}, credentials={
                 "GOOGLE_API_KEY": oc_secret.google_api_key,
@@ -1144,7 +1181,7 @@ async def _do_launch_openshell(
     # Attach the provider if it already exists (created via the secrets UI).
     _vertex_pname = f"swarmer-ws-{ws_id}-google-cloud"
     _has_google_cloud_provider = False
-    if tool.name != "shell":
+    if tool.requires_ai_model():
         try:
             if await openshell_client.provider_exists(_vertex_pname):
                 provider_names.append(_vertex_pname)
@@ -1568,6 +1605,12 @@ async def _setup_openshell_sandbox(
             if tool_name == "shell":
                 # Shell tool: run the raw command directly — no AI agent involved.
                 # main_cmd is already the verbatim instruction_prompt from build_main_cmd().
+                #
+                # Security note: instruction_prompt is injected into a compound sh -c
+                # string without sanitisation — shell metacharacters (;, &&, |, $(), etc.)
+                # are intentional: the whole point is to run arbitrary commands.  The
+                # sandbox container is the security boundary; only authenticated users
+                # (require_auth) with access to the workspace can set instruction_prompt.
                 agent_cmd = f"export HOME=/sandbox PATH=\"/sandbox/.local/bin:$PATH\" && cd /sandbox && {main_cmd}"
             else:
                 _tool_bin = {"opencode": "opencode run"}.get(tool_name, "opencode run")
@@ -1700,7 +1743,11 @@ async def _run_openshell_agent(
 
             async def _on_output(text: str) -> None:
                 _streamed[:] = [text]
-                await _update_db(last_output=text, raw_output=text)
+                # Redact secrets from shell output before persisting — the raw
+                # stdout/stderr of a shell command may contain credential values
+                # if the script calls printenv, env, or echoes config variables.
+                _safe = _redact_secrets(text) if agent_tool == "shell" else text
+                await _update_db(last_output=_safe, raw_output=_safe)
 
             result = await openshell_client.exec_command_streaming(
                 sandbox_name, cmd,
@@ -1724,7 +1771,10 @@ async def _run_openshell_agent(
             # streamed stdout/stderr as the result.
             _streamed_text = _streamed[0] if _streamed else ""
             if agent_tool == "shell":
-                output = _streamed_text or stderr
+                # Use streamed stdout; fall back to stderr on failure.
+                # Apply secret redaction: the raw shell command output may contain
+                # credential values if the script echoes env vars or config.
+                output = _redact_secrets(_streamed_text or stderr)
             else:
                 output = (
                     await openshell_client.read_opencode_response(sandbox_name)
@@ -1763,10 +1813,13 @@ async def _run_openshell_agent(
                     phase, session_id,
                 )
 
+            # For shell runs _streamed_text is already redacted (via _on_output);
+            # for AI-tool runs it passes through unmodified.
+            _final_raw = _streamed_text if agent_tool != "shell" else _redact_secrets(_streamed_text)
             await _update_db(
                 phase=phase,
                 last_output=output,
-                raw_output=_streamed_text,  # preserve raw console log regardless of agent tool
+                raw_output=_final_raw,  # preserve raw console log regardless of agent tool
                 status_detail="",  # clear any stale status from previous runs
                 policy_chunks=chunks_json,
                 run_completed_at=datetime.now(timezone.utc),

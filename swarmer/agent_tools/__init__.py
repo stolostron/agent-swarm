@@ -82,6 +82,30 @@ class AgentToolStrategy(ABC):
         """Return True if *model* is a preset name rather than a raw model ID."""
         return self.resolve_preset(model) is not None
 
+    def requires_ai_model(self) -> bool:
+        """Return True if this tool needs an AI model and provider credentials.
+
+        Used to gate AI-provider setup (Google AI Studio, Vertex AI, etc.) —
+        tools that return False skip provider creation entirely, reducing latency
+        and avoiding unnecessary credential injection into the sandbox.
+
+        Defaults to True; override to False for non-AI tools such as ShellStrategy.
+        """
+        return True
+
+    def supports_server_mode(self) -> bool:
+        """Return True if this tool can run in server mode.
+
+        Server mode keeps the sandbox alive and exposes a persistent HTTP
+        service.  Tools that don't have a server binary (e.g. ShellStrategy)
+        should return False so the UI can disable the option and the router
+        can reject such requests before reaching build_main_cmd().
+
+        Defaults to True; override to False for tools that only support prompt
+        or TUI mode.
+        """
+        return True
+
     def resolve_build_model(self, model: str) -> str:
         """Return the concrete BUILD-role model ID for *model*.
 

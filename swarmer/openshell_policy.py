@@ -456,10 +456,14 @@ def build_session_network_policies(
     """
     network_policies_dict: dict = {}
 
-    # Shell tool: no AI agent, no model API calls needed — skip the agent API
-    # and Google Cloud egress blocks entirely.  Git, Jira, Slack, and any
-    # custom rules still apply below.
-    if agent_tool != "shell":
+    # Non-AI tools (agent_tool reported as not requiring an AI model via
+    # AgentToolStrategy.requires_ai_model()) don't make model API calls, so we
+    # skip the agent API and Google Cloud egress blocks entirely.  Git, Jira,
+    # Slack, and any custom rules still apply below.
+    # Using the tool name here avoids importing the registry into this module;
+    # the canonical check is get_tool(agent_tool).requires_ai_model().
+    from swarmer.agent_tools.registry import get as _get_tool
+    if _get_tool(agent_tool).requires_ai_model():
         network_policies_dict.update(_build_agent_api_block(agent_tool, model))
 
         # Google Cloud provider: grant aiplatform.googleapis.com + api.github.com
