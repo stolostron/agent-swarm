@@ -50,20 +50,28 @@ _INVALID_REF_RE = re.compile(
 # stdout/stderr is stored directly (unlike AI-tool output, which is filtered
 # through OpenCode's response pipeline).
 #
-# Each pattern targets a key=value or KEY: value assignment where the value is
-# likely a credential (long opaque string, bearer token, etc.).  We match
-# conservatively to avoid false positives on legitimate debug output.
+# Each pattern targets a key=value, KEY: value, or JSON-style credential
+# assignment where the value is likely a credential (long opaque string,
+# bearer token, etc.).  We match conservatively to avoid false positives on
+# legitimate debug output.
+#
+# The key name may be wrapped in quotes (JSON/YAML ``"api_key": ...``) and the
+# value may be quoted (``API_KEY="..."``).  The whole assignment is matched so
+# that only the value is replaced, preserving the surrounding syntax.
 _SECRET_KEY_RE = re.compile(
     r"(?i)"                                         # case-insensitive
     r"(?P<prefix>"
+    r"[\"']?"                                       # optional JSON/YAML key quote
     r"(?:api[_-]?key|access[_-]?token|auth[_-]?token|bearer|password|passwd|secret|"
-    r"private[_-]?key|gh_token|github_token|gh_token|google_api_key|jira_access_token|"
+    r"private[_-]?key|gh_token|github_token|google_api_key|jira_access_token|"
     r"jira_api_token|openai_api_key|anthropic_api_key|slack_token|slack_webhook|"
     r"aws_secret_access_key|aws_session_token|service_account_key"
     r")"
-    r"(?:\s*[=:]\s*)"
+    r"[\"']?\s*[=:]\s*"                             # optional key quote + separator
+    r"(?P<q>[\"']?)"                                # optional value quote
     r")"
-    r"(?P<value>[A-Za-z0-9+/._\-]{8,})",
+    r"(?:[^\"'\s]{6,})"                             # opaque value, no quotes/spaces
+    r"(?P<q2>(?P=q))",                              # matching closing value quote
 )
 _REDACTED = "[REDACTED]"
 
@@ -77,10 +85,14 @@ def _redact_secrets(text: str) -> str:
 
     The redaction is best-effort and pattern-based — it targets common
     credential key names (TOKEN, API_KEY, PASSWORD, etc.) followed by an
-    ``=`` or ``:`` assignment.  Legitimate log lines are not affected as long
-    as they don't look like key=value credential assignments.
+    ``=`` or ``:`` assignment, including quoted values (``API_KEY="..."``)
+    and JSON-style key/value pairs (``"api_key": "..."``).  Legitimate log
+    lines are not affected as long as they don't look like key=value
+    credential assignments.
     """
-    return _SECRET_KEY_RE.sub(lambda m: m.group("prefix") + _REDACTED, text)
+    return _SECRET_KEY_RE.sub(
+        lambda m: m.group("prefix") + _REDACTED + m.group("q2"), text
+    )
 
 
 def _is_valid_ref_name(name: str) -> bool:
