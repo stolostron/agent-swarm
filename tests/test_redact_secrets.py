@@ -58,6 +58,14 @@ def test_redacts_known_key_substrings():
 
 def test_redacts_short_credential_assignment():
     assert _redact_secrets("password=admin") == "password=[REDACTED]"
+    assert _redact_secrets("PASSWORD=abc") == "PASSWORD=[REDACTED]"
+
+
+def test_redacts_email_address_after_pii_key():
+    assert _redact_secrets("JIRA_EMAIL=user@example.com") == "JIRA_EMAIL=[REDACTED]"
+    assert _redact_secrets("email=admin@corp.internal") == "email=[REDACTED]"
+    assert _redact_secrets('JIRA_EMAIL="user@example.com"') == 'JIRA_EMAIL="[REDACTED]"'
+    assert _redact_secrets('user_email=me@example.com') == 'user_email=[REDACTED]'
 
 
 def test_leaves_plain_prose_alone():

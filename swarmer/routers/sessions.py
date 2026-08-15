@@ -50,14 +50,16 @@ _INVALID_REF_RE = re.compile(
 # stdout/stderr is stored directly (unlike AI-tool output, which is filtered
 # through OpenCode's response pipeline).
 #
-# Each pattern targets a key=value, KEY: value, or JSON-style credential
-# assignment where the value is likely a credential (opaque string, bearer
-# token, short password, etc.).  We match conservatively to avoid false
-# positives on legitimate debug output.
+# _SECRET_KEY_RE targets key=value, KEY: value, or JSON-style credential
+# assignments where the key is a known credential name.  The value minimum is
+# intentionally 1 char so short passwords (e.g. PASSWORD=abc) are still
+# redacted.  The key name may be wrapped in quotes (JSON/YAML "api_key": ...)
+# and the value may be quoted (API_KEY="...") — only the value is replaced,
+# preserving surrounding syntax.
 #
-# The key name may be wrapped in quotes (JSON/YAML ``"api_key": ...``) and the
-# value may be quoted (``API_KEY="..."``).  The whole assignment is matched so
-# that only the value is replaced, preserving the surrounding syntax.
+# _EMAIL_RE separately redacts email addresses that appear after known PII key
+# names (e.g. JIRA_EMAIL=user@example.com), since the @ and domain chars fall
+# outside the opaque-token character class used by _SECRET_KEY_RE.
 _SECRET_KEY_RE = re.compile(
     r"(?i)"                                         # case-insensitive
     r"(?P<prefix>"
@@ -70,8 +72,19 @@ _SECRET_KEY_RE = re.compile(
     r"[\"']?\s*[=:]\s*"                             # optional key quote + separator
     r"(?P<q>[\"']?)"                                # optional value quote
     r")"
-    r"(?:[^\"'\s]{4,})"                             # opaque value, no quotes/spaces
+    r"(?:[^\"'\s]+)"                                # opaque value (1+ non-quote/space chars)
     r"(?P<q2>(?P=q))",                              # matching closing value quote
+)
+_EMAIL_RE = re.compile(
+    r"(?i)"
+    r"(?P<prefix>"
+    r"[\"']?"                                       # optional JSON/YAML key quote
+    r"(?:\w+[_-])?email(?:[_-]\w+)?"               # *_email, email_*, or just email
+    r"[\"']?\s*[=:]\s*"
+    r"(?P<q>[\"']?)"                                # optional value quote
+    r")"
+    r"(?:[^\s,}\"']{1,}@[^\s,}\"']+)"              # user@domain (any chars except delimiters)
+    r"(?P<q2>(?P=q))",
 )
 _REDACTED = "[REDACTED]"
 
@@ -83,14 +96,22 @@ def _redact_secrets(text: str) -> str:
     accidental ``printenv``, ``env``, or credential-echoing scripts don't
     persist secrets in plaintext in the session output columns.
 
-    The redaction is best-effort and pattern-based — it targets common
-    credential key names (TOKEN, API_KEY, PASSWORD, etc.) followed by an
-    ``=`` or ``:`` assignment, including quoted values (``API_KEY="..."``)
-    and JSON-style key/value pairs (``"api_key": "..."``).  Legitimate log
-    lines are not affected as long as they don't look like key=value
-    credential assignments.
+    The redaction is best-effort and pattern-based — it targets:
+
+    * Common credential key names (TOKEN, API_KEY, PASSWORD, etc.) followed by
+      an ``=`` or ``:`` assignment, including quoted values (``API_KEY="..."``)
+      and JSON-style key/value pairs (``"api_key": "..."``).  Values of any
+      length are redacted so short passwords (e.g. ``PASSWORD=abc``) are
+      covered.
+    * Email addresses that follow PII key names (e.g. ``JIRA_EMAIL=u@example.com``).
+
+    Legitimate log lines are not affected as long as they don't look like
+    key=value credential or PII assignments.
     """
-    return _SECRET_KEY_RE.sub(
+    text = _SECRET_KEY_RE.sub(
+        lambda m: m.group("prefix") + _REDACTED + m.group("q2"), text
+    )
+    return _EMAIL_RE.sub(
         lambda m: m.group("prefix") + _REDACTED + m.group("q2"), text
     )
 
