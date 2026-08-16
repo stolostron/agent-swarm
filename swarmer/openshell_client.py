@@ -4,8 +4,21 @@ OpenShell sandbox client wrapper for AgentSwarm session lifecycle.
 Wraps the synchronous OpenShell gRPC SDK (pip install openshell) and exposes
 async helpers by running blocking calls via asyncio.to_thread().
 
-Credential injection: env vars go directly into SandboxSpec.environment —
-there is no provider_create RPC in this SDK version.
+Sandbox isolation model:
+    Each session runs inside an OpenShell sandbox — a container managed by the
+    OpenShell Gateway via gRPC.  The sandbox is the primary security boundary:
+    it enforces filesystem restrictions (Landlock LSM), network egress policy
+    (OPA rules via SandboxPolicy proto), and process isolation (run_as_user /
+    run_as_group).  Commands execute inside the container, not on the Swarmer
+    host.
+
+Credential injection:
+    All credentials (AI keys, GitHub PAT, Jira/Slack tokens) are stored
+    server-side on the Gateway via the Provider API (ensure_provider /
+    attach_sandbox_provider) and injected as env vars into the sandbox at exec
+    time via GetSandboxProviderEnvironment.  Raw credential values are never
+    placed in SandboxSpec.environment or logged by Swarmer.  The Gateway
+    returns them as REDACTED on subsequent reads.
 """
 from __future__ import annotations
 

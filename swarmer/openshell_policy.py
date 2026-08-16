@@ -32,6 +32,17 @@ def _bin(path: str) -> dict:
 
 # ── Static base policy sections ───────────────────────────────────────────────
 
+# Filesystem policy applied to every sandbox regardless of agent tool.
+# Rationale:
+#   read_only  — system directories needed to run binaries and resolve
+#                libraries, but where the agent must not write (prevents
+#                tampering with the container OS or application code).
+#   read_write — /sandbox is the agent's working directory and primary
+#                output location; /tmp is required by many tools; /home/sandbox
+#                is the sandbox user's home; /dev/null is required for I/O
+#                redirection.
+#   include_workdir — ensures the sandbox's working directory (set per-session)
+#                is always accessible even if it falls outside the paths above.
 _BASE_FILESYSTEM = {
     "include_workdir": True,
     "read_only": ["/usr", "/lib", "/proc", "/dev/urandom", "/app", "/etc", "/var/log"],

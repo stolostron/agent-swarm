@@ -110,6 +110,16 @@ class ShellStrategy(AgentToolStrategy):
         can connect interactively and run commands manually.
 
         Server mode is not supported for the shell tool.
+
+        Security note — no input sanitisation:
+            The returned command is injected verbatim into ``sh -c`` by the
+            caller.  Shell metacharacters (``; && | $() >`` etc.) are
+            intentional — the shell tool's purpose is to run arbitrary commands.
+            The sandbox container is the trust boundary, not the command string.
+            Only authenticated users with explicit workspace access can set
+            ``instruction_prompt`` (enforced by ``require_auth`` + workspace
+            ownership checks in the session router).  See the equivalent note in
+            ``swarmer/routers/sessions.py`` at the ``sh -c`` call site.
         """
         if session.mode == "tui":
             return "sleep infinity"
@@ -134,7 +144,15 @@ class ShellStrategy(AgentToolStrategy):
         return False
 
     def supports_server_mode(self) -> bool:
-        """Return False — shell tool does not support server mode."""
+        """Return False — shell tool does not support server mode.
+
+        Server mode keeps the sandbox alive indefinitely and exposes a
+        persistent HTTP endpoint via the chat proxy.  The shell tool runs a
+        one-shot command with no AI agent to mediate incoming requests, so
+        there is nothing to serve and no safe way to gate inbound traffic.
+        Returning False causes the router to reject server-mode shell sessions
+        before reaching ``build_main_cmd`` and disables the option in the UI.
+        """
         return False
 
     def is_valid_model(self, model: str) -> bool:

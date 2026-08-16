@@ -1,4 +1,19 @@
-"""Unit tests for shell-tool output secret redaction (``_redact_secrets``)."""
+"""Unit tests for shell-tool output secret redaction (``_redact_secrets``).
+
+Shell commands may write credentials to stdout/stderr — e.g. a script that
+runs ``printenv``, ``env``, or echoes a config variable.  ``_redact_secrets``
+scrubs known credential patterns before shell output is persisted to the DB
+(``last_output`` / ``raw_output`` columns).  These tests verify:
+
+* Positive cases: credential assignments are replaced with ``[REDACTED]``
+  regardless of quoting style (unquoted, double-quoted, single-quoted),
+  key casing, JSON/YAML structure, or value length (including short values
+  like ``password=abc`` that would previously slip through a length floor).
+* Email addresses: PII key names followed by an ``addr@domain`` value are
+  also redacted via a dedicated ``_EMAIL_RE`` pattern.
+* Negative cases: plain prose, logs, and text without ``key=value`` credential
+  assignments are left untouched to avoid corrupting legitimate output.
+"""
 
 import os
 import sys

@@ -36,6 +36,30 @@ from swarmer.models.workspace_prompt import WorkspacePrompt, WorkspacePromptSour
 
 log = logging.getLogger(__name__)
 
+# ── Security model overview ───────────────────────────────────────────────────
+#
+# Authentication:
+#   Every route uses Depends(require_auth), which checks that the request
+#   carries a valid authenticated session cookie set during the login flow.
+#   The login flow validates the user's Kubernetes bearer token via the K8s
+#   TokenReview API (swarmer/k8s_auth.py), so only users with a valid cluster
+#   identity can authenticate.  The REST API (swarmer/api/) uses
+#   require_api_auth which validates the bearer token on every request.
+#
+# Workspace isolation:
+#   Workspaces map 1:1 to Kubernetes namespaces.  Every session operation
+#   checks that the requested session belongs to the workspace in the URL
+#   (session.workspace_id == ws_id); mismatches are rejected.  The REST API
+#   additionally enforces K8s namespace RBAC via user_can_access_workspace().
+#
+# Shell command trust boundary:
+#   For shell-tool sessions, instruction_prompt is executed verbatim inside a
+#   sandboxed container.  Input is not sanitised — the sandbox (Landlock
+#   filesystem policy, OPA network policy, process isolation) is the security
+#   boundary.  See the inline "Security note" comment at the sh -c call site.
+#
+# ─────────────────────────────────────────────────────────────────────────────
+
 _INVALID_REF_RE = re.compile(
     r"[\x00-\x1f\x7f ~^:?*\[\\]"
     r"|\.\.+"
@@ -1838,8 +1862,16 @@ async def _run_openshell_agent(
                 await _delete_github_app_provider(workspace_id, session_id)
                 await _delete_pat_provider(workspace_id, pat_id, session_id)
             else:
-                # failed/stopped — sandbox left running for debugging; providers stay
-                # attached and will be cleaned up when the session is stopped/deleted.
+                # failed/stopped — sandbox intentionally left running so the user
+                # can inspect stdout/stderr and re-run.  Providers (GitHub PAT,
+                # Jira token) stay attached to the sandbox; they are cleaned up
+                # when the session is explicitly stopped or deleted.
+                #
+                # Security note: leaving providers attached means the sandbox
+                # retains network credentials until explicit cleanup.  The risk
+                # is bounded by the sandbox's network policy (egress is still
+                # restricted to approved hosts/ports) and the requirement that
+                # only authenticated workspace members can interact with it.
                 log.info(
                     "_run_openshell_agent: skipping provider cleanup for phase=%s session=%d "
                     "(sandbox still attached — cleanup on explicit stop/delete)",
