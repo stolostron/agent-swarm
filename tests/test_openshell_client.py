@@ -490,7 +490,7 @@ async def test_ensure_provider_refreshes_stale_cached_false(sdk_client):
     oc._provider_cache[pname] = (False, time.monotonic() + 30)  # stale, not yet expired
     with patch.object(oc, "_get_client", return_value=sdk_client):
         await oc.ensure_provider(
-            pname, "google-ai-studio", {}, credentials={"GOOGLE_API_KEY": "test-key"},
+            pname, "google-ai-studio", {},
         )
     assert oc._provider_cache[pname][0] is True
     # provider_exists() must now see the refreshed cache without another gRPC call.
