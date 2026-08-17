@@ -45,7 +45,9 @@ OPENSHELL_TLS_DIR        ?= auth/openshell
 # OpenShell gateway level. Distinct from the sandbox pod's ephemeral-storage COMPUTE
 # resource, which is hardcoded to 10Gi in openshell_client.create_sandbox() (ACM-39804)
 # and not configurable via this variable. Override with OPENSHELL_WORKSPACE_STORAGE=<val>
-# if needed; only applied on first OpenShell install (see the deploy target).
+# if needed. `make deploy` applies this on every run — first install (--install) or
+# in-place upgrade (--reuse-values) — via helm; only newly created sandbox PVCs pick
+# up a changed value.
 OPENSHELL_WORKSPACE_STORAGE ?= 10Gi
 
 # ──────────────────────────────────────────────────────────────
@@ -315,11 +317,18 @@ deploy:  ## Deploy swarmer to the current kubectl context  (SILENT=1 for non-int
 	    --wait --timeout 5m; \
 	  echo "✓ OpenShell $(OPENSHELL_VERSION) installed (workspaceDefaultStorageSize=$(OPENSHELL_WORKSPACE_STORAGE))."; \
 	else \
-	  echo "OpenShell already installed — version and workspaceDefaultStorageSize changes are"; \
-	  echo "  NOT applied automatically. To upgrade in place, run:"; \
-	  echo "  helm upgrade openshell oci://ghcr.io/nvidia/openshell/helm-chart --version $(OPENSHELL_VERSION) \\"; \
-	  echo "    -n $(OPENSHELL_NAMESPACE) --set server.auth.allowUnauthenticatedUsers=true \\"; \
-	  echo "    --set server.workspaceDefaultStorageSize=$(OPENSHELL_WORKSPACE_STORAGE) --wait"; \
+	  echo "OpenShell already installed — applying workspaceDefaultStorageSize=$(OPENSHELL_WORKSPACE_STORAGE) \
+and pinned version $(OPENSHELL_VERSION) (reusing other existing values)..."; \
+	  DOCKER_CONFIG=$$(mktemp -d) helm upgrade openshell \
+	    oci://ghcr.io/nvidia/openshell/helm-chart \
+	    --version $(OPENSHELL_VERSION) \
+	    --namespace $(OPENSHELL_NAMESPACE) \
+	    --reuse-values \
+	    --set server.auth.allowUnauthenticatedUsers=true \
+	    --set server.workspaceDefaultStorageSize=$(OPENSHELL_WORKSPACE_STORAGE) \
+	    --wait --timeout 5m; \
+	  echo "✓ OpenShell upgraded (version=$(OPENSHELL_VERSION), workspaceDefaultStorageSize=$(OPENSHELL_WORKSPACE_STORAGE))."; \
+	  echo "  NOTE: only newly created sandboxes get the new /sandbox PVC size; existing sandboxes are unaffected."; \
 	fi; \
 	# Grant OpenShift SCCs required for sandbox pods (no-op on plain k8s / if oc is absent) \
 	if command -v oc > /dev/null 2>&1; then \

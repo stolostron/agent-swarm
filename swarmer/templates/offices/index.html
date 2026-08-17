@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+{% block title %}{% if ws %}{{ ws.display_name }} Office{% else %}Swarm Office{% endif %} — Swarmer{% endblock %}
+
+{% block head %}
+<link rel="stylesheet" href="/static/office.css?v=3">
+{% endblock %}
+
+{% block content %}
+{% if scope == "workspace" and ws %}
+<nav class="pf-v6-c-breadcrumb office-breadcrumb" aria-label="breadcrumb">
+  <ol class="pf-v6-c-breadcrumb__list">
+    <li class="pf-v6-c-breadcrumb__item">
+      <span class="pf-v6-c-breadcrumb__item-divider">/</span>
+      <a href="/workspaces" class="pf-v6-c-breadcrumb__link">Workspaces</a>
+    </li>
+    <li class="pf-v6-c-breadcrumb__item">
+      <span class="pf-v6-c-breadcrumb__item-divider">/</span>
+      <a href="/workspaces/{{ ws.id }}/sessions" class="pf-v6-c-breadcrumb__link">{{ ws.display_name }}</a>
+    </li>
+    <li class="pf-v6-c-breadcrumb__item">
+      <span class="pf-v6-c-breadcrumb__item-divider">/</span>
+      <span class="pf-v6-c-breadcrumb__link pf-m-current">Office</span>
+    </li>
+  </ol>
+</nav>
+{% endif %}
+
+<div class="office-page">
+  <div class="office-hero">
+    <div>
+      <h1 class="pf-v6-c-title pf-m-2xl">
+        {% if scope == "workspace" and ws %}
+          {{ ws.display_name }} Office
+        {% else %}
+          Swarm Office
+        {% endif %}
+      </h1>
+      <p class="office-hero__tagline">
+        Each office is a workspace. Each person is a session.
+        Status labels match the session list — animations are just the visual cue.
+      </p>
+    </div>
+    <div class="office-hero__actions">
+      <div class="office-legend" aria-label="Activity legend">
+        <span class="office-legend__item"><span class="office-legend__dot office-legend__dot--typing"></span>Running</span>
+        <span class="office-legend__item"><span class="office-legend__dot office-legend__dot--waiting"></span>Queued</span>
+        <span class="office-legend__item"><span class="office-legend__dot office-legend__dot--walking"></span>Pending</span>
+        <span class="office-legend__item"><span class="office-legend__dot office-legend__dot--coffee"></span>Succeeded</span>
+        <span class="office-legend__item"><span class="office-legend__dot office-legend__dot--crying"></span>Failed</span>
+        <span class="office-legend__item"><span class="office-legend__dot office-legend__dot--sleeping"></span>Stopped</span>
+        <span class="office-legend__item"><span class="office-legend__dot office-legend__dot--idle"></span>Idle</span>
+      </div>
+      <div class="office-hero__buttons">
+        {% if scope == "workspace" and ws %}
+        <a href="/office" class="pf-v6-c-button pf-m-secondary pf-m-small">All Offices</a>
+        <a href="/workspaces/{{ ws.id }}/sessions" class="pf-v6-c-button pf-m-secondary pf-m-small">Session list</a>
+        {% else %}
+        <a href="/workspaces" class="pf-v6-c-button pf-m-secondary pf-m-small">Workspaces</a>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+
+  {# Global floor polls slower (10s) to limit N×workspace session fan-out. #}
+  <div id="office-scene"
+       hx-get="{{ poll_url }}"
+       hx-trigger="every {{ '5s' if scope == 'workspace' else '10s' }}"
+       hx-swap="innerHTML">
+    {% include "offices/_scene.html" %}
+  </div>
+</div>
+{% endblock %}

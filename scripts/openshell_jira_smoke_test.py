@@ -27,7 +27,9 @@ Requirements:
   - JIRA_SERVER_URL, JIRA_ACCESS_TOKEN, JIRA_EMAIL in process environment
   - OpenShell gateway reachable (OPENSHELL_GATEWAY_URL in .env)
   - swarmer auth/secret.key exists
-  - At least one OpencodeSecret in the DB with a Google API key (for provider)
+  - GOOGLE_API_KEY in process environment (for the AI provider used to drive
+    the sandbox — since ACM-37263 this key lives on the OpenShell gateway
+    only and is never read from the Swarmer DB)
 
 Exit 0 = all steps passed. Exit 1 = one or more failures.
 """
@@ -113,26 +115,14 @@ async def run_jira_smoke_test(model: str) -> bool:
     if not ok:
         return False
 
-    # ── 2. Read Google API key from DB (for gateway provider only) ───────────
-    print("\n[2] Reading Google API key from DB")
-    google_key = None
-    try:
-        from swarmer.database import init_db, get_db
-        from sqlalchemy import select
-        from swarmer.models.opencode_secret import OpencodeSecret
+    # ── 2. Read Google API key from the process environment ─────────────────
+    # Since ACM-37263 the Gemini key is pushed to the OpenShell gateway at
+    # save time and is never stored in the Swarmer DB — read it directly from
+    # the environment, same as the secrets UI does.
+    print("\n[2] Reading Google API key from environment")
+    google_key = os.environ.get("GOOGLE_API_KEY")
 
-        init_db("sqlite+aiosqlite:///data/swarmer.db")
-        async for db in get_db():
-            result = await db.execute(select(OpencodeSecret))
-            secret = result.scalars().first()
-            if secret:
-                google_key = secret.google_api_key
-            break
-    except Exception as exc:
-        step("Read OpencodeSecret from DB", False, str(exc))
-        return False
-
-    if not step("Google API key present", bool(google_key),
+    if not step("GOOGLE_API_KEY env var present", bool(google_key),
                 f"len={len(google_key) if google_key else 0}"):
         return False
 
