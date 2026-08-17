@@ -149,6 +149,13 @@ async def ensure_provider(
                 raise
 
     await asyncio.to_thread(_do_ensure)
+    # A successful create/update means the provider now definitely exists —
+    # refresh the provider_exists() cache immediately instead of waiting out
+    # _PROVIDER_CACHE_TTL. Without this, a page load or session launch that
+    # happens right after a credential save (e.g. Gemini/Google AI Studio via
+    # the secrets UI) could see a stale cached "False" and skip attaching the
+    # provider that was just configured.
+    _provider_cache[name] = (True, time.monotonic() + _PROVIDER_CACHE_TTL)
 
 
 async def delete_provider(name: str, client=None) -> None:
@@ -231,6 +238,9 @@ async def create_google_cloud_provider(
         client=client,
     )
     # Provider now exists — update cache so the next page load doesn't need an RPC.
+    # (ensure_provider() also refreshes this cache on success; this explicit set
+    # keeps the contract in place even when ensure_provider() is mocked out, as
+    # in test_create_google_cloud_provider_populates_cache.)
     _provider_cache[name] = (True, time.monotonic() + _PROVIDER_CACHE_TTL)
 
 
