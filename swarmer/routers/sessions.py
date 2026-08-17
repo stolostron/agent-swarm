@@ -4,6 +4,7 @@ import logging
 import re
 import shlex
 import uuid
+from collections.abc import Iterable
 from datetime import datetime, timezone
 
 import httpx
@@ -113,25 +114,43 @@ _EMAIL_RE = re.compile(
 _REDACTED = "[REDACTED]"
 
 
-def _redact_secrets(text: str) -> str:
+def _redact_secrets(
+    text: str,
+    secret_values: Iterable[str] | None = None,
+) -> str:
     """Replace likely secret values in *text* with ``[REDACTED]``.
 
     Applied to shell-tool stdout/stderr before it is written to the DB so that
     accidental ``printenv``, ``env``, or credential-echoing scripts don't
     persist secrets in plaintext in the session output columns.
 
-    The redaction is best-effort and pattern-based — it targets:
+    The redaction is best-effort and multi-layered:
 
-    * Common credential key names (TOKEN, API_KEY, PASSWORD, etc.) followed by
-      an ``=`` or ``:`` assignment, including quoted values (``API_KEY="..."``)
-      and JSON-style key/value pairs (``"api_key": "..."``).  Values of any
-      length are redacted so short passwords (e.g. ``PASSWORD=abc``) are
-      covered.
-    * Email addresses that follow PII key names (e.g. ``JIRA_EMAIL=u@example.com``).
+    1. Any non-empty literal secret strings provided in *secret_values*
+       (e.g., injected GitHub PAT tokens, Jira tokens, workspace env vars)
+       are replaced directly with ``[REDACTED]``.
+    2. Key-based regex pattern matching targets common credential key names
+       (TOKEN, API_KEY, PASSWORD, etc.) followed by an ``=`` or ``:`` assignment,
+       including quoted values (``API_KEY="..."``) and JSON-style key/value pairs
+       (``"api_key": "..."``).  Values of any length are redacted so short
+       passwords (e.g. ``PASSWORD=abc``) are covered.
+    3. Email addresses following PII key names (e.g. ``JIRA_EMAIL=u@example.com``).
 
     Legitimate log lines are not affected as long as they don't look like
     key=value credential or PII assignments.
     """
+    if not text:
+        return text
+
+    if secret_values:
+        valid_secrets = sorted(
+            {s for s in secret_values if s and isinstance(s, str) and s.strip()},
+            key=len,
+            reverse=True,
+        )
+        for sec in valid_secrets:
+            text = text.replace(sec, _REDACTED)
+
     text = _SECRET_KEY_RE.sub(
         lambda m: m.group("prefix") + _REDACTED + m.group("q2"), text
     )
@@ -1752,6 +1771,56 @@ async def _run_openshell_agent(
 
     _TERMINAL_PHASES = frozenset(("succeeded", "failed", "stopped"))
 
+    # Collect non-empty injected credential values so bare secret strings in shell output are redacted
+    injected_secrets: set[str] = set()
+    if env_vars:
+        for _v in env_vars.values():
+            if _v and isinstance(_v, str) and _v.strip():
+                injected_secrets.add(_v)
+
+    try:
+        async for _db in _get_db():
+            from sqlalchemy import select as sa_select
+            from swarmer.models.github_pat import GitHubPAT
+            from swarmer.models.mcp_server import McpServer
+            from swarmer.models.opencode_secret import OpencodeSecret
+            from swarmer.models.sandbox_env_var import SandboxEnvVar
+
+            if pat_id:
+                _pat_obj = await _db.get(GitHubPAT, pat_id)
+                if _pat_obj and _pat_obj.pat and _pat_obj.pat.strip():
+                    injected_secrets.add(_pat_obj.pat)
+
+            _s = await _db.get(_Session, session_id)
+            if _s and _s.github_pat and _s.github_pat.pat and _s.github_pat.pat.strip():
+                injected_secrets.add(_s.github_pat.pat)
+
+            _ev_res = await _db.execute(
+                sa_select(SandboxEnvVar).where(SandboxEnvVar.workspace_id == workspace_id)
+            )
+            for row in _ev_res.scalars().all():
+                if row.value and isinstance(row.value, str) and row.value.strip():
+                    injected_secrets.add(row.value)
+
+            _sec_res = await _db.execute(
+                sa_select(OpencodeSecret).where(OpencodeSecret.workspace_id == workspace_id)
+            )
+            for row in _sec_res.scalars().all():
+                if row.google_api_key and isinstance(row.google_api_key, str) and row.google_api_key.strip():
+                    injected_secrets.add(row.google_api_key)
+
+            _mcp_res = await _db.execute(
+                sa_select(McpServer).where(McpServer.workspace_id == workspace_id)
+            )
+            for row in _mcp_res.scalars().all():
+                if row.api_token and isinstance(row.api_token, str) and row.api_token.strip():
+                    injected_secrets.add(row.api_token)
+                if row.access_token and isinstance(row.access_token, str) and row.access_token.strip():
+                    injected_secrets.add(row.access_token)
+            break
+    except Exception:
+        log.warning("_run_openshell_agent: failed to load secret values for redaction", exc_info=True)
+
     async def _update_db(**fields) -> None:
         from swarmer.session_runs import record_session_run as _record_run
 
@@ -1803,7 +1872,7 @@ async def _run_openshell_agent(
                 # Redact secrets from shell output before persisting — the raw
                 # stdout/stderr of a shell command may contain credential values
                 # if the script calls printenv, env, or echoes config variables.
-                _safe = _redact_secrets(text) if agent_tool == "shell" else text
+                _safe = _redact_secrets(text, secret_values=injected_secrets) if agent_tool == "shell" else text
                 await _update_db(last_output=_safe, raw_output=_safe)
 
             result = await openshell_client.exec_command_streaming(
@@ -1831,7 +1900,7 @@ async def _run_openshell_agent(
                 # Use streamed stdout; fall back to stderr on failure.
                 # Apply secret redaction: the raw shell command output may contain
                 # credential values if the script echoes env vars or config.
-                output = _redact_secrets(_streamed_text or stderr)
+                output = _redact_secrets(_streamed_text or stderr, secret_values=injected_secrets)
             else:
                 output = (
                     await openshell_client.read_opencode_response(sandbox_name)
@@ -1880,7 +1949,7 @@ async def _run_openshell_agent(
 
             # For shell runs _streamed_text is already redacted (via _on_output);
             # for AI-tool runs it passes through unmodified.
-            _final_raw = _streamed_text if agent_tool != "shell" else _redact_secrets(_streamed_text)
+            _final_raw = _streamed_text if agent_tool != "shell" else _redact_secrets(_streamed_text, secret_values=injected_secrets)
             await _update_db(
                 phase=phase,
                 last_output=output,

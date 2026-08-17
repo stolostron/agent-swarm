@@ -106,3 +106,20 @@ def test_redacts_secrets_inside_larger_stream():
     assert "test_val_abcdef" not in out
     assert "build starting" in out
     assert "build done" in out
+
+
+def test_redacts_injected_literal_secret_values():
+    secrets = ["ghp_1234567890abcdef", "secret_api_val_789"]
+    out = _redact_secrets(
+        "The bare token is ghp_1234567890abcdef in plain text",
+        secret_values=secrets,
+    )
+    assert out == "The bare token is [REDACTED] in plain text"
+    assert "ghp_1234567890abcdef" not in out
+
+
+def test_redacts_injected_secrets_sorted_by_length():
+    secrets = ["secret", "secret_longer_val"]
+    out = _redact_secrets("Found secret_longer_val here", secret_values=secrets)
+    assert out == "Found [REDACTED] here"
+
