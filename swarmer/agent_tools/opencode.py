@@ -168,14 +168,11 @@ class OpenCodeStrategy(AgentToolStrategy):
         return model in _PRESET_NAMES or model.startswith(("google/", "google-vertex-anthropic/"))
 
     def get_model_options(self, secret=None, has_vertex: bool = False, has_gemini: bool = False) -> list[dict]:
-        # has_gemini can be passed explicitly by callers that already checked the
-        # OpenShell gateway/provider; fall back to the legacy DB-encrypted-key
-        # check for callers that only have the OpencodeSecret row (ACM-37263 will
-        # migrate this to a provider_exists() check like has_vertex).
-        _has_gemini = has_gemini or bool(secret and getattr(secret, "google_api_key_enc", ""))
-
+        # has_gemini is sourced by the caller from an OpenShell gateway
+        # provider_exists() check (ACM-37263) — the key is never stored in the
+        # Swarmer DB, so there is no DB fallback here (mirrors has_vertex).
         _vertex_reason = "" if has_vertex else "Vertex AI not configured — add credentials in Secrets."
-        _gemini_reason = "" if _has_gemini else "Google AI Studio API key not set — add it in Secrets."
+        _gemini_reason = "" if has_gemini else "Google AI Studio API key not set — add it in Secrets."
 
         # Family-level presets (ACM-37232) — the only UX. Always listed, even
         # when the backing provider isn't configured, so missing credentials show
@@ -187,7 +184,7 @@ class OpenCodeStrategy(AgentToolStrategy):
             },
             {
                 "value": "gemini", "label": "Gemini", "group": "Presets", "type": "preset",
-                "available": _has_gemini, "reason": _gemini_reason,
+                "available": has_gemini, "reason": _gemini_reason,
             },
         ]
 

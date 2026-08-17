@@ -138,16 +138,19 @@ class TestGetModelOptions:
         assert len(options) == 2
         assert all(o["type"] == "preset" for o in options)
 
-    def test_has_gemini_from_legacy_secret_fallback(self):
-        """Callers that only pass the OpencodeSecret row (not an explicit
-        has_gemini bool) still detect Gemini availability via the encrypted
-        key column, pending the ACM-37263 provider migration."""
+    def test_secret_alone_does_not_grant_gemini_availability(self):
+        """Since ACM-37263, the Gemini key lives only on the OpenShell gateway
+        provider — passing an OpencodeSecret row with a stale encrypted key
+        column (e.g. a workspace that hasn't rotated its key since the
+        migration) must NOT make Gemini available. Callers must explicitly
+        pass has_gemini sourced from a provider_exists() check, exactly like
+        has_vertex."""
         class _FakeSecret:
             google_api_key_enc = "encrypted-value"
 
-        options = _opencode.get_model_options(secret=_FakeSecret(), has_vertex=False)
+        options = _opencode.get_model_options(secret=_FakeSecret(), has_vertex=False, has_gemini=False)
         gemini_preset = next(o for o in options if o["value"] == "gemini")
-        assert gemini_preset["available"] is True
+        assert gemini_preset["available"] is False
 
     def test_explicit_has_gemini_overrides_missing_secret(self):
         options = _opencode.get_model_options(secret=None, has_vertex=False, has_gemini=True)

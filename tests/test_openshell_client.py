@@ -475,6 +475,31 @@ async def test_delete_provider_invalidates_cache(sdk_client):
     assert "swarmer-ws-4-google-cloud" not in oc._provider_cache
 
 
+@pytest.mark.asyncio
+async def test_ensure_provider_refreshes_stale_cached_false(sdk_client):
+    """ensure_provider() must refresh a stale cached "False" to "True" on success.
+
+    Regression test for a save-then-launch race: a page load right before a
+    credential save (e.g. Gemini via the secrets UI) can cache provider_exists()
+    as False. Without this refresh, a session launched immediately after saving
+    would read the stale cached False and skip attaching the just-configured
+    provider (CodeRabbit review on PR #150 / ACM-37263).
+    """
+    import time
+    pname = "swarmer-ws-9-google-ai-studio"
+    oc._provider_cache[pname] = (False, time.monotonic() + 30)  # stale, not yet expired
+    with patch.object(oc, "_get_client", return_value=sdk_client):
+        await oc.ensure_provider(
+            pname, "google-ai-studio", {},
+        )
+    assert oc._provider_cache[pname][0] is True
+    # provider_exists() must now see the refreshed cache without another gRPC call.
+    with patch.object(oc, "_get_client", return_value=sdk_client):
+        result = await oc.provider_exists(pname)
+    assert result is True
+    sdk_client._stub.GetProvider.assert_not_called()
+
+
 # ---------------------------------------------------------------------------
 # 6. create_google_cloud_provider + configure_google_cloud_provider
 # ---------------------------------------------------------------------------

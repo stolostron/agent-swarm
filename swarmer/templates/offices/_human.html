@@ -1,0 +1,84 @@
+{# Cute human worker for one session. Expects: session, ws_id, rest_mode #}
+<a class="desk-station desk-station--{{ session.activity }} desk-station--{{ session.look }}{% if rest_mode %} desk-station--rest{% endif %}"
+   href="/workspaces/{{ ws_id }}/sessions/{{ session.id }}"
+   aria-describedby="office-tip-{{ ws_id }}-{{ session.id }}{% if rest_mode %}-rest{% endif %}">
+  <div class="human-tip" id="office-tip-{{ ws_id }}-{{ session.id }}{% if rest_mode %}-rest{% endif %}" role="tooltip">
+    <div class="human-tip__title">{{ session.name }}</div>
+    <div class="human-tip__status">{{ session.label }} · {{ session.mode }}</div>
+    <div class="human-tip__section">Schedule</div>
+    {% if session.schedules %}
+    <ul class="human-tip__schedules">
+      {% for sched in session.schedules %}
+      <li class="{% if not sched.enabled %}human-tip__sched--off{% endif %}">
+        <span class="human-tip__sched-label">{{ sched.label or sched.cron }}</span>
+        {% if sched.cron and sched.label and sched.label != sched.cron %}
+        <code class="human-tip__cron">{{ sched.cron }}</code>
+        {% elif sched.cron and not sched.label %}
+        <code class="human-tip__cron">{{ sched.cron }}</code>
+        {% endif %}
+        {% if not sched.enabled %}
+        <span class="human-tip__badge">paused</span>
+        {% elif sched.next_run %}
+        <span class="human-tip__next">Next {{ sched.next_run }}</span>
+        {% endif %}
+      </li>
+      {% endfor %}
+    </ul>
+    {% else %}
+    <div class="human-tip__empty">No schedule — runs manually</div>
+    {% endif %}
+  </div>
+  <div class="human-stage" aria-hidden="true">
+    <div class="human">
+      <span class="human__tear human__tear--l"></span>
+      <span class="human__tear human__tear--r"></span>
+      <span class="human__steam"></span>
+      <div class="human__hair"></div>
+      <div class="human__head">
+        <span class="human__eye human__eye--l"></span>
+        <span class="human__eye human__eye--r"></span>
+        <span class="human__brow human__brow--l"></span>
+        <span class="human__brow human__brow--r"></span>
+        <span class="human__blush human__blush--l"></span>
+        <span class="human__blush human__blush--r"></span>
+        <span class="human__mouth"></span>
+      </div>
+      <div class="human__neck"></div>
+      <div class="human__torso">
+        <div class="human__arm human__arm--l"></div>
+        <div class="human__arm human__arm--r"></div>
+      </div>
+      <div class="human__legs">
+        <span class="human__leg human__leg--l"></span>
+        <span class="human__leg human__leg--r"></span>
+      </div>
+      {% if rest_mode %}
+      <div class="human__mug">
+        <span class="human__mug-cup"></span>
+        <span class="human__mug-handle"></span>
+      </div>
+      {% endif %}
+    </div>
+  </div>
+  {% if not rest_mode %}
+  <div class="desk" aria-hidden="true">
+    <div class="desk__monitor"></div>
+    <div class="desk__lamp"></div>
+    <div class="desk__legs"><span></span><span></span></div>
+  </div>
+  {% else %}
+  <div class="lounge-seat" aria-hidden="true">
+    <div class="lounge-seat__cushion"></div>
+    <div class="lounge-seat__base"></div>
+  </div>
+  {% endif %}
+  <div class="desk-station__name">
+    {{ session.name }}
+    {% if session.schedule_count %}
+    <span class="desk-station__sched-dot" title="Has schedule" aria-hidden="true">⏱</span>
+    {% endif %}
+  </div>
+  <div class="desk-station__status">
+    {{ session.label }}{% if session.run_duration and session.is_active %} · {{ session.run_duration }}{% endif %}
+  </div>
+</a>
