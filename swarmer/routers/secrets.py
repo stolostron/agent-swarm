@@ -66,12 +66,24 @@ async def _secrets_context(api, ws_id: int) -> dict:
     except Exception:
         pass  # gateway may be unreachable in local dev without OpenShell
 
+    # Check gateway for the Google AI Studio (Gemini) provider — same pattern as
+    # Vertex ADC: the key is pushed to the gateway at save time and never stored
+    # encrypted in the Swarmer DB (ACM-37263).
+    gemini_provider_configured = False
+    try:
+        gemini_provider_configured = await openshell_client.provider_exists(
+            f"swarmer-ws-{ws_id}-google-ai-studio"
+        )
+    except Exception:
+        pass  # gateway may be unreachable in local dev without OpenShell
+
     return {
         "secret": secret,
         "pats": pats,
         "pull_secret_info": pull_secret_info,
         "github_app": github_app,
         "vertex_provider_configured": vertex_provider_configured,
+        "gemini_provider_configured": gemini_provider_configured,
     }
 
 
@@ -174,13 +186,14 @@ async def opencode_secret_save(
 
         try:
             # Save project/region to DB (non-secret config).
-            # ADC JSON is NOT stored in the Swarmer DB — it is pushed exclusively to
-            # the OpenShell gateway below so credentials never persist in Swarmer.
+            # ADC JSON and the Google AI Studio (Gemini) API key are NOT stored in the
+            # Swarmer DB — both are pushed exclusively to the OpenShell gateway below
+            # so credentials never persist in Swarmer (ACM-37263).
             await api.save_credentials(
                 ws_id,
                 google_cloud_project=google_cloud_project,
                 vertex_location=vertex_location,
-                google_api_key=google_api_key,
+                google_api_key="",  # intentionally empty — gateway is the store
                 application_default_credentials="",  # intentionally empty — gateway is the store
                 shared=bool(shared),
             )
@@ -201,6 +214,23 @@ async def opencode_secret_save(
             flash(request, f"Credentials saved, but failed to configure Vertex AI on OpenShell: {exc}", "warning")
     elif adc_content and not (google_cloud_project and vertex_location):
         flash(request, "ADC file provided but GCP Project ID and Vertex AI Region are required to configure the provider.", "warning")
+
+    # Push the Gemini (Google AI Studio) API key to the OpenShell gateway if a new
+    # key was submitted. A blank submission is a no-op — leaves the existing gateway
+    # provider (if any) untouched, mirroring the ADC "leave blank to keep" behavior.
+    gemini_key = google_api_key.strip()
+    if gemini_key:
+        pname = f"swarmer-ws-{ws_id}-google-ai-studio"
+        try:
+            await openshell_client.ensure_provider(
+                pname, "google-ai-studio", {},
+                credentials={
+                    "GOOGLE_API_KEY": gemini_key,
+                    "GOOGLE_GENERATIVE_AI_API_KEY": gemini_key,
+                },
+            )
+        except Exception as exc:
+            flash(request, f"Credentials saved, but failed to configure Gemini on OpenShell: {exc}", "warning")
 
     return RedirectResponse(url=f"/workspaces/{ws_id}/secrets?tab=credentials", status_code=302)
 

@@ -200,8 +200,14 @@ async def _get_provider_options(
         has_vertex = await openshell_client.provider_exists(f"swarmer-ws-{ws_id}-google-cloud")
     except Exception:
         pass
-    # Google AI Studio key still lives encrypted in the DB pending ACM-37263.
-    has_gemini = bool(oc and oc.google_api_key_enc)
+    # Check gateway for Google AI Studio (Gemini) provider — key is stored on
+    # OpenShell, not Swarmer DB (ACM-37263).
+    has_gemini = False
+    try:
+        from swarmer import openshell_client
+        has_gemini = await openshell_client.provider_exists(f"swarmer-ws-{ws_id}-google-ai-studio")
+    except Exception:
+        pass
     return tool.get_model_options(oc, has_vertex=has_vertex, has_gemini=has_gemini)
 
 router = APIRouter()
@@ -1113,13 +1119,18 @@ async def _do_launch_openshell(
     #     the injected env vars (GOOGLE_API_KEY, ANTHROPIC_API_KEY, GH_TOKEN, etc.).
     provider_names: list[str] = []
     ws_id = session.workspace_id
-    if oc_secret and oc_secret.google_api_key:
-        pname = f"swarmer-ws-{ws_id}-google-ai-studio"
-        await openshell_client.ensure_provider(pname, "google-ai-studio", {}, credentials={
-                "GOOGLE_API_KEY": oc_secret.google_api_key,
-                "GOOGLE_GENERATIVE_AI_API_KEY": oc_secret.google_api_key,
-            })
-        provider_names.append(pname)
+    # Google AI Studio (Gemini) via google-ai-studio provider — key is stored on the
+    # gateway (not in Swarmer DB, ACM-37263). Attach the provider if it already
+    # exists (created via the secrets UI at save time), mirroring the Vertex pattern.
+    _gemini_pname = f"swarmer-ws-{ws_id}-google-ai-studio"
+    try:
+        if await openshell_client.provider_exists(_gemini_pname):
+            provider_names.append(_gemini_pname)
+    except Exception:
+        log.warning(
+            "_do_launch_openshell: could not check google-ai-studio provider for session %d",
+            session.id, exc_info=True,
+        )
     # Vertex AI via google-cloud provider — ADC is stored on the gateway (not in Swarmer DB).
     # Attach the provider if it already exists (created via the secrets UI).
     _vertex_pname = f"swarmer-ws-{ws_id}-google-cloud"
@@ -2836,7 +2847,18 @@ def _prefix_diff_paths(diff: str, prefix: str) -> str:
 
 
 async def _build_commit_msg(patch: str, workspace_id: int, db: AsyncSession) -> str:
-    """Use an LLM to generate a commit message from the diff."""
+    """Use an LLM to generate a commit message from the diff.
+
+    Gemini-based generation calls the Google API directly from the Swarmer
+    process, which requires a plaintext key in-process. Since ACM-37263 the
+    Gemini key is pushed to the OpenShell gateway at save time and the gateway
+    never returns credentials in plaintext (REDACTED), so this path only works
+    for workspaces with a legacy key still present in ``google_api_key_enc``
+    from before the migration. New/rotated keys are gateway-only and fall
+    through to the file-list summary below — there is no in-process
+    replacement for this feature short of running generation inside the
+    sandbox (out of scope here).
+    """
     truncated = patch[:8000] if len(patch) > 8000 else patch
 
     oc_result = await db.execute(

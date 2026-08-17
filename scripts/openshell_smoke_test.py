@@ -11,13 +11,18 @@ Usage:
 Requirements:
   - OpenShell gateway reachable (OPENSHELL_GATEWAY_URL in .env)
   - swarmer auth/secret.key exists
-  - At least one OpencodeSecret in the DB with a Google AI Studio key
+  - GOOGLE_API_KEY set in the process environment (source your .env before
+    running: `set -a && source .env && set +a`). Since ACM-37263 the Gemini
+    key is pushed to the OpenShell gateway at credential-save time and is no
+    longer readable from the Swarmer DB — this script mints its own
+    provider directly from the env var, same as the secrets UI does.
 
 Exit 0 = all steps passed. Exit 1 = one or more failures.
 """
 import argparse
 import asyncio
 import json
+import os
 import re
 import shlex
 import sys
@@ -62,26 +67,15 @@ async def run_smoke_test(model: str) -> bool:
 
     init_crypto("auth/secret.key")
 
-    # ── 1. Read Google API key from DB ───────────────────────────────────────
-    print("\n[1] Reading credentials from DB")
-    google_key = None
-    try:
-        from swarmer.database import init_db, get_db
-        from sqlalchemy import select
-        from swarmer.models.opencode_secret import OpencodeSecret
+    # ── 1. Read Google API key from the process environment ─────────────────
+    # Since ACM-37263 the Gemini key is pushed to the OpenShell gateway at
+    # save time and is never stored in the Swarmer DB — read it directly from
+    # the environment (source your .env: `set -a && source .env && set +a`),
+    # same as the secrets UI does when it pushes a newly-submitted key.
+    print("\n[1] Reading credentials from environment")
+    google_key = os.environ.get("GOOGLE_API_KEY")
 
-        init_db("sqlite+aiosqlite:///data/swarmer.db")
-        async for db in get_db():
-            result = await db.execute(select(OpencodeSecret))
-            secret = result.scalars().first()
-            if secret:
-                google_key = secret.google_api_key
-            break
-    except Exception as exc:
-        step("Read OpencodeSecret from DB", False, str(exc))
-        return False
-
-    if not step("Google API key present", bool(google_key),
+    if not step("GOOGLE_API_KEY env var present", bool(google_key),
                 f"len={len(google_key) if google_key else 0}"):
         return False
 
@@ -828,26 +822,14 @@ async def run_policy_extract(
 
     init_crypto("auth/secret.key")
 
-    # ── 1. Read credentials ──────────────────────────────────────────────────
-    print("\n[1] Reading credentials from DB")
-    google_key = None
-    try:
-        from swarmer.database import init_db, get_db
-        from sqlalchemy import select
-        from swarmer.models.opencode_secret import OpencodeSecret
+    # ── 1. Read credentials from the process environment ────────────────────
+    # Since ACM-37263 the Gemini key is pushed to the OpenShell gateway at
+    # save time and is never stored in the Swarmer DB — read it directly from
+    # the environment (source your .env: `set -a && source .env && set +a`).
+    print("\n[1] Reading credentials from environment")
+    google_key = os.environ.get("GOOGLE_API_KEY")
 
-        init_db("sqlite+aiosqlite:///data/swarmer.db")
-        async for db in get_db():
-            result = await db.execute(select(OpencodeSecret))
-            secret = result.scalars().first()
-            if secret:
-                google_key = secret.google_api_key
-            break
-    except Exception as exc:
-        step("Read OpencodeSecret from DB", False, str(exc))
-        return False
-
-    if not step("Google API key present", bool(google_key)):
+    if not step("GOOGLE_API_KEY env var present", bool(google_key)):
         return False
 
     tool = OpenCodeStrategy()
