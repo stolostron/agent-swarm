@@ -14,6 +14,7 @@ any K8s error is logged and skipped so it can never block startup.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 
 from sqlalchemy import select
@@ -45,7 +46,9 @@ async def sync_k8s_workspace_members(db: AsyncSession) -> None:
     changed = False
     for ws in workspaces:
         try:
-            identities = k8s.list_swarmer_user_role_binding_identities(ws.k8s_namespace)
+            identities = await asyncio.to_thread(
+                k8s.list_swarmer_user_role_binding_identities, ws.k8s_namespace
+            )
         except Exception:
             log.warning(
                 "K8s workspace-member sync failed for workspace %s (%s)",

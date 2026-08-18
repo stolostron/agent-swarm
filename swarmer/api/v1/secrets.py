@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -10,7 +11,6 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from swarmer import k8s
-from swarmer.database import get_db
 from swarmer.api.deps import get_current_user, get_workspace_or_404, require_api_auth
 from swarmer.api.schemas import (
     CredentialsOut,
@@ -24,6 +24,7 @@ from swarmer.api.schemas import (
     PullSecretCreate,
     PullSecretOut,
 )
+from swarmer.database import get_db
 from swarmer.models.github_app import GitHubApp
 from swarmer.models.github_pat import GitHubPAT
 from swarmer.models.opencode_secret import OpencodeSecret
@@ -53,7 +54,7 @@ async def get_credentials(
             OpencodeSecret.workspace_id == ws_id,
             or_(
                 OpencodeSecret.user_id == user,
-                OpencodeSecret.shared == True,  # noqa: E712
+                OpencodeSecret.shared == True,
                 OpencodeSecret.user_id == "",
             ),
         )
@@ -151,7 +152,7 @@ async def list_pats(
             GitHubPAT.workspace_id == ws_id,
             or_(
                 GitHubPAT.user_id == user,
-                GitHubPAT.shared == True,  # noqa: E712
+                GitHubPAT.shared == True,
                 GitHubPAT.user_id == "",
             ),
         ).order_by(GitHubPAT.name)
@@ -205,7 +206,7 @@ async def update_pat(
             GitHubPAT.workspace_id == ws_id,
             or_(
                 GitHubPAT.user_id == user,
-                GitHubPAT.shared == True,  # noqa: E712
+                GitHubPAT.shared == True,
                 GitHubPAT.user_id == "",
             ),
         )
@@ -251,7 +252,7 @@ async def delete_pat(
             GitHubPAT.workspace_id == ws_id,
             or_(
                 GitHubPAT.user_id == user,
-                GitHubPAT.shared == True,  # noqa: E712
+                GitHubPAT.shared == True,
                 GitHubPAT.user_id == "",
             ),
         )
@@ -314,7 +315,7 @@ async def get_github_app(
             GitHubApp.workspace_id == ws_id,
             or_(
                 GitHubApp.user_id == user,
-                GitHubApp.shared == True,  # noqa: E712
+                GitHubApp.shared == True,
                 GitHubApp.user_id == "",
             ),
         )
@@ -387,7 +388,7 @@ async def delete_github_app(
             GitHubApp.workspace_id == ws_id,
             or_(
                 GitHubApp.user_id == user,
-                GitHubApp.shared == True,  # noqa: E712
+                GitHubApp.shared == True,
                 GitHubApp.user_id == "",
             ),
         )
@@ -433,9 +434,13 @@ async def create_pull_secret(
         # time — lazily create one here on first use of this legacy
         # per-workspace K8s Secret feature.
         if not settings.k8s_namespace:
-            k8s.ensure_namespace(ws.k8s_namespace)
-        k8s.apply_pull_secret(
-            ws.k8s_namespace, body.registry.strip(), body.username.strip(), body.password.strip()
+            await asyncio.to_thread(k8s.ensure_namespace, ws.k8s_namespace)
+        await asyncio.to_thread(
+            k8s.apply_pull_secret,
+            ws.k8s_namespace,
+            body.registry.strip(),
+            body.username.strip(),
+            body.password.strip(),
         )
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Failed to create pull secret: {exc}")

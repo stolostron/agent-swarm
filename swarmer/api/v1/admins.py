@@ -9,8 +9,11 @@ remain useful for declarative/GitOps-managed admin lists.
 
 from __future__ import annotations
 
+from sqlite3 import OperationalError as SQLiteOperationalError
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import OperationalError as SQLAlchemyOperationalError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from swarmer import workspace_acl
@@ -24,6 +27,7 @@ from swarmer.api.schemas import (
 )
 from swarmer.database import get_db
 from swarmer.k8s_auth import TokenIdentity
+from swarmer.models.global_admin import GlobalAdmin
 
 router = APIRouter(tags=["admins"], dependencies=[Depends(require_api_auth)])
 
@@ -32,7 +36,7 @@ router = APIRouter(tags=["admins"], dependencies=[Depends(require_api_auth)])
 async def get_me(
     identity: TokenIdentity = Depends(require_api_auth),
     db: AsyncSession = Depends(get_db),
-):
+) -> MeOut:
     """Return the caller's identity and admin/create-workspace permissions.
 
     Console routes only talk to the API (never the DB directly), so this is
@@ -54,7 +58,7 @@ async def get_me(
 async def get_known_users(
     identity: TokenIdentity = Depends(require_api_auth),
     db: AsyncSession = Depends(get_db),
-):
+) -> KnownUsersOut:
     """Autocomplete suggestions for Add Member / Add Admin forms.
 
     Visibility-scoped, not a global user directory — see
@@ -77,7 +81,7 @@ async def _require_admin(identity: TokenIdentity, db: AsyncSession) -> None:
 async def list_admins(
     identity: TokenIdentity = Depends(require_api_auth),
     db: AsyncSession = Depends(get_db),
-):
+) -> list[GlobalAdmin]:
     await _require_admin(identity, db)
     return await workspace_acl.list_global_admins(db)
 
@@ -87,7 +91,7 @@ async def add_admin(
     body: GlobalAdminCreate,
     identity: TokenIdentity = Depends(require_api_auth),
     db: AsyncSession = Depends(get_db),
-):
+) -> GlobalAdmin:
     await _require_admin(identity, db)
     user_id = body.user_id.strip()
     if not user_id:
@@ -110,7 +114,7 @@ async def remove_admin(
     user_id: str,
     identity: TokenIdentity = Depends(require_api_auth),
     db: AsyncSession = Depends(get_db),
-):
+) -> MessageOut:
     await _require_admin(identity, db)
     if not await workspace_acl.remove_global_admin(db, user_id):
         raise HTTPException(
@@ -124,12 +128,17 @@ async def remove_admin(
 async def bootstrap_admin(
     identity: TokenIdentity = Depends(require_api_auth),
     db: AsyncSession = Depends(get_db),
-):
+) -> GlobalAdmin:
     """One-click self-promotion to global admin — only works while zero
     admins exist (static or DB). Solves the bootstrap problem: a fresh
     deployment has zero friction, and every deployment after that is managed
     entirely through the `/admins` UI/API."""
-    if not await workspace_acl.bootstrap_admin(db, identity.username):
+    try:
+        success = await workspace_acl.bootstrap_admin(db, identity.username)
+    except (IntegrityError, SQLAlchemyOperationalError, SQLiteOperationalError):
+        await db.rollback()
+        success = False
+    if not success:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="An admin already exists — ask them to add you via the Admins page.",

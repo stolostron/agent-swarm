@@ -176,4 +176,4 @@ class TestListUserServiceAccounts:
                 mock_core = mock_k8s.CoreV1Api.return_value
                 mock_core.list_namespaced_service_account.return_value = result
                 list_user_service_accounts()
-                mock_core.list_namespaced_service_account.assert_called_once_with("detected-ns")
+                mock_core.list_namespaced_service_account.assert_called_once_with("detected-ns", _request_timeout=10)

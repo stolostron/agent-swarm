@@ -14,12 +14,11 @@ import pytest
 import pytest_asyncio
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from swarmer.database import Base
+from swarmer import workspace_acl
 from swarmer.config import settings
+from swarmer.database import Base
 from swarmer.models.workspace import Workspace
 from swarmer.models.workspace_member import WorkspaceMember
-from swarmer import workspace_acl
-
 
 _engine = create_async_engine("sqlite+aiosqlite://", echo=False)
 _TestSession = async_sessionmaker(_engine, expire_on_commit=False)
@@ -32,14 +31,16 @@ async def _setup_db(monkeypatch):
     orig_admin_users = settings.workspace_admin_users
     orig_admin_groups = settings.workspace_admin_groups
     orig_policy = settings.workspace_create_policy
+    orig_ns = settings.k8s_namespace
     settings.workspace_admin_users = ""
     settings.workspace_admin_groups = ""
     settings.workspace_create_policy = "all"
+    settings.k8s_namespace = ""
 
     # list_known_users() merges in K8s discovery — stub it out by default so
     # tests never make real network calls. Tests exercising K8s discovery
     # override these via monkeypatch themselves.
-    monkeypatch.setattr("swarmer.k8s.list_openshift_users", lambda: [])
+    monkeypatch.setattr("swarmer.k8s.list_openshift_users", list)
     monkeypatch.setattr("swarmer.k8s.list_user_service_accounts", lambda *a, **k: [])
 
     async with _engine.begin() as conn:
@@ -51,6 +52,7 @@ async def _setup_db(monkeypatch):
     settings.workspace_admin_users = orig_admin_users
     settings.workspace_admin_groups = orig_admin_groups
     settings.workspace_create_policy = orig_policy
+    settings.k8s_namespace = orig_ns
 
 
 @pytest_asyncio.fixture
@@ -231,11 +233,12 @@ class TestUserCanAccessWorkspace:
         assert not await workspace_acl.user_can_access_workspace(db, ws, "")
 
     @pytest.mark.asyncio
-    async def test_unclaimed_workspace_open_to_any_authenticated_user(self, db):
-        """ACM-41659: a workspace with no owner (e.g. no recoverable owner
-        during migration) stays accessible to everyone until claimed."""
+    async def test_unclaimed_workspace_restricted_to_admins(self, db):
+        """Unowned workspaces are restricted to global administrators."""
         ws = await _make_workspace(db, owner_id="")
-        assert await workspace_acl.user_can_access_workspace(db, ws, "anyone")
+        assert not await workspace_acl.user_can_access_workspace(db, ws, "anyone")
+        settings.workspace_admin_users = "admin"
+        assert await workspace_acl.user_can_access_workspace(db, ws, "admin")
 
     @pytest.mark.asyncio
     async def test_namespace_scoped_deployment_grants_access_to_all_workspaces(self, db):
@@ -290,14 +293,20 @@ class TestFilterAccessibleWorkspaces:
         assert await workspace_acl.filter_accessible_workspaces(db, [ws], "") == []
 
     @pytest.mark.asyncio
-    async def test_unclaimed_workspace_visible_to_all(self, db):
+    async def test_unclaimed_workspace_restricted_in_filter(self, db):
         unclaimed = await _make_workspace(db, owner_id="", name="unclaimed")
         owned = await _make_workspace(db, owner_id="bob", name="owned-by-bob")
 
         result = await workspace_acl.filter_accessible_workspaces(
             db, [unclaimed, owned], "anyone"
         )
-        assert {ws.id for ws in result} == {unclaimed.id}
+        assert result == []
+
+        settings.workspace_admin_users = "admin"
+        admin_result = await workspace_acl.filter_accessible_workspaces(
+            db, [unclaimed, owned], "admin"
+        )
+        assert {ws.id for ws in admin_result} == {unclaimed.id, owned.id}
 
     @pytest.mark.asyncio
     async def test_namespace_scoped_deployment_returns_all_workspaces(self, db):
@@ -338,9 +347,11 @@ class TestCanManageMembers:
         assert await workspace_acl.can_manage_members(db, ws, "root")
 
     @pytest.mark.asyncio
-    async def test_anyone_can_manage_unclaimed_workspace(self, db):
+    async def test_unclaimed_workspace_restricted_management(self, db):
         ws = await _make_workspace(db, owner_id="")
-        assert await workspace_acl.can_manage_members(db, ws, "anyone")
+        assert not await workspace_acl.can_manage_members(db, ws, "anyone")
+        settings.workspace_admin_users = "root"
+        assert await workspace_acl.can_manage_members(db, ws, "root")
 
     @pytest.mark.asyncio
     async def test_empty_username_cannot_manage(self, db):
@@ -458,12 +469,15 @@ class TestListKnownUsers:
     @pytest.mark.asyncio
     async def test_k8s_error_does_not_break_db_results(self, db, monkeypatch):
         """list_known_users must still return DB results even if K8s discovery
-        itself somehow raises (though the k8s.py helpers already swallow
-        errors internally — this guards the merge path too)."""
+        itself raises."""
         ws = await _make_workspace(db, owner_id="alice", name="owned")
         db.add(WorkspaceMember(workspace_id=ws.id, user_id="bob"))
         await db.commit()
-        monkeypatch.setattr("swarmer.k8s.list_openshift_users", lambda: [])
+
+        def _boom():
+            raise RuntimeError("K8s unreachable")
+
+        monkeypatch.setattr("swarmer.k8s.list_openshift_users", _boom)
         monkeypatch.setattr("swarmer.k8s.list_user_service_accounts", lambda *a, **k: [])
 
         result = await workspace_acl.list_known_users(db, "alice")

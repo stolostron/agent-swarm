@@ -193,9 +193,9 @@ grant-workspace-create: export _SA_USER := $(value SA_USER)
 grant-workspace-create: export _OIDC_USER := $(value OIDC_USER)
 grant-workspace-create: export _NAMESPACE := $(value NAMESPACE)
 grant-workspace-create:  # [Legacy/optional, hidden from `make help`] K8s ClusterRoleBinding — set WORKSPACE_CREATE_POLICY instead, see README.md Access Control (SA_USER=alice OR OIDC_USER=alice)
-	@echo "NOTE: Swarmer workspace creation is now controlled by SWARMER_WORKSPACE_CREATE_POLICY"
+	@echo "NOTE: Swarmer workspace creation is now controlled by WORKSPACE_CREATE_POLICY"
 	@echo "(default 'all' — any authenticated user can create a workspace) and"
-	@echo "SWARMER_WORKSPACE_ADMIN_USERS/GROUPS — this K8s ClusterRoleBinding is no longer read."
+	@echo "WORKSPACE_ADMIN_USERS/GROUPS — this K8s ClusterRoleBinding is no longer read."
 	@echo "See README.md Access Control. Proceeding anyway..."
 	@test -n "$$_SA_USER$$_OIDC_USER" || (echo "Usage: make grant-workspace-create SA_USER=<name>  (or OIDC_USER=<name> for OpenShift/OIDC users)" && exit 1)
 	@test -z "$$_SA_USER" -o -z "$$_OIDC_USER" || (echo "Error: specify only one of SA_USER or OIDC_USER, not both" && exit 1)

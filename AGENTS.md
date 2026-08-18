@@ -52,13 +52,13 @@ python3 scripts/openshell_jira_smoke_test.py                     # Jira MCP: env
 # See docs/ARCHITECTURE.md "Adding a new MCP server" for how to write new smoke tests
 
 # User management
-make user-token SA_USER=alice   # Issue a K8s login token (default 8h); logs in as
-                                 # system:serviceaccount:<NAMESPACE>:alice
+make user-token SA_USER=<SA_USER>   # Issue a K8s login token (default 8h); logs in as
+                                 # system:serviceaccount:<NAMESPACE>:<SA_USER>
 # Workspace access/creation is a database ACL (ACM-41659), not K8s RBAC — grant it via the
 # UI (workspace -> Members tab -> Add Member) or the API, not a make target:
 #   curl -sX POST "$SWARMER_URL/api/v1/workspaces/<id>/members" \
 #     -H "Authorization: Bearer <owner-or-admin-token>" -H "Content-Type: application/json" \
-#     -d '{"user_id": "system:serviceaccount:<NAMESPACE>:alice"}'
+#     -d '{"user_id": "system:serviceaccount:<NAMESPACE>:<SA_USER>"}'
 # Workspace creation policy: WORKSPACE_CREATE_POLICY=all|admins env var (+ WORKSPACE_ADMIN_USERS/
 # WORKSPACE_ADMIN_GROUPS). Global admins: self-service "Become the first Admin" button / /admins
 # page, or POST /api/v1/admins.

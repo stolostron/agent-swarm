@@ -4,11 +4,12 @@ All data access goes through the REST API client (/api/v1/).
 """
 
 from fastapi import APIRouter, Depends, Form, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 
-from swarmer.deps import require_auth
 from swarmer.config import settings
+from swarmer.csrf import CSRFError, ensure_csrf_token, validate_csrf_token
+from swarmer.deps import require_auth
 from swarmer.flash import flash
 from swarmer.routers.api_client import APIError, get_api_client
 
@@ -206,7 +207,7 @@ async def workspace_delete(
 # ---------- Members (ACM-41659) — database-backed workspace ACL ----------
 
 @router.get("/workspaces/{ws_id}/members", dependencies=[Depends(require_auth)])
-async def workspace_members(ws_id: int, request: Request):
+async def workspace_members(ws_id: int, request: Request) -> Response:
     async with get_api_client(request) as api:
         try:
             ws = await api.get_workspace(ws_id)
@@ -226,12 +227,9 @@ async def workspace_members(ws_id: int, request: Request):
             known_users = []
 
     current_user = request.session.get("username", "")
-    # Unclaimed workspace (no owner yet): anyone can manage it (and claims it
-    # on the first management action — see workspace_acl.claim_ownership_if_unowned).
     can_manage = (
-        me.get("is_admin")
-        or current_user == ws.get("owner_id")
-        or not ws.get("owner_id")
+        me.get("is_admin", False)
+        or (bool(ws.get("owner_id")) and current_user == ws.get("owner_id"))
     )
 
     # Autocomplete suggestions only — free-text entry is always still allowed.
@@ -242,7 +240,13 @@ async def workspace_members(ws_id: int, request: Request):
     return templates.TemplateResponse(
         request,
         "workspaces/members.html",
-        {"ws": ws, "members": members, "can_manage": can_manage, "known_users": known_users},
+        {
+            "ws": ws,
+            "members": members,
+            "can_manage": can_manage,
+            "known_users": known_users,
+            "csrf_token": ensure_csrf_token(request),
+        },
     )
 
 
@@ -252,7 +256,14 @@ async def workspace_members_add(
     ws_id: int,
     user_id: str = Form(...),
     role: str = Form("member"),
-):
+    csrf_token: str = Form(""),
+) -> Response:
+    try:
+        validate_csrf_token(request, csrf_token)
+    except CSRFError:
+        flash(request, "Invalid or missing CSRF token.", "danger")
+        return RedirectResponse(url=f"/workspaces/{ws_id}/members", status_code=302)
+
     async with get_api_client(request) as api:
         try:
             await api.add_workspace_member(ws_id, user_id.strip(), role.strip() or "member")
@@ -266,7 +277,15 @@ async def workspace_members_add(
 @router.post(
     "/workspaces/{ws_id}/members/{user_id}/delete", dependencies=[Depends(require_auth)]
 )
-async def workspace_members_remove(request: Request, ws_id: int, user_id: str):
+async def workspace_members_remove(
+    request: Request, ws_id: int, user_id: str, csrf_token: str = Form("")
+) -> Response:
+    try:
+        validate_csrf_token(request, csrf_token)
+    except CSRFError:
+        flash(request, "Invalid or missing CSRF token.", "danger")
+        return RedirectResponse(url=f"/workspaces/{ws_id}/members", status_code=302)
+
     async with get_api_client(request) as api:
         try:
             await api.remove_workspace_member(ws_id, user_id)

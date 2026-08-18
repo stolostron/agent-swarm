@@ -26,7 +26,7 @@ hold cluster-scoped namespace create/list/delete or RoleBinding permissions.
 
 from __future__ import annotations
 
-from sqlalchemy import func, select
+from sqlalchemy import exists, func, insert, literal, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from swarmer.config import settings
@@ -86,15 +86,25 @@ async def bootstrap_admin(db: AsyncSession, username: str) -> bool:
     """Self-promote *username* to global admin iff no admin exists yet.
 
     Returns True on success, False if an admin already exists (races are
-    resolved by the DB — a second caller sees admin_bootstrap_available()
-    become False, or hits the unique constraint on user_id / a concurrent
-    commit and simply fails the initial check).
+    resolved by the DB via a conditional insert — only one user can be inserted).
     """
     if not username or not await admin_bootstrap_available(db):
         return False
-    db.add(GlobalAdmin(user_id=username, created_by="bootstrap"))
-    await db.commit()
-    return True
+    stmt = (
+        insert(GlobalAdmin)
+        .from_select(
+            ["user_id", "created_by"],
+            select(literal(username), literal("bootstrap")).where(
+                ~exists(select(GlobalAdmin.id))
+            ),
+        )
+    )
+    result = await db.execute(stmt)
+    if result.rowcount == 1:
+        await db.commit()
+        return True
+    await db.rollback()
+    return False
 
 
 async def list_global_admins(db: AsyncSession) -> list[GlobalAdmin]:
@@ -147,10 +157,9 @@ async def user_can_access_workspace(
         return True
     if ws.owner_id == username:
         return True
-    # Unclaimed workspace (no owner recorded — e.g. a pre-ACL workspace with
-    # no recoverable owner): open to any authenticated user until claimed.
+    # Unclaimed workspace (no owner recorded): restricted to global admins (checked above).
     if not ws.owner_id:
-        return True
+        return False
     result = await db.execute(
         select(WorkspaceMember.id).where(
             WorkspaceMember.workspace_id == ws.id,
@@ -173,7 +182,7 @@ async def filter_accessible_workspaces(
         return list(workspaces)
     if await is_admin(db, username, groups):
         return list(workspaces)
-    accessible_ids = {ws.id for ws in workspaces if ws.owner_id == username or not ws.owner_id}
+    accessible_ids = {ws.id for ws in workspaces if ws.owner_id and ws.owner_id == username}
     result = await db.execute(
         select(WorkspaceMember.workspace_id).where(
             WorkspaceMember.user_id == username,
@@ -187,14 +196,14 @@ async def filter_accessible_workspaces(
 async def can_manage_members(
     db: AsyncSession, ws: Workspace, username: str, groups: list[str] | None = None
 ) -> bool:
-    """Owner, a global admin, or anyone (while the workspace is unclaimed)
-    can rename/delete a workspace or manage its members."""
+    """Owner or a global admin can rename/delete a workspace or manage its members.
+    Unowned workspaces are restricted to global admins."""
     if not username:
         return False
     if await is_admin(db, username, groups):
         return True
     if not ws.owner_id:
-        return True
+        return False
     return ws.owner_id == username
 
 
@@ -248,14 +257,24 @@ async def _k8s_known_users() -> set[str]:
     """OpenShift `User` objects + K8s ServiceAccounts (the identities
     `make user-token SA_USER=<name>` creates) — best-effort, never raises."""
     import asyncio
+    import logging
 
     from swarmer import k8s
 
-    openshift_users, service_accounts = await asyncio.gather(
+    log = logging.getLogger(__name__)
+
+    results = await asyncio.gather(
         asyncio.to_thread(k8s.list_openshift_users),
         asyncio.to_thread(k8s.list_user_service_accounts),
+        return_exceptions=True,
     )
-    return set(openshift_users) | set(service_accounts)
+    users: set[str] = set()
+    for result in results:
+        if isinstance(result, BaseException):
+            log.debug("K8s known-user discovery failed", exc_info=result)
+            continue
+        users |= set(result)
+    return users
 
 
 async def list_known_users(
@@ -284,6 +303,24 @@ async def list_known_users(
     users = db_users | k8s_users
     users.discard(username)
     return sorted(users)
+
+
+async def claim_ownership_if_unowned_db(
+    db: AsyncSession, workspace_id: int, username: str
+) -> bool:
+    """Atomically claim an unowned workspace for *username*.
+
+    Returns True if ownership was claimed, False if it already had an owner or
+    username was empty.
+    """
+    if not username:
+        return False
+    result = await db.execute(
+        update(Workspace)
+        .where(Workspace.id == workspace_id, Workspace.owner_id == "")
+        .values(owner_id=username)
+    )
+    return result.rowcount > 0
 
 
 def claim_ownership_if_unowned(ws: Workspace, username: str) -> bool:

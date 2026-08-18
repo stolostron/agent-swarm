@@ -16,6 +16,7 @@
     Be the first — this only works while no admin exists.
   </div>
   <form method="post" action="/admins/bootstrap">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <button type="submit" class="pf-v6-c-button pf-m-primary pf-m-small">Become the first Admin</button>
   </form>
 </div>
@@ -43,7 +44,9 @@
       <td class="pf-v6-c-table__td pf-m-fit-content" role="cell" data-label="Actions" style="text-align:right;">
         <form method="post" action="/admins/{{ a.user_id | urlencode }}/delete"
               style="display:inline"
-              onsubmit="return confirm('Remove admin access from \'{{ a.user_id }}\'?')">
+              data-confirm-user="{{ a.user_id }}"
+              onsubmit="return confirm('Remove admin access from \'' + this.getAttribute('data-confirm-user') + '\'?')">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
           <button type="submit"
                   class="pf-v6-c-button pf-m-plain pf-m-small"
                   title="Remove {{ a.user_id }}"
@@ -68,6 +71,7 @@
 
 <h2 class="pf-v6-c-title pf-m-lg" style="margin-bottom:var(--pf-t--global--spacer--md);">Add Admin</h2>
 <form method="post" action="/admins" class="pf-v6-c-form" style="max-width:600px;">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
   <div class="pf-v6-c-form__group">
     <label class="pf-v6-c-form__label" for="admin-user-id">
       <span class="pf-v6-c-form__label-text" style="font-weight:var(--pf-t--global--font--weight--heading--bold);">Username</span>

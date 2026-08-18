@@ -4,9 +4,10 @@ All data access goes through the REST API client (/api/v1/).
 """
 
 from fastapi import APIRouter, Depends, Form, Request
-from fastapi.responses import RedirectResponse
+from fastapi.responses import RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 
+from swarmer.csrf import CSRFError, ensure_csrf_token, validate_csrf_token
 from swarmer.deps import require_auth
 from swarmer.flash import flash
 from swarmer.routers.api_client import APIError, get_api_client
@@ -16,7 +17,7 @@ templates = Jinja2Templates(directory="swarmer/templates")
 
 
 @router.get("/admins", dependencies=[Depends(require_auth)])
-async def admins_list(request: Request):
+async def admins_list(request: Request) -> Response:
     async with get_api_client(request) as api:
         try:
             me = await api.get_me()
@@ -47,12 +48,21 @@ async def admins_list(request: Request):
             "is_admin": me.get("is_admin", False),
             "admin_bootstrap_available": me.get("admin_bootstrap_available", False),
             "known_users": known_users,
+            "csrf_token": ensure_csrf_token(request),
         },
     )
 
 
 @router.post("/admins", dependencies=[Depends(require_auth)])
-async def admins_add(request: Request, user_id: str = Form(...)):
+async def admins_add(
+    request: Request, user_id: str = Form(...), csrf_token: str = Form("")
+) -> Response:
+    try:
+        validate_csrf_token(request, csrf_token)
+    except CSRFError:
+        flash(request, "Invalid or missing CSRF token.", "danger")
+        return RedirectResponse(url="/admins", status_code=302)
+
     async with get_api_client(request) as api:
         try:
             await api.add_admin(user_id.strip())
@@ -64,7 +74,15 @@ async def admins_add(request: Request, user_id: str = Form(...)):
 
 
 @router.post("/admins/{user_id}/delete", dependencies=[Depends(require_auth)])
-async def admins_remove(request: Request, user_id: str):
+async def admins_remove(
+    request: Request, user_id: str, csrf_token: str = Form("")
+) -> Response:
+    try:
+        validate_csrf_token(request, csrf_token)
+    except CSRFError:
+        flash(request, "Invalid or missing CSRF token.", "danger")
+        return RedirectResponse(url="/admins", status_code=302)
+
     async with get_api_client(request) as api:
         try:
             await api.remove_admin(user_id)
@@ -76,8 +94,16 @@ async def admins_remove(request: Request, user_id: str):
 
 
 @router.post("/admins/bootstrap", dependencies=[Depends(require_auth)])
-async def admins_bootstrap(request: Request):
+async def admins_bootstrap(
+    request: Request, csrf_token: str = Form("")
+) -> Response:
     """One-click self-promotion — only succeeds while zero admins exist."""
+    try:
+        validate_csrf_token(request, csrf_token)
+    except CSRFError:
+        flash(request, "Invalid or missing CSRF token.", "danger")
+        return RedirectResponse(url="/admins", status_code=302)
+
     async with get_api_client(request) as api:
         try:
             await api.bootstrap_admin()

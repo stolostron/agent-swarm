@@ -69,7 +69,9 @@
         {% if can_manage %}
         <form method="post" action="/workspaces/{{ ws.id }}/members/{{ m.user_id | urlencode }}/delete"
               style="display:inline"
-              onsubmit="return confirm('Remove \'{{ m.user_id }}\' from this workspace?')">
+              data-confirm-user="{{ m.user_id }}"
+              onsubmit="return confirm('Remove \'' + this.getAttribute('data-confirm-user') + '\' from this workspace?')">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
           <button type="submit"
                   class="pf-v6-c-button pf-m-plain pf-m-small"
                   title="Remove {{ m.user_id }}"
@@ -96,6 +98,7 @@
 {% if can_manage %}
 <h2 class="pf-v6-c-title pf-m-lg" style="margin-bottom:var(--pf-t--global--spacer--md);">Add Member</h2>
 <form method="post" action="/workspaces/{{ ws.id }}/members" class="pf-v6-c-form" style="max-width:600px;">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
   <div class="pf-v6-c-form__group">
     <label class="pf-v6-c-form__label" for="member-user-id">
       <span class="pf-v6-c-form__label-text" style="font-weight:var(--pf-t--global--font--weight--heading--bold);">Username</span>

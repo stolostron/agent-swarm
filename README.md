@@ -108,7 +108,7 @@ token, or their OpenShift OAuth/OIDC username). The username field suggests cand
 you already share a workspace with (global admins see every known username), plus every OpenShift
 `User` and every ServiceAccount `make user-token SA_USER=<name>` would create — but it's always
 still a free-text field, so you can invite someone who hasn't logged in yet. Only the workspace
-owner or a configured admin can add or remove members. This can also be done via the API:
+owner or a global admin can add or remove members. This can also be done via the API:
 
 ```sh
 curl -sX POST "$SWARMER_URL/api/v1/workspaces/<id>/members" \

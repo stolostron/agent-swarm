@@ -61,7 +61,7 @@ async def _setup_db(monkeypatch):
     monkeypatch.setattr("swarmer.k8s.delete_namespace", lambda namespace: None)
     # list_known_users() merges in K8s discovery — stub it out by default so
     # tests never make real network calls.
-    monkeypatch.setattr("swarmer.k8s.list_openshift_users", lambda: [])
+    monkeypatch.setattr("swarmer.k8s.list_openshift_users", list)
     monkeypatch.setattr("swarmer.k8s.list_user_service_accounts", lambda *a, **k: [])
 
     import swarmer.models  # noqa: F401 — register models on Base.metadata
@@ -378,6 +378,9 @@ class TestWorkspaceMembers:
             return TokenIdentity(username="claimant", uid="uid-2")
 
         app.dependency_overrides[require_api_auth] = _other_identity
+        from swarmer.config import settings
+        orig_admins = settings.workspace_admin_users
+        settings.workspace_admin_users = "claimant"
         try:
             resp = await client.post(
                 f"/api/v1/workspaces/{ws['id']}/members", json={"user_id": "someone-else"}
@@ -388,6 +391,7 @@ class TestWorkspaceMembers:
             resp = await client.get(f"/api/v1/workspaces/{ws['id']}")
             assert resp.json()["owner_id"] == "claimant"
         finally:
+            settings.workspace_admin_users = orig_admins
             app.dependency_overrides[require_api_auth] = _override_require_api_auth
 
 

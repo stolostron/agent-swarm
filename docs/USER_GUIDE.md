@@ -430,7 +430,7 @@ token, or their OpenShift OAuth/OIDC username for OAuth logins. The field sugges
 admins see every known username), every OpenShift `User` object, and every ServiceAccount
 `make user-token SA_USER=<name>` would create/use — but it always remains free-text so you can
 invite someone who hasn't logged in yet. Suggestions are rendered as both clickable pills and a
-native `<datalist>` on the input. Only the workspace owner or a configured admin can add or remove
+native `<datalist>` on the input. Only the workspace owner or a global admin can add or remove
 members. Equivalent via the API:
 
 ```sh

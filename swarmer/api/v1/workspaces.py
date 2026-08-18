@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 
@@ -11,8 +12,6 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from swarmer import k8s, workspace_acl
-from swarmer.config import settings
-from swarmer.database import get_db
 from swarmer.api.deps import (
     filter_accessible_workspaces,
     get_workspace_or_404,
@@ -26,6 +25,8 @@ from swarmer.api.schemas import (
     WorkspaceOut,
     WorkspaceUpdate,
 )
+from swarmer.config import settings
+from swarmer.database import get_db
 from swarmer.k8s_auth import TokenIdentity
 from swarmer.models.workspace import Workspace
 from swarmer.models.workspace_member import WorkspaceMember
@@ -49,9 +50,9 @@ def _derive_namespace(display_name: str) -> str:
 async def list_workspaces(
     db: AsyncSession = Depends(get_db),
     identity: TokenIdentity = Depends(require_api_auth),
-):
+) -> list[Workspace]:
     result = await db.execute(select(Workspace).order_by(Workspace.display_name))
-    workspaces = result.scalars().all()
+    workspaces = list(result.scalars().all())
     return await filter_accessible_workspaces(db, workspaces, identity)
 
 
@@ -60,7 +61,7 @@ async def create_workspace(
     body: WorkspaceCreate,
     db: AsyncSession = Depends(get_db),
     identity: TokenIdentity = Depends(require_api_auth),
-):
+) -> Workspace:
     if settings.k8s_namespace:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -103,7 +104,7 @@ async def create_workspace(
 
 
 @router.get("/{ws_id}", response_model=WorkspaceOut)
-async def get_workspace(ws: Workspace = Depends(get_workspace_or_404)):
+async def get_workspace(ws: Workspace = Depends(get_workspace_or_404)) -> Workspace:
     return ws
 
 
@@ -120,15 +121,27 @@ async def _require_manage_permission(
         )
 
 
+async def _claim_unowned_if_needed(
+    db: AsyncSession, ws: Workspace, identity: TokenIdentity
+) -> None:
+    if not ws.owner_id:
+        claimed = await workspace_acl.claim_ownership_if_unowned_db(db, ws.id, identity.username)
+        if not claimed:
+            await db.refresh(ws)
+            await _require_manage_permission(db, ws, identity)
+        else:
+            ws.owner_id = identity.username
+
+
 @router.put("/{ws_id}", response_model=WorkspaceOut)
 async def update_workspace(
     body: WorkspaceUpdate,
     ws: Workspace = Depends(get_workspace_or_404),
     identity: TokenIdentity = Depends(require_api_auth),
     db: AsyncSession = Depends(get_db),
-):
+) -> Workspace:
     await _require_manage_permission(db, ws, identity)
-    workspace_acl.claim_ownership_if_unowned(ws, identity.username)
+    await _claim_unowned_if_needed(db, ws, identity)
     ws.display_name = body.display_name.strip()
     ws.description = body.description.strip()
     await db.commit()
@@ -141,7 +154,7 @@ async def delete_workspace(
     ws: Workspace = Depends(get_workspace_or_404),
     identity: TokenIdentity = Depends(require_api_auth),
     db: AsyncSession = Depends(get_db),
-):
+) -> MessageOut:
     await _require_manage_permission(db, ws, identity)
     name = ws.display_name
     k8s_ns = ws.k8s_namespace
@@ -155,7 +168,7 @@ async def delete_workspace(
     # created at workspace creation time anymore (ACM-41659).
     try:
         if not settings.k8s_namespace:
-            k8s.delete_namespace(k8s_ns)
+            await asyncio.to_thread(k8s.delete_namespace, k8s_ns)
     except Exception:
         log.warning("Failed to delete K8s namespace %s for workspace '%s'", k8s_ns, name)
 
@@ -171,13 +184,13 @@ async def delete_workspace(
 async def list_workspace_members(
     ws: Workspace = Depends(get_workspace_or_404),
     db: AsyncSession = Depends(get_db),
-):
+) -> list[WorkspaceMember]:
     result = await db.execute(
         select(WorkspaceMember)
         .where(WorkspaceMember.workspace_id == ws.id)
         .order_by(WorkspaceMember.user_id)
     )
-    return result.scalars().all()
+    return list(result.scalars().all())
 
 
 @router.post(
@@ -190,9 +203,9 @@ async def add_workspace_member(
     ws: Workspace = Depends(get_workspace_or_404),
     identity: TokenIdentity = Depends(require_api_auth),
     db: AsyncSession = Depends(get_db),
-):
+) -> WorkspaceMember:
     await _require_manage_permission(db, ws, identity)
-    workspace_acl.claim_ownership_if_unowned(ws, identity.username)
+    await _claim_unowned_if_needed(db, ws, identity)
     user_id = body.user_id.strip()
     if not user_id:
         raise HTTPException(
@@ -228,9 +241,9 @@ async def remove_workspace_member(
     ws: Workspace = Depends(get_workspace_or_404),
     identity: TokenIdentity = Depends(require_api_auth),
     db: AsyncSession = Depends(get_db),
-):
+) -> MessageOut:
     await _require_manage_permission(db, ws, identity)
-    workspace_acl.claim_ownership_if_unowned(ws, identity.username)
+    await _claim_unowned_if_needed(db, ws, identity)
     result = await db.execute(
         select(WorkspaceMember).where(
             WorkspaceMember.workspace_id == ws.id,
