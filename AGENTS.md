@@ -179,6 +179,8 @@ Use placeholder patterns instead: `<YOUR_PROJECT>`, `example.com`, `your-registr
 
 18. **GitHub App IAT refresh loop**: For TUI and server-mode sessions using a GitHub App, `_setup_openshell_sandbox` starts a background `asyncio.create_task` called `iat-refresh-{session_id}`. This task calls `github_auth.start_token_refresh_loop()`, which sleeps `IAT_REFRESH_INTERVAL` (3000 s) then re-mints an IAT and calls `openshell_client.ensure_provider()` to update the Gateway. The task is cancelled when the event loop session is torn down — including a Swarmer process restart, since the task lives only in that process's event loop. `main.py:_restart_server_sessions()` accounts for this: on startup it re-mints an IAT and restarts the refresh loop for every surviving server/TUI session that has no explicit PAT and has a workspace GitHub App configured (`_restart_github_app_iat_refresh`) — without this, the sandbox's existing IAT keeps working post-restart but silently expires ~1 hour later with no task left to renew it. The raw PEM private key is serialised into the task as a plain string (not an ORM object) to survive the DB session expiry.
 
+19. **Always include version updates with all commits**: `.push-defaults` is tracked in git. Whenever versions, image tags, or `.push-defaults` are bumped or changed, always stage and commit `.push-defaults` (and any related version configs) alongside the code changes.
+
 ## Personal configuration
 
 Read `~/.config/user.local.md` at the start of any task that needs an assignee, email, or project key. If the file does not exist, fall back to Claude memory (`user-config`), then placeholders.
