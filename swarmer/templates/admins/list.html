@@ -83,19 +83,12 @@
         <option value="{{ u }}">
         {% endfor %}
       </datalist>
-      <div style="margin-top:var(--pf-t--global--spacer--sm); display:flex; flex-wrap:wrap; gap:var(--pf-t--global--spacer--xs); align-items:center;">
-        <span style="color:var(--pf-t--global--text--color--subtle); font-size:var(--pf-t--global--font--size--sm);">Suggested:</span>
-        {% for u in known_users %}
-        <button type="button" class="pf-v6-c-button pf-m-control pf-m-small known-user-pill" data-user-id="{{ u }}">{{ u }}</button>
-        {% endfor %}
-      </div>
       {% endif %}
       <div class="pf-v6-c-form__helper-text">
         <div class="pf-v6-c-helper-text__item">
           <span class="pf-v6-c-helper-text__item-text">
             The exact K8s ServiceAccount identity (<code>system:serviceaccount:&lt;ns&gt;:&lt;name&gt;</code>) or
             OpenShift OAuth/OIDC username this person logs in with.
-            {% if known_users %}Click a suggestion above, start typing to filter them, or enter any username directly.{% endif %}
           </span>
         </div>
       </div>
@@ -108,15 +101,6 @@
     </div>
   </div>
 </form>
-<script>
-  document.querySelectorAll('.known-user-pill').forEach(function (btn) {
-    btn.addEventListener('click', function () {
-      var input = document.getElementById('admin-user-id');
-      input.value = btn.dataset.userId;
-      input.focus();
-    });
-  });
-</script>
 {% elif not admin_bootstrap_available %}
 <div class="pf-v6-c-empty-state">
   <div class="pf-v6-c-empty-state__content">
