@@ -81,7 +81,7 @@ agent-swarm/
 
 **OpenShell is the sole session runtime** — All agent session lifecycle (create, exec, stop, delete) goes through the OpenShell Gateway + Supervisor APIs. Swarmer does not create K8s pods, PVCs, Services, or Routes for agent sessions.
 
-**Minimal K8s surface** — Swarmer's K8s usage is limited to: authentication (TokenReview via `k8s_auth.py`), image pull secrets (for `check_image_reachable`), and workspace namespace scoping. All credential injection for agent sessions is handled by the OpenShell Gateway.
+**Minimal K8s surface** — Swarmer's K8s usage is limited to: authentication (TokenReview via `k8s_auth.py`, identity only — no RBAC checks), image pull secrets (for `check_image_reachable`; the K8s namespace they live in is created lazily on first use, ACM-41659), and Add Member / Add Admin candidate discovery (`k8s.list_openshift_users()`, `k8s.list_user_service_accounts()`, both best-effort/read-only). Workspace access control itself is a database ACL (`workspace_acl.py`), not K8s RBAC or namespace scoping. All credential injection for agent sessions is handled by the OpenShell Gateway.
 
 ## Domain Model
 
@@ -154,6 +154,8 @@ Swarmer uses the official `kubernetes` Python client for a limited set of infras
 - `k8s.ensure_namespace()` / `delete_namespace()` — **no longer called at workspace create/delete time** (ACM-41659). A workspace's K8s namespace (`k8s.effective_namespace()`) is now created lazily, only the first time a legacy per-workspace K8s Secret feature (pull secrets) is actually used, and best-effort deleted when the workspace is deleted.
 - Pull secret management (`apply_pull_secret`, `get_pull_secret_info`, `delete_pull_secret`) — required for `check_image_reachable`
 - `get_extra_env_vars()` / `set_extra_env_var()` / `delete_extra_env_var()` — workspace env var storage via K8s Secret `swarmer-agent-extra-env` (**ACM-35039**: migrating to SQLite)
+- `k8s.list_swarmer_user_role_binding_identities()` — read-only, used once at startup by `workspace_migration.py` to mirror legacy `swarmer-user` RoleBinding grants into the DB ACL (ACM-41659); never writes RoleBindings anymore
+- `k8s.list_openshift_users()` / `k8s.list_user_service_accounts()` — read-only, back the Add Member / Add Admin candidate discovery (`workspace_acl.list_known_users()` / `GET /api/v1/users`); both best-effort, never raise
 
 All kubernetes client imports remain lazy (inside functions) to avoid import errors when K8s is not configured.
 

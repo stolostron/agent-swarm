@@ -52,14 +52,18 @@ python3 scripts/openshell_jira_smoke_test.py                     # Jira MCP: env
 # See docs/ARCHITECTURE.md "Adding a new MCP server" for how to write new smoke tests
 
 # User management
-make user-token SA_USER=alice                                      # Issue a K8s login token (default 8h)
-make grant-workspace-access SA_USER=alice WORKSPACE_NS=my-proj     # Grant access to an existing workspace
-make grant-workspace-create SA_USER=alice                          # Allow user to create new workspaces
-# For OpenShift OAuth/OIDC users (e.g. GitHub identity provider) instead of a ServiceAccount
-# token, use OIDC_USER=<name> in place of SA_USER=<name> — these are different RBAC
-# principals (User vs ServiceAccount) and a grant for one does not apply to the other.
-make grant-workspace-access OIDC_USER=<name> WORKSPACE_NS=my-proj
-make grant-workspace-create OIDC_USER=<name>
+make user-token SA_USER=alice   # Issue a K8s login token (default 8h); logs in as
+                                 # system:serviceaccount:<NAMESPACE>:alice
+# Workspace access/creation is a database ACL (ACM-41659), not K8s RBAC — grant it via the
+# UI (workspace -> Members tab -> Add Member) or the API, not a make target:
+#   curl -sX POST "$SWARMER_URL/api/v1/workspaces/<id>/members" \
+#     -H "Authorization: Bearer <owner-or-admin-token>" -H "Content-Type: application/json" \
+#     -d '{"user_id": "system:serviceaccount:<NAMESPACE>:alice"}'
+# Workspace creation policy: WORKSPACE_CREATE_POLICY=all|admins env var (+ WORKSPACE_ADMIN_USERS/
+# WORKSPACE_ADMIN_GROUPS). Global admins: self-service "Become the first Admin" button / /admins
+# page, or POST /api/v1/admins.
+# `make grant-workspace-access` / `grant-workspace-create` still exist but are deprecated
+# no-ops — Swarmer no longer reads that K8s RoleBinding/ClusterRoleBinding data.
 ```
 
 ## Architecture
