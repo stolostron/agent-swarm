@@ -615,11 +615,48 @@ class TestSessions:
         s = await _create_session(client, ws["id"])
         resp = await client.put(
             f"/api/v1/workspaces/{ws['id']}/sessions/{s['id']}",
-            json={"name": "renamed-session", "mode": "tui"},
+            json={"name": "renamed-session", "mode": "tui", "agent_tool": "shell"},
         )
         assert resp.status_code == 200
         assert resp.json()["name"] == "renamed-session"
         assert resp.json()["mode"] == "tui"
+        assert resp.json()["agent_tool"] == "shell"
+
+    @pytest.mark.asyncio
+    async def test_create_session_with_shell_tool(self, client):
+        ws = await _create_workspace(client)
+        resp = await client.post(
+            f"/api/v1/workspaces/{ws['id']}/sessions",
+            json={"name": "shell-s", "mode": "prompt", "agent_tool": "shell", "instruction_prompt": "echo hi"},
+        )
+        assert resp.status_code == 201
+        assert resp.json()["agent_tool"] == "shell"
+        assert resp.json()["instruction_prompt"] == "echo hi"
+
+    @pytest.mark.asyncio
+    async def test_session_ui_renders_branded_agent_pills(self, client):
+        from swarmer.deps import require_auth
+        from swarmer.main import app
+
+        app.dependency_overrides[require_auth] = lambda: None
+        try:
+            ws = await _create_workspace(client)
+            # Check /sessions/new page
+            resp_new = await client.get(f"/workspaces/{ws['id']}/sessions/new")
+            assert resp_new.status_code == 200
+            assert "agent-pill-oc" in resp_new.text
+            assert "agent-pill-shell" in resp_new.text
+            assert "shell-pixel-prompt" in resp_new.text
+
+            # Create session and check /sessions/{id} detail page
+            s = await _create_session(client, ws["id"], name="detail-pills-s")
+            resp_detail = await client.get(f"/workspaces/{ws['id']}/sessions/{s['id']}")
+            assert resp_detail.status_code == 200
+            assert "agent-pill-oc" in resp_detail.text
+            assert "agent-pill-shell" in resp_detail.text
+            assert "selectDetailAgentTool" in resp_detail.text
+        finally:
+            app.dependency_overrides.pop(require_auth, None)
 
     @pytest.mark.asyncio
     async def test_delete_session(self, client):

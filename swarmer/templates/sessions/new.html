@@ -4,25 +4,51 @@
 {% block head %}
 <style>
   .agent-pill {
-    display: inline-flex; align-items: center;
+    display: inline-flex; align-items: center; justify-content: center;
     padding: 4px 12px;
+    height: 28px;
+    box-sizing: border-box;
     border: 2px solid #444;
     border-radius: var(--pf-t--global--border--radius--small);
-    font-family: monospace; font-weight: 700;
+    font-family: var(--pf-t--global--font--family--mono, monospace);
+    font-weight: 700;
     font-size: var(--pf-t--global--font--size--sm);
-    background: none;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    background: #2d2d2d;
+    color: #aaa;
   }
-  .agent-pill-oc { background: #2d2d2d; }
+  .agent-pill:hover:not(:disabled) {
+    border-color: #666;
+    color: #fff;
+  }
   .agent-pill.selected {
     border: 2px solid transparent;
     background-origin: border-box;
     background-clip: padding-box, border-box;
+    color: #fff;
   }
+  .agent-pill-oc { background: #2d2d2d; }
   .agent-pill-oc.selected {
     background-image:
       linear-gradient(#1e1e1e, #1e1e1e),
       linear-gradient(135deg, #e06c75, #e5c07b, #98c379, #56b6c2, #61afef, #c678dd);
   }
+  .agent-pill-shell { background: #2d2d2d; }
+  .agent-pill-shell .shell-pixel-shadow { fill: #1e3324; }
+  .agent-pill-shell .shell-pixel-prompt { fill: #4a88c7; }
+  .agent-pill-shell .shell-pixel-text   { fill: #38a158; }
+  .agent-pill-shell:hover:not(:disabled) .shell-pixel-shadow { fill: #24462e; }
+  .agent-pill-shell:hover:not(:disabled) .shell-pixel-prompt { fill: #79c0ff; }
+  .agent-pill-shell:hover:not(:disabled) .shell-pixel-text   { fill: #56d364; }
+  .agent-pill-shell.selected {
+    background-image:
+      linear-gradient(#0d130e, #0d130e),
+      linear-gradient(135deg, #38ef7d, #11998e, #00f2fe, #4facfe);
+  }
+  .agent-pill-shell.selected .shell-pixel-shadow { fill: #1b3822; }
+  .agent-pill-shell.selected .shell-pixel-prompt { fill: #58a6ff; }
+  .agent-pill-shell.selected .shell-pixel-text   { fill: #38ef7d; }
 </style>
 {% endblock %}
 
@@ -106,15 +132,24 @@
         </label>
         <div class="pf-v6-c-form__group-control">
           {% set _selected_tool = form.agent_tool if form and form.agent_tool else default_agent_tool %}
-          {% for tool in agent_tools %}
-          <label style="display:inline-flex;align-items:center;gap:var(--pf-t--global--spacer--xs);margin-right:var(--pf-t--global--spacer--sm);cursor:pointer;">
-            <input type="radio" name="agent_tool" value="{{ tool.name }}"
-                   id="agent-tool-{{ tool.name }}"
-                   {% if tool.name == _selected_tool %}checked{% endif %}
-                   onchange="handleAgentToolChange(this.value)">
-            <span class="pf-v6-c-badge pf-m-read" style="font-size:0.85rem;">{{ tool.display_name }}</span>
-          </label>
-          {% endfor %}
+          <div style="display:flex; gap:var(--pf-t--global--spacer--sm); align-items:center; flex-wrap:wrap;">
+            {% for tool in agent_tools %}
+            <button type="button"
+                    class="agent-pill agent-pill-{{ 'oc' if tool.name == 'opencode' else tool.name }} {% if tool.name == _selected_tool %}selected{% endif %}"
+                    id="agent-tool-pill-{{ tool.name }}"
+                    data-tool="{{ tool.name }}"
+                    onclick="selectNewAgentTool('{{ tool.name }}')">
+              {% if tool.name == 'opencode' %}
+              <svg width="78" height="14" viewBox="0 0 234 42" fill="none" xmlns="http://www.w3.org/2000/svg" style="display:block;"><path d="M18 30H6V18H18V30Z" fill="#4B4646"/><path d="M18 12H6V30H18V12ZM24 36H0V6H24V36Z" fill="#B7B1B1"/><path d="M48 30H36V18H48V30Z" fill="#4B4646"/><path d="M36 30H48V12H36V30ZM54 36H36V42H30V6H54V36Z" fill="#B7B1B1"/><path d="M84 24V30H66V24H84Z" fill="#4B4646"/><path d="M84 24H66V30H84V36H60V6H84V24ZM66 18H78V12H66V18Z" fill="#B7B1B1"/><path d="M108 36H96V18H108V36Z" fill="#4B4646"/><path d="M108 12H96V36H90V6H108V12ZM114 36H108V12H114V36Z" fill="#B7B1B1"/><path d="M144 30H126V18H144V30Z" fill="#4B4646"/><path d="M144 12H126V30H144V36H120V6H144V12Z" fill="#F1ECEC"/><path d="M168 30H156V18H168V30Z" fill="#4B4646"/><path d="M168 12H156V30H168V12ZM174 36H150V6H174V36Z" fill="#F1ECEC"/><path d="M198 30H186V18H198V30Z" fill="#4B4646"/><path d="M198 12H186V30H198V12ZM204 36H180V6H198V0H204V36Z" fill="#F1ECEC"/><path d="M234 24V30H216V24H234Z" fill="#4B4646"/><path d="M216 12V18H228V12H216ZM234 24H216V30H234V36H210V6H234V24Z" fill="#F1ECEC"/></svg>
+              {% elif tool.name == 'shell' %}
+              <svg width="66" height="14" viewBox="0 0 198 42" fill="none" xmlns="http://www.w3.org/2000/svg" style="display:block;"><path d="M42 6H24V30H42V6ZM78 18H60V12H78V18ZM72 30H54V24H72V30ZM102 18H90V6H102V18ZM102 36H90V24H102V36ZM138 30H120V24H138V30ZM138 18H120V12H138V18ZM168 30H150V6H168V30ZM198 30H180V6H198V30Z" fill="#1b3320" class="shell-pixel-shadow"/><path d="M6 6H0V12H6V18H12V24H6V30H0V36H6V30H12V24H18V18H12V12H6V6ZM42 30H24V36H42V30Z" fill="#58a6ff" class="shell-pixel-prompt"/><path d="M78 6H54V24H72V30H54V36H78V18H60V12H78V6ZM90 6H84V36H90V24H102V36H108V6H102V18H90V6ZM138 6H114V36H138V30H120V24H132V18H120V12H138V6ZM150 6H144V36H168V30H150V6ZM180 6H174V36H198V30H180V6Z" fill="#38ef7d" class="shell-pixel-text"/></svg>
+              {% else %}
+              {{ tool.display_name }}
+              {% endif %}
+            </button>
+            {% endfor %}
+            <input type="hidden" name="agent_tool" id="agent-tool" value="{{ _selected_tool }}">
+          </div>
           <div class="pf-v6-c-form__helper-text" style="margin-top:var(--pf-t--global--spacer--xs);">
             <div class="pf-v6-c-helper-text__item">
               <span class="pf-v6-c-helper-text__item-text" id="agent-tool-hint">
@@ -137,7 +172,15 @@
         {% include "sessions/_provider_select.html" with context %}
       </div>
       <script>
-        function handleAgentToolChange(tool) {
+        function selectNewAgentTool(tool) {
+          document.querySelectorAll('.agent-pill').forEach(function(p) {
+            p.classList.remove('selected');
+          });
+          var btn = document.getElementById('agent-tool-pill-' + tool);
+          if (btn) btn.classList.add('selected');
+          var hiddenInput = document.getElementById('agent-tool');
+          if (hiddenInput) hiddenInput.value = tool;
+
           var hint = document.getElementById('agent-tool-hint');
           var providerContainer = document.getElementById('provider-select-container');
           if (tool === 'shell') {

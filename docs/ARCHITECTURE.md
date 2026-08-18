@@ -382,7 +382,7 @@ The session detail page (`sessions/detail.html`) uses a two-column grid inside t
 
 Launch pills are ordered TUI → CHAT → PROMPT (most-used first). TUI and CHAT use green fill (`.launch-pill-green`); PROMPT uses a dark charcoal fill with green border (`.launch-pill-muted`). Each pill POSTs the full config form to `/launch` with `mode` and `save_config=1` — no separate save step required.
 
-**Agent tool pill** — OpenCode is currently the only supported agent tool, shown as a static, always-selected pill rendering the official block-pixel SVG logo inline at 78×14px with a rainbow gradient border. The underlying registry/strategy pattern supports adding more tools in the future without further UI changes.
+**Agent tool pills** — Interactive branded button pills allow selecting between configured agent tools (OpenCode and Shell). The OpenCode pill renders the official block-pixel SVG logo inline at 78×14px with a signature rainbow gradient border when selected. The Shell pill renders a matching block-pixel `>_ SHeLL` SVG logo inline at 66×14px in phosphor matrix green with an emerald/cyan terminal gradient border when selected. Selecting a pill dynamically toggles the model selection and helper hint without a full page reload.
 
 **Cluster capacity indicator** — a single pill labelled `Sessions: X / Y active` with optional `· N queued` appended. Colour escalates: outline (0 active) → green (healthy) → gold (near/at capacity: `active >= max-1` for `max > 2`, `active == max` for `max ≤ 2`) → red (any queued). Rendered in both `detail.html` and `_list_rows.html`.
 
