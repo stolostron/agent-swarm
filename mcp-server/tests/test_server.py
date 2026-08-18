@@ -185,6 +185,20 @@ async def test_update_session_agent_tool():
     assert result["agent_tool"] == "shell"
 
 
+@pytest.mark.asyncio
+async def test_create_session_invalid_agent_tool():
+    server = make_server()
+    with pytest.raises(ValueError, match="Unsupported agent tool"):
+        await server._create_session(1, "invalid-session", agent_tool="invalid_tool")
+
+
+@pytest.mark.asyncio
+async def test_update_session_invalid_agent_tool():
+    server = make_server()
+    with pytest.raises(ValueError, match="Unsupported agent tool"):
+        await server._update_session(1, 10, agent_tool="invalid_tool")
+
+
 # ------------------------------------------------------------------
 # list_workspace_prompts flattening
 # ------------------------------------------------------------------

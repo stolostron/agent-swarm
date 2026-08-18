@@ -101,7 +101,7 @@ agent-swarm/
 
 ## Agent Tool Strategy Pattern
 
-Agent tool support uses the Strategy pattern (`agent_tools/`). Each tool (currently OpenCode) implements `AgentToolStrategy` with abstract methods covering:
+Agent tool support uses the Strategy pattern (`agent_tools/`). Each tool (OpenCode, Shell) implements `AgentToolStrategy` with abstract methods covering:
 - Image selection and container name
 - Config data generation (`build_config_data` → written to sandbox via `write_agent_config()`)
 - Mode-specific command construction (`build_main_cmd`, `build_model_setup_cmd`, `build_share_setup_cmd`)

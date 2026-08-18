@@ -357,6 +357,8 @@
                                {% if canonical_agent_tool == tool.name %}selected{% endif %}"
                         id="cfg-agent-tool-pill-{{ tool.name }}"
                         data-tool="{{ tool.name }}"
+                        aria-label="{{ tool.display_name }}"
+                        aria-pressed="{{ 'true' if canonical_agent_tool == tool.name else 'false' }}"
                         onclick="selectDetailAgentTool('{{ tool.name }}')"
                         {% if session.is_active or _tool_disabled %}disabled{% endif %}
                         {% if _tool_disabled %}title="Shell does not support server mode" style="cursor:not-allowed; opacity:0.5;"{% endif %}>
@@ -387,9 +389,13 @@
                 function selectDetailAgentTool(tool) {
                   document.querySelectorAll('#left-col .agent-pill').forEach(function(p) {
                     p.classList.remove('selected');
+                    p.setAttribute('aria-pressed', 'false');
                   });
                   var btn = document.getElementById('cfg-agent-tool-pill-' + tool);
-                  if (btn) btn.classList.add('selected');
+                  if (btn) {
+                    btn.classList.add('selected');
+                    btn.setAttribute('aria-pressed', 'true');
+                  }
                   var hiddenInput = document.getElementById('cfg_agent_tool');
                   if (hiddenInput) hiddenInput.value = tool;
 
