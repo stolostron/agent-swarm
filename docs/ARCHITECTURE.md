@@ -380,11 +380,31 @@ The session detail page (`sessions/detail.html`) uses a two-column grid inside t
 | Active (Chat) | `(Status) ∙ [■ Stop] sandbox-name [Chat ↗] · · · · · [Delete]` |
 | Active (other) | `(Status) ∙ [■ Stop] sandbox-name · · · · · · · · · · [Delete]` |
 
-Launch pills are ordered TUI → CHAT → PROMPT (most-used first). TUI and CHAT use green fill (`.launch-pill-green`); PROMPT uses a dark charcoal fill with green border (`.launch-pill-muted`). Each pill POSTs the full config form to `/launch` with `mode` and `save_config=1` — no separate save step required.
+### Pill UX Architecture
 
-**Agent tool pills** — Interactive branded button pills allow selecting between configured agent tools (OpenCode and Shell). The OpenCode pill renders the official block-pixel SVG logo inline at 78×14px with a signature rainbow gradient border when selected. The Shell pill renders a matching block-pixel `>_ SHeLL` SVG logo inline at 66×14px in phosphor matrix green with an emerald/cyan terminal gradient border when selected. Selecting a pill dynamically toggles the model selection and helper hint without a full page reload.
+Swarmer uses branded, styled interactive pills across the UI for tool selection, execution modes, logs, and status:
 
-**Cluster capacity indicator** — a single pill labelled `Sessions: X / Y active` with optional `· N queued` appended. Colour escalates: outline (0 active) → green (healthy) → gold (near/at capacity: `active >= max-1` for `max > 2`, `active == max` for `max ≤ 2`) → red (any queued). Rendered in both `detail.html` and `_list_rows.html`.
+- **Agent Tool Pills** (`.agent-pill`, `.agent-pill-oc`, `.agent-pill-shell`):
+  - Branded button pills used on both the New Session form (`new.html`) and the Configuration card (`detail.html`).
+  - **OpenCode**: Official 4×5 block-pixel SVG wordmark (`78×14px`), dark background (`#2d2d2d`) when inactive, and a 6-stop rainbow gradient border (`linear-gradient(135deg, #e06c75, #e5c07b, #98c379, #56b6c2, #61afef, #c678dd)`) on `#1e1e1e` when selected.
+  - **Shell**: Matching 4×5 block-pixel `>_ SHeLL` SVG wordmark (`66×14px`) in phosphor matrix green (`#38ef7d`) with cyan prompt glyph (`#58a6ff`), and an emerald-to-cyan terminal gradient border (`linear-gradient(135deg, #38ef7d, #11998e, #00f2fe, #4facfe)`) on `#0d130e` when selected.
+  - **Interaction**: Clicking a pill updates the underlying hidden input (`agent_tool`), toggles AI provider selector visibility (hidden for Shell), updates helper text dynamically, and triggers auto-save (`_cfgSave()`) on the detail page. In `server` mode, the Shell pill is automatically disabled (`cursor: not-allowed`, `opacity: 0.5`).
+
+- **Launch Pills** (`.launch-pill-green`, `.launch-pill-muted`):
+  - Action bar launch buttons ordered `TERM.UI` → `CHAT` → `PROMPT` (most-used first).
+  - `TERM.UI` and `CHAT` use green fill (`.launch-pill-green`); `PROMPT` uses a dark charcoal fill with green border (`.launch-pill-muted`).
+  - Submitting any launch pill POSTs the full configuration form to `/launch` with `mode` and `save_config=1` atomically.
+
+- **Log-View Toggle Pills** (`.log-pill`):
+  - Used on the Output tab and History expandable rows to toggle between processed Output and raw console logs.
+  - Selected state applies the signature rainbow gradient border on `#1e1e1e`.
+
+- **Cluster Capacity Indicator Pill**:
+  - A status pill labelled `Sessions: X / Y active` with optional `· N queued` appended.
+  - Color escalates dynamically: outline (0 active) → green (healthy) → gold (near/at capacity: `active >= max-1` for `max > 2`, `active == max` for `max ≤ 2`) → red (any queued). Rendered in both `detail.html` and `_list_rows.html`.
+
+- **History Source Pills**:
+  - Denormalized source pills in Run History rows: purple schedule pills for cron runs (`[📅 schedule-name · prompt-name]`), green `[TERM.UI]` / `[CHAT]` pills for interactive runs, and prompt name pills for manual prompt runs.
 
 ## Adding New Features
 
