@@ -226,6 +226,54 @@ class APIClient:
     async def delete_workspace(self, ws_id: int) -> dict:
         return await self._delete(f"/api/v1/workspaces/{ws_id}")
 
+    # ---------- Members (ACM-41659) — database-backed workspace ACL ----------
+
+    async def list_workspace_members(self, ws_id: int) -> list[dict]:
+        return await self._get(f"/api/v1/workspaces/{ws_id}/members")
+
+    async def add_workspace_member(
+        self, ws_id: int, user_id: str, role: str = "member"
+    ) -> dict:
+        return await self._post(
+            f"/api/v1/workspaces/{ws_id}/members",
+            json={"user_id": user_id, "role": role},
+        )
+
+    async def remove_workspace_member(self, ws_id: int, user_id: str) -> dict:
+        from urllib.parse import quote
+
+        return await self._delete(
+            f"/api/v1/workspaces/{ws_id}/members/{quote(user_id, safe='')}"
+        )
+
+    # ==================================================================
+    # Me / Global Admins (ACM-41659)
+    # ==================================================================
+
+    async def get_me(self) -> dict:
+        return await self._get("/api/v1/me")
+
+    async def list_admins(self) -> list[dict]:
+        return await self._get("/api/v1/admins")
+
+    async def add_admin(self, user_id: str) -> dict:
+        return await self._post("/api/v1/admins", json={"user_id": user_id})
+
+    async def remove_admin(self, user_id: str) -> dict:
+        from urllib.parse import quote
+
+        return await self._delete(f"/api/v1/admins/{quote(user_id, safe='')}")
+
+    async def bootstrap_admin(self) -> dict:
+        return await self._post("/api/v1/admins/bootstrap")
+
+    async def list_known_users(self) -> list[str]:
+        """Autocomplete suggestions for Add Member / Add Admin forms —
+        visibility-scoped (see workspace_acl.list_known_users()), never a
+        global user directory."""
+        result = await self._get("/api/v1/users")
+        return list(result.get("users", []))
+
     # ==================================================================
     # Sessions
     # ==================================================================

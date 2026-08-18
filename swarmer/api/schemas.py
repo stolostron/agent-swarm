@@ -27,10 +27,60 @@ class WorkspaceOut(BaseModel):
     display_name: str
     namespace: str
     description: str
+    owner_id: str = ""
     created_at: datetime
     updated_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+# ============================================================
+# Workspace Members (ACM-41659) — database-backed workspace ACL
+# ============================================================
+
+
+class WorkspaceMemberCreate(BaseModel):
+    user_id: str = Field(..., min_length=1, max_length=255)
+    role: str = "member"
+
+
+class WorkspaceMemberOut(BaseModel):
+    id: int
+    workspace_id: int
+    user_id: str
+    role: str
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+# ============================================================
+# Global Admins (ACM-41659) — simple self-service admin flow
+# ============================================================
+
+
+class GlobalAdminCreate(BaseModel):
+    user_id: str = Field(..., min_length=1, max_length=255)
+
+
+class GlobalAdminOut(BaseModel):
+    id: int
+    user_id: str
+    created_by: str
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class MeOut(BaseModel):
+    username: str
+    is_admin: bool
+    can_create_workspace: bool
+    admin_bootstrap_available: bool
+
+
+class KnownUsersOut(BaseModel):
+    users: list[str]
 
 
 # ============================================================

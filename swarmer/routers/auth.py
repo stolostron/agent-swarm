@@ -70,6 +70,7 @@ async def _validate_and_login(request: Request, token: str):
     request.session["authenticated"] = True
     request.session["k8s_token"] = encrypt(token)
     request.session["username"] = identity.username
+    request.session["groups"] = identity.groups
     return identity
 
 

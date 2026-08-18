@@ -325,6 +325,9 @@ cp .env.example .env
 | `AGENT_IMAGE_PULL_SECRET` | _(empty)_ | Pull secret name in the workspace namespace |
 | `AGENT_IMAGE_PULL_POLICY` | `IfNotPresent` | Image pull policy for session pods |
 | `K8S_NAMESPACE` | _(empty)_ | Force all workspaces into a single K8s namespace (namespace-scoped mode) |
+| `WORKSPACE_ADMIN_USERS` | _(empty)_ | Comma-separated K8s/OIDC usernames that can see and manage every workspace |
+| `WORKSPACE_ADMIN_GROUPS` | _(empty)_ | Comma-separated K8s/OIDC groups with the same effect as `WORKSPACE_ADMIN_USERS` |
+| `WORKSPACE_CREATE_POLICY` | `all` | `all` — any authenticated user can create a workspace; `admins` — only workspace admins can |
 | `MAX_CONCURRENT_AGENTS` | `5` | Global cap on concurrent agent pods; `0` disables the limit |
 | `SESSION_RUN_HISTORY_LIMIT` | `100` | Completed prompt-mode runs kept per session in history (with logs); oldest pruned when exceeded; `0` = unlimited |
 | `SESSION_RUN_HISTORY_MAX_AGE_DAYS` | `7` | Max age (days) of completed runs kept per session; applied together with `SESSION_RUN_HISTORY_LIMIT` (whichever prunes more wins); `0` = disabled |
@@ -402,7 +405,9 @@ PVCs must be group-0 writable for the non-root UID 1001 user in the swarmer cont
 
 ### Access Control
 
-Authentication uses Kubernetes ServiceAccount bearer tokens — not passwords.
+Authentication uses Kubernetes ServiceAccount bearer tokens — not passwords. **Authorization**
+(which workspaces a user can see) is a database-backed ACL (ACM-41659), not Kubernetes RBAC —
+a workspace no longer requires a dedicated K8s namespace or RoleBinding to grant access.
 
 #### Issuing login tokens
 
@@ -413,64 +418,87 @@ make user-token SA_USER=alice
 make user-token SA_USER=alice TOKEN_DURATION=24h   # default: 8h
 ```
 
-Share the printed token with the user — it expires after `TOKEN_DURATION`.
+Share the printed token with the user — it expires after `TOKEN_DURATION`. OpenShift OAuth / OIDC
+users skip this step and authenticate via the OAuth flow instead (see below).
 
 #### Granting workspace access
 
-Binds a user to a specific workspace namespace so they can see and manage sessions in it:
+Self-service, no `kubectl` required: open the workspace in the UI, go to the **Members** tab,
+and add the user's exact K8s username — `system:serviceaccount:<ns>:<name>` for a ServiceAccount
+token, or their OpenShift OAuth/OIDC username for OAuth logins. The field suggests candidates from
+`GET /api/v1/users`, which merges three sources: people you already share a workspace with (global
+admins see every known username), every OpenShift `User` object, and every ServiceAccount
+`make user-token SA_USER=<name>` would create/use — but it always remains free-text so you can
+invite someone who hasn't logged in yet. Suggestions are rendered as both clickable pills and a
+native `<datalist>` on the input. Only the workspace owner or a configured admin can add or remove
+members. Equivalent via the API:
 
 ```sh
-make grant-workspace-access SA_USER=alice WORKSPACE_NS=my-project
+curl -sX POST "$SWARMER_URL/api/v1/workspaces/<id>/members" \
+  -H "Authorization: Bearer <owner-or-admin-token>" \
+  -H "Content-Type: application/json" \
+  -d '{"user_id": "alice"}'
 ```
 
-Run this once per user per namespace. A user with no workspace grants can log in but will see no workspaces.
-
-**OpenShift OAuth / OIDC users** (e.g. logging in via a GitHub identity provider) are a
-different Kubernetes RBAC principal (`User`) than a ServiceAccount (`system:serviceaccount:...`).
-A `SA_USER=` grant does **not** apply to them. Use `OIDC_USER=` instead, with the *effective*
-RBAC username — on OpenShift, list it with `kubectl get users`; on vanilla Kubernetes with an
-OIDC authenticator, use the username your cluster's `--oidc-username-claim` /
-`--oidc-username-prefix` flags (or structured `AuthenticationConfiguration`) produce. Do not
-assume this is the raw `sub` claim from the token — the API server may remap or prefix it
-(commonly `<issuer-url>#<sub>` unless a prefix is explicitly configured), so relying on the
-unprocessed claim value can silently grant the wrong identity or fail to match anyone:
-
-```sh
-make grant-workspace-access OIDC_USER=<name> WORKSPACE_NS=my-project
-```
-
-`SA_USER` and `OIDC_USER` are mutually exclusive — specify exactly one.
+A user with no workspace grants (not an owner, member, or admin of any workspace) can log in but
+will see no workspaces.
 
 #### Allowing a user to create new workspaces
 
-Grants cluster-scoped `create namespaces` permission so the user sees the **Create Workspace** button.
-Users can only see workspaces they have been explicitly granted access to — this does not expose other users' workspaces:
+By default (`WORKSPACE_CREATE_POLICY=all`), any authenticated user can create a workspace and
+becomes its owner. To restrict creation to admins, set `WORKSPACE_CREATE_POLICY=admins` and list
+admins via `WORKSPACE_ADMIN_USERS` (comma-separated K8s usernames) and/or `WORKSPACE_ADMIN_GROUPS`
+(comma-separated groups) in the deployment environment. Workspace admins can see and manage every
+workspace, not just ones they own or are a member of.
 
-```sh
-make grant-workspace-create SA_USER=<name>
-make grant-workspace-create OIDC_USER=<name>   # for OpenShift OAuth / OIDC users
-```
+#### Global Admins — simple setup
+
+Two ways to grant admin rights, and you can mix both:
+
+- **Self-service:** the first user to log in sees a **"Become the first Admin"** button on the
+  Workspaces page (or `/admins`) — one click, works only while zero admins exist. Once bootstrapped,
+  admins add/remove other admins from `/admins` (or `POST`/`DELETE /api/v1/admins`).
+- **Declarative:** `WORKSPACE_ADMIN_USERS` / `WORKSPACE_ADMIN_GROUPS` env vars (see above) — always
+  take effect, no bootstrap step needed, ideal for GitOps-managed deployments.
+
+`GET /api/v1/me` returns `{username, is_admin, can_create_workspace, admin_bootstrap_available}` —
+the Console uses it to render admin-gated UI without duplicating ACL logic.
+
+#### Upgrading from an older Swarmer version
+
+Nobody needs to be manually re-added to a workspace they already had access to. On first startup
+after upgrading, Swarmer automatically:
+
+1. Backfills `workspace_members` and each workspace's `owner_id` from existing per-user records
+   already in the database (AI provider credentials, GitHub PATs, MCP servers, GitHub Apps) —
+   plain SQL, runs as part of `migrate_db()`.
+2. Mirrors any legacy `make grant-workspace-access` K8s RoleBinding grants (bound to the
+   `swarmer-user` ClusterRole) into the same table. Best-effort: skipped per-workspace on any K8s
+   error, and never blocks startup.
+3. For shared-namespace deployments (`K8S_NAMESPACE` set), every authenticated user keeps access
+   to every workspace — unchanged from before, since that deployment flavor already has a single
+   shared trust boundary.
+
+A workspace left with no recoverable owner (no prior secrets/PATs and no RoleBinding grants) stays
+open to any authenticated user — the first person to rename it, delete it, or add/remove a member
+claims ownership automatically. Nothing is ever orphaned or locked out.
 
 #### Typical onboarding flow
 
 ```sh
-make user-token SA_USER=alice                                  # 1. create user + print token
-make grant-workspace-access SA_USER=alice WORKSPACE_NS=team-a  # 2. give access to a workspace
-make grant-workspace-access SA_USER=alice WORKSPACE_NS=team-b  # 3. repeat for additional workspaces
-# Optionally allow the user to create their own workspaces:
-make grant-workspace-create SA_USER=alice                      # 4. allow self-service workspace creation
+make user-token SA_USER=alice   # 1. create user + print token, share with alice
+# 2. alice logs in and either creates her own workspace, or an existing
+#    workspace owner adds her via the Members tab / API above.
 ```
 
-For OpenShift OAuth / OIDC users, substitute `OIDC_USER=<name>` for `SA_USER=<name>` in
-steps 2–4 above and skip `make user-token` (OIDC users authenticate via the OAuth flow,
-not a ServiceAccount token).
+> Deprecated: `make grant-workspace-access` / `make grant-workspace-create` (Kubernetes namespace
+> RoleBindings) are kept only for existing automation — Swarmer no longer consults K8s RBAC for
+> workspace authorization. Use the Members tab / `WORKSPACE_ADMIN_USERS` / `WORKSPACE_ADMIN_GROUPS`
+> / `WORKSPACE_CREATE_POLICY` above instead.
 
 #### OpenShift OAuth
 
-When `OPENSHIFT_OAUTH_URL` is set, a "Sign in with OpenShift" button appears on the login page. Users authenticate via the OpenShift OAuth implicit grant flow — no token pasting required. The callback captures the token from the URL fragment client-side via `/auth/callback`.
-
-Grants made with `SA_USER=` (Kubernetes ServiceAccount) do not apply to these users — use
-`OIDC_USER=` for `grant-workspace-access` and `grant-workspace-create` instead (see above).
+When `OPENSHIFT_OAUTH_URL` is set, a "Sign in with OpenShift" button appears on the login page. Users authenticate via the OpenShift OAuth implicit grant flow — no token pasting required. The callback captures the token from the URL fragment client-side via `/auth/callback`. Grant workspace access to these users the same way as any other user — via the Members tab / API (their username is their OpenShift OAuth/OIDC identity).
 
 ---
 
@@ -478,13 +506,18 @@ Grants made with `SA_USER=` (Kubernetes ServiceAccount) do not apply to these us
 
 ### Workspaces
 
-Each workspace maps 1:1 to a Kubernetes namespace. When `K8S_NAMESPACE` is set (namespace-scoped deployment), all workspaces share that single K8s namespace.
+A workspace is a logical grouping for sessions and secrets, backed by the database (ACM-41659) —
+it no longer maps to a dedicated Kubernetes namespace. Access is controlled by the workspace's
+owner, its `workspace_members`, and any configured workspace admins (see Access Control above).
+`K8S_NAMESPACE` (namespace-scoped deployment) additionally forces all workspaces to share one K8s
+namespace for the handful of legacy per-workspace K8s Secret features (pull secrets) that still
+use one.
 
-- **Create** — creates a new workspace in the database and a corresponding K8s namespace + agent config ConfigMap
-- **Rename** — updates the display name (does not rename the K8s namespace)
-- **Delete** — removes the workspace from the database
+- **Create** — creates a new workspace in the database; the creator becomes its owner. No K8s namespace is created.
+- **Rename** — updates the display name
+- **Delete** — removes the workspace from the database (and best-effort cleans up its K8s namespace, if a pull secret ever created one)
 
-All resources (sessions, secrets, repos, MCP servers) are scoped to a workspace. Users only see workspaces whose K8s namespaces they have RBAC access to (checked via `get_accessible_namespaces()` using SelfSubjectAccessReview for pods `list` in the namespace, matching namespace-scoped `swarmer-user` RoleBindings).
+All resources (sessions, secrets, repos, MCP servers) are scoped to a workspace. Users only see workspaces they own, are an explicit member of, or — for workspace admins — every workspace (see Access Control above).
 
 ### Secrets & Credentials
 
@@ -770,8 +803,8 @@ All targets can be listed with `make help`. Run `make lint` to check code style 
 | Target | Description | Key Variables |
 |---|---|---|
 | `user-token` | Issue a K8s login token for a user | `SA_USER`, `TOKEN_DURATION` (default `8h`) |
-| `grant-workspace-access` | Grant a user access to a specific workspace namespace | `SA_USER` or `OIDC_USER`, `WORKSPACE_NS` |
-| `grant-workspace-create` | Allow a user to create new workspaces | `SA_USER` or `OIDC_USER` |
+| `grant-workspace-access` | **[Deprecated]** K8s namespace RoleBinding — no longer read by Swarmer (ACM-41659); use the Members tab / API instead | `SA_USER` or `OIDC_USER`, `WORKSPACE_NS` |
+| `grant-workspace-create` | **[Deprecated]** K8s ClusterRoleBinding — no longer read by Swarmer (ACM-41659); use `WORKSPACE_CREATE_POLICY` instead | `SA_USER` or `OIDC_USER` |
 | `grant-workspace` | Deprecated alias for `grant-workspace-access` | `SA_USER` or `OIDC_USER`, `WORKSPACE_NS` |
 
 #### Key overridable variables

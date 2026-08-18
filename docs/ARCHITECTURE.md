@@ -31,7 +31,8 @@ agent-swarm/
     ├── config.py               # pydantic-settings Settings singleton
     ├── database.py             # SQLAlchemy async engine + session factory + migrations
     ├── crypto.py               # Fernet encrypt/decrypt from secret key file or env var
-    ├── k8s_auth.py             # K8s TokenReview validation, namespace access check, RBAC probing
+    ├── k8s_auth.py             # K8s TokenReview validation — identity (username/groups) only
+    ├── workspace_acl.py        # Database-backed workspace ACL (owner/member/admin) — ACM-41659
     ├── deps.py                 # FastAPI dependencies (require_auth, get_user_token)
     ├── k8s.py                  # Kubernetes utility functions (namespace, pull secrets, image check, extra env vars)
     ├── mcp_catalog.py          # Registry of well-known MCP servers (Jira, etc.) with OAuth defaults
@@ -47,7 +48,9 @@ agent-swarm/
     │   └── opencode.py         # OpenCode strategy (Vertex AI Anthropic/Gemini models)
     ├── models/                 # SQLAlchemy ORM models
     │   ├── __init__.py         # Imports all models (required for Base.metadata)
-    │   ├── workspace.py        # Workspace → K8s namespace (or shared via settings.k8s_namespace)
+    │   ├── workspace.py        # Workspace (owner_id + derived namespace slug for legacy K8s secrets)
+    │   ├── workspace_member.py # Explicit per-user workspace access grants (ACM-41659)
+    │   ├── global_admin.py     # Self-service global admins (ACM-41659)
     │   ├── session.py          # Session (sandbox lifecycle, modes: tui/server/prompt, cron scheduling)
     │   ├── session_repo.py     # Git repos attached to sessions (cloned into sandbox at launch)
     │   ├── sandbox_env_var.py  # Per-workspace env vars (encrypted at rest, injected into sandboxes)
@@ -82,7 +85,7 @@ agent-swarm/
 
 ## Domain Model
 
-- **Workspace** maps to a Kubernetes namespace for scoping purposes. All resources (sessions, secrets) are scoped to a workspace. When `settings.k8s_namespace` is set (namespace-scoped deployment), all workspaces share a single K8s namespace via `Workspace.k8s_namespace` property.
+- **Workspace** is a logical grouping for sessions/secrets, backed purely by the database (ACM-41659) — access is a database ACL (`Workspace.owner_id` + `workspace_members` rows + configured admin allow-list, see `workspace_acl.py`), not a per-workspace Kubernetes namespace. `Workspace.namespace` is still a derived slug used to name a handful of legacy per-workspace K8s Secrets (pull secrets) that are lazily created on first use via `Workspace.k8s_namespace` (or a single shared namespace when `settings.k8s_namespace` is set).
 - **Session** = an agent run inside an OpenShell sandbox. Three modes:
   - `prompt` — one-shot: runs the agent with a prompt, sandbox exits on completion, sandbox auto-deleted on success
   - `server` — persistent: runs the agent in server mode, exposes a service via OpenShell `expose_service()`, dashboard proxies HTTP/WS/SSE to it
@@ -113,7 +116,9 @@ Token-based auth via Kubernetes bearer tokens (not password-based):
 - Users paste a K8s ServiceAccount token into the login form
 - Token validated via TokenReview API (`k8s_auth.py`); falls back to namespace probe if RBAC for tokenreviews is missing
 - Validated token is Fernet-encrypted and stored in the session cookie (`deps.py:get_user_token()`)
-- Workspace access controlled by K8s RBAC: `get_accessible_namespaces()` checks pods `list` in each workspace namespace (via namespace-scoped `swarmer-user` RoleBinding), or cluster-scoped `namespaces` `get` for admin bindings
+- Workspace access is a database ACL (ACM-41659, `workspace_acl.py`), not K8s RBAC: a user may access a workspace as its owner (`Workspace.owner_id`), an explicit `WorkspaceMember` row, a global admin (`WORKSPACE_ADMIN_USERS` / `WORKSPACE_ADMIN_GROUPS` env vars, or the self-service `global_admins` DB table / `/admins` UI), or — while a workspace has no owner yet — any authenticated user ("claim on write": the first management action claims ownership). Shared-namespace deployments (`K8S_NAMESPACE` set) grant every authenticated user access to every workspace. `k8s_auth.py` only authenticates identity (username + groups); it performs no SelfSubjectAccessReview calls.
+- `workspace_acl.list_known_users()` / `GET /api/v1/users` back the Add Member / Add Admin autocomplete (both forms use the same discovery — exclusions differ by call site). Merges three sources: DB-known users (visibility-scoped — people who already share a workspace with the caller; admins see everyone, never a global directory for non-admins), `k8s.list_openshift_users()` (OpenShift `User` objects, cluster-scoped, `[]` off-OpenShift), and `k8s.list_user_service_accounts()` (ServiceAccounts `make user-token SA_USER=<name>` would create, formatted as `system:serviceaccount:<ns>:<name>`). Both K8s helpers are best-effort and never raise. Free-text entry on those forms is always still allowed; suggestions never restrict who can actually be granted access.
+- Startup migration (`workspace_migration.py` + SQL in `database.py:migrate_db()`) backfills `workspace_members`/`owner_id` from existing per-user credential rows and legacy `swarmer-user` K8s RoleBindings, so upgrading never requires re-adding users.
 - Optional OpenShift OAuth: implicit grant flow via `/auth/callback` (captures token from URL fragment client-side)
 - `swarmer/auth.py` is superseded — just contains a comment pointing to `k8s_auth.py`
 
@@ -144,10 +149,9 @@ All sensitive fields that are actually persisted in the DB (PATs, GitHub App pri
 Swarmer uses the official `kubernetes` Python client for a limited set of infrastructure operations. All agent session lifecycle is handled by OpenShell — Swarmer does not create pods, PVCs, Services, or Routes for sessions.
 
 **Active K8s usage:**
-- `k8s_auth.py` — TokenReview for user authentication; namespace access validation
+- `k8s_auth.py` — TokenReview for user authentication (identity only — no RBAC/authorization checks; see Auth Flow above)
 - `k8s.init_k8s()` — loads in-cluster or kubeconfig at startup
-- `k8s.ensure_namespace()` / `delete_namespace()` — workspace namespace lifecycle
-- `k8s.effective_namespace()` — resolves the effective K8s namespace for a workspace
+- `k8s.ensure_namespace()` / `delete_namespace()` — **no longer called at workspace create/delete time** (ACM-41659). A workspace's K8s namespace (`k8s.effective_namespace()`) is now created lazily, only the first time a legacy per-workspace K8s Secret feature (pull secrets) is actually used, and best-effort deleted when the workspace is deleted.
 - Pull secret management (`apply_pull_secret`, `get_pull_secret_info`, `delete_pull_secret`) — required for `check_image_reachable`
 - `get_extra_env_vars()` / `set_extra_env_var()` / `delete_extra_env_var()` — workspace env var storage via K8s Secret `swarmer-agent-extra-env` (**ACM-35039**: migrating to SQLite)
 

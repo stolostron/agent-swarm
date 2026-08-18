@@ -2,11 +2,16 @@
 {% block title %}Workspaces — Swarmer{% endblock %}
 
 {% block content %}
-{% if can_create_workspaces %}
-<div style="display:flex; justify-content:flex-end; margin-bottom:var(--pf-t--global--spacer--md);">
+<div style="display:flex; justify-content:flex-end; align-items:center; gap:var(--pf-t--global--spacer--sm); margin-bottom:var(--pf-t--global--spacer--md);">
+  {% if admin_bootstrap_available %}
+  <a href="/admins" class="pf-v6-c-button pf-m-warning pf-m-small">⚠ Set up the first Admin</a>
+  {% elif is_admin %}
+  <a href="/admins" class="pf-v6-c-button pf-m-secondary pf-m-small">👑 Admins</a>
+  {% endif %}
+  {% if can_create_workspaces %}
   <a href="/workspaces/new" class="pf-v6-c-button pf-m-primary pf-m-small">+ New Workspace</a>
+  {% endif %}
 </div>
-{% endif %}
 
 {% if workspaces %}
 <table class="pf-v6-c-table pf-m-grid-md" role="grid">

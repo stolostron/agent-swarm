@@ -2,6 +2,8 @@
 
 API authentication uses the Authorization header with a K8s bearer token,
 validated via the same TokenReview mechanism as the Console login flow.
+Workspace-level authorization is a database-backed ACL (ACM-41659) — see
+``swarmer.workspace_acl`` — rather than per-workspace K8s namespace RBAC.
 """
 
 from __future__ import annotations
@@ -10,9 +12,10 @@ from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from swarmer import workspace_acl
 from swarmer.config import settings
 from swarmer.database import get_db
-from swarmer.k8s_auth import TokenIdentity, get_accessible_namespaces, validate_token
+from swarmer.k8s_auth import TokenIdentity, validate_token
 from swarmer.models.workspace import Workspace
 
 _bearer_scheme = HTTPBearer()
@@ -51,50 +54,37 @@ async def get_current_user(
     return identity.username
 
 
-async def user_can_access_workspace(token: str, ws: Workspace) -> bool:
-    """Return True when *token* has RBAC access to the workspace namespace."""
-    accessible = await get_accessible_namespaces(
-        token,
-        [ws.k8s_namespace],
-        settings.k8s_api_url,
-        settings.k8s_in_cluster,
+async def user_can_access_workspace(
+    db: AsyncSession, ws: Workspace, identity: TokenIdentity
+) -> bool:
+    """Return True when *identity* has ACL access to the workspace."""
+    return await workspace_acl.user_can_access_workspace(
+        db, ws, identity.username, identity.groups
     )
-    return ws.k8s_namespace in accessible
 
 
 async def filter_accessible_workspaces(
-    token: str, workspaces: list[Workspace]
+    db: AsyncSession, workspaces: list[Workspace], identity: TokenIdentity
 ) -> list[Workspace]:
-    """Return workspaces whose K8s namespaces *token* can access via RBAC."""
-    if not workspaces:
-        return []
-    ns_map: dict[str, list[Workspace]] = {}
-    for ws in workspaces:
-        ns_map.setdefault(ws.k8s_namespace, []).append(ws)
-    accessible = set(
-        await get_accessible_namespaces(
-            token,
-            list(ns_map),
-            settings.k8s_api_url,
-            settings.k8s_in_cluster,
-        )
+    """Return workspaces *identity* can access per the workspace ACL."""
+    return await workspace_acl.filter_accessible_workspaces(
+        db, workspaces, identity.username, identity.groups
     )
-    return [ws for ws in workspaces if ws.k8s_namespace in accessible]
 
 
 async def get_workspace_or_404(
     ws_id: int,
     db: AsyncSession = Depends(get_db),
-    token: str = Depends(get_bearer_token),
+    identity: TokenIdentity = Depends(require_api_auth),
 ) -> Workspace:
-    """Fetch a workspace by ID when the caller has namespace access, else 404."""
+    """Fetch a workspace by ID when the caller has ACL access, else 404."""
     ws = await db.get(Workspace, ws_id)
     if ws is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Workspace {ws_id} not found",
         )
-    if not await user_can_access_workspace(token, ws):
+    if not await user_can_access_workspace(db, ws, identity):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Workspace {ws_id} not found",

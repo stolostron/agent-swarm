@@ -109,7 +109,7 @@ Use placeholder patterns instead: `<YOUR_PROJECT>`, `example.com`, `your-registr
 - Template directories: plural noun matching the resource
 - HTMX partial templates: prefixed with `_` (e.g., `_status_badge.html`, `_repo_list.html`, `_list_rows.html`)
 - OpenShell sandbox names: `swarmer-session-{session_id}-{hex}` (auto-generated at launch)
-- K8s resource names (infrastructure only): workspace namespace, `quay-pull-secret`, `swarmer-agent-extra-env` (env vars, pending ACM-35039 migration)
+- K8s resource names (infrastructure only): workspace namespace (lazily created only when a pull secret is configured — ACM-41659), `quay-pull-secret`, `swarmer-agent-extra-env` (env vars, pending ACM-35039 migration)
 - URL pattern: `/workspaces/{ws_id}/sessions/{sid}/action`
 
 ### Design Principles

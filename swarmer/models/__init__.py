@@ -10,3 +10,5 @@ from swarmer.models.mcp_server import McpServer  # noqa: F401
 from swarmer.models.workspace_prompt import WorkspacePromptSource, WorkspacePrompt  # noqa: F401
 from swarmer.models.sandbox_env_var import SandboxEnvVar  # noqa: F401
 from swarmer.models.session_schedule import SessionSchedule  # noqa: F401
+from swarmer.models.workspace_member import WorkspaceMember  # noqa: F401
+from swarmer.models.global_admin import GlobalAdmin  # noqa: F401

@@ -155,7 +155,10 @@ grant-workspace-access: export _SA_USER := $(value SA_USER)
 grant-workspace-access: export _OIDC_USER := $(value OIDC_USER)
 grant-workspace-access: export _WORKSPACE_NS := $(value WORKSPACE_NS)
 grant-workspace-access: export _NAMESPACE := $(value NAMESPACE)
-grant-workspace-access:  ## Grant a user access to a specific workspace namespace  (SA_USER=alice OR OIDC_USER=alice, WORKSPACE_NS=my-project)
+grant-workspace-access:  ## [Legacy/optional] K8s namespace RoleBinding — workspace access is now DB-backed, see README.md Access Control (SA_USER=alice OR OIDC_USER=alice, WORKSPACE_NS=my-project)
+	@echo "NOTE: Swarmer workspace access is a database ACL (ACM-41659) and no longer reads this"
+	@echo "K8s RoleBinding for authorization. Use the Members tab (or POST /api/v1/workspaces/{id}/members)"
+	@echo "to grant access instead — see README.md Access Control. Proceeding anyway..."
 	@test -n "$$_SA_USER$$_OIDC_USER" || (echo "Usage: make grant-workspace-access SA_USER=<name> WORKSPACE_NS=<ns>  (or OIDC_USER=<name> for OpenShift/OIDC users)" && exit 1)
 	@test -z "$$_SA_USER" -o -z "$$_OIDC_USER" || (echo "Error: specify only one of SA_USER or OIDC_USER, not both" && exit 1)
 	@test -n "$$_WORKSPACE_NS" || (echo "Usage: make grant-workspace-access SA_USER=<name>|OIDC_USER=<name> WORKSPACE_NS=<ns>" && exit 1)
@@ -185,7 +188,11 @@ grant-workspace-access:  ## Grant a user access to a specific workspace namespac
 grant-workspace-create: export _SA_USER := $(value SA_USER)
 grant-workspace-create: export _OIDC_USER := $(value OIDC_USER)
 grant-workspace-create: export _NAMESPACE := $(value NAMESPACE)
-grant-workspace-create:  ## Allow a user to create new workspaces  (SA_USER=alice OR OIDC_USER=alice)
+grant-workspace-create:  ## [Legacy/optional] K8s ClusterRoleBinding — set SWARMER_WORKSPACE_CREATE_POLICY instead, see README.md Access Control (SA_USER=alice OR OIDC_USER=alice)
+	@echo "NOTE: Swarmer workspace creation is now controlled by SWARMER_WORKSPACE_CREATE_POLICY"
+	@echo "(default 'all' — any authenticated user can create a workspace) and"
+	@echo "SWARMER_WORKSPACE_ADMIN_USERS/GROUPS — this K8s ClusterRoleBinding is no longer read."
+	@echo "See README.md Access Control. Proceeding anyway..."
 	@test -n "$$_SA_USER$$_OIDC_USER" || (echo "Usage: make grant-workspace-create SA_USER=<name>  (or OIDC_USER=<name> for OpenShift/OIDC users)" && exit 1)
 	@test -z "$$_SA_USER" -o -z "$$_OIDC_USER" || (echo "Error: specify only one of SA_USER or OIDC_USER, not both" && exit 1)
 	@case "$$_SA_USER$$_OIDC_USER" in \

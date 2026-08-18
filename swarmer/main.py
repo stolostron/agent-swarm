@@ -17,6 +17,7 @@ from swarmer.crypto import derive_session_secret, init_crypto
 from swarmer.database import checkpoint_db, create_tables, migrate_db, init_db
 from swarmer.deps import NotAuthenticated
 from swarmer.api.v1 import router as api_v1_router
+from swarmer.routers import admins as admins_router
 from swarmer.routers import auth as auth_router
 from swarmer.routers import chat_proxy as chat_proxy_router
 from swarmer.routers import env_vars as env_vars_router
@@ -93,6 +94,7 @@ async def lifespan(app: FastAPI):
     await create_tables()
     await migrate_db()
     k8s.init_k8s(settings.k8s_in_cluster)
+    await _sync_k8s_workspace_members()
     if settings.openshell_gateway_url:
         await _ensure_openshell_provider_profiles()
     await _restart_prompt_pollers()
@@ -102,6 +104,20 @@ async def lifespan(app: FastAPI):
     scheduler.start_scheduler()
     yield
     await scheduler.shutdown()
+
+
+async def _sync_k8s_workspace_members() -> None:
+    """Best-effort startup migration (ACM-41659): mirror legacy K8s RBAC
+    workspace grants into workspace_members. Never blocks startup."""
+    try:
+        from swarmer.database import get_db
+        from swarmer.workspace_migration import sync_k8s_workspace_members
+
+        async for db in get_db():
+            await sync_k8s_workspace_members(db)
+            break
+    except Exception:
+        log.warning("K8s workspace-member sync skipped (non-fatal)", exc_info=True)
 
 
 async def _ensure_openshell_provider_profiles() -> None:
@@ -339,6 +355,7 @@ async def not_authenticated_handler(request: Request, _exc: NotAuthenticated):
 
 # Routers
 app.include_router(auth_router.router)
+app.include_router(admins_router.router)
 app.include_router(workspaces_router.router)
 app.include_router(secrets_router.router)
 app.include_router(env_vars_router.router)

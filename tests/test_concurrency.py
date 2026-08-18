@@ -56,22 +56,7 @@ async def _setup_db(monkeypatch):
     orig_max = settings.max_concurrent_agents
     settings.k8s_namespace = ""
 
-    async def _all_accessible(token, namespaces, api_url, in_cluster):
-        return list(namespaces)
-
-    async def _can_create_namespaces(token, api_url, in_cluster):
-        return True
-
-    monkeypatch.setattr(
-        "swarmer.api.deps.get_accessible_namespaces", _all_accessible
-    )
-    monkeypatch.setattr(
-        "swarmer.api.v1.workspaces.can_create_namespaces", _can_create_namespaces
-    )
     monkeypatch.setattr("swarmer.k8s.ensure_namespace", lambda namespace: None)
-    monkeypatch.setattr(
-        "swarmer.k8s.grant_swarmer_user_access", lambda namespace, username: None
-    )
     monkeypatch.setattr("swarmer.k8s.delete_namespace", lambda namespace: None)
 
     import swarmer.models  # noqa: F401

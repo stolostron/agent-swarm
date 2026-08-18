@@ -49,25 +49,20 @@ async def _setup_db(monkeypatch):
 
     from swarmer.config import settings
     orig_ns = settings.k8s_namespace
+    orig_admin_users = settings.workspace_admin_users
+    orig_admin_groups = settings.workspace_admin_groups
+    orig_create_policy = settings.workspace_create_policy
     settings.k8s_namespace = ""
+    settings.workspace_admin_users = ""
+    settings.workspace_admin_groups = ""
+    settings.workspace_create_policy = "all"
 
-    async def _all_accessible(token, namespaces, api_url, in_cluster):
-        return list(namespaces)
-
-    async def _can_create_namespaces(token, api_url, in_cluster):
-        return True
-
-    monkeypatch.setattr(
-        "swarmer.api.deps.get_accessible_namespaces", _all_accessible
-    )
-    monkeypatch.setattr(
-        "swarmer.api.v1.workspaces.can_create_namespaces", _can_create_namespaces
-    )
     monkeypatch.setattr("swarmer.k8s.ensure_namespace", lambda namespace: None)
-    monkeypatch.setattr(
-        "swarmer.k8s.grant_swarmer_user_access", lambda namespace, username: None
-    )
     monkeypatch.setattr("swarmer.k8s.delete_namespace", lambda namespace: None)
+    # list_known_users() merges in K8s discovery — stub it out by default so
+    # tests never make real network calls.
+    monkeypatch.setattr("swarmer.k8s.list_openshift_users", lambda: [])
+    monkeypatch.setattr("swarmer.k8s.list_user_service_accounts", lambda *a, **k: [])
 
     import swarmer.models  # noqa: F401 — register models on Base.metadata
 
@@ -77,6 +72,9 @@ async def _setup_db(monkeypatch):
     async with _engine.begin() as conn:
         await conn.run_sync(Base.metadata.drop_all)
     settings.k8s_namespace = orig_ns
+    settings.workspace_admin_users = orig_admin_users
+    settings.workspace_admin_groups = orig_admin_groups
+    settings.workspace_create_policy = orig_create_policy
 
 
 def _override_get_bearer_token():
@@ -190,17 +188,27 @@ class TestWorkspaces:
 
 
 class TestWorkspaceRbac:
+    """Database-backed workspace ACL (ACM-41659) — owner/member/admin access."""
+
+    @staticmethod
+    def _override_identity(username: str):
+        from swarmer.k8s_auth import TokenIdentity
+
+        def _identity():
+            return TokenIdentity(username=username, uid="uid-other")
+
+        return _identity
+
     @pytest.mark.asyncio
-    async def test_list_workspaces_filters_by_namespace_access(self, client, monkeypatch):
+    async def test_list_workspaces_filters_by_ownership(self, client):
+        from swarmer.api.deps import require_api_auth
+        from swarmer.main import app
+
         await _create_workspace(client, "Allowed")
+
+        app.dependency_overrides[require_api_auth] = self._override_identity("other-user")
         await _create_workspace(client, "Denied")
-
-        async def _partial_access(token, namespaces, api_url, in_cluster):
-            return [ns for ns in namespaces if ns != "denied"]
-
-        monkeypatch.setattr(
-            "swarmer.api.deps.get_accessible_namespaces", _partial_access
-        )
+        app.dependency_overrides[require_api_auth] = _override_require_api_auth
 
         resp = await client.get("/api/v1/workspaces")
         assert resp.status_code == 200
@@ -208,31 +216,80 @@ class TestWorkspaceRbac:
         assert names == {"Allowed"}
 
     @pytest.mark.asyncio
-    async def test_get_workspace_denied_returns_404(self, client, monkeypatch):
+    async def test_get_workspace_denied_returns_404(self, client):
+        from swarmer.api.deps import require_api_auth
+        from swarmer.main import app
+
+        app.dependency_overrides[require_api_auth] = self._override_identity("other-user")
         ws = await _create_workspace(client, "Secret")
-
-        async def _no_access(token, namespaces, api_url, in_cluster):
-            return []
-
-        monkeypatch.setattr("swarmer.api.deps.get_accessible_namespaces", _no_access)
+        app.dependency_overrides[require_api_auth] = _override_require_api_auth
 
         resp = await client.get(f"/api/v1/workspaces/{ws['id']}")
         assert resp.status_code == 404
 
     @pytest.mark.asyncio
-    async def test_create_workspace_requires_namespace_create(self, client, monkeypatch):
-        async def _deny_create(token, api_url, in_cluster):
-            return False
+    async def test_workspace_member_can_access(self, client):
+        from swarmer.api.deps import require_api_auth
+        from swarmer.main import app
 
-        monkeypatch.setattr(
-            "swarmer.api.v1.workspaces.can_create_namespaces", _deny_create
+        app.dependency_overrides[require_api_auth] = self._override_identity("owner-user")
+        ws = await _create_workspace(client, "Shared")
+        resp = await client.post(
+            f"/api/v1/workspaces/{ws['id']}/members",
+            json={"user_id": "test-user"},
         )
+        assert resp.status_code == 201, resp.text
+        app.dependency_overrides[require_api_auth] = _override_require_api_auth
+
+        resp = await client.get(f"/api/v1/workspaces/{ws['id']}")
+        assert resp.status_code == 200
+
+    @pytest.mark.asyncio
+    async def test_non_owner_cannot_add_members(self, client):
+        from swarmer.api.deps import require_api_auth
+        from swarmer.main import app
+
+        app.dependency_overrides[require_api_auth] = self._override_identity("owner-user")
+        ws = await _create_workspace(client, "Owned")
+        app.dependency_overrides[require_api_auth] = _override_require_api_auth
 
         resp = await client.post(
-            "/api/v1/workspaces",
-            json={"display_name": "Blocked", "description": ""},
+            f"/api/v1/workspaces/{ws['id']}/members",
+            json={"user_id": "eve"},
         )
-        assert resp.status_code == 403
+        assert resp.status_code == 404  # not even visible to test-user
+
+    @pytest.mark.asyncio
+    async def test_create_workspace_requires_permission_under_admins_only_policy(
+        self, client
+    ):
+        from swarmer.config import settings
+
+        settings.workspace_create_policy = "admins"
+        try:
+            resp = await client.post(
+                "/api/v1/workspaces",
+                json={"display_name": "Blocked", "description": ""},
+            )
+            assert resp.status_code == 403
+        finally:
+            settings.workspace_create_policy = "all"
+
+    @pytest.mark.asyncio
+    async def test_workspace_admin_can_create_under_admins_only_policy(self, client):
+        from swarmer.config import settings
+
+        settings.workspace_create_policy = "admins"
+        settings.workspace_admin_users = "test-user"
+        try:
+            resp = await client.post(
+                "/api/v1/workspaces",
+                json={"display_name": "Allowed", "description": ""},
+            )
+            assert resp.status_code == 201
+        finally:
+            settings.workspace_create_policy = "all"
+            settings.workspace_admin_users = ""
 
     @pytest.mark.asyncio
     async def test_create_workspace_disabled_in_namespace_scoped_mode(self, client):
@@ -247,6 +304,277 @@ class TestWorkspaceRbac:
             assert resp.status_code == 403
         finally:
             settings.k8s_namespace = ""
+
+
+class TestWorkspaceMembers:
+    @pytest.mark.asyncio
+    async def test_add_list_remove_member_round_trip(self, client):
+        ws = await _create_workspace(client, "Team WS")
+
+        resp = await client.get(f"/api/v1/workspaces/{ws['id']}/members")
+        assert resp.status_code == 200
+        assert resp.json() == []
+
+        resp = await client.post(
+            f"/api/v1/workspaces/{ws['id']}/members",
+            json={"user_id": "alice", "role": "member"},
+        )
+        assert resp.status_code == 201, resp.text
+        assert resp.json()["user_id"] == "alice"
+
+        resp = await client.get(f"/api/v1/workspaces/{ws['id']}/members")
+        assert resp.status_code == 200
+        assert [m["user_id"] for m in resp.json()] == ["alice"]
+
+        resp = await client.delete(f"/api/v1/workspaces/{ws['id']}/members/alice")
+        assert resp.status_code == 200
+
+        resp = await client.get(f"/api/v1/workspaces/{ws['id']}/members")
+        assert resp.json() == []
+
+    @pytest.mark.asyncio
+    async def test_add_duplicate_member_conflicts(self, client):
+        ws = await _create_workspace(client, "Dup WS")
+        await client.post(
+            f"/api/v1/workspaces/{ws['id']}/members", json={"user_id": "alice"}
+        )
+        resp = await client.post(
+            f"/api/v1/workspaces/{ws['id']}/members", json={"user_id": "alice"}
+        )
+        assert resp.status_code == 409
+
+    @pytest.mark.asyncio
+    async def test_add_owner_as_member_conflicts(self, client):
+        ws = await _create_workspace(client, "Owner WS")
+        resp = await client.post(
+            f"/api/v1/workspaces/{ws['id']}/members", json={"user_id": "test-user"}
+        )
+        assert resp.status_code == 409
+
+    @pytest.mark.asyncio
+    async def test_remove_nonexistent_member_returns_404(self, client):
+        ws = await _create_workspace(client, "WS")
+        resp = await client.delete(f"/api/v1/workspaces/{ws['id']}/members/ghost")
+        assert resp.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_owner_and_admin_actions_claim_an_unowned_workspace(self, client):
+        """ACM-41659: a workspace with no owner (e.g. migrated with no
+        recoverable owner) is claimed by the first person who manages it."""
+        ws = await _create_workspace(client, "Unowned WS")
+        # Simulate a pre-ACL / unclaimed workspace by clearing owner_id directly.
+        from swarmer.models.workspace import Workspace
+
+        async with _TestSession() as session:
+            row = await session.get(Workspace, ws["id"])
+            row.owner_id = ""
+            await session.commit()
+
+        from swarmer.api.deps import require_api_auth
+        from swarmer.k8s_auth import TokenIdentity
+        from swarmer.main import app
+
+        def _other_identity():
+            return TokenIdentity(username="claimant", uid="uid-2")
+
+        app.dependency_overrides[require_api_auth] = _other_identity
+        try:
+            resp = await client.post(
+                f"/api/v1/workspaces/{ws['id']}/members", json={"user_id": "someone-else"}
+            )
+            assert resp.status_code == 201, resp.text
+
+            # The claimant is now the owner and can fetch the workspace directly.
+            resp = await client.get(f"/api/v1/workspaces/{ws['id']}")
+            assert resp.json()["owner_id"] == "claimant"
+        finally:
+            app.dependency_overrides[require_api_auth] = _override_require_api_auth
+
+
+# ===========================================================================
+# Global Admins / Me (ACM-41659)
+# ===========================================================================
+
+
+class TestMe:
+    @pytest.mark.asyncio
+    async def test_me_default_state(self, client):
+        resp = await client.get("/api/v1/me")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["username"] == "test-user"
+        assert body["is_admin"] is False
+        assert body["can_create_workspace"] is True
+        assert body["admin_bootstrap_available"] is True
+
+    @pytest.mark.asyncio
+    async def test_me_reflects_static_admin_config(self, client):
+        from swarmer.config import settings
+
+        settings.workspace_admin_users = "test-user"
+        resp = await client.get("/api/v1/me")
+        body = resp.json()
+        assert body["is_admin"] is True
+        assert body["admin_bootstrap_available"] is False
+
+    @pytest.mark.asyncio
+    async def test_me_admins_only_create_policy(self, client):
+        from swarmer.config import settings
+
+        settings.workspace_create_policy = "admins"
+        resp = await client.get("/api/v1/me")
+        assert resp.json()["can_create_workspace"] is False
+
+
+class TestKnownUsers:
+    """GET /api/v1/users — visibility-scoped autocomplete suggestions."""
+
+    @pytest.mark.asyncio
+    async def test_no_shared_workspaces_returns_empty(self, client):
+        resp = await client.get("/api/v1/users")
+        assert resp.status_code == 200
+        assert resp.json() == {"users": []}
+
+    @pytest.mark.asyncio
+    async def test_sees_members_of_own_workspace(self, client):
+        ws = await _create_workspace(client, "Shared WS")
+        await client.post(
+            f"/api/v1/workspaces/{ws['id']}/members", json={"user_id": "alice"}
+        )
+        resp = await client.get("/api/v1/users")
+        assert resp.json() == {"users": ["alice"]}
+
+    @pytest.mark.asyncio
+    async def test_does_not_see_unrelated_workspace_users(self, client):
+        from swarmer.api.deps import require_api_auth
+        from swarmer.k8s_auth import TokenIdentity
+        from swarmer.main import app
+
+        app.dependency_overrides[require_api_auth] = lambda: TokenIdentity(
+            username="other-user", uid="uid-2"
+        )
+        try:
+            ws = await _create_workspace(client, "Someone Else's WS")
+            await client.post(
+                f"/api/v1/workspaces/{ws['id']}/members", json={"user_id": "eve"}
+            )
+        finally:
+            app.dependency_overrides[require_api_auth] = _override_require_api_auth
+
+        resp = await client.get("/api/v1/users")
+        assert resp.json() == {"users": []}
+
+    @pytest.mark.asyncio
+    async def test_admin_sees_every_known_user(self, client):
+        ws = await _create_workspace(client, "Some WS")
+        await client.post(
+            f"/api/v1/workspaces/{ws['id']}/members", json={"user_id": "alice"}
+        )
+        await client.post("/api/v1/admins/bootstrap")  # test-user becomes admin
+        await client.post("/api/v1/admins", json={"user_id": "root2"})
+
+        resp = await client.get("/api/v1/users")
+        assert set(resp.json()["users"]) == {"alice", "root2"}
+
+    @pytest.mark.asyncio
+    async def test_merges_openshift_users_and_service_accounts(self, client, monkeypatch):
+        monkeypatch.setattr("swarmer.k8s.list_openshift_users", lambda: ["dave"])
+        monkeypatch.setattr(
+            "swarmer.k8s.list_user_service_accounts",
+            lambda *a, **k: ["system:serviceaccount:swarmer:ci-bot"],
+        )
+        resp = await client.get("/api/v1/users")
+        assert set(resp.json()["users"]) == {"dave", "system:serviceaccount:swarmer:ci-bot"}
+
+
+class TestAdminBootstrap:
+    @pytest.mark.asyncio
+    async def test_bootstrap_succeeds_when_no_admin_exists(self, client):
+        resp = await client.post("/api/v1/admins/bootstrap")
+        assert resp.status_code == 201, resp.text
+        assert resp.json()["user_id"] == "test-user"
+
+        resp = await client.get("/api/v1/me")
+        assert resp.json()["is_admin"] is True
+        assert resp.json()["admin_bootstrap_available"] is False
+
+    @pytest.mark.asyncio
+    async def test_bootstrap_fails_once_an_admin_exists(self, client):
+        resp = await client.post("/api/v1/admins/bootstrap")
+        assert resp.status_code == 201
+
+        from swarmer.api.deps import require_api_auth
+        from swarmer.k8s_auth import TokenIdentity
+        from swarmer.main import app
+
+        app.dependency_overrides[require_api_auth] = lambda: TokenIdentity(
+            username="second-user", uid="uid-2"
+        )
+        try:
+            resp = await client.post("/api/v1/admins/bootstrap")
+            assert resp.status_code == 409
+        finally:
+            app.dependency_overrides[require_api_auth] = _override_require_api_auth
+
+    @pytest.mark.asyncio
+    async def test_bootstrap_fails_when_static_admins_configured(self, client):
+        from swarmer.config import settings
+
+        settings.workspace_admin_users = "someone-else"
+        resp = await client.post("/api/v1/admins/bootstrap")
+        assert resp.status_code == 409
+
+
+class TestAdminCrud:
+    @pytest.mark.asyncio
+    async def test_non_admin_cannot_list_or_manage_admins(self, client):
+        resp = await client.get("/api/v1/admins")
+        assert resp.status_code == 403
+
+        resp = await client.post("/api/v1/admins", json={"user_id": "alice"})
+        assert resp.status_code == 403
+
+        resp = await client.delete("/api/v1/admins/alice")
+        assert resp.status_code == 403
+
+    @pytest.mark.asyncio
+    async def test_admin_can_add_list_remove_admin(self, client):
+        await client.post("/api/v1/admins/bootstrap")  # test-user becomes admin
+
+        resp = await client.post("/api/v1/admins", json={"user_id": "alice"})
+        assert resp.status_code == 201, resp.text
+        assert resp.json()["created_by"] == "test-user"
+
+        resp = await client.get("/api/v1/admins")
+        assert resp.status_code == 200
+        assert {a["user_id"] for a in resp.json()} == {"test-user", "alice"}
+
+        resp = await client.delete("/api/v1/admins/alice")
+        assert resp.status_code == 200
+
+        resp = await client.get("/api/v1/admins")
+        assert {a["user_id"] for a in resp.json()} == {"test-user"}
+
+    @pytest.mark.asyncio
+    async def test_add_duplicate_admin_conflicts(self, client):
+        await client.post("/api/v1/admins/bootstrap")
+        await client.post("/api/v1/admins", json={"user_id": "alice"})
+        resp = await client.post("/api/v1/admins", json={"user_id": "alice"})
+        assert resp.status_code == 409
+
+    @pytest.mark.asyncio
+    async def test_remove_nonexistent_admin_returns_404(self, client):
+        await client.post("/api/v1/admins/bootstrap")
+        resp = await client.delete("/api/v1/admins/ghost")
+        assert resp.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_static_admin_can_manage_db_admins(self, client):
+        from swarmer.config import settings
+
+        settings.workspace_admin_users = "test-user"
+        resp = await client.post("/api/v1/admins", json={"user_id": "alice"})
+        assert resp.status_code == 201
 
 
 # ===========================================================================

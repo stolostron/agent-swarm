@@ -3,6 +3,7 @@
 from fastapi import APIRouter
 
 from swarmer.api.v1 import (
+    admins,
     env_vars,
     mcp_servers,
     prompts,
@@ -14,6 +15,7 @@ from swarmer.api.v1 import (
 
 router = APIRouter(prefix="/api/v1", tags=["api-v1"])
 
+router.include_router(admins.router)
 router.include_router(workspaces.router)
 router.include_router(sessions.router)
 router.include_router(repos.router)

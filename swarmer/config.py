@@ -14,6 +14,18 @@ class Settings(BaseSettings):
     default_agent_tool: str = "opencode"
     k8s_namespace: str = ""
     max_concurrent_agents: int = 5
+
+    # Workspace access control (ACM-41659) — database-backed ACL replaces
+    # per-workspace K8s namespace + RoleBinding RBAC now that OpenShell owns
+    # sandbox lifecycle. Comma-separated K8s usernames / OIDC usernames and
+    # groups that can see and manage every workspace, regardless of
+    # ownership/membership (e.g. "alice,system:serviceaccount:swarmer:bob").
+    workspace_admin_users: str = ""
+    workspace_admin_groups: str = ""
+    # "all" — any authenticated user may create a workspace (and becomes its
+    #   owner); "admins" — only workspace_admin_users/workspace_admin_groups
+    #   may create workspaces.
+    workspace_create_policy: str = "all"
     # Completed prompt-mode runs kept per session (includes logs). 0 = unlimited.
     session_run_history_limit: int = 100
     # Max age (days) of completed prompt-mode runs kept per session. 0 = disabled.
