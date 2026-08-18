@@ -181,6 +181,8 @@ Use placeholder patterns instead: `<YOUR_PROJECT>`, `example.com`, `your-registr
 
 19. **Always include version updates with all commits**: `.push-defaults` is tracked in git. Whenever versions, image tags, or `.push-defaults` are bumped or changed, always stage and commit `.push-defaults` (and any related version configs) alongside the code changes.
 
+20. **Keep MCP Server in sync with REST API changes**: The standalone Agent Swarm MCP Server (`mcp-server/`) mirrors Swarmer's REST API under `/api/v1/` to enable AI agent orchestration. Whenever REST API endpoints, request/response schemas (`swarmer/api/schemas.py`), session options, agent tools, or parameters are added, modified, or deprecated, always evaluate and update the corresponding MCP tool definitions, client methods, schema docstrings, and test suites in `mcp-server/`.
+
 ## Personal configuration
 
 Read `~/.config/user.local.md` at the start of any task that needs an assignee, email, or project key. If the file does not exist, fall back to Claude memory (`user-config`), then placeholders.
