@@ -218,5 +218,5 @@ class TestBuildConfigDataPresets:
     def test_empty_model_falls_back_to_gemini_default(self):
         data = _opencode.build_config_data(model="")
         config = json.loads(data["opencode.json"])
-        assert config["model"] == "google/gemini-3.1-pro-preview"
+        assert config["model"] == "google/gemini-3.7-flash"
         assert config["enabled_providers"] == ["google"]
