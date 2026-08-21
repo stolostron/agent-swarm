@@ -18,6 +18,8 @@ A FastAPI + HTMX dashboard for managing AI coding agent workloads on Kubernetes.
 - **Dual output capture** — prompt-mode sessions preserve both the processed agent response (`last_output`) and the raw console log (`raw_output`); an Output / Raw Log toggle appears in the UI when they differ
 - **Agent tool support** — OpenCode (Go) coding agent, with pluggable tooling for future agents
 - **MCP server integration** — Model Context Protocol servers per workspace (e.g., Atlassian Jira)
+- **Agent Swarm MCP Server** — Standalone MCP server (`agent-swarm-mcp-server`) exposing full session, schedule, gateway, and workspace management tools for external AI agent orchestration
+- **API Token & MCP Setup** — Dedicated `/token` web dashboard view with 1-click token copying and `opencode.json` snippets, plus automated CLI configuration (`make mcp-setup` / `make api-info`)
 - **Prompt library** — workspace-level prompt library with git-backed folders and per-session picker
 - **Cron scheduling** — recurring prompt-mode sessions on a cron schedule
 - **REST API** — full `/api/v1/` REST API alongside the HTMX Console
@@ -140,7 +142,10 @@ make user-token SA_USER=alice   # 1. create user + print token, share with alice
 ## Other useful targets
 
 ```sh
-make help          # list all Makefile targets
-make lint          # run ruff linter
-make db-reset      # delete the SQLite database (fresh schema on next start)
+make help                      # list all Makefile targets
+make lint                      # run ruff linter
+make test                      # run unit tests and mcp-server test suite
+make mcp-setup TOKEN="..."     # configure local opencode.json for Agent Swarm
+make api-info                  # display Swarmer API URL, current token, and MCP config snippet
+make db-reset                  # delete the SQLite database (fresh schema on next start)
 ```

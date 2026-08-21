@@ -20,9 +20,19 @@ agent-swarm/
 ├── docs/                       # Documentation
 │   ├── USER_GUIDE.md           # Full user-facing guide
 │   └── ARCHITECTURE.md         # This file
+├── scripts/                    # Automation, smoke tests, and CLI helpers
+│   ├── mcp_setup.py            # CLI setup for opencode.json + token discovery
+│   ├── openshell_connect.py    # Multi-cluster OpenShell port-forward helper
+│   ├── openshell_smoke_test.py # Sandbox runtime e2e verification
+│   └── openshell_jira_smoke_test.py # Jira MCP server e2e policy verification
 ├── mcp-server/                 # Standalone MCP server for session orchestration
-├── tests/                      # Test suite
+│   ├── pyproject.toml          # MCP server packaging
+│   ├── agent_swarm_mcp_server/ # FastMCP server, REST API client, auth resolution
+│   └── tests/                  # Client & tool unit tests (respx mocked)
+├── tests/                      # Swarmer test suite
 │   ├── test_api.py              # REST API unit tests (in-memory SQLite, no server)
+│   ├── test_token_page.py       # /token UI and mcp_setup script unit tests
+│   ├── test_k8s_auth.py         # TokenReview & OpenShift OAuth fallback tests
 │   ├── test_list_repos_for_pat.py  # GitHub API helpers (respx mocking)
 │   ├── test_openshell_client.py # OpenShell client wrapper tests (mocked SDK, no package required)
 │   └── test_ui_patternfly.py   # Playwright e2e tests (requires running server at :8091)
@@ -31,7 +41,7 @@ agent-swarm/
     ├── config.py               # pydantic-settings Settings singleton
     ├── database.py             # SQLAlchemy async engine + session factory + migrations
     ├── crypto.py               # Fernet encrypt/decrypt from secret key file or env var
-    ├── k8s_auth.py             # K8s TokenReview validation — identity (username/groups) only
+    ├── k8s_auth.py             # K8s TokenReview validation & OpenShift OAuth fallback
     ├── workspace_acl.py        # Database-backed workspace ACL (owner/member/admin) — ACM-41659
     ├── deps.py                 # FastAPI dependencies (require_auth, get_user_token)
     ├── k8s.py                  # Kubernetes utility functions (namespace, pull secrets, image check, extra env vars)
@@ -59,7 +69,7 @@ agent-swarm/
     │   ├── github_app.py       # Fernet-encrypted GitHub App credentials (one per workspace)
     │   └── mcp_server.py       # MCP server configs with Fernet-encrypted OAuth tokens
     ├── routers/                # FastAPI route handlers
-    │   ├── auth.py             # /login (token paste + OpenShift OAuth), /logout, /auth/callback
+    │   ├── auth.py             # /login (token paste + OpenShift OAuth), /logout, /token, /auth/callback
     │   ├── workspaces.py       # CRUD for workspaces
     │   ├── sessions.py         # CRUD + launch/stop/schedule/patch generation + repo management
     │   ├── secrets.py          # OpenCode secrets, GitHub PATs, GitHub App, pull secrets
@@ -69,7 +79,9 @@ agent-swarm/
     ├── api/v1/                 # REST API — 51 endpoints under /api/v1/
     └── templates/              # Jinja2 HTML templates (PatternFly 6 dark theme + HTMX)
         ├── base.html           # Layout with masthead, flash messages, PatternFly CDN
-        ├── workspaces/         # list, detail, new, edit, _delete_confirm
+        ├── token.html          # Active bearer token, opencode.json snippet, 1-click copy
+        ├── workspaces/         # list, detail, new, edit, _delete_confirm, members
+        ├── admins/             # list, bootstrap
         ├── sessions/           # list, detail, new, _status_badge, _last_output, _repo_list, etc.
         ├── secrets/            # tabs, opencode_form, github_pat_form, github_pat_list
         └── mcp_servers/        # list (catalog + configured servers with OAuth status)
@@ -538,3 +550,56 @@ path OPA reports.
 
 **Reference implementation:** `scripts/openshell_jira_smoke_test.py` + `_JIRA_MCP_BLOCK`
 in `swarmer/openshell_policy.py` — worked through the full sub-bump loop to reach 18/18.
+
+## Agent Swarm MCP Server (`mcp-server/`)
+
+The standalone Agent Swarm MCP Server (`agent-swarm-mcp-server`) exposes Swarmer's full REST API (`/api/v1/`) as Model Context Protocol tools for AI agent orchestration. This enables developer-agent interfaces (OpenCode, Claude Code) or agent-in-sandbox workloads to launch, monitor, configure, and orchestrate other Swarmer sessions programmatically.
+
+### Architecture & Data Flow
+
+```
+AI Coding Agent (OpenCode / Claude Code)
+         │
+         ▼  (stdio / SSE MCP transport)
+Agent Swarm MCP Server (`mcp-server/`)
+  ├── FastMCP Server (`agent_swarm_mcp_server/server.py`)
+  ├── API Client (`agent_swarm_mcp_server/client.py`)
+  └── Auth Token Resolver (`agent_swarm_mcp_server/auth.py`)
+         │
+         ▼  (HTTPS Bearer Token Authorization)
+Swarmer REST API (`/api/v1/`)
+  ├── Workspaces & ACL Memberships
+  ├── Global Admin & User Identity (/me)
+  ├── OpenShell Dedicated Gateway Settings
+  ├── Agent Sessions (Launch / Stop / Monitor / History)
+  └── Prompts, Repositories, PATs, & Schedules
+```
+
+### Available Tool Capabilities
+
+| Domain | MCP Tools | Description |
+|---|---|---|
+| **Workspaces & ACL** | `list_workspaces`, `get_workspace`, `create_workspace`, `update_workspace`, `delete_workspace`, `list_workspace_members`, `add_workspace_member`, `remove_workspace_member` | Full workspace CRUD and explicit member access management (ACM-41659 database ACL). |
+| **Identity & Admins** | `get_me`, `list_known_users`, `list_admins`, `add_admin`, `remove_admin`, `bootstrap_admin` | Query authenticated caller identity and permissions; manage global Swarmer admins. |
+| **Dedicated Gateways** | `get_workspace_gateway`, `set_workspace_gateway`, `delete_workspace_gateway`, `test_workspace_gateway`, `parse_gateway_command`, `parse_gateway_token` | Configure and test workspace-dedicated OpenShell gateways with OIDC or Bearer auth. |
+| **Session Lifecycle** | `list_sessions`, `find_sessions_by_repo`, `get_session`, `create_session`, `update_session`, `delete_session`, `launch_session`, `stop_session`, `get_session_status`, `get_session_output`, `wait_for_session` | Launch, stop, monitor, and await agent execution runs across OpenCode and Shell tools. |
+| **Repos & Prompts** | `add_repo_to_session`, `remove_repo_from_session`, `list_workspace_prompts`, `set_session_prompt`, `list_github_pats` | Attach git repositories and configure prompts or private git PAT credentials. |
+| **Schedules** | `list_session_schedules`, `add_session_schedule`, `update_session_schedule`, `delete_session_schedule` | Manage automated cron schedules and schedule-specific prompt overrides. |
+
+### Authentication & Token Resolution
+
+The MCP server resolves Kubernetes bearer tokens in `agent_swarm_mcp_server/auth.py` in priority order:
+
+1. **`AGENT_SWARM_API_TOKEN`** env var (explicit token override; always wins).
+2. **In-cluster ServiceAccount token** at `/var/run/secrets/kubernetes.io/serviceaccount/token` (used when deployed as a sidecar or in-pod agent).
+3. **Kubeconfig Context** (`$KUBECONFIG` or `~/.kube/config`):
+   - Direct `token` field on current user.
+   - Exec credential provider output (common with `oc login` and cloud IAM providers).
+   - Validated against Swarmer's `/api/v1/` endpoints with fallback resolution for OpenShift OAuth tokens (`sha256~...`).
+
+### Setup & CLI Automation
+
+- **Web UI (`/token`):** Authenticated users can visit `/token` directly from the masthead navigation to view their active token, API endpoint URL, and a ready-to-copy `opencode.json` configuration block.
+- **CLI Automation (`make mcp-setup` / `make api-info`):**
+  - `make mcp-setup TOKEN="..."`: Configures the local `opencode.json` file in the project with the detected Swarmer route and token.
+  - `make api-info`: Prints current API endpoint, decoded user identity, and the MCP JSON snippet.
