@@ -86,11 +86,12 @@ def _cleanup_provider(client, provider_name: str, openshell_pb2) -> None:
 
 
 async def run_jira_smoke_test(model: str) -> bool:
-    from swarmer.crypto import init_crypto
-    from swarmer.openshell_client import _get_client, ensure_provider, create_sandbox
-    from swarmer.agent_tools.opencode import OpenCodeStrategy
-    from swarmer.openshell_policy import build_session_policy
     from openshell._proto import openshell_pb2
+
+    from swarmer.agent_tools.opencode import OpenCodeStrategy
+    from swarmer.crypto import init_crypto
+    from swarmer.openshell_client import _get_client, create_sandbox, ensure_provider
+    from swarmer.openshell_policy import build_session_policy
 
     init_crypto("auth/secret.key")
 

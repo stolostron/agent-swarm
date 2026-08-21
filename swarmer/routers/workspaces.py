@@ -8,8 +8,9 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from markupsafe import escape
 
-from swarmer.deps import require_auth
 from swarmer.config import settings
+from swarmer.csrf import CSRFError, ensure_csrf_token, validate_csrf_token
+from swarmer.deps import require_auth
 from swarmer.flash import flash
 from swarmer.routers.api_client import APIError, get_api_client
 
@@ -78,12 +79,14 @@ async def workspace_new(request: Request):
     return templates.TemplateResponse(
         request,
         "workspaces/new.html",
+        {"csrf_token": ensure_csrf_token(request)},
     )
 
 
 @router.post("/workspaces", dependencies=[Depends(require_auth)])
 async def workspace_create(
     request: Request,
+    csrf_token: str = Form(""),
     display_name: str = Form(...),
     description: str = Form(""),
     gateway_mode: str = Form("default"),
@@ -97,6 +100,12 @@ async def workspace_create(
     gateway_tls_ca: str = Form(""),
     gateway_tls_verify: str = Form("1"),
 ):
+    try:
+        validate_csrf_token(request, csrf_token)
+    except CSRFError:
+        flash(request, "Invalid or missing CSRF token. Please try again.", "danger")
+        return RedirectResponse(url="/workspaces/new", status_code=302)
+
     gateway_payload = None
     if gateway_mode == "custom" and gateway_url.strip():
         gateway_payload = {
@@ -122,6 +131,7 @@ async def workspace_create(
                 "workspaces/new.html",
                 {
                     "error": exc.detail,
+                    "csrf_token": ensure_csrf_token(request),
                     "display_name": display_name,
                     "description": description,
                     "gateway_mode": gateway_mode,
@@ -130,8 +140,6 @@ async def workspace_create(
                     "gateway_oidc_issuer": gateway_oidc_issuer,
                     "gateway_oidc_client_id": gateway_oidc_client_id,
                     "gateway_oidc_audience": gateway_oidc_audience,
-                    "gateway_refresh_token": gateway_refresh_token,
-                    "gateway_bearer_token": gateway_bearer_token,
                     "gateway_tls_ca": gateway_tls_ca,
                     "gateway_tls_verify": gateway_tls_verify,
                 },
@@ -219,7 +227,7 @@ async def workspace_edit_form(ws_id: int, request: Request):
     return templates.TemplateResponse(
         request,
         "workspaces/edit.html",
-        {"ws": ws},
+        {"ws": ws, "csrf_token": ensure_csrf_token(request)},
     )
 
 
@@ -227,6 +235,7 @@ async def workspace_edit_form(ws_id: int, request: Request):
 async def workspace_update(
     ws_id: int,
     request: Request,
+    csrf_token: str = Form(""),
     display_name: str = Form(...),
     description: str = Form(""),
     gateway_mode: str = Form("default"),
@@ -240,6 +249,11 @@ async def workspace_update(
     gateway_tls_ca: str = Form(""),
     gateway_tls_verify: str = Form("1"),
 ):
+    try:
+        validate_csrf_token(request, csrf_token)
+    except CSRFError:
+        flash(request, "Invalid or missing CSRF token. Please try again.", "danger")
+        return RedirectResponse(url=f"/workspaces/{ws_id}/edit", status_code=302)
     async with get_api_client(request) as api:
         try:
             await api.update_workspace(ws_id, display_name, description)

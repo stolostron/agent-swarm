@@ -8,7 +8,6 @@ from collections.abc import Iterable
 from datetime import datetime, timezone
 
 import httpx
-
 from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
@@ -18,15 +17,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from swarmer import k8s
-from swarmer.agent_tools.registry import get as get_tool, all_tools
+from swarmer.agent_tools.registry import all_tools
+from swarmer.agent_tools.registry import get as get_tool
+from swarmer.ansi import ansi_to_html
 from swarmer.config import settings
 from swarmer.database import get_db
 from swarmer.deps import require_auth
-from swarmer.ansi import ansi_to_html
 from swarmer.flash import flash
 from swarmer.github import fetch_repo_info as _fetch_repo_info
-from swarmer.github import list_repos_for_pat as _list_repos_for_pat
 from swarmer.github import list_repos_for_github_app as _list_repos_for_github_app
+from swarmer.github import list_repos_for_pat as _list_repos_for_pat
 from swarmer.github_url_validator import GitHubURLError, validate_github_url
 from swarmer.models.github_pat import GitHubPAT
 from swarmer.models.opencode_secret import OpencodeSecret
@@ -572,7 +572,10 @@ async def session_create(
         try:
             pid = int(prompt_id)
             # Verify prompt ownership
-            from swarmer.models.workspace_prompt import WorkspacePrompt, WorkspacePromptSource
+            from swarmer.models.workspace_prompt import (
+                WorkspacePrompt,
+                WorkspacePromptSource,
+            )
             prompt = await db.get(WorkspacePrompt, pid)
             if not prompt:
                 flash(request, "Selected prompt not found.", "danger")
@@ -828,7 +831,10 @@ async def session_edit(
     if prompt_id:
         try:
             pid = int(prompt_id)
-            from swarmer.models.workspace_prompt import WorkspacePrompt, WorkspacePromptSource
+            from swarmer.models.workspace_prompt import (
+                WorkspacePrompt,
+                WorkspacePromptSource,
+            )
             prompt = await db.get(WorkspacePrompt, pid)
             if not prompt:
                 flash(request, "Selected prompt not found.", "danger")
@@ -1189,6 +1195,7 @@ async def _do_launch_openshell(
 
     # Query workspace env vars from DB before releasing the connection.
     from sqlalchemy import select as sa_select
+
     from swarmer.models.sandbox_env_var import SandboxEnvVar
     _ev_result = await db.execute(
         sa_select(SandboxEnvVar).where(SandboxEnvVar.workspace_id == session.workspace_id)
@@ -1875,6 +1882,7 @@ async def _run_openshell_agent(
     try:
         async for _db in _get_db():
             from sqlalchemy import select as sa_select
+
             from swarmer.models.github_pat import GitHubPAT
             from swarmer.models.mcp_server import McpServer
             from swarmer.models.opencode_secret import OpencodeSecret
@@ -2249,7 +2257,11 @@ async def session_stop(
 
     if session.sandbox_name:
         from swarmer import openshell_client
-        client = await openshell_client.get_client_for_workspace(ws_id, db)
+        client = None
+        try:
+            client = await openshell_client.get_client_for_workspace(ws_id, db)
+        except Exception as exc:
+            log.warning("get_client_for_workspace failed for workspace %d: %s", ws_id, exc)
         # Snapshot draft policy chunks before deleting the sandbox so the
         # Policy tab remains useful after the session is stopped.
         try:
@@ -2451,6 +2463,7 @@ async def schedule_create(
     db: AsyncSession = Depends(get_db),
 ):
     from croniter import croniter as _croniter
+
     from swarmer.models.session_schedule import SessionSchedule
 
     ws = await _get_workspace(ws_id, db)
@@ -2493,6 +2506,7 @@ async def schedule_edit(
     db: AsyncSession = Depends(get_db),
 ):
     from croniter import croniter as _croniter
+
     from swarmer.models.session_schedule import SessionSchedule
 
     ws = await _get_workspace(ws_id, db)
@@ -2978,7 +2992,11 @@ async def session_delete(
     if session.sandbox_name:
         # OpenShell session — delete sandbox
         from swarmer import openshell_client
-        client = await openshell_client.get_client_for_workspace(ws_id, db)
+        client = None
+        try:
+            client = await openshell_client.get_client_for_workspace(ws_id, db)
+        except Exception as exc:
+            log.warning("get_client_for_workspace failed for workspace %d: %s", ws_id, exc)
         if session.service_url:
             try:
                 if client is not None:

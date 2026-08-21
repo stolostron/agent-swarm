@@ -313,6 +313,7 @@ async def _load_workspace_bundle(workspace_id: int | None) -> dict | None:
         return None
 
     from sqlalchemy import select
+
     from swarmer.database import get_db
     from swarmer.models.workspace_gateway import WorkspaceGateway
 
@@ -342,6 +343,7 @@ async def _persist_workspace_bundle(workspace_id: int | None, bundle: dict) -> N
         return
 
     from sqlalchemy import select
+
     from swarmer.database import get_db
     from swarmer.models.workspace_gateway import WorkspaceGateway
 

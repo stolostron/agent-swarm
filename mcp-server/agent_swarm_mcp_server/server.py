@@ -486,6 +486,11 @@ class AgentSwarmMCPServer:
         ) -> dict:
             """Configure a dedicated OpenShell gateway for a workspace.
 
+            WARNING: This operation performs a full replacement of the gateway configuration.
+            Omitted OIDC and TLS fields will be cleared. Always supply the complete gateway
+            configuration, including oidc_issuer, oidc_client_id, oidc_audience, tls_ca,
+            and tls_verify alongside gateway_url and auth_mode.
+
             Args:
                 workspace_id: The workspace id.
                 gateway_url: The gateway endpoint URL (e.g. https://gw-xyz.example.com:443).

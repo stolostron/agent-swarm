@@ -7,9 +7,9 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from swarmer.database import Base
 
 if TYPE_CHECKING:
-    from swarmer.models.workspace import Workspace
     from swarmer.models.github_pat import GitHubPAT
     from swarmer.models.session import Session
+    from swarmer.models.workspace import Workspace
 
 
 class WorkspacePromptSource(Base):

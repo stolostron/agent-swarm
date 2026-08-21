@@ -10,7 +10,6 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from swarmer import k8s
-from swarmer.database import get_db
 from swarmer.api.deps import get_current_user, get_workspace_or_404, require_api_auth
 from swarmer.api.schemas import (
     CredentialsOut,
@@ -24,6 +23,7 @@ from swarmer.api.schemas import (
     PullSecretCreate,
     PullSecretOut,
 )
+from swarmer.database import get_db
 from swarmer.models.github_app import GitHubApp
 from swarmer.models.github_pat import GitHubPAT
 from swarmer.models.opencode_secret import OpencodeSecret

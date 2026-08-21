@@ -12,11 +12,11 @@ from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
 
 from swarmer import k8s
+from swarmer.api.v1 import router as api_v1_router
 from swarmer.config import settings
 from swarmer.crypto import derive_session_secret, init_crypto
-from swarmer.database import checkpoint_db, create_tables, migrate_db, init_db
+from swarmer.database import checkpoint_db, create_tables, init_db, migrate_db
 from swarmer.deps import NotAuthenticated
-from swarmer.api.v1 import router as api_v1_router
 from swarmer.routers import admins as admins_router
 from swarmer.routers import auth as auth_router
 from swarmer.routers import chat_proxy as chat_proxy_router
@@ -24,8 +24,8 @@ from swarmer.routers import env_vars as env_vars_router
 from swarmer.routers import mcp_servers as mcp_servers_router
 from swarmer.routers import office as office_router
 from swarmer.routers import prompts as prompts_router
-from swarmer.routers import sessions as sessions_router
 from swarmer.routers import secrets as secrets_router
+from swarmer.routers import sessions as sessions_router
 from swarmer.routers import tui_ws as tui_router
 from swarmer.routers import workspaces as workspaces_router
 
@@ -238,19 +238,20 @@ async def _restart_server_sessions() -> None:
     without losing the proxy connection or GitHub App authentication.
     """
     from datetime import datetime, timezone
+
     from sqlalchemy import select
     from sqlalchemy.orm import selectinload
 
     from swarmer import openshell_client
+    from swarmer.agent_tools.registry import get as _get_tool
     from swarmer.database import get_db
     from swarmer.models.session import Session
-    from swarmer.agent_tools.registry import get as _get_tool
 
+    default_live_sandboxes = None
     try:
         default_live_sandboxes = set(await openshell_client.list_sandboxes())
     except Exception:
-        log.warning("_restart_server_sessions: could not list sandboxes — skipping", exc_info=True)
-        return
+        log.warning("_restart_server_sessions: could not list default gateway sandboxes", exc_info=True)
 
     async for db in get_db():
         result = await db.execute(
@@ -276,6 +277,9 @@ async def _restart_server_sessions() -> None:
                     log.warning("_restart_server_sessions: could not list sandboxes for workspace %d — skipping", s.workspace_id, exc_info=True)
                     continue
             else:
+                if default_live_sandboxes is None:
+                    log.warning("_restart_server_sessions: default gateway unavailable — skipping session %d", s.id)
+                    continue
                 live_sandboxes = default_live_sandboxes
 
             if sandbox_name not in live_sandboxes:
@@ -337,7 +341,10 @@ async def _restart_github_app_iat_refresh(session: Session, db: AsyncSession) ->
         from swarmer import openshell_client
         from swarmer.github import github_slug as _github_slug
         from swarmer.github_app import get_workspace_github_app
-        from swarmer.github_auth import mint_installation_token, start_token_refresh_loop
+        from swarmer.github_auth import (
+            mint_installation_token,
+            start_token_refresh_loop,
+        )
         from swarmer.routers.sessions import _github_app_provider_name
 
         app = await get_workspace_github_app(session.workspace_id, db, user_id="")

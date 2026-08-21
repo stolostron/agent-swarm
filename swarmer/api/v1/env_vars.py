@@ -11,8 +11,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from swarmer.api.deps import get_workspace_or_404, require_api_auth
 from swarmer.api.schemas import EnvVarCreate, EnvVarOut, MessageOut
 from swarmer.database import get_db
-from swarmer.models.workspace import Workspace
 from swarmer.models.sandbox_env_var import SandboxEnvVar
+from swarmer.models.workspace import Workspace
 
 log = logging.getLogger(__name__)
 

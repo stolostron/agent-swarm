@@ -98,12 +98,15 @@ async def _run_openshell_tui(
     read_q: asyncio.Queue,
     stop_event: threading.Event,
 ) -> None:
-    from swarmer import openshell_client
     from openshell._proto import openshell_pb2
+
+    from swarmer import openshell_client
 
     sandbox_name = session.sandbox_name
 
     client = await openshell_client.get_client_for_workspace(session.workspace_id)
+    if client is None:
+        client = openshell_client._get_client()
 
     # Resolve sandbox_id synchronously (brief blocking call)
     try:
@@ -123,6 +126,7 @@ async def _run_openshell_tui(
     tui_env: dict[str, str] = {}
     try:
         from sqlalchemy import select as _sa_select
+
         from swarmer.database import get_db as _get_db
         from swarmer.models.sandbox_env_var import SandboxEnvVar
         from swarmer.routers.mcp_servers import get_enabled_mcp_servers as _get_mcp

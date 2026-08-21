@@ -10,7 +10,6 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from swarmer.database import get_db
 from swarmer.api.deps import get_current_user, get_workspace_or_404, require_api_auth
 from swarmer.api.schemas import (
     MessageOut,
@@ -19,6 +18,7 @@ from swarmer.api.schemas import (
     PromptSourceOut,
     PromptSourceUpdate,
 )
+from swarmer.database import get_db
 from swarmer.github import github_slug, list_folder_contents, list_repos_for_pat
 from swarmer.github_url_validator import GitHubURLError
 from swarmer.models.github_pat import GitHubPAT

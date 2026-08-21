@@ -293,6 +293,7 @@ PULL_SECRET_NAME = "quay-pull-secret"
 def apply_pull_secret(namespace: str, registry: str, username: str, password: str) -> None:
     """Create or update a kubernetes.io/dockerconfigjson pull secret."""
     import json
+
     from kubernetes import client
 
     dockerconfig = json.dumps({
@@ -322,6 +323,7 @@ def apply_pull_secret(namespace: str, registry: str, username: str, password: st
 def get_pull_secret_info(namespace: str) -> dict | None:
     """Return {"registry": ..., "username": ...} if the pull secret exists, else None."""
     import json
+
     from kubernetes import client
 
     try:
@@ -346,6 +348,7 @@ def delete_pull_secret(namespace: str) -> None:
 async def check_image_reachable(image: str, namespace: str) -> bool:
     """Return True if the image manifest is accessible (with or without a pull secret)."""
     import json
+
     import httpx
     from kubernetes import client as k8s_client
 

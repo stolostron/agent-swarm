@@ -116,11 +116,20 @@ def _tls_material_path(value: str) -> tuple[pathlib.Path, bool]:
     except OSError:
         pass  # e.g. ENAMETOOLONG for inline PEM content — fall through
 
-    fd, tmp_path = tempfile.mkstemp(prefix="swarmer-tls-", suffix=".pem")
+    dir_path = os.environ.get("SWARMER_TLS_DIR")
+    if not dir_path or not os.path.exists(dir_path):
+        if os.path.exists("/dev/shm") and os.path.isdir("/dev/shm"):
+            dir_path = "/dev/shm"
+        else:
+            dir_path = None
+
+    try:
+        fd, tmp_path = tempfile.mkstemp(prefix="swarmer-tls-", suffix=".pem", dir=dir_path)
+    except OSError:
+        fd, tmp_path = tempfile.mkstemp(prefix="swarmer-tls-", suffix=".pem")
     try:
         with os.fdopen(fd, "w") as f:
             f.write(value)
-        os.chmod(tmp_path, 0o600)
     except Exception:
         os.unlink(tmp_path)
         raise
@@ -134,7 +143,9 @@ def get_client_for_config(config: GatewayConfig):
     tls = None
     temp_paths: list[pathlib.Path] = []
     try:
-        if config.tls_cert and config.tls_key:
+        if not config.tls_verify:
+            tls = None
+        elif config.tls_cert and config.tls_key:
             ca_path = None
             if config.tls_ca:
                 ca_path, ca_is_tmp = _tls_material_path(config.tls_ca)
@@ -343,8 +354,8 @@ async def ensure_provider(
     Credentials are stored server-side (returned as REDACTED); use UpdateProvider
     on subsequent launches to rotate keys.
     """
-    from openshell._proto import openshell_pb2
     import grpc
+    from openshell._proto import openshell_pb2
 
     if client is None:
         client = _get_client()
@@ -382,8 +393,8 @@ async def ensure_provider(
 
 async def delete_provider(name: str, client=None) -> None:
     """Delete a named provider from the gateway, ignoring NOT_FOUND errors."""
-    from openshell._proto import openshell_pb2
     import grpc
+    from openshell._proto import openshell_pb2
 
     if client is None:
         client = _get_client()
@@ -416,8 +427,8 @@ async def provider_exists(name: str, client=None) -> bool:
         if now < expires_at:
             return result
 
-    from openshell._proto import openshell_pb2
     import grpc
+    from openshell._proto import openshell_pb2
 
     if client is None:
         client = _get_client()
@@ -482,6 +493,7 @@ async def configure_google_cloud_provider(
     that bypass HTTP_PROXY still receive a valid access token.
     """
     import json as _json
+
     from openshell._proto import openshell_pb2
 
     if client is None:
@@ -577,6 +589,7 @@ async def configure_vertex_provider(
     VERTEX_LOCATION, VERTEXAI_LOCATION) alongside the access token.
     """
     import json as _json
+
     from openshell._proto import openshell_pb2
 
     if client is None:
@@ -684,8 +697,8 @@ async def attach_sandbox_provider(sandbox_name: str, provider_name: str, client=
 
 async def detach_sandbox_provider(sandbox_name: str, provider_name: str, client=None) -> None:
     """Detach a provider from a sandbox, ignoring NOT_FOUND errors."""
-    from openshell._proto import openshell_pb2
     import grpc
+    from openshell._proto import openshell_pb2
 
     if client is None:
         client = _get_client()
@@ -1168,6 +1181,7 @@ async def _wait_sandbox_ready(
     available to exec commands.
     """
     import time
+
     from openshell._proto import openshell_pb2
 
     if client is None:
@@ -1571,7 +1585,7 @@ async def expose_service(
         # port (e.g. 17670). Rewrite to the configured gateway port so Swarmer
         # can reach it from the host.
         from swarmer.config import settings
-        gw = settings.openshell_gateway_url or ""
+        gw = getattr(client, "_endpoint", None) or getattr(client, "endpoint", None) or settings.openshell_gateway_url or ""
         gw_port = gw.rsplit(":", 1)[-1] if ":" in gw else ""
         if gw_port and gw_port.isdigit():
             from urllib.parse import urlparse, urlunparse

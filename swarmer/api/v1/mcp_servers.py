@@ -9,7 +9,6 @@ from sqlalchemy import or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from swarmer.database import get_db
 from swarmer.api.deps import get_current_user, get_workspace_or_404, require_api_auth
 from swarmer.api.schemas import (
     McpHealthOut,
@@ -18,6 +17,7 @@ from swarmer.api.schemas import (
     McpServerSaveConfig,
     MessageOut,
 )
+from swarmer.database import get_db
 from swarmer.mcp_catalog import get_catalog_entry
 from swarmer.models.mcp_server import McpServer
 from swarmer.models.workspace import Workspace

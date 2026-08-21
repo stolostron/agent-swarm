@@ -1,4 +1,5 @@
 import re
+
 from markupsafe import Markup, escape
 
 _COLORS = {

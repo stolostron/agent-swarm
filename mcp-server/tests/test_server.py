@@ -5,11 +5,9 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-
-from agent_swarm_mcp_server.server import _normalize_repo_url, AgentSwarmMCPServer
-from agent_swarm_mcp_server.config import AgentSwarmConfig
 from agent_swarm_mcp_server.client import AgentSwarmClient
-
+from agent_swarm_mcp_server.config import AgentSwarmConfig
+from agent_swarm_mcp_server.server import AgentSwarmMCPServer, _normalize_repo_url
 
 # ------------------------------------------------------------------
 # Server instantiation and tool registration
@@ -50,10 +48,13 @@ EXPECTED_TOOLS = {
 
 def test_server_can_be_imported():
     """Verify AgentSwarmMCPServer and helpers can be imported without errors."""
-    from agent_swarm_mcp_server.server import AgentSwarmMCPServer, _normalize_repo_url  # noqa: F401
-    from agent_swarm_mcp_server.config import AgentSwarmConfig  # noqa: F401
-    from agent_swarm_mcp_server.client import AgentSwarmClient  # noqa: F401
     from agent_swarm_mcp_server.auth import resolve_token  # noqa: F401
+    from agent_swarm_mcp_server.client import AgentSwarmClient  # noqa: F401
+    from agent_swarm_mcp_server.config import AgentSwarmConfig  # noqa: F401
+    from agent_swarm_mcp_server.server import (  # noqa: F401
+        AgentSwarmMCPServer,
+        _normalize_repo_url,
+    )
 
 
 def test_server_instantiates_with_config():

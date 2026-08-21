@@ -56,13 +56,17 @@ def _redact_secret(value: str) -> str:
 
 
 async def run_smoke_test(model: str) -> bool:
+    from openshell._proto import openshell_pb2
+
+    from swarmer.agent_tools.opencode import OpenCodeStrategy
     from swarmer.crypto import init_crypto
     from swarmer.openshell_client import (
-        _get_client, ensure_provider, create_sandbox, write_agent_config,
+        _get_client,
+        create_sandbox,
+        ensure_provider,
+        write_agent_config,
     )
-    from swarmer.agent_tools.opencode import OpenCodeStrategy
     from swarmer.openshell_policy import build_session_policy
-    from openshell._proto import openshell_pb2
 
     init_crypto("auth/secret.key")
 
@@ -397,13 +401,18 @@ async def run_vertex_smoke_test(
     Usage:
       python3 scripts/openshell_smoke_test.py --vertex
     """
+    from openshell._proto import openshell_pb2
+
     from swarmer.crypto import init_crypto
     from swarmer.openshell_client import (
-        _get_client, ensure_provider, configure_vertex_provider,
-        create_sandbox, write_agent_config, enable_providers_v2,
+        _get_client,
+        configure_vertex_provider,
+        create_sandbox,
+        enable_providers_v2,
+        ensure_provider,
+        write_agent_config,
     )
     from swarmer.openshell_policy import build_session_policy
-    from openshell._proto import openshell_pb2
 
     init_crypto("auth/secret.key")
 
@@ -413,8 +422,9 @@ async def run_vertex_smoke_test(
     print(f"\n[1] Reading VertexAI credentials from DB (agent_tool={agent_tool}, model={model})")
     adc_json = project = location = ""
     try:
-        from swarmer.database import init_db, get_db
         from sqlalchemy import select
+
+        from swarmer.database import get_db, init_db
         from swarmer.models.opencode_secret import OpencodeSecret
 
         init_db("sqlite+aiosqlite:///data/swarmer.db")
@@ -813,11 +823,15 @@ async def run_policy_extract(
           --model google/gemini-3.5-flash \\
           --agent opencode --language golang
     """
-    from swarmer.crypto import init_crypto
-    from swarmer.openshell_client import _get_client, ensure_provider, create_sandbox
-    from swarmer.openshell_policy import build_session_policy, build_session_network_policies
-    from swarmer.agent_tools.opencode import OpenCodeStrategy
     from openshell._proto import openshell_pb2
+
+    from swarmer.agent_tools.opencode import OpenCodeStrategy
+    from swarmer.crypto import init_crypto
+    from swarmer.openshell_client import _get_client, create_sandbox, ensure_provider
+    from swarmer.openshell_policy import (
+        build_session_network_policies,
+        build_session_policy,
+    )
 
     init_crypto("auth/secret.key")
 

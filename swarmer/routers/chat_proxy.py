@@ -223,8 +223,8 @@ def _rewrite_js(content: bytes, prefix: str) -> bytes:
 # ── Session lookup helper ─────────────────────────────────────────────────────
 
 async def _load(ws_id: int, sid: int, db: AsyncSession):
-    from sqlalchemy.orm import selectinload
     from sqlalchemy import select
+    from sqlalchemy.orm import selectinload
     ws_obj = await db.get(Workspace, ws_id)
     result = await db.execute(
         select(Session)

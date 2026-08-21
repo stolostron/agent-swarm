@@ -45,6 +45,9 @@ class ParsedTokenResult:
 
 def parse_token_input(raw: str) -> ParsedTokenResult:
     """Parse and clean an OIDC token or credential bundle."""
+    if not isinstance(raw, str):
+        return ParsedTokenResult(status="malformed", message="Token input must be a string.")
+
     if not raw or not raw.strip():
         return ParsedTokenResult(status="empty", message="No token provided.")
 
@@ -57,6 +60,18 @@ def parse_token_input(raw: str) -> ParsedTokenResult:
             if isinstance(data, dict):
                 refresh = data.get("refresh_token") or data.get("refreshToken") or ""
                 access = data.get("access_token") or data.get("accessToken") or ""
+                issuer = data.get("issuer")
+                client_id = data.get("client_id") or data.get("clientId")
+
+                if not isinstance(refresh, str):
+                    return ParsedTokenResult(status="malformed", message="refresh_token in JSON must be a string.")
+                if not isinstance(access, str):
+                    return ParsedTokenResult(status="malformed", message="access_token in JSON must be a string.")
+                if issuer is not None and not isinstance(issuer, str):
+                    return ParsedTokenResult(status="malformed", message="issuer in JSON must be a string.")
+                if client_id is not None and not isinstance(client_id, str):
+                    return ParsedTokenResult(status="malformed", message="client_id in JSON must be a string.")
+
                 expires_at = data.get("expires_at") or data.get("expiresAt")
                 if expires_at is not None:
                     try:
@@ -70,8 +85,8 @@ def parse_token_input(raw: str) -> ParsedTokenResult:
                         refresh_token=refresh,
                         access_token=access,
                         expires_at=expires_at,
-                        issuer=data.get("issuer"),
-                        client_id=data.get("client_id") or data.get("clientId"),
+                        issuer=issuer,
+                        client_id=client_id,
                         format_detected="json_bundle",
                         status="valid",
                         message=f"Extracted from JSON bundle ({len(effective_token)} chars).",

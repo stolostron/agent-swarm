@@ -7,9 +7,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-
 from agent_swarm_mcp_server.client import AgentSwarmClient
-
 
 SAMPLE_KUBECONFIG = textwrap.dedent("""\
     apiVersion: v1

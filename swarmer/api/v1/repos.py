@@ -8,9 +8,9 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from swarmer.database import get_db
 from swarmer.api.deps import get_workspace_or_404, require_api_auth
 from swarmer.api.schemas import MessageOut, RepoCreate, RepoOut
+from swarmer.database import get_db
 from swarmer.github_url_validator import GitHubURLError, validate_github_url
 from swarmer.models.session import Session
 from swarmer.models.session_repo import SessionRepo

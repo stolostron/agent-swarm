@@ -9,14 +9,13 @@ import sys
 def update_opencode_json(api_url: str, config_path: str = "opencode.json") -> None:
     data = {}
     if os.path.exists(config_path):
-        try:
-            with open(config_path, "r", encoding="utf-8") as f:
+        with open(config_path, "r", encoding="utf-8") as f:
+            try:
                 data = json.load(f)
-        except Exception:
-            data = {}
-
-    if not isinstance(data, dict):
-        data = {}
+            except json.JSONDecodeError as exc:
+                raise ValueError(f"Invalid JSON in config file '{config_path}': {exc}") from exc
+        if not isinstance(data, dict):
+            raise ValueError(f"Config root in '{config_path}' must be a JSON object (dict)")
 
     if "$schema" not in data:
         data["$schema"] = "https://opencode.ai/config.json"
@@ -33,7 +32,7 @@ def update_opencode_json(api_url: str, config_path: str = "opencode.json") -> No
             "enabled": True,
             "environment": {
                 "AGENT_SWARM_API_URL": api_url,
-                "AGENT_SWARM_VERIFY_SSL": "false",
+                "AGENT_SWARM_VERIFY_SSL": "true",
             },
         }
     else:
@@ -43,7 +42,7 @@ def update_opencode_json(api_url: str, config_path: str = "opencode.json") -> No
             as_m["environment"] = {}
         as_m["environment"]["AGENT_SWARM_API_URL"] = api_url
         if "AGENT_SWARM_VERIFY_SSL" not in as_m["environment"]:
-            as_m["environment"]["AGENT_SWARM_VERIFY_SSL"] = "false"
+            as_m["environment"]["AGENT_SWARM_VERIFY_SSL"] = "true"
 
     parent_dir = os.path.dirname(config_path)
     if parent_dir:

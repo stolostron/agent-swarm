@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
+import httpx
 import pytest
 import respx
-import httpx
-
-from agent_swarm_mcp_server.client import AgentSwarmClient, AgentSwarmAPIError
+from agent_swarm_mcp_server.client import AgentSwarmAPIError, AgentSwarmClient
 
 BASE_URL = "https://swarmer.example.com"
 

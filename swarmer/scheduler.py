@@ -88,10 +88,11 @@ async def _collect_orphaned_sandboxes(db) -> None:
     The GC is skipped entirely if any session is in 'pending' phase to avoid racing
     with sandbox setup (sandbox exists but sandbox_name not yet saved to DB).
     """
+    from datetime import datetime
+
     from swarmer import openshell_client
     from swarmer.models.session import Session
     from swarmer.models.workspace_gateway import WorkspaceGateway
-    from datetime import datetime
 
     # Skip GC entirely if any session is pending AND has a sandbox_name already set
     # (mid-setup: sandbox exists but sandbox_name not yet committed to DB — deleting
@@ -181,6 +182,7 @@ async def _collect_orphaned_sandboxes(db) -> None:
         # Only delete sandboxes that have been around long enough — grace period covers
         # the race window where sandbox_name isn't yet committed to DB after creation.
         import time as _time
+
         from openshell._proto import openshell_pb2 as _pb
         now_ms = int(_time.time() * 1000)
         _grace_ms = 5 * 60 * 1000  # 5 minutes — covers sandbox creation race window
@@ -194,8 +196,9 @@ async def _collect_orphaned_sandboxes(db) -> None:
                 created_ms = resp.sandbox.metadata.created_at_ms if resp.sandbox.metadata else 0
                 age_ms = now_ms - created_ms
                 return age_ms >= _grace_ms
-            except Exception:
-                return True  # if we can't check, assume old enough
+            except Exception as exc:
+                log.warning("sandbox-gc: GetSandbox failed for %s: %s", name, exc)
+                return False
 
         # --- Orphans: live sandboxes with no matching session at all ---
         orphaned = [name for name in live_names if name not in known]
@@ -239,7 +242,10 @@ async def _collect_orphaned_sandboxes(db) -> None:
                             session.sandbox_name = None
                             db_dirty = True
                             # Clean up per-session GitHub App IAT and PAT providers.
-                            from swarmer.routers.sessions import _delete_github_app_provider, _delete_pat_provider
+                            from swarmer.routers.sessions import (
+                                _delete_github_app_provider,
+                                _delete_pat_provider,
+                            )
                             await _delete_github_app_provider(session.workspace_id, session_id)
                             await _delete_pat_provider(session.workspace_id, session.github_pat_id, session_id)
                     except Exception:

@@ -26,7 +26,6 @@ guard.
 import re
 from urllib.parse import parse_qs, urlparse, urlunparse
 
-
 # ---------------------------------------------------------------------------
 # Known token formats (compiled once at import time)
 # ---------------------------------------------------------------------------

@@ -12,8 +12,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from swarmer import k8s, workspace_acl
-from swarmer.config import settings
-from swarmer.database import get_db
 from swarmer.api.deps import (
     filter_accessible_workspaces,
     get_workspace_or_404,
@@ -35,6 +33,8 @@ from swarmer.api.schemas import (
     WorkspaceOut,
     WorkspaceUpdate,
 )
+from swarmer.config import settings
+from swarmer.database import get_db
 from swarmer.k8s_auth import TokenIdentity
 from swarmer.models.workspace import Workspace
 from swarmer.models.workspace_gateway import WorkspaceGateway
@@ -111,7 +111,16 @@ def _to_workspace_out(ws: Workspace, gw: WorkspaceGateway | None = None) -> Work
 
 
 @router.post("/gateway/parse-command", response_model=ParseGatewayCommandOut)
-async def parse_gateway_command_endpoint(body: ParseGatewayCommandIn):
+async def parse_gateway_command_endpoint(
+    body: ParseGatewayCommandIn,
+    db: AsyncSession = Depends(get_db),
+    identity: TokenIdentity = Depends(require_api_auth),
+):
+    if not await workspace_acl.can_create_workspace(db, identity.username, identity.groups):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have permission to configure workspace gateways.",
+        )
     res = parse_gateway_command_or_json(body.command)
     return ParseGatewayCommandOut(
         gateway_url=res.gateway_url,
@@ -127,7 +136,16 @@ async def parse_gateway_command_endpoint(body: ParseGatewayCommandIn):
 
 
 @router.post("/gateway/parse-token", response_model=ParseTokenOut)
-async def parse_gateway_token_endpoint(body: ParseTokenIn):
+async def parse_gateway_token_endpoint(
+    body: ParseTokenIn,
+    db: AsyncSession = Depends(get_db),
+    identity: TokenIdentity = Depends(require_api_auth),
+):
+    if not await workspace_acl.can_create_workspace(db, identity.username, identity.groups):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have permission to configure workspace gateways.",
+        )
     res = parse_token_input(body.token_input)
     return ParseTokenOut(
         refresh_token=res.refresh_token,
@@ -143,7 +161,16 @@ async def parse_gateway_token_endpoint(body: ParseTokenIn):
 
 
 @router.post("/gateway/test-connection", response_model=TestGatewayConnectionOut)
-async def test_gateway_connection_endpoint(body: TestGatewayConnectionIn):
+async def test_gateway_connection_endpoint(
+    body: TestGatewayConnectionIn,
+    db: AsyncSession = Depends(get_db),
+    identity: TokenIdentity = Depends(require_api_auth),
+):
+    if not await workspace_acl.can_create_workspace(db, identity.username, identity.groups):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have permission to test gateway connections.",
+        )
     from swarmer.openshell_client import GatewayConfig, probe_gateway_connectivity
     from swarmer.openshell_oidc import OidcGatewayAuth
 
@@ -179,9 +206,10 @@ async def test_gateway_connection_endpoint(body: TestGatewayConnectionIn):
             sandboxes_count=result.get("sandboxes_count", 0),
         )
     except Exception as exc:
+        log.warning("Gateway connection test failed for %s: %s", body.gateway_url, exc)
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Connection test failed: {exc}",
+            detail="Connection test failed. Check the gateway URL and credentials.",
         )
     finally:
         if temp_auth is not None:

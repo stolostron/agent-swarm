@@ -6,6 +6,7 @@ ACM-41659, workspace-level authorization is a database-backed ACL (see
 this module no longer performs any SelfSubjectAccessReview checks.
 """
 from __future__ import annotations
+
 import base64
 import json
 import logging
@@ -49,6 +50,7 @@ def _make_user_config(token: str, api_url: str, in_cluster: bool):
 async def validate_token(token: str, api_url: str, in_cluster: bool) -> TokenIdentity | None:
     """Validate a bearer token via TokenReview. Falls back to direct probe on 401/403."""
     import asyncio
+
     from kubernetes import client as k8s_client
 
     def _do_tokenreview():
@@ -87,6 +89,7 @@ async def validate_token(token: str, api_url: str, in_cluster: bool) -> TokenIde
 
 async def _probe_with_user_token(token: str, api_url: str, in_cluster: bool) -> TokenIdentity | None:
     import asyncio
+
     from kubernetes import client as k8s_client
 
     def _do_probe():

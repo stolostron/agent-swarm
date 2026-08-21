@@ -8,15 +8,13 @@ import re
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from pydantic import BaseModel
-
 from swarmer.agent_tools.registry import get as get_tool
-from swarmer.database import get_db
 from swarmer.api.deps import get_current_user, get_workspace_or_404, require_api_auth
 from swarmer.api.schemas import (
     MessageOut,
@@ -33,6 +31,7 @@ from swarmer.api.schemas import (
     SetNameRequest,
     SetProviderRequest,
 )
+from swarmer.database import get_db
 from swarmer.models.session import Session
 from swarmer.models.session_run import SessionRun
 from swarmer.models.workspace import Workspace
@@ -226,7 +225,11 @@ async def delete_session(
     if session.sandbox_name:
         # OpenShell session — delete sandbox
         from swarmer import openshell_client
-        oc_client = await openshell_client.get_client_for_workspace(ws_id, db)
+        oc_client = None
+        try:
+            oc_client = await openshell_client.get_client_for_workspace(ws_id, db)
+        except Exception as exc:
+            log.warning("get_client_for_workspace failed for workspace %d: %s", ws_id, exc)
         if session.service_url:
             try:
                 if oc_client is not None:
@@ -301,7 +304,11 @@ async def stop_session(
 
     if session.sandbox_name:
         from swarmer import openshell_client
-        oc_client = await openshell_client.get_client_for_workspace(ws_id, db)
+        oc_client = None
+        try:
+            oc_client = await openshell_client.get_client_for_workspace(ws_id, db)
+        except Exception as exc:
+            log.warning("get_client_for_workspace failed for workspace %d: %s", ws_id, exc)
         if session.service_url:
             try:
                 if oc_client is not None:
@@ -447,6 +454,7 @@ async def schedule_session(
 ):
     """Backward-compat: create or replace a single schedule entry on the session."""
     from croniter import croniter
+
     from swarmer.models.session_schedule import SessionSchedule
 
     session = await _get_session_or_404(ws_id, sid, db)
@@ -538,6 +546,7 @@ async def create_schedule(
     db: AsyncSession = Depends(get_db),
 ):
     from croniter import croniter
+
     from swarmer.models.session_schedule import SessionSchedule
     await _get_session_or_404(ws_id, sid, db)
     if not croniter.is_valid(body.cron_schedule):
@@ -567,6 +576,7 @@ async def update_schedule(
     db: AsyncSession = Depends(get_db),
 ):
     from croniter import croniter
+
     from swarmer.models.session_schedule import SessionSchedule
     await _get_session_or_404(ws_id, sid, db)
     sched = await db.get(SessionSchedule, sched_id)
@@ -704,6 +714,7 @@ async def download_patch(
     db: AsyncSession = Depends(get_db),
 ):
     from fastapi.responses import Response
+
     from swarmer.routers.sessions import _patch_filename
 
     session = await _get_session_or_404(ws_id, sid, db)

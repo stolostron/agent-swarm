@@ -5,7 +5,6 @@ to the API.  Post-login workspace access checks use the API client.
 """
 
 import secrets
-
 from urllib.parse import quote
 
 from fastapi import APIRouter, Form, Request
@@ -56,8 +55,8 @@ async def _validate_and_login(request: Request, token: str):
     # Post-login workspace access check via API client.
     # Use the validated token to list workspaces through the API and
     # verify the user can reach at least one.
-    from swarmer.routers.api_client import APIClient, APIError
     from swarmer.main import app
+    from swarmer.routers.api_client import APIClient, APIError
     async with APIClient(app=app, token=token) as api:
         try:
             await api.list_workspaces()

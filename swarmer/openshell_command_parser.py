@@ -70,24 +70,44 @@ def _parse_json_metadata(json_str: str) -> ParsedGatewayCommand:
     if not isinstance(data, dict):
         return ParsedGatewayCommand(errors=["JSON payload must be an object."])
 
-    endpoint = data.get("gateway_endpoint") or data.get("endpoint") or data.get("gateway_url") or data.get("url") or ""
-    # Coerce to str: JSON values for these keys may be non-string (e.g. a number
-    # or null), and downstream .startswith()/DB storage assume a string.
-    if not isinstance(endpoint, str):
-        endpoint = str(endpoint) if endpoint is not None else ""
-    auth_mode = str(data.get("auth_mode") or "oidc").lower()
+    raw_endpoint = data.get("gateway_endpoint") or data.get("endpoint") or data.get("gateway_url") or data.get("url") or ""
+    if not isinstance(raw_endpoint, str):
+        return ParsedGatewayCommand(errors=["gateway_endpoint must be a string."])
+
+    raw_auth_mode = data.get("auth_mode") or "oidc"
+    if not isinstance(raw_auth_mode, str):
+        return ParsedGatewayCommand(errors=["auth_mode must be a string."])
+
+    endpoint = raw_endpoint
+    auth_mode = raw_auth_mode.lower()
     if endpoint.startswith("http://") and auth_mode not in ("bearer", "mtls"):
         auth_mode = "none"
+
+    oidc_issuer = data.get("oidc_issuer")
+    if oidc_issuer is not None and not isinstance(oidc_issuer, str):
+        return ParsedGatewayCommand(errors=["oidc_issuer must be a string."])
+
+    oidc_client_id = data.get("oidc_client_id")
+    if oidc_client_id is not None and not isinstance(oidc_client_id, str):
+        return ParsedGatewayCommand(errors=["oidc_client_id must be a string."])
+
+    oidc_audience = data.get("oidc_audience")
+    if oidc_audience is not None and not isinstance(oidc_audience, str):
+        return ParsedGatewayCommand(errors=["oidc_audience must be a string."])
+
+    bearer_token = data.get("bearer_token") or data.get("token")
+    if bearer_token is not None and not isinstance(bearer_token, str):
+        return ParsedGatewayCommand(errors=["bearer_token must be a string."])
 
     return ParsedGatewayCommand(
         gateway_url=endpoint,
         auth_mode=auth_mode,
-        oidc_issuer=data.get("oidc_issuer"),
-        oidc_client_id=data.get("oidc_client_id"),
-        oidc_audience=data.get("oidc_audience"),
-        bearer_token=data.get("bearer_token") or data.get("token"),
+        oidc_issuer=oidc_issuer,
+        oidc_client_id=oidc_client_id,
+        oidc_audience=oidc_audience,
+        bearer_token=bearer_token,
         tls_verify=not bool(data.get("insecure") or data.get("gateway_insecure")),
-        suggested_name=data.get("name"),
+        suggested_name=data.get("name") if isinstance(data.get("name"), str) else None,
         raw_input=json_str,
     )
 

@@ -579,6 +579,14 @@ mcp-setup:  ## Resolve Swarmer API URL and update opencode.json MCP config
 	if [ -z "$$RESOLVED_URL" ]; then \
 	  RESOLVED_URL="http://localhost:$(LOCAL_PORT)"; \
 	fi; \
+	HTTP_CODE=$$(curl -s --connect-timeout 3 -o /dev/null -w "%{http_code}" "$$RESOLVED_URL" 2>/dev/null || echo "000"); \
+	if [ "$$HTTP_CODE" = "000" ]; then \
+	  echo "Error: Swarmer API at '$$RESOLVED_URL' is unreachable." >&2; \
+	  if [ "$$RESOLVED_URL" = "http://localhost:$(LOCAL_PORT)" ]; then \
+	    echo "Run 'make connect' in a separate terminal to start port-forwarding before running mcp-setup." >&2; \
+	  fi; \
+	  exit 1; \
+	fi; \
 	echo "export AGENT_SWARM_API_URL=\"$$RESOLVED_URL\""; \
 	python3 scripts/update_opencode_config.py "$$RESOLVED_URL" "opencode.json"
 

@@ -1839,6 +1839,15 @@ class TestSessionDeleteOpenshell:
 
 
 class TestSandboxGC:
+    @pytest.fixture(autouse=True)
+    def mock_get_sandbox(self):
+        fake_resp = MagicMock()
+        fake_resp.sandbox.metadata.created_at_ms = 0
+        fake_client = MagicMock()
+        fake_client._stub.GetSandbox.return_value = fake_resp
+        with patch("swarmer.openshell_client._get_client", return_value=fake_client):
+            yield
+
     @pytest.mark.asyncio
     async def test_deletes_sandbox_not_in_db(self):
         async with _TestSession() as db:
