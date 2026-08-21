@@ -4,10 +4,20 @@ from __future__ import annotations
 
 import logging
 from typing import Any
+from urllib.parse import quote
 
 import httpx
 
 log = logging.getLogger(__name__)
+
+
+def _validate_path_user_id(user_id: str) -> str:
+    user_id_str = str(user_id).strip()
+    if not user_id_str:
+        raise ValueError("Invalid user_id: cannot be empty")
+    if "/" in user_id_str or "\\" in user_id_str or ".." in user_id_str:
+        raise ValueError(f"Invalid user_id '{user_id_str}': path traversal or separators not allowed")
+    return quote(user_id_str, safe=":")
 
 
 class AgentSwarmAPIError(Exception):
@@ -122,12 +132,13 @@ class AgentSwarmClient:
         self,
         ws_id: int,
         display_name: str,
-        description: str = "",
+        description: str | None = None,
     ) -> dict:
         body: dict[str, Any] = {
             "display_name": display_name,
-            "description": description,
         }
+        if description is not None:
+            body["description"] = description
         return await self._put(f"/api/v1/workspaces/{ws_id}", json=body)
 
     async def delete_workspace(self, ws_id: int) -> dict:
@@ -150,7 +161,8 @@ class AgentSwarmClient:
         return await self._post(f"/api/v1/workspaces/{ws_id}/members", json=body)
 
     async def remove_workspace_member(self, ws_id: int, user_id: str) -> dict:
-        return await self._delete(f"/api/v1/workspaces/{ws_id}/members/{user_id}")
+        encoded_user = _validate_path_user_id(user_id)
+        return await self._delete(f"/api/v1/workspaces/{ws_id}/members/{encoded_user}")
 
     # ==================================================================
     # Me / Identity & Global Admins (ACM-41659)
@@ -172,10 +184,33 @@ class AgentSwarmClient:
         return await self._post("/api/v1/admins", json={"user_id": user_id})
 
     async def remove_admin(self, user_id: str) -> dict:
-        return await self._delete(f"/api/v1/admins/{user_id}")
+        encoded_user = _validate_path_user_id(user_id)
+        return await self._delete(f"/api/v1/admins/{encoded_user}")
 
     async def bootstrap_admin(self) -> dict:
         return await self._post("/api/v1/admins/bootstrap")
+
+    # ==================================================================
+    # Dedicated Gateway (ACM-41655)
+    # ==================================================================
+
+    async def get_workspace_gateway(self, ws_id: int) -> dict:
+        return await self._get(f"/api/v1/workspaces/{ws_id}/gateway")
+
+    async def set_workspace_gateway(self, ws_id: int, payload: dict) -> dict:
+        return await self._put(f"/api/v1/workspaces/{ws_id}/gateway", json=payload)
+
+    async def delete_workspace_gateway(self, ws_id: int) -> dict:
+        return await self._delete(f"/api/v1/workspaces/{ws_id}/gateway")
+
+    async def test_gateway_connection(self, payload: dict) -> dict:
+        return await self._post("/api/v1/gateway/test-connection", json=payload)
+
+    async def parse_gateway_command(self, command: str) -> dict:
+        return await self._post("/api/v1/gateway/parse-command", json={"command": command})
+
+    async def parse_gateway_token(self, token_input: str) -> dict:
+        return await self._post("/api/v1/gateway/parse-token", json={"token": token_input})
 
     # ==================================================================
     # Sessions

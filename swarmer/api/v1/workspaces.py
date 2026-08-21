@@ -130,7 +130,8 @@ async def update_workspace(
     await _require_manage_permission(db, ws, identity)
     workspace_acl.claim_ownership_if_unowned(ws, identity.username)
     ws.display_name = body.display_name.strip()
-    ws.description = body.description.strip()
+    if body.description is not None:
+        ws.description = body.description.strip()
     await db.commit()
     await db.refresh(ws)
     return ws

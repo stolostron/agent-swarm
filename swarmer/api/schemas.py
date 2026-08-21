@@ -19,7 +19,7 @@ class WorkspaceCreate(BaseModel):
 
 class WorkspaceUpdate(BaseModel):
     display_name: str = Field(..., min_length=1, max_length=255)
-    description: str = ""
+    description: str | None = None
 
 
 class WorkspaceOut(BaseModel):

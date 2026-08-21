@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any, Optional
+from typing import Any
 from urllib.parse import urlparse
 
 from fastmcp import Context, FastMCP
@@ -112,7 +112,7 @@ class AgentSwarmMCPServer:
     async def _create_workspace(self, display_name: str, description: str = "") -> dict:
         return await self.client.create_workspace(display_name, description)
 
-    async def _update_workspace(self, workspace_id: int, display_name: str, description: str = "") -> dict:
+    async def _update_workspace(self, workspace_id: int, display_name: str, description: str | None = None) -> dict:
         return await self.client.update_workspace(workspace_id, display_name, description)
 
     async def _delete_workspace(self, workspace_id: int) -> dict:
@@ -170,12 +170,12 @@ class AgentSwarmMCPServer:
         workspace_id: int,
         gateway_url: str,
         auth_mode: str = "oidc",
-        oidc_issuer: Optional[str] = None,
-        oidc_client_id: Optional[str] = None,
-        oidc_audience: Optional[str] = None,
-        refresh_token: Optional[str] = None,
-        bearer_token: Optional[str] = None,
-        tls_ca: Optional[str] = None,
+        oidc_issuer: str | None = None,
+        oidc_client_id: str | None = None,
+        oidc_audience: str | None = None,
+        refresh_token: str | None = None,
+        bearer_token: str | None = None,
+        tls_ca: str | None = None,
         tls_verify: bool = True,
     ) -> dict:
         payload = {
@@ -198,12 +198,12 @@ class AgentSwarmMCPServer:
         self,
         gateway_url: str,
         auth_mode: str = "oidc",
-        oidc_issuer: Optional[str] = None,
-        oidc_client_id: Optional[str] = None,
-        oidc_audience: Optional[str] = None,
-        refresh_token: Optional[str] = None,
-        bearer_token: Optional[str] = None,
-        tls_ca: Optional[str] = None,
+        oidc_issuer: str | None = None,
+        oidc_client_id: str | None = None,
+        oidc_audience: str | None = None,
+        refresh_token: str | None = None,
+        bearer_token: str | None = None,
+        tls_ca: str | None = None,
         tls_verify: bool = True,
     ) -> dict:
         payload = {
@@ -228,7 +228,7 @@ class AgentSwarmMCPServer:
     async def _list_sessions(
         self,
         workspace_id: int,
-        phase: Optional[str] = None,
+        phase: str | None = None,
     ) -> list[dict]:
         sessions = await self.client.list_sessions(workspace_id)
         if phase:
@@ -274,8 +274,8 @@ class AgentSwarmMCPServer:
         persist: bool = False,
         working_branch: str = "",
         instruction_prompt: str = "",
-        github_pat_id: Optional[int] = None,
-        prompt_id: Optional[int] = None,
+        github_pat_id: int | None = None,
+        prompt_id: int | None = None,
     ) -> dict:
         session = await self.client.create_session(
             workspace_id,
@@ -295,15 +295,15 @@ class AgentSwarmMCPServer:
         self,
         workspace_id: int,
         session_id: int,
-        name: Optional[str] = None,
-        mode: Optional[str] = None,
-        provider: Optional[str] = None,
-        agent_tool: Optional[str] = None,
-        instruction_prompt: Optional[str] = None,
-        prompt_id: Optional[int] = None,
-        persist: Optional[bool] = None,
-        working_branch: Optional[str] = None,
-        github_pat_id: Optional[int] = None,
+        name: str | None = None,
+        mode: str | None = None,
+        provider: str | None = None,
+        agent_tool: str | None = None,
+        instruction_prompt: str | None = None,
+        prompt_id: int | None = None,
+        persist: bool | None = None,
+        working_branch: str | None = None,
+        github_pat_id: int | None = None,
     ) -> dict:
         fields: dict[str, Any] = {}
         if name is not None:
@@ -367,8 +367,8 @@ class AgentSwarmMCPServer:
         self,
         workspace_id: int,
         session_id: int,
-        prompt_id: Optional[int] = None,
-        instruction_prompt: Optional[str] = None,
+        prompt_id: int | None = None,
+        instruction_prompt: str | None = None,
     ) -> dict:
         fields: dict[str, Any] = {}
         if prompt_id is not None:
@@ -414,7 +414,7 @@ class AgentSwarmMCPServer:
         session_id: int,
         poll_interval: int = 10,
         timeout: int = 3600,
-        ctx: Optional[Context] = None,
+        ctx: Context | None = None,
     ) -> dict:
         poll = max(1, poll_interval)
         elapsed = 0
@@ -539,13 +539,13 @@ class AgentSwarmMCPServer:
             return await self._create_workspace(display_name, description)
 
         @mcp.tool()
-        async def update_workspace(workspace_id: int, display_name: str, description: str = "") -> dict:
+        async def update_workspace(workspace_id: int, display_name: str, description: str | None = None) -> dict:
             """Update a workspace's display name or description.
 
             Args:
                 workspace_id: The workspace id.
                 display_name: New workspace display name.
-                description: New workspace description.
+                description: Optional new workspace description.
             """
             return await self._update_workspace(workspace_id, display_name, description)
 
@@ -573,7 +573,7 @@ class AgentSwarmMCPServer:
 
             Args:
                 workspace_id: The workspace id.
-                user_id: Username or ServiceAccount identity (e.g. 'system:serviceaccount:ns:name').
+                user_id: Username or ServiceAccount identity (e.g. 'system:serviceaccount:<NAMESPACE>:<NAME>').
                 role: Member role (default 'member').
             """
             return await self._add_workspace_member(workspace_id, user_id, role)
@@ -643,19 +643,19 @@ class AgentSwarmMCPServer:
             workspace_id: int,
             gateway_url: str,
             auth_mode: str = "oidc",
-            oidc_issuer: Optional[str] = None,
-            oidc_client_id: Optional[str] = None,
-            oidc_audience: Optional[str] = None,
-            refresh_token: Optional[str] = None,
-            bearer_token: Optional[str] = None,
-            tls_ca: Optional[str] = None,
+            oidc_issuer: str | None = None,
+            oidc_client_id: str | None = None,
+            oidc_audience: str | None = None,
+            refresh_token: str | None = None,
+            bearer_token: str | None = None,
+            tls_ca: str | None = None,
             tls_verify: bool = True,
         ) -> dict:
             """Configure a dedicated OpenShell gateway for a workspace.
 
             Args:
                 workspace_id: The workspace id.
-                gateway_url: The gateway endpoint URL (e.g. https://gw-xyz.example.com:443).
+                gateway_url: The gateway endpoint URL (e.g. https://<YOUR_GATEWAY_HOST>:443).
                 auth_mode: Authentication mode ('oidc', 'bearer', 'none').
                 oidc_issuer: OIDC issuer URL (when auth_mode is 'oidc').
                 oidc_client_id: OIDC client ID (when auth_mode is 'oidc').
@@ -691,12 +691,12 @@ class AgentSwarmMCPServer:
         async def test_workspace_gateway(
             gateway_url: str,
             auth_mode: str = "oidc",
-            oidc_issuer: Optional[str] = None,
-            oidc_client_id: Optional[str] = None,
-            oidc_audience: Optional[str] = None,
-            refresh_token: Optional[str] = None,
-            bearer_token: Optional[str] = None,
-            tls_ca: Optional[str] = None,
+            oidc_issuer: str | None = None,
+            oidc_client_id: str | None = None,
+            oidc_audience: str | None = None,
+            refresh_token: str | None = None,
+            bearer_token: str | None = None,
+            tls_ca: str | None = None,
             tls_verify: bool = True,
         ) -> dict:
             """Test connection and authentication to an OpenShell gateway.
@@ -750,7 +750,7 @@ class AgentSwarmMCPServer:
         @mcp.tool()
         async def list_sessions(
             workspace_id: int,
-            phase: Optional[str] = None,
+            phase: str | None = None,
         ) -> list[dict]:
             """List sessions in a workspace.
 
@@ -798,8 +798,8 @@ class AgentSwarmMCPServer:
             persist: bool = False,
             working_branch: str = "",
             instruction_prompt: str = "",
-            github_pat_id: Optional[int] = None,
-            prompt_id: Optional[int] = None,
+            github_pat_id: int | None = None,
+            prompt_id: int | None = None,
         ) -> dict:
             """Create a new agent session.
 
@@ -825,15 +825,15 @@ class AgentSwarmMCPServer:
         async def update_session(
             workspace_id: int,
             session_id: int,
-            name: Optional[str] = None,
-            mode: Optional[str] = None,
-            provider: Optional[str] = None,
-            agent_tool: Optional[str] = None,
-            instruction_prompt: Optional[str] = None,
-            prompt_id: Optional[int] = None,
-            persist: Optional[bool] = None,
-            working_branch: Optional[str] = None,
-            github_pat_id: Optional[int] = None,
+            name: str | None = None,
+            mode: str | None = None,
+            provider: str | None = None,
+            agent_tool: str | None = None,
+            instruction_prompt: str | None = None,
+            prompt_id: int | None = None,
+            persist: bool | None = None,
+            working_branch: str | None = None,
+            github_pat_id: int | None = None,
         ) -> dict:
             """Update a non-running session's configuration (only changed fields needed).
 
@@ -918,8 +918,8 @@ class AgentSwarmMCPServer:
         async def set_session_prompt(
             workspace_id: int,
             session_id: int,
-            prompt_id: Optional[int] = None,
-            instruction_prompt: Optional[str] = None,
+            prompt_id: int | None = None,
+            instruction_prompt: str | None = None,
         ) -> dict:
             """Set the prompt configuration for a session.
 
@@ -993,7 +993,7 @@ class AgentSwarmMCPServer:
             session_id: int,
             poll_interval: int = 10,
             timeout: int = 3600,
-            ctx: Context = None,
+            ctx: Context | None = None,
         ) -> dict:
             """Poll a session until it reaches a terminal state, then return output.
 
@@ -1035,7 +1035,7 @@ class AgentSwarmMCPServer:
             session_id: int,
             cron_schedule: str,
             label: str = "",
-            prompt_id: Optional[int] = None,
+            prompt_id: int | None = None,
             instruction_prompt: str = "",
             enabled: bool = True,
         ) -> dict:
@@ -1061,11 +1061,11 @@ class AgentSwarmMCPServer:
             workspace_id: int,
             session_id: int,
             schedule_id: int,
-            cron_schedule: Optional[str] = None,
-            label: Optional[str] = None,
-            prompt_id: Optional[int] = None,
-            instruction_prompt: Optional[str] = None,
-            enabled: Optional[bool] = None,
+            cron_schedule: str | None = None,
+            label: str | None = None,
+            prompt_id: int | None = None,
+            instruction_prompt: str | None = None,
+            enabled: bool | None = None,
         ) -> dict:
             """Update an existing session schedule.
 

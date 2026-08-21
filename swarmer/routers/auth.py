@@ -102,7 +102,7 @@ async def oauth_callback(request: Request, token: str = Form(...), state: str = 
 
 
 @router.get("/token", dependencies=[Depends(require_auth)], response_class=HTMLResponse)
-async def token_page(request: Request):
+async def token_page(request: Request) -> HTMLResponse:
     token = get_user_token(request)
     username = request.session.get("username", "")
 
@@ -119,7 +119,7 @@ async def token_page(request: Request):
                 "enabled": True,
                 "environment": {
                     "AGENT_SWARM_API_URL": base_url,
-                    "AGENT_SWARM_VERIFY_SSL": "false" if base_url.startswith("https") else "true",
+                    "AGENT_SWARM_VERIFY_SSL": "true",
                     "AGENT_SWARM_API_TOKEN": token,
                 },
             }
@@ -127,7 +127,7 @@ async def token_page(request: Request):
     }
     mcp_json = json.dumps(mcp_config, indent=2)
 
-    return templates.TemplateResponse(
+    response = templates.TemplateResponse(
         request,
         "token.html",
         {
@@ -137,6 +137,8 @@ async def token_page(request: Request):
             "mcp_json": mcp_json,
         },
     )
+    response.headers["Cache-Control"] = "no-store, private"
+    return response
 
 
 @router.post("/logout")

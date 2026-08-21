@@ -215,11 +215,14 @@ class APIClient:
         return self._enrich_workspace(ws)
 
     async def update_workspace(
-        self, ws_id: int, display_name: str, description: str = ""
+        self, ws_id: int, display_name: str, description: str | None = None
     ) -> dict:
+        body: dict[str, Any] = {"display_name": display_name}
+        if description is not None:
+            body["description"] = description
         ws = await self._put(
             f"/api/v1/workspaces/{ws_id}",
-            json={"display_name": display_name, "description": description},
+            json=body,
         )
         return self._enrich_workspace(ws)
 

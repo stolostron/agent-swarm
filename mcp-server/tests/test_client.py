@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import json
+
+import httpx
 import pytest
 import respx
-import httpx
 
 from agent_swarm_mcp_server.client import AgentSwarmClient, AgentSwarmAPIError
 
@@ -186,49 +188,55 @@ async def test_delete_repo(client):
 @pytest.mark.asyncio
 async def test_workspace_crud(client):
     with respx.mock(base_url=BASE_URL) as mock:
-        mock.post("/api/v1/workspaces").mock(
+        post_route = mock.post("/api/v1/workspaces").mock(
             return_value=httpx.Response(201, json={"id": 2, "display_name": "ws2", "description": "desc"})
         )
-        mock.put("/api/v1/workspaces/2").mock(
+        put_route = mock.put("/api/v1/workspaces/2").mock(
             return_value=httpx.Response(200, json={"id": 2, "display_name": "ws2-updated", "description": "new-desc"})
         )
-        mock.delete("/api/v1/workspaces/2").mock(
+        delete_route = mock.delete("/api/v1/workspaces/2").mock(
             return_value=httpx.Response(200, json={"detail": "deleted"})
         )
 
         created = await client.create_workspace("ws2", "desc")
         assert created["id"] == 2
         assert created["display_name"] == "ws2"
+        assert json.loads(post_route.calls.last.request.content) == {"display_name": "ws2", "description": "desc"}
 
         updated = await client.update_workspace(2, "ws2-updated", "new-desc")
         assert updated["display_name"] == "ws2-updated"
+        assert json.loads(put_route.calls.last.request.content) == {"display_name": "ws2-updated", "description": "new-desc"}
 
         deleted = await client.delete_workspace(2)
         assert deleted == {"detail": "deleted"}
+        assert delete_route.called
 
 
 @pytest.mark.asyncio
 async def test_workspace_members(client):
     with respx.mock(base_url=BASE_URL) as mock:
-        mock.get("/api/v1/workspaces/1/members").mock(
-            return_value=httpx.Response(200, json=[{"id": 1, "workspace_id": 1, "user_id": "alice", "role": "member"}])
+        get_route = mock.get("/api/v1/workspaces/1/members").mock(
+            return_value=httpx.Response(200, json=[{"id": 1, "workspace_id": 1, "user_id": "test-user-1", "role": "member"}])
         )
-        mock.post("/api/v1/workspaces/1/members").mock(
-            return_value=httpx.Response(201, json={"id": 2, "workspace_id": 1, "user_id": "bob", "role": "admin"})
+        post_route = mock.post("/api/v1/workspaces/1/members").mock(
+            return_value=httpx.Response(201, json={"id": 2, "workspace_id": 1, "user_id": "test-user-2", "role": "admin"})
         )
-        mock.delete("/api/v1/workspaces/1/members/bob").mock(
-            return_value=httpx.Response(200, json={"detail": "bob removed"})
+        delete_route = mock.delete("/api/v1/workspaces/1/members/test-user-2").mock(
+            return_value=httpx.Response(200, json={"detail": "test-user-2 removed"})
         )
 
         members = await client.list_workspace_members(1)
         assert len(members) == 1
-        assert members[0]["user_id"] == "alice"
+        assert members[0]["user_id"] == "test-user-1"
+        assert get_route.called
 
-        added = await client.add_workspace_member(1, "bob", role="admin")
-        assert added["user_id"] == "bob"
+        added = await client.add_workspace_member(1, "test-user-2", role="admin")
+        assert added["user_id"] == "test-user-2"
+        assert json.loads(post_route.calls.last.request.content) == {"user_id": "test-user-2", "role": "admin"}
 
-        removed = await client.remove_workspace_member(1, "bob")
-        assert removed == {"detail": "bob removed"}
+        removed = await client.remove_workspace_member(1, "test-user-2")
+        assert removed == {"detail": "test-user-2 removed"}
+        assert delete_route.called
 
 
 @pytest.mark.asyncio
@@ -236,43 +244,46 @@ async def test_me_and_admins(client):
     with respx.mock(base_url=BASE_URL) as mock:
         mock.get("/api/v1/me").mock(
             return_value=httpx.Response(200, json={
-                "username": "alice",
+                "username": "test-user-1",
                 "is_admin": True,
                 "can_create_workspace": True,
                 "admin_bootstrap_available": False,
             })
         )
         mock.get("/api/v1/users").mock(
-            return_value=httpx.Response(200, json={"users": ["alice", "bob"]})
+            return_value=httpx.Response(200, json={"users": ["test-user-1", "test-user-2"]})
         )
         mock.get("/api/v1/admins").mock(
-            return_value=httpx.Response(200, json=[{"id": 1, "user_id": "alice", "created_by": "bootstrap"}])
+            return_value=httpx.Response(200, json=[{"id": 1, "user_id": "test-user-1", "created_by": "bootstrap"}])
         )
-        mock.post("/api/v1/admins").mock(
-            return_value=httpx.Response(201, json={"id": 2, "user_id": "bob", "created_by": "alice"})
+        post_admin = mock.post("/api/v1/admins").mock(
+            return_value=httpx.Response(201, json={"id": 2, "user_id": "test-user-2", "created_by": "test-user-1"})
         )
-        mock.delete("/api/v1/admins/bob").mock(
-            return_value=httpx.Response(200, json={"detail": "bob removed from admins."})
+        del_admin = mock.delete("/api/v1/admins/test-user-2").mock(
+            return_value=httpx.Response(200, json={"detail": "test-user-2 removed from admins."})
         )
-        mock.post("/api/v1/admins/bootstrap").mock(
-            return_value=httpx.Response(201, json={"id": 1, "user_id": "alice", "created_by": "bootstrap"})
+        post_bootstrap = mock.post("/api/v1/admins/bootstrap").mock(
+            return_value=httpx.Response(201, json={"id": 1, "user_id": "test-user-1", "created_by": "bootstrap"})
         )
 
         me = await client.get_me()
-        assert me["username"] == "alice"
+        assert me["username"] == "test-user-1"
         assert me["is_admin"] is True
 
         users = await client.list_known_users()
-        assert users == ["alice", "bob"]
+        assert users == ["test-user-1", "test-user-2"]
 
         admins = await client.list_admins()
         assert len(admins) == 1
 
-        added = await client.add_admin("bob")
-        assert added["user_id"] == "bob"
+        added = await client.add_admin("test-user-2")
+        assert added["user_id"] == "test-user-2"
+        assert json.loads(post_admin.calls.last.request.content) == {"user_id": "test-user-2"}
 
-        removed = await client.remove_admin("bob")
-        assert removed == {"detail": "bob removed from admins."}
+        removed = await client.remove_admin("test-user-2")
+        assert removed == {"detail": "test-user-2 removed from admins."}
+        assert del_admin.called
 
         bootstrapped = await client.bootstrap_admin()
         assert bootstrapped["created_by"] == "bootstrap"
+        assert post_bootstrap.called

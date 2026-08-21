@@ -387,49 +387,70 @@ async def test_workspace_crud_server_methods():
     server.client.delete_workspace = AsyncMock(return_value={"detail": "deleted"})
 
     assert (await server._get_workspace(1))["display_name"] == "ws1"
+    server.client.get_workspace.assert_awaited_once_with(1)
+
     assert (await server._create_workspace("ws2", "d"))["id"] == 2
+    server.client.create_workspace.assert_awaited_once_with("ws2", "d")
+
     assert (await server._update_workspace(2, "ws2-renamed", "d2"))["display_name"] == "ws2-renamed"
+    server.client.update_workspace.assert_awaited_once_with(2, "ws2-renamed", "d2")
+
     assert (await server._delete_workspace(2))["detail"] == "deleted"
+    server.client.delete_workspace.assert_awaited_once_with(2)
 
 
 @pytest.mark.asyncio
 async def test_workspace_members_server_methods():
     server = make_server()
     server.client.list_workspace_members = AsyncMock(return_value=[
-        {"id": 10, "workspace_id": 1, "user_id": "alice", "role": "member"}
+        {"id": 10, "workspace_id": 1, "user_id": "test-user-1", "role": "member"}
     ])
     server.client.add_workspace_member = AsyncMock(return_value={
-        "id": 11, "workspace_id": 1, "user_id": "bob", "role": "admin"
+        "id": 11, "workspace_id": 1, "user_id": "test-user-2", "role": "admin"
     })
     server.client.remove_workspace_member = AsyncMock(return_value={"detail": "removed"})
 
     members = await server._list_workspace_members(1)
     assert len(members) == 1
-    assert members[0]["user_id"] == "alice"
+    assert members[0]["user_id"] == "test-user-1"
+    server.client.list_workspace_members.assert_awaited_once_with(1)
 
-    added = await server._add_workspace_member(1, "bob", role="admin")
-    assert added["user_id"] == "bob"
+    added = await server._add_workspace_member(1, "test-user-2", role="admin")
+    assert added["user_id"] == "test-user-2"
+    server.client.add_workspace_member.assert_awaited_once_with(1, "test-user-2", "admin")
 
-    removed = await server._remove_workspace_member(1, "bob")
+    removed = await server._remove_workspace_member(1, "test-user-2")
     assert removed == {"detail": "removed"}
+    server.client.remove_workspace_member.assert_awaited_once_with(1, "test-user-2")
 
 
 @pytest.mark.asyncio
 async def test_admins_and_me_server_methods():
     server = make_server()
-    server.client.get_me = AsyncMock(return_value={"username": "alice", "is_admin": True})
-    server.client.list_known_users = AsyncMock(return_value=["alice", "bob"])
-    server.client.list_admins = AsyncMock(return_value=[{"id": 1, "user_id": "alice", "created_by": "bootstrap"}])
-    server.client.add_admin = AsyncMock(return_value={"id": 2, "user_id": "bob", "created_by": "alice"})
+    server.client.get_me = AsyncMock(return_value={"username": "test-user-1", "is_admin": True})
+    server.client.list_known_users = AsyncMock(return_value=["test-user-1", "test-user-2"])
+    server.client.list_admins = AsyncMock(return_value=[{"id": 1, "user_id": "test-user-1", "created_by": "bootstrap"}])
+    server.client.add_admin = AsyncMock(return_value={"id": 2, "user_id": "test-user-2", "created_by": "test-user-1"})
     server.client.remove_admin = AsyncMock(return_value={"detail": "removed"})
-    server.client.bootstrap_admin = AsyncMock(return_value={"id": 1, "user_id": "alice", "created_by": "bootstrap"})
+    server.client.bootstrap_admin = AsyncMock(return_value={"id": 1, "user_id": "test-user-1", "created_by": "bootstrap"})
 
-    assert (await server._get_me())["username"] == "alice"
-    assert (await server._list_known_users()) == ["alice", "bob"]
+    assert (await server._get_me())["username"] == "test-user-1"
+    server.client.get_me.assert_awaited_once_with()
+
+    assert (await server._list_known_users()) == ["test-user-1", "test-user-2"]
+    server.client.list_known_users.assert_awaited_once_with()
+
     assert len(await server._list_admins()) == 1
-    assert (await server._add_admin("bob"))["user_id"] == "bob"
-    assert (await server._remove_admin("bob"))["detail"] == "removed"
+    server.client.list_admins.assert_awaited_once_with()
+
+    assert (await server._add_admin("test-user-2"))["user_id"] == "test-user-2"
+    server.client.add_admin.assert_awaited_once_with("test-user-2")
+
+    assert (await server._remove_admin("test-user-2"))["detail"] == "removed"
+    server.client.remove_admin.assert_awaited_once_with("test-user-2")
+
     assert (await server._bootstrap_admin())["created_by"] == "bootstrap"
+    server.client.bootstrap_admin.assert_awaited_once_with()
 
 
 # ------------------------------------------------------------------
