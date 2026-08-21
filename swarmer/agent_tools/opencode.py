@@ -52,8 +52,8 @@ class OpenCodeStrategy(AgentToolStrategy):
             # chosen model: swap pro→flash / opus/sonnet→haiku within same provider.
             # Fall back to fixed defaults if the model is unrecognised. Kept for
             # backward compatibility with sessions created before presets existed.
-            _model = model or "google/gemini-3.7-flash"
-            _small_model = "google/gemini-3.5-flash-lite"
+            _model = model or "google/gemini-3.7-flash@default"
+            _small_model = "google/gemini-3.5-flash-lite@default"
             if "/" in _model:
                 _provider, _mid = _model.split("/", 1)
                 # Strip @version suffix for comparison
