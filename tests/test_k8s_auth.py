@@ -175,7 +175,80 @@ class TestValidateTokenFallback:
 
             result = await validate_token(token, "https://localhost:6443", False)
 
+            assert result is not None
+            assert result.username == "system:serviceaccount:swarmer:alice"
+            assert result.uid == "uid-123"
+            assert "system:serviceaccounts" in result.groups
+
+    @pytest.mark.asyncio
+    async def test_openshift_oauth_token_resolved_via_user_api(self):
+        """An OpenShift OAuth token (sha256~...) has no JWT payload, but resolves via CustomObjectsApi."""
+        token = "sha256~mockOpenShiftOauthBearerToken"
+
+        with patch("kubernetes.client") as mock_k8s:
+            # TokenReview fails with 403 (unprivileged user token)
+            auth_api = MagicMock()
+            auth_api.create_token_review.side_effect = _api_exception(403)
+            mock_k8s.AuthenticationV1Api.return_value = auth_api
+
+            # CustomObjectsApi returns user object from user.openshift.io
+            custom_api = MagicMock()
+            custom_api.get_cluster_custom_object.return_value = {
+                "metadata": {"name": "jpacker", "uid": "uid-openshift-456"},
+                "groups": ["system:authenticated", "system:authenticated:oauth", "developers"],
+            }
+            mock_k8s.CustomObjectsApi.return_value = custom_api
+
+            api_client_instance = MagicMock()
+            api_client_instance.__enter__ = MagicMock(return_value=api_client_instance)
+            api_client_instance.__exit__ = MagicMock(return_value=False)
+            mock_k8s.ApiClient.return_value = api_client_instance
+            mock_k8s.Configuration.return_value = MagicMock()
+            mock_k8s.V1TokenReview = MagicMock()
+            mock_k8s.V1TokenReviewSpec = MagicMock()
+
+            result = await validate_token(token, "https://localhost:6443", False)
+
         assert result is not None
-        assert result.username == "system:serviceaccount:swarmer:alice"
-        assert result.uid == "uid-123"
-        assert "system:serviceaccounts" in result.groups
+        assert isinstance(result, TokenIdentity)
+        assert result.username == "jpacker"
+        assert result.uid == "uid-openshift-456"
+        assert "developers" in result.groups
+
+    @pytest.mark.asyncio
+    async def test_non_jwt_token_resolved_via_self_subject_review(self):
+        """A generic K8s non-JWT token resolves via SelfSubjectReview when OpenShift API 404s."""
+        token = "opaque-k8s-token-123"
+
+        with patch("kubernetes.client") as mock_k8s:
+            auth_api = MagicMock()
+            auth_api.create_token_review.side_effect = _api_exception(403)
+
+            # OpenShift User API returns 404 (not an OpenShift cluster)
+            custom_api = MagicMock()
+            custom_api.get_cluster_custom_object.side_effect = _api_exception(404)
+            mock_k8s.CustomObjectsApi.return_value = custom_api
+
+            # SelfSubjectReview succeeds
+            mock_ssr = MagicMock()
+            mock_ssr.status.user_info.username = "k8s-user"
+            mock_ssr.status.user_info.uid = "k8s-uid"
+            mock_ssr.status.user_info.groups = ["system:authenticated"]
+            auth_api.create_self_subject_review.return_value = mock_ssr
+            mock_k8s.AuthenticationV1Api.return_value = auth_api
+
+            api_client_instance = MagicMock()
+            api_client_instance.__enter__ = MagicMock(return_value=api_client_instance)
+            api_client_instance.__exit__ = MagicMock(return_value=False)
+            mock_k8s.ApiClient.return_value = api_client_instance
+            mock_k8s.Configuration.return_value = MagicMock()
+            mock_k8s.V1TokenReview = MagicMock()
+            mock_k8s.V1TokenReviewSpec = MagicMock()
+            mock_k8s.V1SelfSubjectReview = MagicMock()
+
+            result = await validate_token(token, "https://localhost:6443", False)
+
+        assert result is not None
+        assert result.username == "k8s-user"
+        assert result.uid == "k8s-uid"
+        assert result.groups == ["system:authenticated"]

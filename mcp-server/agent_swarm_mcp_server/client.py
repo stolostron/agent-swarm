@@ -104,6 +104,79 @@ class AgentSwarmClient:
     async def get_workspace(self, ws_id: int) -> dict:
         return await self._get(f"/api/v1/workspaces/{ws_id}")
 
+    async def create_workspace(
+        self,
+        display_name: str,
+        description: str = "",
+        gateway: dict | None = None,
+    ) -> dict:
+        body: dict[str, Any] = {
+            "display_name": display_name,
+            "description": description,
+        }
+        if gateway:
+            body["gateway"] = gateway
+        return await self._post("/api/v1/workspaces", json=body)
+
+    async def update_workspace(
+        self,
+        ws_id: int,
+        display_name: str,
+        description: str = "",
+    ) -> dict:
+        body: dict[str, Any] = {
+            "display_name": display_name,
+            "description": description,
+        }
+        return await self._put(f"/api/v1/workspaces/{ws_id}", json=body)
+
+    async def delete_workspace(self, ws_id: int) -> dict:
+        return await self._delete(f"/api/v1/workspaces/{ws_id}")
+
+    # ==================================================================
+    # Workspace Members (ACM-41659)
+    # ==================================================================
+
+    async def list_workspace_members(self, ws_id: int) -> list[dict]:
+        return await self._get(f"/api/v1/workspaces/{ws_id}/members")
+
+    async def add_workspace_member(
+        self,
+        ws_id: int,
+        user_id: str,
+        role: str = "member",
+    ) -> dict:
+        body = {"user_id": user_id, "role": role}
+        return await self._post(f"/api/v1/workspaces/{ws_id}/members", json=body)
+
+    async def remove_workspace_member(self, ws_id: int, user_id: str) -> dict:
+        return await self._delete(f"/api/v1/workspaces/{ws_id}/members/{user_id}")
+
+    # ==================================================================
+    # Me / Identity & Global Admins (ACM-41659)
+    # ==================================================================
+
+    async def get_me(self) -> dict:
+        return await self._get("/api/v1/me")
+
+    async def list_known_users(self) -> list[str]:
+        data = await self._get("/api/v1/users")
+        if isinstance(data, dict):
+            return data.get("users", [])
+        return data or []
+
+    async def list_admins(self) -> list[dict]:
+        return await self._get("/api/v1/admins")
+
+    async def add_admin(self, user_id: str) -> dict:
+        return await self._post("/api/v1/admins", json={"user_id": user_id})
+
+    async def remove_admin(self, user_id: str) -> dict:
+        return await self._delete(f"/api/v1/admins/{user_id}")
+
+    async def bootstrap_admin(self) -> dict:
+        return await self._post("/api/v1/admins/bootstrap")
+
     # ==================================================================
     # Sessions
     # ==================================================================

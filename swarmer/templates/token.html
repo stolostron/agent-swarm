@@ -1,0 +1,91 @@
+{% extends "base.html" %}
+{% block title %}API Token & MCP Setup — Swarmer{% endblock %}
+
+{% block content %}
+<h1 class="pf-v6-c-title pf-m-2xl" style="margin-bottom:var(--pf-t--global--spacer--xs);">🔑 API Access & MCP Configuration</h1>
+<p style="color:var(--pf-t--global--text--color--subtle); margin-bottom:var(--pf-t--global--spacer--lg);">
+  Use your active session credentials to connect external tools, OpenCode CLI, or the Agent Swarm MCP Server directly to this Swarmer instance.
+</p>
+
+{# ── 1. User & Endpoint Details ── #}
+<div class="pf-v6-c-card" style="margin-bottom:var(--pf-t--global--spacer--lg); max-width:850px;">
+  <div class="pf-v6-c-card__title">
+    <h2 class="pf-v6-c-title pf-m-lg">Session Identity</h2>
+  </div>
+  <div class="pf-v6-c-card__body">
+    <div style="display:grid; grid-template-columns: 180px 1fr; gap:var(--pf-t--global--spacer--sm); align-items:center;">
+      <span style="font-weight:var(--pf-t--global--font--weight--heading--bold);">Authenticated User:</span>
+      <code>{{ username }}</code>
+
+      <span style="font-weight:var(--pf-t--global--font--weight--heading--bold);">Swarmer API URL:</span>
+      <code>{{ api_url }}</code>
+    </div>
+  </div>
+</div>
+
+{# ── 2. Bearer Token ── #}
+<div class="pf-v6-c-card" style="margin-bottom:var(--pf-t--global--spacer--lg); max-width:850px;">
+  <div class="pf-v6-c-card__title" style="display:flex; justify-content:space-between; align-items:center;">
+    <h2 class="pf-v6-c-title pf-m-lg">Active Bearer Token</h2>
+    <button type="button" class="pf-v6-c-button pf-m-secondary pf-m-small" id="copy-token-btn" onclick="copyToClipboard('bearer-token-text', 'copy-token-btn')">
+      📋 Copy Token
+    </button>
+  </div>
+  <div class="pf-v6-c-card__body">
+    <p style="color:var(--pf-t--global--text--color--subtle); margin-bottom:var(--pf-t--global--spacer--sm); font-size:var(--pf-t--global--font--size--sm);">
+      Pass this token in the <code>Authorization: Bearer &lt;TOKEN&gt;</code> header when invoking the REST API or configuring the MCP server.
+    </p>
+    <textarea id="bearer-token-text" class="pf-v6-c-form-control" rows="3" readonly
+              style="font-family:var(--pf-t--global--font--family--mono); font-size:var(--pf-t--global--font--size--sm); word-break:break-all; resize:vertical;">{{ token }}</textarea>
+  </div>
+</div>
+
+{# ── 3. OpenCode MCP Configuration ── #}
+<div class="pf-v6-c-card" style="margin-bottom:var(--pf-t--global--spacer--lg); max-width:850px;">
+  <div class="pf-v6-c-card__title" style="display:flex; justify-content:space-between; align-items:center;">
+    <h2 class="pf-v6-c-title pf-m-lg">OpenCode MCP Configuration (<code>opencode.json</code>)</h2>
+    <button type="button" class="pf-v6-c-button pf-m-secondary pf-m-small" id="copy-json-btn" onclick="copyToClipboard('mcp-json-text', 'copy-json-btn')">
+      📋 Copy Config Snippet
+    </button>
+  </div>
+  <div class="pf-v6-c-card__body">
+    <p style="color:var(--pf-t--global--text--color--subtle); margin-bottom:var(--pf-t--global--spacer--sm); font-size:var(--pf-t--global--font--size--sm);">
+      Add this block to your local <code>opencode.json</code> (or <code>~/.config/opencode/opencode.json</code>) to enable the <code>agent-swarm</code> MCP server:
+    </p>
+    <pre id="mcp-json-text" style="background:var(--pf-t--global--background--color--secondary--default); padding:var(--pf-t--global--spacer--md); border-radius:var(--pf-t--global--border--radius--medium); overflow-x:auto; font-size:var(--pf-t--global--font--size--sm);"><code>{{ mcp_json }}</code></pre>
+  </div>
+</div>
+
+{# ── 4. CLI Quick Setup ── #}
+<div class="pf-v6-c-card" style="margin-bottom:var(--pf-t--global--spacer--xl); max-width:850px;">
+  <div class="pf-v6-c-card__title" style="display:flex; justify-content:space-between; align-items:center;">
+    <h2 class="pf-v6-c-title pf-m-lg">CLI Quick Setup</h2>
+    <button type="button" class="pf-v6-c-button pf-m-secondary pf-m-small" id="copy-make-btn" onclick="copyToClipboard('make-cmd-text', 'copy-make-btn')">
+      📋 Copy Make Command
+    </button>
+  </div>
+  <div class="pf-v6-c-card__body">
+    <p style="color:var(--pf-t--global--text--color--subtle); margin-bottom:var(--pf-t--global--spacer--sm); font-size:var(--pf-t--global--font--size--sm);">
+      You can also apply this token directly from your terminal using the Makefile in the repo:
+    </p>
+    <pre id="make-cmd-text" style="background:var(--pf-t--global--background--color--secondary--default); padding:var(--pf-t--global--spacer--md); border-radius:var(--pf-t--global--border--radius--medium); overflow-x:auto; font-size:var(--pf-t--global--font--size--sm);"><code>make mcp-setup TOKEN="{{ token }}"</code></pre>
+  </div>
+</div>
+
+<script>
+function copyToClipboard(elementId, buttonId) {
+  const el = document.getElementById(elementId);
+  const text = el.tagName === 'TEXTAREA' || el.tagName === 'INPUT' ? el.value : el.innerText;
+  navigator.clipboard.writeText(text).then(() => {
+    const btn = document.getElementById(buttonId);
+    const originalText = btn.innerText;
+    btn.innerText = '✓ Copied!';
+    setTimeout(() => {
+      btn.innerText = originalText;
+    }, 2000);
+  }).catch(err => {
+    console.error('Failed to copy: ', err);
+  });
+}
+</script>
+{% endblock %}

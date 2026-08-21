@@ -15,6 +15,25 @@ An MCP server that exposes Agent Swarm session management as tools for AI agents
 | Tool | Purpose |
 |------|---------|
 | `list_workspaces` | Discover available workspaces |
+| `get_workspace` | Get details of a specific workspace |
+| `create_workspace` | Create a new workspace |
+| `update_workspace` | Modify a workspace's display name or description |
+| `delete_workspace` | Delete a workspace |
+| `list_workspace_members` | List members granted access to a workspace |
+| `add_workspace_member` | Grant a user access to a workspace |
+| `remove_workspace_member` | Revoke a user's access from a workspace |
+| `get_me` | Get authenticated user identity and ACL permissions |
+| `list_known_users` | List known users for member/admin autocomplete |
+| `list_admins` | List global Swarmer admins |
+| `add_admin` | Grant a user global admin rights |
+| `remove_admin` | Revoke global admin rights from a user |
+| `bootstrap_admin` | Self-promote to global admin when zero admins exist |
+| `get_workspace_gateway` | Get dedicated OpenShell gateway settings |
+| `set_workspace_gateway` | Configure a dedicated OpenShell gateway |
+| `delete_workspace_gateway` | Revert to default cluster OpenShell gateway |
+| `test_workspace_gateway` | Test OpenShell gateway connection |
+| `parse_gateway_command` | Parse OpenShell CLI gateway command |
+| `parse_gateway_token` | Parse OIDC token / credential payload |
 | `list_sessions` | List sessions (optional phase filter) |
 | `find_sessions_by_repo` | Find sessions with a specific git repo attached |
 | `get_session` | Full session details including repos |
@@ -31,6 +50,10 @@ An MCP server that exposes Agent Swarm session management as tools for AI agents
 | `get_session_output` | Retrieve captured output |
 | `wait_for_session` | Poll until terminal state, return output |
 | `list_github_pats` | List GitHub PATs for private repo access |
+| `list_session_schedules` | List schedules configured for a session |
+| `add_session_schedule` | Add a new schedule to a session |
+| `update_session_schedule` | Update an existing session schedule |
+| `delete_session_schedule` | Delete a session schedule |
 
 ## Installation
 

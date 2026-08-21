@@ -55,7 +55,7 @@ OPENSHELL_WORKSPACE_STORAGE ?= 10Gi
 # ──────────────────────────────────────────────────────────────
 #  Phony targets
 # ──────────────────────────────────────────────────────────────
-.PHONY: setup-secret user-token grant-workspace grant-workspace-access grant-workspace-create \
+.PHONY: setup-secret user-token api-info mcp-setup grant-workspace grant-workspace-access grant-workspace-create \
         dev lint test smoke-test-jira \
         sync-images image-build image-push \
         deploy delete connect openshell-register connect-openshell status \
@@ -106,6 +106,12 @@ user-token:  ## Issue a login token for a K8s user  (SA_USER=alice, TOKEN_DURATI
 	@echo "'$(SA_USER)' logs in as: system:serviceaccount:$(NAMESPACE):$(SA_USER)"
 	@echo "Grant workspace access via the UI: workspace -> Members tab -> Add Member -> that username"
 	@echo "(or POST /api/v1/workspaces/<id>/members {\"user_id\": \"system:serviceaccount:$(NAMESPACE):$(SA_USER)\"})"
+
+api-info:  ## Display Swarmer API URL, current user token, and opencode.json snippet
+	@python3 scripts/mcp_setup.py --print-only --namespace "$(NAMESPACE)"
+
+mcp-setup:  ## Configure opencode.json for Agent Swarm  (TOKEN=..., URL=...)
+	@python3 scripts/mcp_setup.py $(if $(TOKEN),--token "$(TOKEN)",) $(if $(URL),--url "$(URL)",) --namespace "$(NAMESPACE)"
 
 # SA_USER/OIDC_USER/WORKSPACE_NS/NAMESPACE are carried as exported shell env
 # vars (not textually substituted into the recipe) and validated against a
@@ -235,7 +241,7 @@ lint:  ## Run ruff linter
 
 test:  ## Run unit tests (excludes Playwright browser tests)
 	python3 -m pytest tests/ -q --ignore=tests/test_ui_patternfly.py
-	python3 -m pip install -q -e "mcp-server[dev]"
+	python3 -m pip install -q --break-system-packages -e "mcp-server[dev]" 2>/dev/null || python3 -m pip install -q -e "mcp-server[dev]" || true
 	python3 -m pytest mcp-server/tests/ -q --rootdir=mcp-server
 
 smoke-test-jira:  ## Run Jira MCP OpenShell e2e smoke test (requires running OpenShell gateway)

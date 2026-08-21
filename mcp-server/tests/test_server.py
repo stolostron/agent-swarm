@@ -17,6 +17,10 @@ from agent_swarm_mcp_server.client import AgentSwarmClient
 
 EXPECTED_TOOLS = {
     "list_workspaces",
+    "get_workspace",
+    "create_workspace",
+    "update_workspace",
+    "delete_workspace",
     "list_sessions",
     "get_session",
     "find_sessions_by_repo",
@@ -38,6 +42,23 @@ EXPECTED_TOOLS = {
     "add_session_schedule",
     "update_session_schedule",
     "delete_session_schedule",
+    # ACM-41655: dedicated gateway tools
+    "get_workspace_gateway",
+    "set_workspace_gateway",
+    "delete_workspace_gateway",
+    "test_workspace_gateway",
+    "parse_gateway_command",
+    "parse_gateway_token",
+    # ACM-41659 / ACM-42585: workspace members, admins, me
+    "list_workspace_members",
+    "add_workspace_member",
+    "remove_workspace_member",
+    "get_me",
+    "list_known_users",
+    "list_admins",
+    "add_admin",
+    "remove_admin",
+    "bootstrap_admin",
 }
 
 
@@ -351,6 +372,64 @@ async def test_wait_for_session_already_terminal():
     result = await server._wait_for_session(1, 10, poll_interval=0, timeout=60)
     assert result["phase"] == "succeeded"
     assert result["output"] == "already done"
+
+
+# ------------------------------------------------------------------
+# Workspace CRUD, Members, and Admin Server Methods
+# ------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_workspace_crud_server_methods():
+    server = make_server()
+    server.client.get_workspace = AsyncMock(return_value={"id": 1, "display_name": "ws1"})
+    server.client.create_workspace = AsyncMock(return_value={"id": 2, "display_name": "ws2", "description": "d"})
+    server.client.update_workspace = AsyncMock(return_value={"id": 2, "display_name": "ws2-renamed", "description": "d2"})
+    server.client.delete_workspace = AsyncMock(return_value={"detail": "deleted"})
+
+    assert (await server._get_workspace(1))["display_name"] == "ws1"
+    assert (await server._create_workspace("ws2", "d"))["id"] == 2
+    assert (await server._update_workspace(2, "ws2-renamed", "d2"))["display_name"] == "ws2-renamed"
+    assert (await server._delete_workspace(2))["detail"] == "deleted"
+
+
+@pytest.mark.asyncio
+async def test_workspace_members_server_methods():
+    server = make_server()
+    server.client.list_workspace_members = AsyncMock(return_value=[
+        {"id": 10, "workspace_id": 1, "user_id": "alice", "role": "member"}
+    ])
+    server.client.add_workspace_member = AsyncMock(return_value={
+        "id": 11, "workspace_id": 1, "user_id": "bob", "role": "admin"
+    })
+    server.client.remove_workspace_member = AsyncMock(return_value={"detail": "removed"})
+
+    members = await server._list_workspace_members(1)
+    assert len(members) == 1
+    assert members[0]["user_id"] == "alice"
+
+    added = await server._add_workspace_member(1, "bob", role="admin")
+    assert added["user_id"] == "bob"
+
+    removed = await server._remove_workspace_member(1, "bob")
+    assert removed == {"detail": "removed"}
+
+
+@pytest.mark.asyncio
+async def test_admins_and_me_server_methods():
+    server = make_server()
+    server.client.get_me = AsyncMock(return_value={"username": "alice", "is_admin": True})
+    server.client.list_known_users = AsyncMock(return_value=["alice", "bob"])
+    server.client.list_admins = AsyncMock(return_value=[{"id": 1, "user_id": "alice", "created_by": "bootstrap"}])
+    server.client.add_admin = AsyncMock(return_value={"id": 2, "user_id": "bob", "created_by": "alice"})
+    server.client.remove_admin = AsyncMock(return_value={"detail": "removed"})
+    server.client.bootstrap_admin = AsyncMock(return_value={"id": 1, "user_id": "alice", "created_by": "bootstrap"})
+
+    assert (await server._get_me())["username"] == "alice"
+    assert (await server._list_known_users()) == ["alice", "bob"]
+    assert len(await server._list_admins()) == 1
+    assert (await server._add_admin("bob"))["user_id"] == "bob"
+    assert (await server._remove_admin("bob"))["detail"] == "removed"
+    assert (await server._bootstrap_admin())["created_by"] == "bootstrap"
 
 
 # ------------------------------------------------------------------

@@ -92,17 +92,70 @@ async def _probe_with_user_token(token: str, api_url: str, in_cluster: bool) -> 
     def _do_probe():
         from kubernetes.client.rest import ApiException
         cfg = _make_user_config(token, api_url, in_cluster)
+        jwt_user = _username_from_jwt(token)
+
         with k8s_client.ApiClient(cfg) as api:
+            if jwt_user:
+                # Fast path for JWT tokens (e.g. K8s ServiceAccount tokens)
+                core = k8s_client.CoreV1Api(api)
+                try:
+                    core.list_namespace(_request_timeout=5)
+                    return TokenIdentity(username=jwt_user)
+                except ApiException as e:
+                    if e.status == 403:
+                        return TokenIdentity(username=jwt_user)
+                    return None
+
+            # Non-JWT tokens (e.g. OpenShift OAuth tokens like sha256~...)
+            # 1. Try OpenShift User API (~ returns caller's User object)
+            try:
+                custom_api = k8s_client.CustomObjectsApi(api)
+                user_obj = custom_api.get_cluster_custom_object(
+                    group="user.openshift.io",
+                    version="v1",
+                    plural="users",
+                    name="~",
+                    _request_timeout=5,
+                )
+                if isinstance(user_obj, dict):
+                    username = user_obj.get("metadata", {}).get("name", "")
+                    uid = user_obj.get("metadata", {}).get("uid", "")
+                    groups = list(user_obj.get("groups") or [])
+                    if username:
+                        return TokenIdentity(username=username, uid=uid, groups=groups)
+            except ApiException as e:
+                if e.status == 401:
+                    return None
+            except Exception:
+                pass
+
+            # 2. Try K8s SelfSubjectReview (K8s 1.26+)
+            try:
+                auth_v1 = k8s_client.AuthenticationV1Api(api)
+                ssr = auth_v1.create_self_subject_review(
+                    body=k8s_client.V1SelfSubjectReview(), _request_timeout=5
+                )
+                user_info = getattr(ssr.status, "user_info", None) or getattr(ssr.status, "userInfo", None)
+                if user_info:
+                    username = getattr(user_info, "username", "") or ""
+                    uid = getattr(user_info, "uid", "") or ""
+                    groups = list(getattr(user_info, "groups", []) or [])
+                    if username:
+                        return TokenIdentity(username=username, uid=uid, groups=groups)
+            except ApiException as e:
+                if e.status == 401:
+                    return None
+            except Exception:
+                pass
+
+            # 3. Fallback: probe with list_namespace
             core = k8s_client.CoreV1Api(api)
             try:
                 core.list_namespace(_request_timeout=5)
-                # 200 — token is valid; extract username from JWT payload
-                return TokenIdentity(username=_username_from_jwt(token))
+                return TokenIdentity(username=jwt_user)
             except ApiException as e:
                 if e.status == 403:
-                    # Authenticated but no list-namespace permission — still valid
-                    return TokenIdentity(username=_username_from_jwt(token))
-                # 401 or other — token itself is invalid
+                    return TokenIdentity(username=jwt_user)
                 return None
 
     return await asyncio.to_thread(_do_probe)

@@ -4,11 +4,12 @@ Auth flow stays in the Console — it obtains the token, then forwards it
 to the API.  Post-login workspace access checks use the API client.
 """
 
+import json
 import secrets
 
 from urllib.parse import quote
 
-from fastapi import APIRouter, Form, Request
+from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from starlette.status import HTTP_303_SEE_OTHER
@@ -16,6 +17,7 @@ from starlette.status import HTTP_303_SEE_OTHER
 from swarmer import k8s_auth
 from swarmer.config import settings
 from swarmer.crypto import encrypt
+from swarmer.deps import get_user_token, require_auth
 from swarmer.flash import flash
 
 router = APIRouter()
@@ -97,6 +99,44 @@ async def oauth_callback(request: Request, token: str = Form(...), state: str = 
     if identity is None:
         return RedirectResponse("/login", status_code=HTTP_303_SEE_OTHER)
     return RedirectResponse("/workspaces", status_code=HTTP_303_SEE_OTHER)
+
+
+@router.get("/token", dependencies=[Depends(require_auth)], response_class=HTMLResponse)
+async def token_page(request: Request):
+    token = get_user_token(request)
+    username = request.session.get("username", "")
+
+    # Derive public API URL
+    base_url = str(request.base_url).rstrip("/")
+    if settings.redirect_base_url:
+        base_url = settings.redirect_base_url.rstrip("/")
+
+    mcp_config = {
+        "mcp": {
+            "agent-swarm": {
+                "type": "local",
+                "command": ["agent-swarm-mcp-server"],
+                "enabled": True,
+                "environment": {
+                    "AGENT_SWARM_API_URL": base_url,
+                    "AGENT_SWARM_VERIFY_SSL": "false" if base_url.startswith("https") else "true",
+                    "AGENT_SWARM_API_TOKEN": token,
+                },
+            }
+        }
+    }
+    mcp_json = json.dumps(mcp_config, indent=2)
+
+    return templates.TemplateResponse(
+        request,
+        "token.html",
+        {
+            "username": username,
+            "token": token,
+            "api_url": base_url,
+            "mcp_json": mcp_json,
+        },
+    )
 
 
 @router.post("/logout")
