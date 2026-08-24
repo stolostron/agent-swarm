@@ -28,12 +28,6 @@ An MCP server that exposes Agent Swarm session management as tools for AI agents
 | `add_admin` | Grant a user global admin rights |
 | `remove_admin` | Revoke global admin rights from a user |
 | `bootstrap_admin` | Self-promote to global admin when zero admins exist |
-| `get_workspace_gateway` | Get dedicated OpenShell gateway settings |
-| `set_workspace_gateway` | Configure a dedicated OpenShell gateway |
-| `delete_workspace_gateway` | Revert to default cluster OpenShell gateway |
-| `test_workspace_gateway` | Test OpenShell gateway connection |
-| `parse_gateway_command` | Parse OpenShell CLI gateway command |
-| `parse_gateway_token` | Parse OIDC token / credential payload |
 | `list_sessions` | List sessions (optional phase filter) |
 | `find_sessions_by_repo` | Find sessions with a specific git repo attached |
 | `get_session` | Full session details including repos |

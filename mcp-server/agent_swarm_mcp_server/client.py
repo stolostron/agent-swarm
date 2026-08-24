@@ -109,14 +109,11 @@ class AgentSwarmClient:
         self,
         display_name: str,
         description: str = "",
-        gateway: dict | None = None,
     ) -> dict:
         body: dict[str, Any] = {
             "display_name": display_name,
             "description": description,
         }
-        if gateway:
-            body["gateway"] = gateway
         return await self._post("/api/v1/workspaces", json=body)
 
     async def update_workspace(
@@ -180,28 +177,6 @@ class AgentSwarmClient:
 
     async def bootstrap_admin(self) -> dict:
         return await self._post("/api/v1/admins/bootstrap")
-
-    # ==================================================================
-    # Dedicated Gateways (ACM-41655)
-    # ==================================================================
-
-    async def get_workspace_gateway(self, ws_id: int) -> dict:
-        return await self._get(f"/api/v1/workspaces/{ws_id}/gateway")
-
-    async def set_workspace_gateway(self, ws_id: int, payload: dict) -> dict:
-        return await self._put(f"/api/v1/workspaces/{ws_id}/gateway", json=payload)
-
-    async def delete_workspace_gateway(self, ws_id: int) -> dict:
-        return await self._delete(f"/api/v1/workspaces/{ws_id}/gateway")
-
-    async def test_gateway_connection(self, payload: dict) -> dict:
-        return await self._post("/api/v1/gateway/test", json=payload)
-
-    async def parse_gateway_command(self, command: str) -> dict:
-        return await self._post("/api/v1/gateway/parse-command", json={"command": command})
-
-    async def parse_gateway_token(self, token_input: str) -> dict:
-        return await self._post("/api/v1/gateway/parse-token", json={"token_input": token_input})
 
     # ==================================================================
     # Sessions

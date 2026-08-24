@@ -570,7 +570,6 @@ Agent Swarm MCP Server (`mcp-server/`)
 Swarmer REST API (`/api/v1/`)
   ├── Workspaces & ACL Memberships
   ├── Global Admin & User Identity (/me)
-  ├── OpenShell Dedicated Gateway Settings
   ├── Agent Sessions (Launch / Stop / Monitor / History)
   └── Prompts, Repositories, PATs, & Schedules
 ```
@@ -581,7 +580,6 @@ Swarmer REST API (`/api/v1/`)
 |---|---|---|
 | **Workspaces & ACL** | `list_workspaces`, `get_workspace`, `create_workspace`, `update_workspace`, `delete_workspace`, `list_workspace_members`, `add_workspace_member`, `remove_workspace_member` | Full workspace CRUD and explicit member access management (ACM-41659 database ACL). |
 | **Identity & Admins** | `get_me`, `list_known_users`, `list_admins`, `add_admin`, `remove_admin`, `bootstrap_admin` | Query authenticated caller identity and permissions; manage global Swarmer admins. |
-| **Dedicated Gateways** | `get_workspace_gateway`, `set_workspace_gateway`, `delete_workspace_gateway`, `test_workspace_gateway`, `parse_gateway_command`, `parse_gateway_token` | Configure and test workspace-dedicated OpenShell gateways with OIDC or Bearer auth. |
 | **Session Lifecycle** | `list_sessions`, `find_sessions_by_repo`, `get_session`, `create_session`, `update_session`, `delete_session`, `launch_session`, `stop_session`, `get_session_status`, `get_session_output`, `wait_for_session` | Launch, stop, monitor, and await agent execution runs across OpenCode and Shell tools. |
 | **Repos & Prompts** | `add_repo_to_session`, `remove_repo_from_session`, `list_workspace_prompts`, `set_session_prompt`, `list_github_pats` | Attach git repositories and configure prompts or private git PAT credentials. |
 | **Schedules** | `list_session_schedules`, `add_session_schedule`, `update_session_schedule`, `delete_session_schedule` | Manage automated cron schedules and schedule-specific prompt overrides. |
