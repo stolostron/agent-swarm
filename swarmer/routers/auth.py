@@ -103,6 +103,7 @@ async def oauth_callback(request: Request, token: str = Form(...), state: str = 
 
 @router.get("/token", dependencies=[Depends(require_auth)], response_class=HTMLResponse)
 async def token_page(request: Request) -> HTMLResponse:
+    """Render the API token and OpenCode MCP setup page."""
     token = get_user_token(request)
     username = request.session.get("username", "")
 

@@ -95,8 +95,10 @@ function copyToClipboard(elementId, buttonId) {
       el.focus();
       el.select();
       try {
-        document.execCommand('copy');
-        markCopied();
+        const ok = document.execCommand('copy');
+        if (ok) {
+          markCopied();
+        }
       } catch (err) {
         console.error('execCommand copy failed: ', err);
       }

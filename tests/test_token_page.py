@@ -163,7 +163,7 @@ class TestMcpSetupScript:
         test_args = [
             "mcp_setup.py",
             "--token", "insecure-token",
-            "--url", "https://self-signed.local",
+            "--url", "https://insecure.example.com",
             "--config", str(config_file),
             "--insecure",
         ]
@@ -200,12 +200,11 @@ class TestMcpSetupScript:
 
     def test_auto_detect_url_with_namespace(self, tmp_path):
         from unittest.mock import MagicMock
-        from pathlib import Path
 
         # Mock kubectl route lookup
         mock_res = MagicMock(returncode=0, stdout="swarmer-custom.apps.example.com\n")
         with patch("subprocess.run", return_value=mock_res) as mock_sub:
-            url = _auto_detect_url("custom-ns", Path("/nonexistent/opencode.json"))
+            url = _auto_detect_url("custom-ns", tmp_path / "nonexistent.json")
             assert url == "https://swarmer-custom.apps.example.com"
             mock_sub.assert_called_once_with(
                 ["kubectl", "get", "route", "swarmer", "-n", "custom-ns", "-o", "jsonpath={.spec.host}"],

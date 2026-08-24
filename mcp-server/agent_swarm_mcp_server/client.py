@@ -100,9 +100,11 @@ class AgentSwarmClient:
     # ==================================================================
 
     async def list_workspaces(self) -> list[dict]:
+        """List all accessible workspaces."""
         return await self._get("/api/v1/workspaces")
 
     async def get_workspace(self, ws_id: int) -> dict:
+        """Get details of a specific workspace by ID."""
         return await self._get(f"/api/v1/workspaces/{ws_id}")
 
     async def create_workspace(
@@ -110,6 +112,7 @@ class AgentSwarmClient:
         display_name: str,
         description: str = "",
     ) -> dict:
+        """Create a new workspace."""
         body: dict[str, Any] = {
             "display_name": display_name,
             "description": description,
@@ -122,6 +125,7 @@ class AgentSwarmClient:
         display_name: str,
         description: str | None = None,
     ) -> dict:
+        """Update an existing workspace's name and optional description."""
         body: dict[str, Any] = {
             "display_name": display_name,
         }
@@ -130,6 +134,7 @@ class AgentSwarmClient:
         return await self._put(f"/api/v1/workspaces/{ws_id}", json=body)
 
     async def delete_workspace(self, ws_id: int) -> dict:
+        """Delete a workspace by ID."""
         return await self._delete(f"/api/v1/workspaces/{ws_id}")
 
     # ==================================================================
@@ -137,6 +142,7 @@ class AgentSwarmClient:
     # ==================================================================
 
     async def list_workspace_members(self, ws_id: int) -> list[dict]:
+        """List all members of a workspace."""
         return await self._get(f"/api/v1/workspaces/{ws_id}/members")
 
     async def add_workspace_member(
@@ -145,10 +151,12 @@ class AgentSwarmClient:
         user_id: str,
         role: str = "member",
     ) -> dict:
+        """Add a user as a member or owner of a workspace."""
         body = {"user_id": user_id, "role": role}
         return await self._post(f"/api/v1/workspaces/{ws_id}/members", json=body)
 
     async def remove_workspace_member(self, ws_id: int, user_id: str) -> dict:
+        """Remove a member from a workspace."""
         quoted_user = urllib.parse.quote(user_id, safe="")
         return await self._delete(f"/api/v1/workspaces/{ws_id}/members/{quoted_user}")
 
@@ -157,25 +165,31 @@ class AgentSwarmClient:
     # ==================================================================
 
     async def get_me(self) -> dict:
+        """Get the authenticated caller's identity and global admin status."""
         return await self._get("/api/v1/me")
 
     async def list_known_users(self) -> list[str]:
+        """List known users in the cluster."""
         data = await self._get("/api/v1/users")
         if isinstance(data, dict):
             return data.get("users", [])
         return data or []
 
     async def list_admins(self) -> list[dict]:
+        """List all global Swarmer administrators."""
         return await self._get("/api/v1/admins")
 
     async def add_admin(self, user_id: str) -> dict:
+        """Grant global administrator privileges to a user."""
         return await self._post("/api/v1/admins", json={"user_id": user_id})
 
     async def remove_admin(self, user_id: str) -> dict:
+        """Revoke global administrator privileges from a user."""
         quoted_user = urllib.parse.quote(user_id, safe="")
         return await self._delete(f"/api/v1/admins/{quoted_user}")
 
     async def bootstrap_admin(self) -> dict:
+        """Claim the initial global administrator role if none exist."""
         return await self._post("/api/v1/admins/bootstrap")
 
     # ==================================================================
@@ -183,9 +197,11 @@ class AgentSwarmClient:
     # ==================================================================
 
     async def list_sessions(self, ws_id: int) -> list[dict]:
+        """List all sessions in a workspace."""
         return await self._get(f"/api/v1/workspaces/{ws_id}/sessions")
 
     async def get_session(self, ws_id: int, sid: int) -> dict:
+        """Get details and status of a session."""
         return await self._get(f"/api/v1/workspaces/{ws_id}/sessions/{sid}")
 
     async def create_session(
@@ -203,6 +219,7 @@ class AgentSwarmClient:
         working_branch: str = "",
         mcp_server_ids: list[int] | None = None,
     ) -> dict:
+        """Create a new agent session in a workspace."""
         body: dict[str, Any] = {
             "name": name,
             "mode": mode,
@@ -221,18 +238,23 @@ class AgentSwarmClient:
         return await self._post(f"/api/v1/workspaces/{ws_id}/sessions", json=body)
 
     async def update_session(self, ws_id: int, sid: int, **fields: Any) -> dict:
+        """Update configuration fields of an existing session."""
         return await self._put(f"/api/v1/workspaces/{ws_id}/sessions/{sid}", json=fields)
 
     async def delete_session(self, ws_id: int, sid: int) -> dict:
+        """Delete a non-running session."""
         return await self._delete(f"/api/v1/workspaces/{ws_id}/sessions/{sid}")
 
     async def launch_session(self, ws_id: int, sid: int) -> dict:
+        """Launch an idle or stopped session."""
         return await self._post(f"/api/v1/workspaces/{ws_id}/sessions/{sid}/launch")
 
     async def stop_session(self, ws_id: int, sid: int) -> dict:
+        """Stop an active session."""
         return await self._post(f"/api/v1/workspaces/{ws_id}/sessions/{sid}/stop")
 
     async def get_session_output(self, ws_id: int, sid: int) -> dict:
+        """Fetch execution logs / output of a session."""
         return await self._get(f"/api/v1/workspaces/{ws_id}/sessions/{sid}/output")
 
     # ==================================================================
@@ -240,6 +262,7 @@ class AgentSwarmClient:
     # ==================================================================
 
     async def list_repos(self, ws_id: int, sid: int) -> list[dict]:
+        """List git repositories attached to a session."""
         return await self._get(f"/api/v1/workspaces/{ws_id}/sessions/{sid}/repos")
 
     async def add_repo(
@@ -250,12 +273,14 @@ class AgentSwarmClient:
         branch: str = "main",
         local_path: str = "",
     ) -> dict:
+        """Attach a git repository to a session."""
         body: dict[str, str] = {"repo_url": repo_url, "branch": branch}
         if local_path:
             body["local_path"] = local_path
         return await self._post(f"/api/v1/workspaces/{ws_id}/sessions/{sid}/repos", json=body)
 
     async def delete_repo(self, ws_id: int, sid: int, rid: int) -> dict:
+        """Detach a git repository from a session."""
         return await self._delete(f"/api/v1/workspaces/{ws_id}/sessions/{sid}/repos/{rid}")
 
     # ==================================================================
@@ -263,6 +288,7 @@ class AgentSwarmClient:
     # ==================================================================
 
     async def list_prompt_sources(self, ws_id: int) -> list[dict]:
+        """List prompt sources in a workspace."""
         return await self._get(f"/api/v1/workspaces/{ws_id}/prompts")
 
     # ==================================================================
@@ -270,6 +296,7 @@ class AgentSwarmClient:
     # ==================================================================
 
     async def list_session_schedules(self, ws_id: int, sid: int) -> list[dict]:
+        """List all cron schedules for a session."""
         return await self._get(f"/api/v1/workspaces/{ws_id}/sessions/{sid}/schedules")
 
     async def create_session_schedule(
@@ -283,6 +310,7 @@ class AgentSwarmClient:
         instruction_prompt: str = "",
         enabled: bool = True,
     ) -> dict:
+        """Create a cron execution schedule for a session."""
         body: dict = {
             "cron_schedule": cron_schedule,
             "label": label,
@@ -300,12 +328,14 @@ class AgentSwarmClient:
         sched_id: int,
         **fields: Any,
     ) -> dict:
+        """Update an existing session schedule."""
         return await self._put(
             f"/api/v1/workspaces/{ws_id}/sessions/{sid}/schedules/{sched_id}",
             json=fields,
         )
 
     async def delete_session_schedule(self, ws_id: int, sid: int, sched_id: int) -> None:
+        """Delete a session schedule."""
         await self._delete(f"/api/v1/workspaces/{ws_id}/sessions/{sid}/schedules/{sched_id}")
 
     # ==================================================================
@@ -313,4 +343,5 @@ class AgentSwarmClient:
     # ==================================================================
 
     async def list_pats(self, ws_id: int) -> list[dict]:
+        """List saved GitHub PAT credentials in a workspace."""
         return await self._get(f"/api/v1/workspaces/{ws_id}/secrets/pats")
