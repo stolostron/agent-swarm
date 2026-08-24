@@ -16,7 +16,11 @@ from starlette.middleware.sessions import SessionMiddleware
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from scripts.mcp_setup import _decode_jwt_sub, _parse_pasted_token_or_json
+from scripts.mcp_setup import (
+    _auto_detect_url,
+    _decode_jwt_sub,
+    _parse_pasted_token_or_json,
+)
 from swarmer.crypto import encrypt, init_crypto
 from swarmer.deps import NotAuthenticated
 from swarmer.routers.auth import router as auth_router
@@ -149,4 +153,64 @@ class TestMcpSetupScript:
         assert aswarm["environment"]["AGENT_SWARM_API_URL"] == "https://swarmer.test.example.com"
         assert aswarm["environment"]["AGENT_SWARM_API_TOKEN"] == "test-token-value-xyz"
         assert aswarm["environment"]["AGENT_SWARM_VERIFY_SSL"] == "true"
+
+    def test_mcp_setup_insecure_flag(self, tmp_path):
+        from scripts.mcp_setup import main
+
+        config_file = tmp_path / "opencode.json"
+        config_file.write_text(json.dumps({"$schema": "https://opencode.ai/config.json", "mcp": {}}))
+
+        test_args = [
+            "mcp_setup.py",
+            "--token", "insecure-token",
+            "--url", "https://self-signed.local",
+            "--config", str(config_file),
+            "--insecure",
+        ]
+        with patch.object(sys, "argv", test_args):
+            main()
+
+        updated_data = json.loads(config_file.read_text())
+        aswarm = updated_data["mcp"]["agent-swarm"]
+        assert aswarm["environment"]["AGENT_SWARM_VERIFY_SSL"] == "false"
+
+    def test_mcp_setup_print_only(self, capsys, tmp_path):
+        from scripts.mcp_setup import main
+
+        config_file = tmp_path / "opencode.json"
+
+        test_args = [
+            "mcp_setup.py",
+            "--token", "secret-print-token",
+            "--url", "https://print.swarmer.example.com",
+            "--config", str(config_file),
+            "--print-only",
+        ]
+        with patch.object(sys, "argv", test_args):
+            main()
+
+        captured = capsys.readouterr()
+        # Config file should not have been created or modified
+        assert not config_file.exists()
+        # Token in output snippet must be redacted
+        assert "<YOUR_TOKEN>" in captured.out
+        assert "secret-print-token" not in captured.out
+        assert "https://print.swarmer.example.com" in captured.out
+        assert "AGENT_SWARM_VERIFY_SSL" in captured.out
+
+    def test_auto_detect_url_with_namespace(self, tmp_path):
+        from unittest.mock import MagicMock
+        from pathlib import Path
+
+        # Mock kubectl route lookup
+        mock_res = MagicMock(returncode=0, stdout="swarmer-custom.apps.example.com\n")
+        with patch("subprocess.run", return_value=mock_res) as mock_sub:
+            url = _auto_detect_url("custom-ns", Path("/nonexistent/opencode.json"))
+            assert url == "https://swarmer-custom.apps.example.com"
+            mock_sub.assert_called_once_with(
+                ["kubectl", "get", "route", "swarmer", "-n", "custom-ns", "-o", "jsonpath={.spec.host}"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
 
