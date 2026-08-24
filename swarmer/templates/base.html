@@ -51,7 +51,128 @@
     .pf-v6-c-breadcrumb__item-divider { margin: 0 0.4rem; }
     .pf-v6-c-breadcrumb__link,
     .pf-v6-c-breadcrumb__item-divider { font-size: 1.125rem; }
+    /* Workspace settings menu (Sessions header) */
+    .ws-settings-menu { position: relative; display: inline-block; }
+    .ws-settings-menu > summary {
+      list-style: none;
+      cursor: pointer;
+    }
+    .ws-settings-menu > summary::-webkit-details-marker { display: none; }
+    .ws-settings-menu__panel {
+      position: absolute;
+      right: 0;
+      top: calc(100% + 4px);
+      min-width: 12rem;
+      z-index: 200;
+      background: var(--pf-t--global--background--color--floating--default);
+      border: 1px solid var(--pf-t--global--border--color--default);
+      border-radius: var(--pf-t--global--border--radius--small);
+      box-shadow: var(--pf-t--global--box-shadow--md);
+      padding: 0.25rem 0;
+    }
+    .ws-settings-menu__panel a {
+      display: block;
+      padding: 0.45rem 0.85rem;
+      color: var(--pf-t--global--text--color--regular);
+      text-decoration: none;
+      font-size: var(--pf-t--global--font--size--sm);
+      white-space: nowrap;
+    }
+    .ws-settings-menu__panel a:hover {
+      background: var(--pf-t--global--background--color--primary--hover);
+    }
+    /* Masthead Office navigator */
+    .office-nav-menu { position: relative; display: inline-block; }
+    .office-nav-menu > summary {
+      list-style: none;
+      cursor: pointer;
+    }
+    .office-nav-menu > summary::-webkit-details-marker { display: none; }
+    .office-nav-menu__panel {
+      position: absolute;
+      right: 0;
+      top: calc(100% + 4px);
+      width: min(20rem, 90vw);
+      max-height: min(24rem, 70vh);
+      z-index: 300;
+      display: flex;
+      flex-direction: column;
+      background: var(--pf-t--global--background--color--floating--default);
+      border: 1px solid var(--pf-t--global--border--color--default);
+      border-radius: var(--pf-t--global--border--radius--small);
+      box-shadow: var(--pf-t--global--box-shadow--md);
+      overflow: hidden;
+    }
+    .office-nav-menu__body {
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+      flex: 1;
+    }
+    .office-nav-menu__list {
+      overflow-y: auto;
+      max-height: 16rem;
+      padding: 0.25rem 0;
+    }
+    .office-nav-menu__item {
+      display: flex;
+      align-items: center;
+      gap: 0.4rem;
+      padding: 0.45rem 0.85rem;
+      color: var(--pf-t--global--text--color--regular);
+      text-decoration: none;
+      font-size: var(--pf-t--global--font--size--sm);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .office-nav-menu__item:hover {
+      background: var(--pf-t--global--background--color--primary--hover);
+    }
+    .office-nav-menu__item--starred {
+      font-weight: var(--pf-t--global--font--weight--heading--bold);
+    }
+    .office-nav-menu__star {
+      color: var(--pf-t--global--color--status--warning--default);
+      width: 1rem;
+      flex-shrink: 0;
+      text-align: center;
+    }
+    .office-nav-menu__star--spacer { visibility: hidden; }
+    .office-nav-menu__empty {
+      padding: 0.6rem 0.85rem;
+      color: var(--pf-t--global--text--color--subtle);
+      font-size: var(--pf-t--global--font--size--sm);
+    }
+    .office-nav-menu__search {
+      border-top: 1px solid var(--pf-t--global--border--color--default);
+      padding: 0.5rem 0.65rem;
+      background: var(--pf-t--global--background--color--secondary--default);
+    }
+    .office-nav-menu__search-input {
+      width: 100%;
+    }
+    .office-nav-menu__item.is-hidden { display: none; }
   </style>
+  <script>
+    window.__officeNavFilter = function (input) {
+      var q = (input.value || "").trim().toLowerCase();
+      var root = input.closest(".office-nav-menu__body") || input.closest(".office-nav-menu__panel");
+      if (!root) return;
+      root.querySelectorAll(".office-nav-menu__item").forEach(function (el) {
+        var name = el.getAttribute("data-name") || "";
+        el.classList.toggle("is-hidden", q !== "" && name.indexOf(q) === -1);
+      });
+    };
+    // Close Office / Settings menus when clicking outside.
+    document.addEventListener("click", function (event) {
+      document.querySelectorAll("details.office-nav-menu[open], details.ws-settings-menu[open]").forEach(function (menu) {
+        if (!menu.contains(event.target)) {
+          menu.removeAttribute("open");
+        }
+      });
+    });
+  </script>
   {% block head %}{% endblock %}
 </head>
 <body>
@@ -67,9 +188,27 @@
     <a href="/token" class="pf-v6-c-button pf-m-plain" title="API Token & MCP Configuration">
       <span class="pf-v6-c-button__text">🔑 API Token</span>
     </a>
-    <a href="/office" class="pf-v6-c-button pf-m-plain" title="Swarm Office Visualizer">
-      <span class="pf-v6-c-button__text">🧑‍💻 Office</span>
-    </a>
+    {% set office_here = "/office" in request.url.path %}
+    {% if ws is defined and ws %}
+      {% set office_menu_url = "/office/nav-menu?ws_id=" ~ ws.id %}
+    {% else %}
+      {% set office_menu_url = "/office/nav-menu" %}
+    {% endif %}
+    <details class="office-nav-menu">
+      <summary class="pf-v6-c-button pf-m-plain{% if office_here %} pf-m-primary{% endif %}"
+               title="Open office navigator"
+               hx-get="{{ office_menu_url }}"
+               hx-target="#office-nav-menu-body"
+               hx-swap="innerHTML"
+               hx-trigger="click">
+        <span class="pf-v6-c-button__text">🧑‍💻 Office</span>
+      </summary>
+      <div class="office-nav-menu__panel" role="menu" aria-label="Office navigator">
+        <div id="office-nav-menu-body" class="office-nav-menu__body">
+          <div class="office-nav-menu__empty">Loading…</div>
+        </div>
+      </div>
+    </details>
     <form method="post" action="/logout">
       <button type="submit" class="pf-v6-c-button pf-m-plain">
         <span class="pf-v6-c-button__text">Logout</span>

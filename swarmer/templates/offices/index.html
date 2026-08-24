@@ -2,7 +2,7 @@
 {% block title %}{% if ws %}{{ ws.display_name }} Office{% else %}Swarm Office{% endif %} — Swarmer{% endblock %}
 
 {% block head %}
-<link rel="stylesheet" href="/static/office.css?v=3">
+<link rel="stylesheet" href="/static/office.css?v=4">
 {% endblock %}
 
 {% block content %}
@@ -36,8 +36,11 @@
         {% endif %}
       </h1>
       <p class="office-hero__tagline">
+        {% if scope == "workspace" and ws %}
+        Sessions in this workspace as people. Use All workspaces for the full floor.
+        {% else %}
         Each office is a workspace. Each person is a session.
-        Status labels match the session list — animations are just the visual cue.
+        {% endif %}
       </p>
     </div>
     <div class="office-hero__actions">
@@ -52,7 +55,13 @@
       </div>
       <div class="office-hero__buttons">
         {% if scope == "workspace" and ws %}
-        <a href="/office" class="pf-v6-c-button pf-m-secondary pf-m-small">All Offices</a>
+        <div class="office-scope-toggle" role="group" aria-label="Office scope">
+          <a href="/workspaces/{{ ws.id }}/office"
+             class="pf-v6-c-button pf-m-small pf-m-primary"
+             aria-current="page">This workspace</a>
+          <a href="/office"
+             class="pf-v6-c-button pf-m-small pf-m-secondary">All workspaces</a>
+        </div>
         <a href="/workspaces/{{ ws.id }}/sessions" class="pf-v6-c-button pf-m-secondary pf-m-small">Session list</a>
         {% else %}
         <a href="/workspaces" class="pf-v6-c-button pf-m-secondary pf-m-small">Workspaces</a>

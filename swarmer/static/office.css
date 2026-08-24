@@ -49,6 +49,30 @@
 .office-hero__buttons {
   display: flex;
   gap: var(--pf-t--global--spacer--sm);
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.office-scope-toggle {
+  display: inline-flex;
+  gap: 0;
+  border-radius: var(--pf-t--global--border--radius--small);
+  overflow: hidden;
+}
+
+.office-scope-toggle .pf-v6-c-button {
+  border-radius: 0;
+}
+
+.office-scope-toggle .pf-v6-c-button:first-child {
+  border-top-left-radius: var(--pf-t--global--border--radius--small);
+  border-bottom-left-radius: var(--pf-t--global--border--radius--small);
+}
+
+.office-scope-toggle .pf-v6-c-button:last-child {
+  border-top-right-radius: var(--pf-t--global--border--radius--small);
+  border-bottom-right-radius: var(--pf-t--global--border--radius--small);
 }
 
 /* Predefined character palettes — used instead of inline CSS variables (CSP). */

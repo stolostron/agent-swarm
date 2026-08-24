@@ -202,6 +202,46 @@ async def office_index(request: Request) -> HTMLResponse:
 
 
 @router.get(
+    "/office/nav-menu",
+    dependencies=[Depends(require_auth)],
+    response_class=HTMLResponse,
+)
+async def office_nav_menu(
+    request: Request, ws_id: int | None = None
+) -> HTMLResponse:
+    """Masthead Office dropdown — workspace list with starred current context."""
+    workspaces: list[dict] = []
+    current: dict | None = None
+    try:
+        async with get_api_client(request) as api:
+            workspaces = await api.list_workspaces()
+            if ws_id is not None:
+                current = next((w for w in workspaces if w.get("id") == ws_id), None)
+                if current is None:
+                    try:
+                        current = await api.get_workspace(ws_id)
+                    except APIError:
+                        current = None
+    except APIError:
+        workspaces = []
+
+    # Stable A–Z list for the filterable rows (exclude starred workspace duplicate).
+    others = sorted(
+        [w for w in workspaces if not current or w.get("id") != current.get("id")],
+        key=lambda w: (w.get("display_name") or w.get("name") or "").lower(),
+    )
+    return templates.TemplateResponse(
+        request,
+        "offices/_nav_menu.html",
+        {
+            "workspaces": others,
+            "current_ws": current,
+            "star_all": current is None,
+        },
+    )
+
+
+@router.get(
     "/office/scene",
     dependencies=[Depends(require_auth)],
     response_class=HTMLResponse,

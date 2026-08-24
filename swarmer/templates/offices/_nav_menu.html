@@ -1,0 +1,50 @@
+{# Masthead Office popup. Expects: workspaces, current_ws, star_all #}
+<div class="office-nav-menu__list" role="list">
+  {% if star_all %}
+  <a class="office-nav-menu__item office-nav-menu__item--starred"
+     role="listitem"
+     href="/office"
+     data-name="all workspaces">
+    <span class="office-nav-menu__star" aria-hidden="true">★</span>
+    <span>All Workspaces</span>
+  </a>
+  {% else %}
+  <a class="office-nav-menu__item office-nav-menu__item--starred"
+     role="listitem"
+     href="/workspaces/{{ current_ws.id }}/office"
+     data-name="{{ current_ws.display_name|lower }}">
+    <span class="office-nav-menu__star" aria-hidden="true">★</span>
+    <span>{{ current_ws.display_name }}</span>
+  </a>
+  <a class="office-nav-menu__item"
+     role="listitem"
+     href="/office"
+     data-name="all workspaces">
+    <span class="office-nav-menu__star office-nav-menu__star--spacer" aria-hidden="true"></span>
+    <span>All Workspaces</span>
+  </a>
+  {% endif %}
+
+  {% for w in workspaces %}
+  <a class="office-nav-menu__item"
+     role="listitem"
+     href="/workspaces/{{ w.id }}/office"
+     data-name="{{ w.display_name|lower }}">
+    <span class="office-nav-menu__star office-nav-menu__star--spacer" aria-hidden="true"></span>
+    <span>{{ w.display_name }}</span>
+  </a>
+  {% else %}
+  {% if star_all %}
+  <div class="office-nav-menu__empty">No workspaces yet</div>
+  {% endif %}
+  {% endfor %}
+</div>
+
+<div class="office-nav-menu__search">
+  <input type="search"
+         class="pf-v6-c-form-control office-nav-menu__search-input"
+         placeholder="Filter workspaces…"
+         aria-label="Filter workspaces"
+         autocomplete="off"
+         oninput="window.__officeNavFilter && window.__officeNavFilter(this)">
+</div>
