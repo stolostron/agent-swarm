@@ -29,6 +29,8 @@ LOCAL_PORT      ?= 8080
 OS_LOCAL_PORT   ?= 17671
 
 # User token duration
+TOKEN_DURATION ?= 8h
+
 # agent-containers build defaults (registry + image tag — checked in)
 AC_DEFAULTS ?= .push-defaults
 
@@ -45,7 +47,9 @@ OPENSHELL_TLS_DIR        ?= auth/openshell
 # OpenShell gateway level. Distinct from the sandbox pod's ephemeral-storage COMPUTE
 # resource, which is hardcoded to 10Gi in openshell_client.create_sandbox() (ACM-39804)
 # and not configurable via this variable. Override with OPENSHELL_WORKSPACE_STORAGE=<val>
-# if needed; only applied on first OpenShell install (see the deploy target).
+# if needed. `make deploy` applies this on every run — first install (--install) or
+# in-place upgrade (--reuse-values) — via helm; only newly created sandbox PVCs pick
+# up a changed value.
 OPENSHELL_WORKSPACE_STORAGE ?= 10Gi
 
 # ──────────────────────────────────────────────────────────────
@@ -99,7 +103,9 @@ user-token:  ## Issue a login token for a K8s user  (SA_USER=alice, TOKEN_DURATI
 	@kubectl create token $(SA_USER) -n $(NAMESPACE) --duration=$(TOKEN_DURATION)
 	@echo "──────────────────────────────────────────────────"
 	@echo "Paste this token into the Swarmer login page."
-	@echo "Grant workspace access with: make grant-workspace-access SA_USER=$(SA_USER) WORKSPACE_NS=<ns>"
+	@echo "'$(SA_USER)' logs in as: system:serviceaccount:$(NAMESPACE):$(SA_USER)"
+	@echo "Grant workspace access via the UI: workspace -> Members tab -> Add Member -> that username"
+	@echo "(or POST /api/v1/workspaces/<id>/members {\"user_id\": \"system:serviceaccount:$(NAMESPACE):$(SA_USER)\"})"
 
 # SA_USER/OIDC_USER/WORKSPACE_NS/NAMESPACE are carried as exported shell env
 # vars (not textually substituted into the recipe) and validated against a
@@ -153,7 +159,10 @@ grant-workspace-access: export _SA_USER := $(value SA_USER)
 grant-workspace-access: export _OIDC_USER := $(value OIDC_USER)
 grant-workspace-access: export _WORKSPACE_NS := $(value WORKSPACE_NS)
 grant-workspace-access: export _NAMESPACE := $(value NAMESPACE)
-grant-workspace-access:  ## Grant a user access to a specific workspace namespace  (SA_USER=alice OR OIDC_USER=alice, WORKSPACE_NS=my-project)
+grant-workspace-access:  # [Legacy/optional, hidden from `make help`] K8s namespace RoleBinding — workspace access is now DB-backed, see README.md Access Control (SA_USER=alice OR OIDC_USER=alice, WORKSPACE_NS=my-project)
+	@echo "NOTE: Swarmer workspace access is a database ACL (ACM-41659) and no longer reads this"
+	@echo "K8s RoleBinding for authorization. Use the Members tab (or POST /api/v1/workspaces/{id}/members)"
+	@echo "to grant access instead — see README.md Access Control. Proceeding anyway..."
 	@test -n "$$_SA_USER$$_OIDC_USER" || (echo "Usage: make grant-workspace-access SA_USER=<name> WORKSPACE_NS=<ns>  (or OIDC_USER=<name> for OpenShift/OIDC users)" && exit 1)
 	@test -z "$$_SA_USER" -o -z "$$_OIDC_USER" || (echo "Error: specify only one of SA_USER or OIDC_USER, not both" && exit 1)
 	@test -n "$$_WORKSPACE_NS" || (echo "Usage: make grant-workspace-access SA_USER=<name>|OIDC_USER=<name> WORKSPACE_NS=<ns>" && exit 1)
@@ -183,7 +192,11 @@ grant-workspace-access:  ## Grant a user access to a specific workspace namespac
 grant-workspace-create: export _SA_USER := $(value SA_USER)
 grant-workspace-create: export _OIDC_USER := $(value OIDC_USER)
 grant-workspace-create: export _NAMESPACE := $(value NAMESPACE)
-grant-workspace-create:  ## Allow a user to create new workspaces  (SA_USER=alice OR OIDC_USER=alice)
+grant-workspace-create:  # [Legacy/optional, hidden from `make help`] K8s ClusterRoleBinding — set WORKSPACE_CREATE_POLICY instead, see README.md Access Control (SA_USER=alice OR OIDC_USER=alice)
+	@echo "NOTE: Swarmer workspace creation is now controlled by SWARMER_WORKSPACE_CREATE_POLICY"
+	@echo "(default 'all' — any authenticated user can create a workspace) and"
+	@echo "SWARMER_WORKSPACE_ADMIN_USERS/GROUPS — this K8s ClusterRoleBinding is no longer read."
+	@echo "See README.md Access Control. Proceeding anyway..."
 	@test -n "$$_SA_USER$$_OIDC_USER" || (echo "Usage: make grant-workspace-create SA_USER=<name>  (or OIDC_USER=<name> for OpenShift/OIDC users)" && exit 1)
 	@test -z "$$_SA_USER" -o -z "$$_OIDC_USER" || (echo "Error: specify only one of SA_USER or OIDC_USER, not both" && exit 1)
 	@case "$$_SA_USER$$_OIDC_USER" in \
@@ -315,11 +328,18 @@ deploy:  ## Deploy swarmer to the current kubectl context  (SILENT=1 for non-int
 	    --wait --timeout 5m; \
 	  echo "✓ OpenShell $(OPENSHELL_VERSION) installed (workspaceDefaultStorageSize=$(OPENSHELL_WORKSPACE_STORAGE))."; \
 	else \
-	  echo "OpenShell already installed — version and workspaceDefaultStorageSize changes are"; \
-	  echo "  NOT applied automatically. To upgrade in place, run:"; \
-	  echo "  helm upgrade openshell oci://ghcr.io/nvidia/openshell/helm-chart --version $(OPENSHELL_VERSION) \\"; \
-	  echo "    -n $(OPENSHELL_NAMESPACE) --set server.auth.allowUnauthenticatedUsers=true \\"; \
-	  echo "    --set server.workspaceDefaultStorageSize=$(OPENSHELL_WORKSPACE_STORAGE) --wait"; \
+	  echo "OpenShell already installed — applying workspaceDefaultStorageSize=$(OPENSHELL_WORKSPACE_STORAGE) \
+and pinned version $(OPENSHELL_VERSION) (reusing other existing values)..."; \
+	  DOCKER_CONFIG=$$(mktemp -d) helm upgrade openshell \
+	    oci://ghcr.io/nvidia/openshell/helm-chart \
+	    --version $(OPENSHELL_VERSION) \
+	    --namespace $(OPENSHELL_NAMESPACE) \
+	    --reuse-values \
+	    --set server.auth.allowUnauthenticatedUsers=true \
+	    --set server.workspaceDefaultStorageSize=$(OPENSHELL_WORKSPACE_STORAGE) \
+	    --wait --timeout 5m; \
+	  echo "✓ OpenShell upgraded (version=$(OPENSHELL_VERSION), workspaceDefaultStorageSize=$(OPENSHELL_WORKSPACE_STORAGE))."; \
+	  echo "  NOTE: only newly created sandboxes get the new /sandbox PVC size; existing sandboxes are unaffected."; \
 	fi; \
 	# Grant OpenShift SCCs required for sandbox pods (no-op on plain k8s / if oc is absent) \
 	if command -v oc > /dev/null 2>&1; then \

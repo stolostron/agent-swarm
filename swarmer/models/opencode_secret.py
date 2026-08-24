@@ -25,7 +25,12 @@ class OpencodeSecret(Base):
     application_default_credentials_enc: Mapped[str] = mapped_column(
         Text, nullable=False, default=""
     )
-    # Fernet-encrypted Google AI Studio API key
+    # Fernet-encrypted Google AI Studio API key.
+    # LEGACY (ACM-37263): the secrets UI no longer writes to this column — new
+    # keys are pushed directly to the OpenShell gateway provider
+    # (swarmer-ws-{id}-google-ai-studio) and never stored in the Swarmer DB,
+    # mirroring the ADC pattern. This column is retained only so previously
+    # saved keys keep working (via the accessors below) until rotated.
     google_api_key_enc: Mapped[str] = mapped_column(Text, nullable=False, default="")
     created_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, server_default=func.now()

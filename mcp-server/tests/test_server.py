@@ -145,6 +145,47 @@ def make_server() -> AgentSwarmMCPServer:
 
 
 # ------------------------------------------------------------------
+# create_session & update_session with agent_tool
+# ------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_create_session_with_shell_tool():
+    server = make_server()
+    server.client.create_session = AsyncMock(return_value={
+        "id": 10, "name": "cron-report", "phase": "idle", "mode": "prompt",
+        "provider": "", "agent_tool": "shell", "persist": False, "working_branch": "",
+        "prompt_id": None, "instruction_prompt": "python3 report.py",
+        "status_detail": "", "run_duration": None, "run_started_at": None,
+        "run_completed_at": None, "is_active": False, "workspace_id": 1,
+    })
+    result = await server._create_session(
+        1, "cron-report", agent_tool="shell", instruction_prompt="python3 report.py"
+    )
+    server.client.create_session.assert_awaited_once_with(
+        1, "cron-report", mode="prompt", provider="", agent_tool="shell",
+        instruction_prompt="python3 report.py", github_pat_id=None, prompt_id=None,
+        persist=False, working_branch=""
+    )
+    assert result["agent_tool"] == "shell"
+    assert result["name"] == "cron-report"
+
+
+@pytest.mark.asyncio
+async def test_update_session_agent_tool():
+    server = make_server()
+    server.client.update_session = AsyncMock(return_value={
+        "id": 10, "name": "cron-report", "phase": "idle", "mode": "prompt",
+        "provider": "", "agent_tool": "shell", "persist": False, "working_branch": "",
+        "prompt_id": None, "instruction_prompt": "echo hello",
+        "status_detail": "", "run_duration": None, "run_started_at": None,
+        "run_completed_at": None, "is_active": False, "workspace_id": 1,
+    })
+    result = await server._update_session(1, 10, agent_tool="shell", instruction_prompt="echo hello")
+    server.client.update_session.assert_awaited_once_with(1, 10, agent_tool="shell", instruction_prompt="echo hello")
+    assert result["agent_tool"] == "shell"
+
+
+# ------------------------------------------------------------------
 # list_workspace_prompts flattening
 # ------------------------------------------------------------------
 

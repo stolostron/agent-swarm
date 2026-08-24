@@ -426,7 +426,14 @@ async def create_pull_secret(
     body: PullSecretCreate,
     ws: Workspace = Depends(get_workspace_or_404),
 ):
+    from swarmer.config import settings
+
     try:
+        # ACM-41659: workspaces no longer get a K8s namespace at creation
+        # time — lazily create one here on first use of this legacy
+        # per-workspace K8s Secret feature.
+        if not settings.k8s_namespace:
+            k8s.ensure_namespace(ws.k8s_namespace)
         k8s.apply_pull_secret(
             ws.k8s_namespace, body.registry.strip(), body.username.strip(), body.password.strip()
         )

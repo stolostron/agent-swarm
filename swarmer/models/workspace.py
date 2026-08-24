@@ -13,6 +13,10 @@ class Workspace(Base):
     display_name: Mapped[str] = mapped_column(String(255), nullable=False)
     namespace: Mapped[str] = mapped_column(String(63), unique=True, nullable=False)
     description: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    # Username of the creator (K8s ServiceAccount or OpenShift OAuth/OIDC
+    # identity). Owners always have access and can manage workspace_members
+    # (ACM-41659 — replaces per-workspace namespace RBAC).
+    owner_id: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
     created_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, server_default=func.now()
     )
@@ -43,6 +47,9 @@ class Workspace(Base):
     )
     github_app: Mapped["GitHubApp | None"] = relationship(  # noqa: F821
         "GitHubApp", back_populates="workspace", uselist=False, cascade="all, delete-orphan"
+    )
+    members: Mapped[list["WorkspaceMember"]] = relationship(  # noqa: F821
+        "WorkspaceMember", back_populates="workspace", cascade="all, delete-orphan"
     )
 
     @property

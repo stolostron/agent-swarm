@@ -1,0 +1,133 @@
+{% extends "base.html" %}
+{% block title %}Members — {{ ws.display_name }} — Swarmer{% endblock %}
+
+{% block content %}
+{# ── Breadcrumb ── #}
+<nav class="pf-v6-c-breadcrumb" aria-label="breadcrumb" style="margin-bottom:var(--pf-t--global--spacer--md);">
+  <ol class="pf-v6-c-breadcrumb__list">
+    <li class="pf-v6-c-breadcrumb__item">
+      <span class="pf-v6-c-breadcrumb__item-divider">/</span>
+      <a href="/workspaces" class="pf-v6-c-breadcrumb__link">Workspaces</a>
+    </li>
+    <li class="pf-v6-c-breadcrumb__item">
+      <span class="pf-v6-c-breadcrumb__item-divider">/</span>
+      <a href="/workspaces/{{ ws.id }}" class="pf-v6-c-breadcrumb__link">{{ ws.display_name }}</a>
+    </li>
+    <li class="pf-v6-c-breadcrumb__item">
+      <span class="pf-v6-c-breadcrumb__item-divider">/</span>
+      <span class="pf-v6-c-breadcrumb__link pf-m-current">Members</span>
+    </li>
+  </ol>
+</nav>
+
+<h1 class="pf-v6-c-title pf-m-2xl" style="margin-bottom:var(--pf-t--global--spacer--xs);">Members</h1>
+<p style="color:var(--pf-t--global--text--color--subtle); margin-bottom:var(--pf-t--global--spacer--lg);">
+  Users who can see and manage workspace <code>{{ ws.display_name }}</code>. Access is a database-backed
+  ACL — no Kubernetes namespace or RBAC grant is required.
+  {% if not can_manage %}
+  Only the workspace owner or an administrator can add or remove members.
+  {% endif %}
+</p>
+
+{% if not ws.owner_id %}
+<div class="pf-v6-c-alert pf-m-info pf-m-inline" style="margin-bottom:var(--pf-t--global--spacer--lg);">
+  <div class="pf-v6-c-alert__icon"></div>
+  <p class="pf-v6-c-alert__title">This workspace has no owner yet.</p>
+  <div class="pf-v6-c-alert__description">
+    Anyone can manage it for now — the first person to rename it, delete it, or add/remove a
+    member here automatically becomes its owner.
+  </div>
+</div>
+{% endif %}
+
+<h2 class="pf-v6-c-title pf-m-lg" style="margin-bottom:var(--pf-t--global--spacer--md);">Current Access</h2>
+<table class="pf-v6-c-table pf-m-grid-md" role="grid" style="margin-bottom:var(--pf-t--global--spacer--xl);">
+  <thead class="pf-v6-c-table__thead">
+    <tr class="pf-v6-c-table__tr" role="row">
+      <th class="pf-v6-c-table__th" role="columnheader">User</th>
+      <th class="pf-v6-c-table__th" role="columnheader">Role</th>
+      <th class="pf-v6-c-table__th pf-m-fit-content" role="columnheader" style="text-align:right;">Actions</th>
+    </tr>
+  </thead>
+  <tbody class="pf-v6-c-table__tbody" role="rowgroup">
+    <tr class="pf-v6-c-table__tr" role="row">
+      <td class="pf-v6-c-table__td" role="cell" data-label="User">
+        <code>{{ ws.owner_id or "(none)" }}</code>
+      </td>
+      <td class="pf-v6-c-table__td" role="cell" data-label="Role">
+        <span class="pf-v6-c-label pf-m-blue"><span class="pf-v6-c-label__content">Owner</span></span>
+      </td>
+      <td class="pf-v6-c-table__td pf-m-fit-content" role="cell" data-label="Actions"></td>
+    </tr>
+  {% for m in members %}
+    <tr class="pf-v6-c-table__tr" role="row">
+      <td class="pf-v6-c-table__td" role="cell" data-label="User">
+        <code>{{ m.user_id }}</code>
+      </td>
+      <td class="pf-v6-c-table__td" role="cell" data-label="Role">{{ m.role }}</td>
+      <td class="pf-v6-c-table__td pf-m-fit-content" role="cell" data-label="Actions" style="text-align:right;">
+        {% if can_manage %}
+        <form method="post" action="/workspaces/{{ ws.id }}/members/{{ m.user_id | urlencode }}/delete"
+              style="display:inline"
+              onsubmit="return confirm('Remove \'{{ m.user_id }}\' from this workspace?')">
+          <button type="submit"
+                  class="pf-v6-c-button pf-m-plain pf-m-small"
+                  title="Remove {{ m.user_id }}"
+                  style="color:var(--pf-t--global--color--status--danger--default); padding:2px 4px; line-height:1;">
+            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+              <path d="M5.5 1a.5.5 0 0 1 .5-.5h4a.5.5 0 0 1 .5.5V2H5.5V1zM4 2v-.5A1.5 1.5 0 0 1 5.5.5h5A1.5 1.5 0 0 1 12 1.5V2h2.5a.5.5 0 0 1 0 1H13v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V3H1.5a.5.5 0 0 1 0-1H4zm1 1v10h6V3H5zm1.5 2a.5.5 0 0 1 .5.5v6a.5.5 0 0 1-1 0v-6a.5.5 0 0 1 .5-.5zm3 0a.5.5 0 0 1 .5.5v6a.5.5 0 0 1-1 0v-6a.5.5 0 0 1 .5-.5z"/>
+            </svg>
+          </button>
+        </form>
+        {% endif %}
+      </td>
+    </tr>
+  {% endfor %}
+  {% if not members %}
+    <tr class="pf-v6-c-table__tr" role="row">
+      <td class="pf-v6-c-table__td" role="cell" colspan="3" style="color:var(--pf-t--global--text--color--subtle);">
+        No additional members yet.
+      </td>
+    </tr>
+  {% endif %}
+  </tbody>
+</table>
+
+{% if can_manage %}
+<h2 class="pf-v6-c-title pf-m-lg" style="margin-bottom:var(--pf-t--global--spacer--md);">Add Member</h2>
+<form method="post" action="/workspaces/{{ ws.id }}/members" class="pf-v6-c-form" style="max-width:600px;">
+  <div class="pf-v6-c-form__group">
+    <label class="pf-v6-c-form__label" for="member-user-id">
+      <span class="pf-v6-c-form__label-text" style="font-weight:var(--pf-t--global--font--weight--heading--bold);">Username</span>
+      <span class="pf-v6-c-form__label-required" aria-hidden="true">&#42;</span>
+    </label>
+    <div class="pf-v6-c-form__group-control">
+      <input type="text" class="pf-v6-c-form-control" id="member-user-id" name="user_id"
+             placeholder="alice or system:serviceaccount:swarmer:alice" required maxlength="255"
+             autocomplete="on" list="known-users-datalist">
+      {% if known_users %}
+      <datalist id="known-users-datalist">
+        {% for u in known_users %}
+        <option value="{{ u }}">
+        {% endfor %}
+      </datalist>
+      {% endif %}
+      <div class="pf-v6-c-form__helper-text">
+        <div class="pf-v6-c-helper-text__item">
+          <span class="pf-v6-c-helper-text__item-text">
+            The exact K8s ServiceAccount identity (<code>system:serviceaccount:&lt;ns&gt;:&lt;name&gt;</code>) or
+            OpenShift OAuth/OIDC username this person logs in with.
+          </span>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="pf-v6-c-form__group pf-m-action" style="margin-top:var(--pf-t--global--spacer--md);">
+    <div class="pf-v6-c-form__actions">
+      <button type="submit" class="pf-v6-c-button pf-m-primary">Add Member</button>
+      <a href="/workspaces/{{ ws.id }}" class="pf-v6-c-button pf-m-link">Cancel</a>
+    </div>
+  </div>
+</form>
+{% endif %}
+{% endblock %}

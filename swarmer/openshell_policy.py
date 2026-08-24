@@ -32,6 +32,17 @@ def _bin(path: str) -> dict:
 
 # ── Static base policy sections ───────────────────────────────────────────────
 
+# Filesystem policy applied to every sandbox regardless of agent tool.
+# Rationale:
+#   read_only  — system directories needed to run binaries and resolve
+#                libraries, but where the agent must not write (prevents
+#                tampering with the container OS or application code).
+#   read_write — /sandbox is the agent's working directory and primary
+#                output location; /tmp is required by many tools; /home/sandbox
+#                is the sandbox user's home; /dev/null is required for I/O
+#                redirection.
+#   include_workdir — ensures the sandbox's working directory (set per-session)
+#                is always accessible even if it falls outside the paths above.
 _BASE_FILESYSTEM = {
     "include_workdir": True,
     "read_only": ["/usr", "/lib", "/proc", "/dev/urandom", "/app", "/etc", "/var/log"],
@@ -455,12 +466,21 @@ def build_session_network_policies(
     Slack Incoming Webhook posts (SLACK_WEBHOOK_URL).
     """
     network_policies_dict: dict = {}
-    network_policies_dict.update(_build_agent_api_block(agent_tool, model))
 
-    # Google Cloud provider: grant aiplatform.googleapis.com + api.github.com
-    # when the workspace's google-cloud provider is attached to this sandbox.
-    if has_google_cloud_provider:
-        network_policies_dict["google_cloud_provider"] = _build_google_cloud_provider_block(agent_tool)
+    # Non-AI tools (agent_tool reported as not requiring an AI model via
+    # AgentToolStrategy.requires_ai_model()) don't make model API calls, so we
+    # skip the agent API and Google Cloud egress blocks entirely.  Git, Jira,
+    # Slack, and any custom rules still apply below.
+    # Using the tool name here avoids importing the registry into this module;
+    # the canonical check is get_tool(agent_tool).requires_ai_model().
+    from swarmer.agent_tools.registry import get as _get_tool
+    if _get_tool(agent_tool).requires_ai_model():
+        network_policies_dict.update(_build_agent_api_block(agent_tool, model))
+
+        # Google Cloud provider: grant aiplatform.googleapis.com + api.github.com
+        # when the workspace's google-cloud provider is attached to this sandbox.
+        if has_google_cloud_provider:
+            network_policies_dict["google_cloud_provider"] = _build_google_cloud_provider_block(agent_tool)
 
     for repo in repos:
         slug = _repo_slug(repo)

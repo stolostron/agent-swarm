@@ -52,14 +52,18 @@ python3 scripts/openshell_jira_smoke_test.py                     # Jira MCP: env
 # See docs/ARCHITECTURE.md "Adding a new MCP server" for how to write new smoke tests
 
 # User management
-make user-token SA_USER=alice                                      # Issue a K8s login token (default 8h)
-make grant-workspace-access SA_USER=alice WORKSPACE_NS=my-proj     # Grant access to an existing workspace
-make grant-workspace-create SA_USER=alice                          # Allow user to create new workspaces
-# For OpenShift OAuth/OIDC users (e.g. GitHub identity provider) instead of a ServiceAccount
-# token, use OIDC_USER=<name> in place of SA_USER=<name> — these are different RBAC
-# principals (User vs ServiceAccount) and a grant for one does not apply to the other.
-make grant-workspace-access OIDC_USER=<name> WORKSPACE_NS=my-proj
-make grant-workspace-create OIDC_USER=<name>
+make user-token SA_USER=alice   # Issue a K8s login token (default 8h); logs in as
+                                 # system:serviceaccount:<NAMESPACE>:alice
+# Workspace access/creation is a database ACL (ACM-41659), not K8s RBAC — grant it via the
+# UI (workspace -> Members tab -> Add Member) or the API, not a make target:
+#   curl -sX POST "$SWARMER_URL/api/v1/workspaces/<id>/members" \
+#     -H "Authorization: Bearer <owner-or-admin-token>" -H "Content-Type: application/json" \
+#     -d '{"user_id": "system:serviceaccount:<NAMESPACE>:alice"}'
+# Workspace creation policy: WORKSPACE_CREATE_POLICY=all|admins env var (+ WORKSPACE_ADMIN_USERS/
+# WORKSPACE_ADMIN_GROUPS). Global admins: self-service "Become the first Admin" button / /admins
+# page, or POST /api/v1/admins.
+# `make grant-workspace-access` / `grant-workspace-create` still exist but are deprecated
+# no-ops — Swarmer no longer reads that K8s RoleBinding/ClusterRoleBinding data.
 ```
 
 ## Architecture
@@ -109,7 +113,7 @@ Use placeholder patterns instead: `<YOUR_PROJECT>`, `example.com`, `your-registr
 - Template directories: plural noun matching the resource
 - HTMX partial templates: prefixed with `_` (e.g., `_status_badge.html`, `_repo_list.html`, `_list_rows.html`)
 - OpenShell sandbox names: `swarmer-session-{session_id}-{hex}` (auto-generated at launch)
-- K8s resource names (infrastructure only): workspace namespace, `quay-pull-secret`, `swarmer-agent-extra-env` (env vars, pending ACM-35039 migration)
+- K8s resource names (infrastructure only): workspace namespace (lazily created only when a pull secret is configured — ACM-41659), `quay-pull-secret`, `swarmer-agent-extra-env` (env vars, pending ACM-35039 migration)
 - URL pattern: `/workspaces/{ws_id}/sessions/{sid}/action`
 
 ### Design Principles
@@ -174,6 +178,10 @@ Use placeholder patterns instead: `<YOUR_PROJECT>`, `example.com`, `your-registr
 17. **Concurrency limit queues, not rejects**: When `MAX_CONCURRENT_AGENTS` is reached, `_do_launch()` sets `phase="queued"` and returns without creating a sandbox — it does NOT raise an exception. The queue processor in `scheduler.py` re-evaluates every 2 minutes (with a 2-minute in-memory cooldown). Stopping a queued session (no sandbox exists) returns it to `"idle"` not `"stopped"`, and skips all sandbox cleanup. The `"queued"` phase is included in `is_active`, so the session is protected from re-launch and editing while waiting.
 
 18. **GitHub App IAT refresh loop**: For TUI and server-mode sessions using a GitHub App, `_setup_openshell_sandbox` starts a background `asyncio.create_task` called `iat-refresh-{session_id}`. This task calls `github_auth.start_token_refresh_loop()`, which sleeps `IAT_REFRESH_INTERVAL` (3000 s) then re-mints an IAT and calls `openshell_client.ensure_provider()` to update the Gateway. The task is cancelled when the event loop session is torn down — including a Swarmer process restart, since the task lives only in that process's event loop. `main.py:_restart_server_sessions()` accounts for this: on startup it re-mints an IAT and restarts the refresh loop for every surviving server/TUI session that has no explicit PAT and has a workspace GitHub App configured (`_restart_github_app_iat_refresh`) — without this, the sandbox's existing IAT keeps working post-restart but silently expires ~1 hour later with no task left to renew it. The raw PEM private key is serialised into the task as a plain string (not an ORM object) to survive the DB session expiry.
+
+19. **Always include version updates with all commits**: `.push-defaults` is tracked in git. Whenever versions, image tags, or `.push-defaults` are bumped or changed, always stage and commit `.push-defaults` (and any related version configs) alongside the code changes.
+
+20. **Keep MCP Server in sync with REST API changes**: The standalone Agent Swarm MCP Server (`mcp-server/`) mirrors Swarmer's REST API under `/api/v1/` to enable AI agent orchestration. Whenever REST API endpoints, request/response schemas (`swarmer/api/schemas.py`), session options, agent tools, or parameters are added, modified, or deprecated, always evaluate and update the corresponding MCP tool definitions, client methods, schema docstrings, and test suites in `mcp-server/`.
 
 ## Personal configuration
 

@@ -4,6 +4,7 @@ import logging
 import re
 import shlex
 import uuid
+from collections.abc import Iterable
 from datetime import datetime, timezone
 
 import httpx
@@ -36,6 +37,30 @@ from swarmer.models.workspace_prompt import WorkspacePrompt, WorkspacePromptSour
 
 log = logging.getLogger(__name__)
 
+# ── Security model overview ───────────────────────────────────────────────────
+#
+# Authentication:
+#   Every route uses Depends(require_auth), which checks that the request
+#   carries a valid authenticated session cookie set during the login flow.
+#   The login flow validates the user's Kubernetes bearer token via the K8s
+#   TokenReview API (swarmer/k8s_auth.py), so only users with a valid cluster
+#   identity can authenticate.  The REST API (swarmer/api/) uses
+#   require_api_auth which validates the bearer token on every request.
+#
+# Workspace isolation:
+#   Workspaces map 1:1 to Kubernetes namespaces.  Every session operation
+#   checks that the requested session belongs to the workspace in the URL
+#   (session.workspace_id == ws_id); mismatches are rejected.  The REST API
+#   additionally enforces K8s namespace RBAC via user_can_access_workspace().
+#
+# Shell command trust boundary:
+#   For shell-tool sessions, instruction_prompt is executed verbatim inside a
+#   sandboxed container.  Input is not sanitised — the sandbox (Landlock
+#   filesystem policy, OPA network policy, process isolation) is the security
+#   boundary.  See the inline "Security note" comment at the sh -c call site.
+#
+# ─────────────────────────────────────────────────────────────────────────────
+
 _INVALID_REF_RE = re.compile(
     r"[\x00-\x1f\x7f ~^:?*\[\\]"
     r"|\.\.+"
@@ -44,6 +69,94 @@ _INVALID_REF_RE = re.compile(
     r"|\.lock$"
     r"|//"
 )
+
+# Patterns for common secret material that should not be persisted verbatim in
+# session output.  Applied only to shell-tool output, where the raw command's
+# stdout/stderr is stored directly (unlike AI-tool output, which is filtered
+# through OpenCode's response pipeline).
+#
+# _SECRET_KEY_RE targets key=value, KEY: value, or JSON-style credential
+# assignments where the key is a known credential name.  The value minimum is
+# intentionally 1 char so short passwords (e.g. PASSWORD=abc) are still
+# redacted.  The key name may be wrapped in quotes (JSON/YAML "api_key": ...)
+# and the value may be quoted (API_KEY="...") — only the value is replaced,
+# preserving surrounding syntax.
+#
+# _EMAIL_RE separately redacts email addresses that appear after known PII key
+# names (e.g. JIRA_EMAIL=user@example.com), since the @ and domain chars fall
+# outside the opaque-token character class used by _SECRET_KEY_RE.
+_SECRET_KEY_RE = re.compile(
+    r"(?i)"                                         # case-insensitive
+    r"(?P<prefix>"
+    r"[\"']?"                                       # optional JSON/YAML key quote
+    r"(?:api[_-]?key|access[_-]?token|auth[_-]?token|bearer|password|passwd|secret|"
+    r"private[_-]?key|gh_token|github_token|google_api_key|jira_access_token|"
+    r"jira_api_token|openai_api_key|anthropic_api_key|slack_token|slack_webhook|"
+    r"aws_secret_access_key|aws_session_token|service_account_key"
+    r")"
+    r"[\"']?\s*[=:]\s*"                             # optional key quote + separator
+    r"(?P<q>[\"']?)"                                # optional value quote
+    r")"
+    r"(?:[^\"'\s]+)"                                # opaque value (1+ non-quote/space chars)
+    r"(?P<q2>(?P=q))",                              # matching closing value quote
+)
+_EMAIL_RE = re.compile(
+    r"(?i)"
+    r"(?P<prefix>"
+    r"[\"']?"                                       # optional JSON/YAML key quote
+    r"(?:\w+[_-])?email(?:[_-]\w+)?"               # *_email, email_*, or just email
+    r"[\"']?\s*[=:]\s*"
+    r"(?P<q>[\"']?)"                                # optional value quote
+    r")"
+    r"(?:[^\s,}\"']{1,}@[^\s,}\"']+)"              # user@domain (any chars except delimiters)
+    r"(?P<q2>(?P=q))",
+)
+_REDACTED = "[REDACTED]"
+
+
+def _redact_secrets(
+    text: str,
+    secret_values: Iterable[str] | None = None,
+) -> str:
+    """Replace likely secret values in *text* with ``[REDACTED]``.
+
+    Applied to shell-tool stdout/stderr before it is written to the DB so that
+    accidental ``printenv``, ``env``, or credential-echoing scripts don't
+    persist secrets in plaintext in the session output columns.
+
+    The redaction is best-effort and multi-layered:
+
+    1. Any non-empty literal secret strings provided in *secret_values*
+       (e.g., injected GitHub PAT tokens, Jira tokens, workspace env vars)
+       are replaced directly with ``[REDACTED]``.
+    2. Key-based regex pattern matching targets common credential key names
+       (TOKEN, API_KEY, PASSWORD, etc.) followed by an ``=`` or ``:`` assignment,
+       including quoted values (``API_KEY="..."``) and JSON-style key/value pairs
+       (``"api_key": "..."``).  Values of any length are redacted so short
+       passwords (e.g. ``PASSWORD=abc``) are covered.
+    3. Email addresses following PII key names (e.g. ``JIRA_EMAIL=u@example.com``).
+
+    Legitimate log lines are not affected as long as they don't look like
+    key=value credential or PII assignments.
+    """
+    if not text:
+        return text
+
+    if secret_values:
+        valid_secrets = sorted(
+            {s for s in secret_values if s and isinstance(s, str) and s.strip()},
+            key=len,
+            reverse=True,
+        )
+        for sec in valid_secrets:
+            text = text.replace(sec, _REDACTED)
+
+    text = _SECRET_KEY_RE.sub(
+        lambda m: m.group("prefix") + _REDACTED + m.group("q2"), text
+    )
+    return _EMAIL_RE.sub(
+        lambda m: m.group("prefix") + _REDACTED + m.group("q2"), text
+    )
 
 
 def _is_valid_ref_name(name: str) -> bool:
@@ -200,8 +313,14 @@ async def _get_provider_options(
         has_vertex = await openshell_client.provider_exists(f"swarmer-ws-{ws_id}-google-cloud")
     except Exception:
         pass
-    # Google AI Studio key still lives encrypted in the DB pending ACM-37263.
-    has_gemini = bool(oc and oc.google_api_key_enc)
+    # Check gateway for Google AI Studio (Gemini) provider — key is stored on
+    # OpenShell, not Swarmer DB (ACM-37263).
+    has_gemini = False
+    try:
+        from swarmer import openshell_client
+        has_gemini = await openshell_client.provider_exists(f"swarmer-ws-{ws_id}-google-ai-studio")
+    except Exception:
+        pass
     return tool.get_model_options(oc, has_vertex=has_vertex, has_gemini=has_gemini)
 
 router = APIRouter()
@@ -528,7 +647,15 @@ async def session_create(
                 "pats": pats,
                 "has_github_app": bool(_ws_github_app),
                 "error": f"A session named '{name}' already exists in this workspace.",
-                "form": {"name": name, "instruction_prompt": instruction_prompt, "working_branch": wb},
+                "form": {
+                    "name": name,
+                    "instruction_prompt": instruction_prompt,
+                    "working_branch": wb,
+                    "agent_tool": agent_tool,
+                    "github_pat_id": github_pat_id,
+                    "prompt_id": prompt_id,
+                    "mcp_server_ids": selected_mcp_ids,
+                },
                 "provider_options": provider_options,
                 "selected_provider": provider,
                 "agent_tools": _tools,
@@ -711,9 +838,18 @@ async def session_edit(
         session.mode = mode
     session.provider = provider.strip()
     try:
-        session.agent_tool = get_tool(agent_tool).name
+        _new_agent_tool = get_tool(agent_tool).name
     except ValueError:
-        pass
+        _new_agent_tool = session.agent_tool
+
+    # Some agent tools don't support server mode (e.g. shell). The UI hides/disables
+    # this combination, but reject it server-side too in case of a direct request.
+    _new_tool_strategy = get_tool(_new_agent_tool)
+    if not _new_tool_strategy.supports_server_mode() and session.mode == "server":
+        flash(request, f"{_new_tool_strategy.display_name} agent tool does not support server mode.", "danger")
+        return RedirectResponse(url=f"/workspaces/{ws_id}/sessions/{sid}", status_code=302)
+
+    session.agent_tool = _new_agent_tool
 
     form_data = await request.form()
     if "working_branch" in form_data:
@@ -1113,26 +1249,35 @@ async def _do_launch_openshell(
     #     the injected env vars (GOOGLE_API_KEY, ANTHROPIC_API_KEY, GH_TOKEN, etc.).
     provider_names: list[str] = []
     ws_id = session.workspace_id
-    if oc_secret and oc_secret.google_api_key:
-        pname = f"swarmer-ws-{ws_id}-google-ai-studio"
-        await openshell_client.ensure_provider(pname, "google-ai-studio", {}, credentials={
-                "GOOGLE_API_KEY": oc_secret.google_api_key,
-                "GOOGLE_GENERATIVE_AI_API_KEY": oc_secret.google_api_key,
-            })
-        provider_names.append(pname)
+    # Google AI Studio (Gemini) via google-ai-studio provider — key is stored on the
+    # gateway (not in Swarmer DB, ACM-37263). Attach the provider if it already
+    # exists (created via the secrets UI at save time), mirroring the Vertex pattern.
+    # Non-AI tools (e.g. shell) never call an AI model — skip AI provider
+    # credentials (Google AI Studio, Vertex/google-cloud) for their sandboxes.
+    _gemini_pname = f"swarmer-ws-{ws_id}-google-ai-studio"
+    if tool.requires_ai_model():
+        try:
+            if await openshell_client.provider_exists(_gemini_pname):
+                provider_names.append(_gemini_pname)
+        except Exception:
+            log.warning(
+                "_do_launch_openshell: could not check google-ai-studio provider for session %d",
+                session.id, exc_info=True,
+            )
     # Vertex AI via google-cloud provider — ADC is stored on the gateway (not in Swarmer DB).
     # Attach the provider if it already exists (created via the secrets UI).
     _vertex_pname = f"swarmer-ws-{ws_id}-google-cloud"
     _has_google_cloud_provider = False
-    try:
-        if await openshell_client.provider_exists(_vertex_pname):
-            provider_names.append(_vertex_pname)
-            _has_google_cloud_provider = True
-    except Exception:
-        log.warning(
-            "_do_launch_openshell: could not check google-cloud provider for session %d",
-            session.id, exc_info=True,
-        )
+    if tool.requires_ai_model():
+        try:
+            if await openshell_client.provider_exists(_vertex_pname):
+                provider_names.append(_vertex_pname)
+                _has_google_cloud_provider = True
+        except Exception:
+            log.warning(
+                "_do_launch_openshell: could not check google-cloud provider for session %d",
+                session.id, exc_info=True,
+            )
     # 1b cont. GitHub App IAT — minted above before commit; now register the provider.
     _app_pname: str | None = None
 
@@ -1537,20 +1682,32 @@ async def _setup_openshell_sandbox(
                         )
 
         # Build the agent command.
-        # Prompt mode: AGENTS.md was written above (prompt + repo context); read it at
-        # runtime via "$(</sandbox/AGENTS.md)" shell expansion — no newlines in args,
-        # full context identical to TUI mode.
+        # Prompt mode:
+        #   - AI-based tools (opencode): AGENTS.md was written above (prompt + repo
+        #     context); read it at runtime via "$(</sandbox/AGENTS.md)" shell expansion.
+        #   - Shell tool: instruction_prompt IS the command — run it directly, no AI hop.
         # TUI/server: main_cmd is "sleep infinity" / "opencode serve …"; agent is
         # started later by the WebSocket handler or start_agent().
         if mode == "prompt":
-            _tool_bin = {"opencode": "opencode run"}.get(tool_name, "opencode run")
-            if agents_md:
-                # Read the full AGENTS.md (prompt + repo context) as the CLI argument.
-                _model_arg = shlex.quote(model) if model else ""
-                agent_cmd = f"HOME=/sandbox {_tool_bin} --model {_model_arg} \"$(</sandbox/AGENTS.md)\""
+            if tool_name == "shell":
+                # Shell tool: run the raw command directly — no AI agent involved.
+                # main_cmd is already the verbatim instruction_prompt from build_main_cmd().
+                #
+                # Security note: instruction_prompt is injected into a compound sh -c
+                # string without sanitisation — shell metacharacters (;, &&, |, $(), etc.)
+                # are intentional: the whole point is to run arbitrary commands.  The
+                # sandbox container is the security boundary; only authenticated users
+                # (require_auth) with access to the workspace can set instruction_prompt.
+                agent_cmd = f"export HOME=/sandbox PATH=\"/sandbox/.local/bin:$PATH\" && cd /sandbox && {main_cmd}"
             else:
-                # No prompt configured — launch without a message argument.
-                agent_cmd = f"HOME=/sandbox {main_cmd}"
+                _tool_bin = {"opencode": "opencode run"}.get(tool_name, "opencode run")
+                if agents_md:
+                    # Read the full AGENTS.md (prompt + repo context) as the CLI argument.
+                    _model_arg = shlex.quote(model) if model else ""
+                    agent_cmd = f"HOME=/sandbox {_tool_bin} --model {_model_arg} \"$(</sandbox/AGENTS.md)\""
+                else:
+                    # No prompt configured — launch without a message argument.
+                    agent_cmd = f"HOME=/sandbox {main_cmd}"
         else:
             # Server and TUI modes: export HOME and PATH, cd into /sandbox/.
             # Mirrors tui_ws.py exactly: HOME=/sandbox, PATH includes /sandbox/.local/bin.
@@ -1625,6 +1782,56 @@ async def _run_openshell_agent(
 
     _TERMINAL_PHASES = frozenset(("succeeded", "failed", "stopped"))
 
+    # Collect non-empty injected credential values so bare secret strings in shell output are redacted
+    injected_secrets: set[str] = set()
+    if env_vars:
+        for _v in env_vars.values():
+            if _v and isinstance(_v, str) and _v.strip():
+                injected_secrets.add(_v)
+
+    try:
+        async for _db in _get_db():
+            from sqlalchemy import select as sa_select
+            from swarmer.models.github_pat import GitHubPAT
+            from swarmer.models.mcp_server import McpServer
+            from swarmer.models.opencode_secret import OpencodeSecret
+            from swarmer.models.sandbox_env_var import SandboxEnvVar
+
+            if pat_id:
+                _pat_obj = await _db.get(GitHubPAT, pat_id)
+                if _pat_obj and _pat_obj.pat and _pat_obj.pat.strip():
+                    injected_secrets.add(_pat_obj.pat)
+
+            _s = await _db.get(_Session, session_id)
+            if _s and _s.github_pat and _s.github_pat.pat and _s.github_pat.pat.strip():
+                injected_secrets.add(_s.github_pat.pat)
+
+            _ev_res = await _db.execute(
+                sa_select(SandboxEnvVar).where(SandboxEnvVar.workspace_id == workspace_id)
+            )
+            for row in _ev_res.scalars().all():
+                if row.value and isinstance(row.value, str) and row.value.strip():
+                    injected_secrets.add(row.value)
+
+            _sec_res = await _db.execute(
+                sa_select(OpencodeSecret).where(OpencodeSecret.workspace_id == workspace_id)
+            )
+            for row in _sec_res.scalars().all():
+                if row.google_api_key and isinstance(row.google_api_key, str) and row.google_api_key.strip():
+                    injected_secrets.add(row.google_api_key)
+
+            _mcp_res = await _db.execute(
+                sa_select(McpServer).where(McpServer.workspace_id == workspace_id)
+            )
+            for row in _mcp_res.scalars().all():
+                if row.api_token and isinstance(row.api_token, str) and row.api_token.strip():
+                    injected_secrets.add(row.api_token)
+                if row.access_token and isinstance(row.access_token, str) and row.access_token.strip():
+                    injected_secrets.add(row.access_token)
+            break
+    except Exception:
+        log.warning("_run_openshell_agent: failed to load secret values for redaction", exc_info=True)
+
     async def _update_db(**fields) -> None:
         from swarmer.session_runs import record_session_run as _record_run
 
@@ -1673,7 +1880,11 @@ async def _run_openshell_agent(
 
             async def _on_output(text: str) -> None:
                 _streamed[:] = [text]
-                await _update_db(last_output=text, raw_output=text)
+                # Redact secrets from shell output before persisting — the raw
+                # stdout/stderr of a shell command may contain credential values
+                # if the script calls printenv, env, or echoes config variables.
+                _safe = _redact_secrets(text, secret_values=injected_secrets) if agent_tool == "shell" else text
+                await _update_db(last_output=_safe, raw_output=_safe)
 
             result = await openshell_client.exec_command_streaming(
                 sandbox_name, cmd,
@@ -1685,18 +1896,28 @@ async def _run_openshell_agent(
             stderr = getattr(result, "stderr", "") or ""
             phase = "succeeded" if exit_code == 0 else "failed"
 
-            # OpenCode stores the response in its SQLite DB, not stdout.
+            # OpenCode stores the response in its SQLite DB, not stdout, so we
+            # do a final read_opencode_response call after the exec completes.
             # On success: prefer the SQLite response (full conversation).
             # On failure: SQLite may be empty; prefer the accumulated streaming
             # output over the sparse ExecResult.stdout (which is the same
             # incremental stdout that on_output already captured, but only the
             # last chunk — the accumulated buffer has everything).
+            # Shell tool runs a raw command directly — there is no OpenCode
+            # SQLite DB to read, so skip that call entirely and use the
+            # streamed stdout/stderr as the result.
             _streamed_text = _streamed[0] if _streamed else ""
-            output = (
-                await openshell_client.read_opencode_response(sandbox_name)
-                or _streamed_text
-                or stderr
-            )
+            if agent_tool == "shell":
+                # Use streamed stdout; fall back to stderr on failure.
+                # Apply secret redaction: the raw shell command output may contain
+                # credential values if the script echoes env vars or config.
+                output = _redact_secrets(_streamed_text or stderr, secret_values=injected_secrets)
+            else:
+                output = (
+                    await openshell_client.read_opencode_response(sandbox_name)
+                    or _streamed_text
+                    or stderr
+                )
 
             # Snapshot draft policy chunks before any sandbox deletion so the
             # Policy tab can show what was denied/proposed during this run.
@@ -1721,18 +1942,29 @@ async def _run_openshell_agent(
                 await _delete_github_app_provider(workspace_id, session_id)
                 await _delete_pat_provider(workspace_id, pat_id, session_id)
             else:
-                # failed/stopped — sandbox left running for debugging; providers stay
-                # attached and will be cleaned up when the session is stopped/deleted.
+                # failed/stopped — sandbox intentionally left running so the user
+                # can inspect stdout/stderr and re-run.  Providers (GitHub PAT,
+                # Jira token) stay attached to the sandbox; they are cleaned up
+                # when the session is explicitly stopped or deleted.
+                #
+                # Security note: leaving providers attached means the sandbox
+                # retains network credentials until explicit cleanup.  The risk
+                # is bounded by the sandbox's network policy (egress is still
+                # restricted to approved hosts/ports) and the requirement that
+                # only authenticated workspace members can interact with it.
                 log.info(
                     "_run_openshell_agent: skipping provider cleanup for phase=%s session=%d "
                     "(sandbox still attached — cleanup on explicit stop/delete)",
                     phase, session_id,
                 )
 
+            # For shell runs _streamed_text is already redacted (via _on_output);
+            # for AI-tool runs it passes through unmodified.
+            _final_raw = _streamed_text if agent_tool != "shell" else _redact_secrets(_streamed_text, secret_values=injected_secrets)
             await _update_db(
                 phase=phase,
                 last_output=output,
-                raw_output=_streamed_text,  # preserve raw console log regardless of agent tool
+                raw_output=_final_raw,  # preserve raw console log regardless of agent tool
                 status_detail="",  # clear any stale status from previous runs
                 policy_chunks=chunks_json,
                 run_completed_at=datetime.now(timezone.utc),
@@ -2836,7 +3068,18 @@ def _prefix_diff_paths(diff: str, prefix: str) -> str:
 
 
 async def _build_commit_msg(patch: str, workspace_id: int, db: AsyncSession) -> str:
-    """Use an LLM to generate a commit message from the diff."""
+    """Use an LLM to generate a commit message from the diff.
+
+    Gemini-based generation calls the Google API directly from the Swarmer
+    process, which requires a plaintext key in-process. Since ACM-37263 the
+    Gemini key is pushed to the OpenShell gateway at save time and the gateway
+    never returns credentials in plaintext (REDACTED), so this path only works
+    for workspaces with a legacy key still present in ``google_api_key_enc``
+    from before the migration. New/rotated keys are gateway-only and fall
+    through to the file-list summary below — there is no in-process
+    replacement for this feature short of running generation inside the
+    sandbox (out of scope here).
+    """
     truncated = patch[:8000] if len(patch) > 8000 else patch
 
     oc_result = await db.execute(

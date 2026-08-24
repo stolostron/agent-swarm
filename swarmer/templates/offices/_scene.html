@@ -1,0 +1,95 @@
+{% if offices %}
+<div class="office-floor">
+  {% for office in offices %}
+  <section class="office-room" aria-label="Office for {{ office.workspace.display_name }}">
+    <header class="office-room__header">
+      <a class="office-room__title" href="/workspaces/{{ office.workspace.id }}/sessions">
+        <span class="office-room__sign" aria-hidden="true">🏢</span>
+        <span>{{ office.workspace.display_name }}</span>
+      </a>
+      <div class="office-room__meta">
+        {% if office.unavailable %}
+        Session count unavailable
+        {% else %}
+        {% if office.active_count %}
+        <span class="office-live-dot" aria-hidden="true"></span>
+        {% endif %}
+        {{ office.active_count }} working ·
+        {% if office.total_count == 1 %}1 person{% else %}{{ office.total_count }} people{% endif %}
+        {% if office.resters %} · {{ office.resters|length }} on break{% endif %}
+        {% endif %}
+      </div>
+    </header>
+    <div class="office-room__window" aria-hidden="true"></div>
+    <div class="office-room__body">
+      {% if office.unavailable %}
+      <div class="office-room__empty office-room__unavailable" role="status">
+        <div>Session list unavailable for this workspace.</div>
+        <div class="office-room__unavailable-hint">
+          {% if scope == "all" and offices|length > 1 %}
+          Other offices are still shown — try again shortly.
+          {% else %}
+          Try again shortly.
+          {% endif %}
+        </div>
+      </div>
+      {% elif office.sessions %}
+      <div class="office-desks">
+        {% for session in office.workers %}
+          {% with ws_id=office.workspace.id, rest_mode=False %}
+            {% include "offices/_human.html" %}
+          {% endwith %}
+        {% endfor %}
+        {% if not office.workers %}
+        <div class="office-room__quiet">
+          Everyone is on break — desks are quiet.
+        </div>
+        {% endif %}
+      </div>
+
+      <aside class="rest-room" aria-label="Break room">
+        <div class="rest-room__banner">
+          <span aria-hidden="true">☕</span>
+          <strong>Break room</strong>
+          <span class="rest-room__hint">Succeeded sessions come here</span>
+        </div>
+        {% if office.resters %}
+        <div class="rest-room__people">
+          {% for session in office.resters %}
+            {% with ws_id=office.workspace.id, rest_mode=True %}
+              {% include "offices/_human.html" %}
+            {% endwith %}
+          {% endfor %}
+        </div>
+        {% else %}
+        <div class="rest-room__empty">
+          No one finished yet — coffee is waiting.
+        </div>
+        {% endif %}
+      </aside>
+      {% else %}
+      <div class="office-room__empty">
+        <div class="office-room__empty-icon" aria-hidden="true">🧑‍💻</div>
+        <div>This office is empty.</div>
+        <a href="/workspaces/{{ office.workspace.id }}/sessions/new" class="pf-v6-c-button pf-m-link pf-m-inline">
+          Hire someone (new session)
+        </a>
+      </div>
+      {% endif %}
+    </div>
+  </section>
+  {% endfor %}
+</div>
+{% else %}
+<div class="pf-v6-c-empty-state">
+  <div class="pf-v6-c-empty-state__content">
+    <h2 class="pf-v6-c-empty-state__title-text">No offices yet</h2>
+    <div class="pf-v6-c-empty-state__body">
+      Create a workspace to open your first Swarm Office floor.
+    </div>
+    <div class="pf-v6-c-empty-state__actions">
+      <a href="/workspaces" class="pf-v6-c-button pf-m-primary">Go to Workspaces</a>
+    </div>
+  </div>
+</div>
+{% endif %}

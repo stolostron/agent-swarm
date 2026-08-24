@@ -10,13 +10,8 @@ creation for agent sessions.
 from __future__ import annotations
 
 import base64
-import hashlib
 import logging
 import time
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from kubernetes.client import RbacV1Subject
 
 log = logging.getLogger(__name__)
 
@@ -92,62 +87,6 @@ def ensure_namespace(namespace: str) -> None:
     _grant_anyuid_scc(namespace)
 
 
-SWARMER_USER_CLUSTER_ROLE = "swarmer-user"
-
-
-def _rbac_subject(identity_username: str) -> RbacV1Subject:
-    """Build a RoleBinding subject for a K8s User or ServiceAccount identity."""
-    from kubernetes import client
-
-    prefix = "system:serviceaccount:"
-    if identity_username.startswith(prefix):
-        sa_ns, sa_name = identity_username[len(prefix):].split(":", 1)
-        return client.RbacV1Subject(
-            kind="ServiceAccount",
-            name=sa_name,
-            namespace=sa_ns,
-        )
-    return client.RbacV1Subject(kind="User", name=identity_username)
-
-
-def _swarmer_user_role_binding_name(identity_username: str) -> str:
-    """Return a stable, unique RoleBinding name for *identity_username*."""
-    import re
-
-    safe = re.sub(r"[^a-z0-9-]", "-", identity_username.lower()).strip("-")[:40]
-    suffix = hashlib.sha256(identity_username.encode()).hexdigest()[:8]
-    return f"swarmer-user-{safe or 'user'}-{suffix}"
-
-
-def grant_swarmer_user_access(namespace: str, identity_username: str) -> None:
-    """Grant swarmer-user ClusterRole in *namespace* to *identity_username*."""
-    from kubernetes import client
-
-    rb_name = _swarmer_user_role_binding_name(identity_username)
-
-    rbac = client.RbacAuthorizationV1Api()
-    rb = client.V1RoleBinding(
-        metadata=client.V1ObjectMeta(name=rb_name, namespace=namespace),
-        role_ref=client.V1RoleRef(
-            api_group="rbac.authorization.k8s.io",
-            kind="ClusterRole",
-            name=SWARMER_USER_CLUSTER_ROLE,
-        ),
-        subjects=[_rbac_subject(identity_username)],
-    )
-    try:
-        rbac.create_namespaced_role_binding(namespace, rb)
-    except client.exceptions.ApiException as exc:
-        if exc.status == 409:
-            return
-        log.warning(
-            "Failed to grant swarmer-user in %s: status=%s reason=%s",
-            namespace,
-            exc.status,
-            exc.reason,
-        )
-
-
 def _grant_anyuid_scc(namespace: str) -> None:
     """Grant the OpenShift anyuid SCC to the default SA in *namespace*.
 
@@ -200,6 +139,120 @@ def delete_namespace(namespace: str) -> None:
     except client.exceptions.ApiException as exc:
         if exc.status != 404:
             raise
+
+
+SWARMER_USER_CLUSTER_ROLE = "swarmer-user"
+
+
+def list_swarmer_user_role_binding_identities(namespace: str) -> list[str]:
+    """Return K8s usernames granted via `swarmer-user` RoleBindings in *namespace*.
+
+    ACM-41659 migration helper: `make grant-workspace-access` (pre-database-ACL)
+    created a RoleBinding to the `swarmer-user` ClusterRole for each granted
+    user. This reads those bindings back so existing grants can be mirrored
+    into `workspace_members` without requiring anyone to be manually re-added.
+    Returns [] (never raises) if the namespace doesn't exist or K8s is
+    unreachable — this is a best-effort, non-fatal sync.
+
+    Identity strings match the TokenIdentity.username format returned by
+    TokenReview: `system:serviceaccount:<sa_namespace>:<sa_name>` for a
+    ServiceAccount subject, or the raw subject name for a User subject.
+    """
+    from kubernetes import client
+
+    identities: list[str] = []
+    try:
+        rbac = client.RbacAuthorizationV1Api()
+        bindings = rbac.list_namespaced_role_binding(namespace)
+    except Exception:
+        log.debug("list_swarmer_user_role_binding_identities: could not list RoleBindings in %s", namespace, exc_info=True)
+        return identities
+
+    for rb in bindings.items or []:
+        role_ref = rb.role_ref
+        if not role_ref or role_ref.kind != "ClusterRole" or role_ref.name != SWARMER_USER_CLUSTER_ROLE:
+            continue
+        for subject in rb.subjects or []:
+            if subject.kind == "ServiceAccount":
+                sa_namespace = subject.namespace or namespace
+                identities.append(f"system:serviceaccount:{sa_namespace}:{subject.name}")
+            elif subject.kind == "User":
+                identities.append(subject.name)
+    return identities
+
+
+# ---------- Add Member / Add Admin candidate discovery (ACM-41659) ----------
+
+INCLUSTER_NAMESPACE_FILE = "/var/run/secrets/kubernetes.io/serviceaccount/namespace"
+DEFAULT_APP_NAMESPACE = "swarmer"
+
+# ServiceAccounts that are infrastructure, not people — never suggested.
+_SYSTEM_SERVICE_ACCOUNTS = frozenset({
+    "default", "builder", "deployer", "swarmer", "openshell", "openshell-sandbox",
+})
+
+
+def app_namespace() -> str:
+    """Best-effort: the namespace Swarmer itself is deployed into.
+
+    Used to discover the ServiceAccounts `make user-token SA_USER=<name>`
+    would create (or already has) for autocomplete suggestions — never
+    raises, always returns a usable default.
+    """
+    from swarmer.config import settings
+
+    if settings.k8s_namespace:
+        return settings.k8s_namespace
+    try:
+        with open(INCLUSTER_NAMESPACE_FILE) as f:
+            ns = f.read().strip()
+            if ns:
+                return ns
+    except OSError:
+        pass
+    return DEFAULT_APP_NAMESPACE
+
+
+def list_openshift_users() -> list[str]:
+    """Return all OpenShift `User` object names (cluster-scoped), or [] if
+    not running on OpenShift / no permission / any K8s error. Never raises."""
+    from kubernetes import client
+
+    try:
+        api = client.CustomObjectsApi()
+        result = api.list_cluster_custom_object(
+            group="user.openshift.io", version="v1", plural="users"
+        )
+        return [
+            item["metadata"]["name"]
+            for item in result.get("items", [])
+            if item.get("metadata", {}).get("name")
+        ]
+    except Exception:
+        log.debug("list_openshift_users: not available (not OpenShift, no permission, or unreachable)", exc_info=True)
+        return []
+
+
+def list_user_service_accounts(namespace: str | None = None) -> list[str]:
+    """Return `system:serviceaccount:<ns>:<name>` identities for every
+    ServiceAccount in *namespace* (defaults to `app_namespace()`) — i.e. the
+    identities `make user-token SA_USER=<name>` creates/uses. Excludes
+    infrastructure ServiceAccounts. Never raises; [] on any K8s error."""
+    from kubernetes import client
+
+    ns = namespace or app_namespace()
+    try:
+        v1 = client.CoreV1Api()
+        result = v1.list_namespaced_service_account(ns)
+    except Exception:
+        log.debug("list_user_service_accounts: could not list ServiceAccounts in %s", ns, exc_info=True)
+        return []
+
+    return [
+        f"system:serviceaccount:{ns}:{sa.metadata.name}"
+        for sa in result.items or []
+        if sa.metadata.name not in _SYSTEM_SERVICE_ACCOUNTS
+    ]
 
 
 # ---------- Secret helpers ----------

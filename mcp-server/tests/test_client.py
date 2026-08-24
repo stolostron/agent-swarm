@@ -72,6 +72,38 @@ async def test_create_session_sends_correct_body(client):
 
 
 @pytest.mark.asyncio
+async def test_create_session_with_shell_tool(client):
+    with respx.mock(base_url=BASE_URL) as mock:
+        route = mock.post("/api/v1/workspaces/1/sessions").mock(
+            return_value=httpx.Response(201, json={"id": 6, "name": "shell-session", "agent_tool": "shell"})
+        )
+        result = await client.create_session(
+            1, "shell-session", mode="prompt", agent_tool="shell", instruction_prompt="echo hello"
+        )
+        assert route.called
+        import json
+        body = json.loads(route.calls[0].request.content)
+        assert body["name"] == "shell-session"
+        assert body["agent_tool"] == "shell"
+        assert body["instruction_prompt"] == "echo hello"
+    assert result["id"] == 6
+
+
+@pytest.mark.asyncio
+async def test_update_session_agent_tool(client):
+    with respx.mock(base_url=BASE_URL) as mock:
+        route = mock.put("/api/v1/workspaces/1/sessions/5").mock(
+            return_value=httpx.Response(200, json={"id": 5, "name": "my-session", "agent_tool": "shell"})
+        )
+        result = await client.update_session(1, 5, agent_tool="shell")
+        assert route.called
+        import json
+        body = json.loads(route.calls[0].request.content)
+        assert body["agent_tool"] == "shell"
+    assert result["agent_tool"] == "shell"
+
+
+@pytest.mark.asyncio
 async def test_launch_session(client):
     with respx.mock(base_url=BASE_URL) as mock:
         mock.post("/api/v1/workspaces/1/sessions/5/launch").mock(

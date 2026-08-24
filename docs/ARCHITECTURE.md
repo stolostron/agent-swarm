@@ -31,7 +31,8 @@ agent-swarm/
     ├── config.py               # pydantic-settings Settings singleton
     ├── database.py             # SQLAlchemy async engine + session factory + migrations
     ├── crypto.py               # Fernet encrypt/decrypt from secret key file or env var
-    ├── k8s_auth.py             # K8s TokenReview validation, namespace access check, RBAC probing
+    ├── k8s_auth.py             # K8s TokenReview validation — identity (username/groups) only
+    ├── workspace_acl.py        # Database-backed workspace ACL (owner/member/admin) — ACM-41659
     ├── deps.py                 # FastAPI dependencies (require_auth, get_user_token)
     ├── k8s.py                  # Kubernetes utility functions (namespace, pull secrets, image check, extra env vars)
     ├── mcp_catalog.py          # Registry of well-known MCP servers (Jira, etc.) with OAuth defaults
@@ -47,11 +48,13 @@ agent-swarm/
     │   └── opencode.py         # OpenCode strategy (Vertex AI Anthropic/Gemini models)
     ├── models/                 # SQLAlchemy ORM models
     │   ├── __init__.py         # Imports all models (required for Base.metadata)
-    │   ├── workspace.py        # Workspace → K8s namespace (or shared via settings.k8s_namespace)
+    │   ├── workspace.py        # Workspace (owner_id + derived namespace slug for legacy K8s secrets)
+    │   ├── workspace_member.py # Explicit per-user workspace access grants (ACM-41659)
+    │   ├── global_admin.py     # Self-service global admins (ACM-41659)
     │   ├── session.py          # Session (sandbox lifecycle, modes: tui/server/prompt, cron scheduling)
     │   ├── session_repo.py     # Git repos attached to sessions (cloned into sandbox at launch)
     │   ├── sandbox_env_var.py  # Per-workspace env vars (encrypted at rest, injected into sandboxes)
-    │   ├── opencode_secret.py  # Fernet-encrypted provider credentials (GCP/Gemini)
+    │   ├── opencode_secret.py  # GCP project/location (DB); ADC + Gemini key are gateway-only (ACM-37263)
     │   ├── github_pat.py       # Fernet-encrypted GitHub PATs for HTTPS git auth
     │   ├── github_app.py       # Fernet-encrypted GitHub App credentials (one per workspace)
     │   └── mcp_server.py       # MCP server configs with Fernet-encrypted OAuth tokens
@@ -78,18 +81,18 @@ agent-swarm/
 
 **OpenShell is the sole session runtime** — All agent session lifecycle (create, exec, stop, delete) goes through the OpenShell Gateway + Supervisor APIs. Swarmer does not create K8s pods, PVCs, Services, or Routes for agent sessions.
 
-**Minimal K8s surface** — Swarmer's K8s usage is limited to: authentication (TokenReview via `k8s_auth.py`), image pull secrets (for `check_image_reachable`), and workspace namespace scoping. All credential injection for agent sessions is handled by the OpenShell Gateway.
+**Minimal K8s surface** — Swarmer's K8s usage is limited to: authentication (TokenReview via `k8s_auth.py`, identity only — no RBAC checks), image pull secrets (for `check_image_reachable`; the K8s namespace they live in is created lazily on first use, ACM-41659), and Add Member / Add Admin candidate discovery (`k8s.list_openshift_users()`, `k8s.list_user_service_accounts()`, both best-effort/read-only). Workspace access control itself is a database ACL (`workspace_acl.py`), not K8s RBAC or namespace scoping. All credential injection for agent sessions is handled by the OpenShell Gateway.
 
 ## Domain Model
 
-- **Workspace** maps to a Kubernetes namespace for scoping purposes. All resources (sessions, secrets) are scoped to a workspace. When `settings.k8s_namespace` is set (namespace-scoped deployment), all workspaces share a single K8s namespace via `Workspace.k8s_namespace` property.
+- **Workspace** is a logical grouping for sessions/secrets, backed purely by the database (ACM-41659) — access is a database ACL (`Workspace.owner_id` + `workspace_members` rows + configured admin allow-list, see `workspace_acl.py`), not a per-workspace Kubernetes namespace. `Workspace.namespace` is still a derived slug used to name a handful of legacy per-workspace K8s Secrets (pull secrets) that are lazily created on first use via `Workspace.k8s_namespace` (or a single shared namespace when `settings.k8s_namespace` is set).
 - **Session** = an agent run inside an OpenShell sandbox. Three modes:
   - `prompt` — one-shot: runs the agent with a prompt, sandbox exits on completion, sandbox auto-deleted on success
   - `server` — persistent: runs the agent in server mode, exposes a service via OpenShell `expose_service()`, dashboard proxies HTTP/WS/SSE to it
   - `tui` — persistent: runs `sleep infinity`; user connects via xterm.js WebSocket → OpenShell `exec_interactive()` PTY
 - **Session phases**: `idle` → `pending` → `running` → `succeeded`/`failed`/`stopped`
 - **Cron scheduling** — sessions of any mode can have a cron schedule (`cron_schedule` field). A background asyncio loop (`scheduler.py`) checks every 30s, uses an atomic `UPDATE … RETURNING` to claim due rows (prevents duplicates), sets `session.mode = "prompt"` before calling `_do_launch()` (scheduled runs always execute in prompt mode regardless of the session's configured mode), then calls the shared `_do_launch()` helper in `sessions.py`.
-- **OpencodeSecret** — per-workspace encrypted storage for GCP project, Vertex location, ADC JSON, and Google API key. Stored in SQLite via Fernet encryption. Despite the legacy name, used by OpenCode. Multiple rows per workspace are tolerated (one per `user_id`); read paths use `.scalars().first()` to avoid `MultipleResultsFound` when users share a workspace. A `UNIQUE (workspace_id, user_id)` constraint prevents future duplicates, with a deduplication migration that keeps the newest row per pair.
+- **OpencodeSecret** — per-workspace storage for GCP project and Vertex location (plain, non-secret SQLite `Text` columns — not Fernet-encrypted, since they carry no sensitive material). Despite the legacy name, used by OpenCode. The ADC JSON and the Google AI Studio (Gemini) API key are **not** persisted here via the UI — both are pushed directly to OpenShell gateway providers at save time (`swarmer-ws-{id}-google-cloud` and `swarmer-ws-{id}-google-ai-studio` respectively) and checked at launch/display time via `provider_exists()` (ACM-37263 completed the Gemini side of this pattern, mirroring the pre-existing ADC behavior). The model's `application_default_credentials_enc` / `google_api_key_enc` columns are retained only for backward compatibility with rows written before each migration and via the raw `POST /api/v1/.../secrets/credentials` API, which still accepts and stores them encrypted. Multiple rows per workspace are tolerated (one per `user_id`); read paths use `.scalars().first()` to avoid `MultipleResultsFound` when users share a workspace. A `UNIQUE (workspace_id, user_id)` constraint prevents future duplicates, with a deduplication migration that keeps the newest row per pair.
 - **GitHubPAT** — per-workspace encrypted GitHub personal access tokens with optional org scope for HTTPS git auth. Injected into OpenShell sandboxes via Gateway credential providers. Acts as fallback when no GitHub App is configured.
 - **GitHubApp** — one GitHub App installation per workspace, storing `app_id`, `installation_id`, and a Fernet-encrypted RSA private key (`private_key_enc`). At session launch, Swarmer mints a short-lived Installation Access Token (IAT) server-side using PyJWT + GitHub's REST API and injects it into the sandbox via the OpenShell Gateway provider — the raw PEM key never enters the sandbox. For TUI and server-mode sessions that may exceed the 1-hour token lifetime, a background asyncio task (`github_auth.start_token_refresh_loop`) re-mints and re-registers the provider every 50 minutes. See [docs/GITHUB_APP_SETUP.md](GITHUB_APP_SETUP.md) for setup steps and required permissions.
 - **McpServer** — per-workspace MCP server configurations with OAuth 2.1 tokens encrypted at rest. Enabled servers are configured in the agent config JSON and credentials injected via Gateway env vars.
@@ -113,13 +116,15 @@ Token-based auth via Kubernetes bearer tokens (not password-based):
 - Users paste a K8s ServiceAccount token into the login form
 - Token validated via TokenReview API (`k8s_auth.py`); falls back to namespace probe if RBAC for tokenreviews is missing
 - Validated token is Fernet-encrypted and stored in the session cookie (`deps.py:get_user_token()`)
-- Workspace access controlled by K8s RBAC: `get_accessible_namespaces()` checks pods `list` in each workspace namespace (via namespace-scoped `swarmer-user` RoleBinding), or cluster-scoped `namespaces` `get` for admin bindings
+- Workspace access is a database ACL (ACM-41659, `workspace_acl.py`), not K8s RBAC: a user may access a workspace as its owner (`Workspace.owner_id`), an explicit `WorkspaceMember` row, a global admin (`WORKSPACE_ADMIN_USERS` / `WORKSPACE_ADMIN_GROUPS` env vars, or the self-service `global_admins` DB table / `/admins` UI), or — while a workspace has no owner yet — any authenticated user ("claim on write": the first management action claims ownership). Shared-namespace deployments (`K8S_NAMESPACE` set) grant every authenticated user access to every workspace. `k8s_auth.py` only authenticates identity (username + groups); it performs no SelfSubjectAccessReview calls.
+- `workspace_acl.list_known_users()` / `GET /api/v1/users` back the Add Member / Add Admin autocomplete (both forms use the same discovery — exclusions differ by call site). Merges three sources: DB-known users (visibility-scoped — people who already share a workspace with the caller; admins see everyone, never a global directory for non-admins), `k8s.list_openshift_users()` (OpenShift `User` objects, cluster-scoped, `[]` off-OpenShift), and `k8s.list_user_service_accounts()` (ServiceAccounts `make user-token SA_USER=<name>` would create, formatted as `system:serviceaccount:<ns>:<name>`). Both K8s helpers are best-effort and never raise. Free-text entry on those forms is always still allowed; suggestions never restrict who can actually be granted access.
+- Startup migration (`workspace_migration.py` + SQL in `database.py:migrate_db()`) backfills `workspace_members`/`owner_id` from existing per-user credential rows and legacy `swarmer-user` K8s RoleBindings, so upgrading never requires re-adding users.
 - Optional OpenShift OAuth: implicit grant flow via `/auth/callback` (captures token from URL fragment client-side)
 - `swarmer/auth.py` is superseded — just contains a comment pointing to `k8s_auth.py`
 
 ## Encryption
 
-All sensitive fields (PATs, API keys, ADC credentials) are Fernet-encrypted at rest in SQLite.
+All sensitive fields that are actually persisted in the DB (PATs, GitHub App private key, Jira tokens) are Fernet-encrypted at rest in SQLite. The ADC JSON and Gemini API key are the notable exceptions — via the UI they go to the OpenShell gateway only and are never written to SQLite (see OpencodeSecret above); their `_enc` columns exist solely for the raw API path and backward compatibility.
 
 - Key source (in priority order): `SWARMER_SECRET_KEY` env var → `auth/secret.key` file → auto-generated on first run
 - Key must decode to exactly 32 bytes (base64url-encoded)
@@ -144,12 +149,13 @@ All sensitive fields (PATs, API keys, ADC credentials) are Fernet-encrypted at r
 Swarmer uses the official `kubernetes` Python client for a limited set of infrastructure operations. All agent session lifecycle is handled by OpenShell — Swarmer does not create pods, PVCs, Services, or Routes for sessions.
 
 **Active K8s usage:**
-- `k8s_auth.py` — TokenReview for user authentication; namespace access validation
+- `k8s_auth.py` — TokenReview for user authentication (identity only — no RBAC/authorization checks; see Auth Flow above)
 - `k8s.init_k8s()` — loads in-cluster or kubeconfig at startup
-- `k8s.ensure_namespace()` / `delete_namespace()` — workspace namespace lifecycle
-- `k8s.effective_namespace()` — resolves the effective K8s namespace for a workspace
+- `k8s.ensure_namespace()` / `delete_namespace()` — **no longer called at workspace create/delete time** (ACM-41659). A workspace's K8s namespace (`k8s.effective_namespace()`) is now created lazily, only the first time a legacy per-workspace K8s Secret feature (pull secrets) is actually used, and best-effort deleted when the workspace is deleted.
 - Pull secret management (`apply_pull_secret`, `get_pull_secret_info`, `delete_pull_secret`) — required for `check_image_reachable`
 - `get_extra_env_vars()` / `set_extra_env_var()` / `delete_extra_env_var()` — workspace env var storage via K8s Secret `swarmer-agent-extra-env` (**ACM-35039**: migrating to SQLite)
+- `k8s.list_swarmer_user_role_binding_identities()` — read-only, used once at startup by `workspace_migration.py` to mirror legacy `swarmer-user` RoleBinding grants into the DB ACL (ACM-41659); never writes RoleBindings anymore
+- `k8s.list_openshift_users()` / `k8s.list_user_service_accounts()` — read-only, back the Add Member / Add Admin candidate discovery (`workspace_acl.list_known_users()` / `GET /api/v1/users`); both best-effort, never raise
 
 All kubernetes client imports remain lazy (inside functions) to avoid import errors when K8s is not configured.
 
@@ -245,8 +251,8 @@ Deployment; `make delete` removes it.
 | `claude_preset_plan_model` | `CLAUDE_PRESET_PLAN_MODEL` | `google-vertex-anthropic/claude-opus-4-6@default` | Claude preset's PLAN-role model |
 | `claude_preset_build_model` | `CLAUDE_PRESET_BUILD_MODEL` | `google-vertex-anthropic/claude-sonnet-5@default` | Claude preset's BUILD-role model |
 | `claude_preset_small_model` | `CLAUDE_PRESET_SMALL_MODEL` | `google-vertex-anthropic/claude-haiku-4-5@20251001` | Claude preset's small/housekeeping model |
-| `gemini_preset_plan_model` | `GEMINI_PRESET_PLAN_MODEL` | `google/gemini-3.1-pro-preview` | Gemini preset's PLAN-role model |
-| `gemini_preset_build_model` | `GEMINI_PRESET_BUILD_MODEL` | `google/gemini-3.6-flash` | Gemini preset's BUILD-role model |
+| `gemini_preset_plan_model` | `GEMINI_PRESET_PLAN_MODEL` | `google/gemini-3.7-flash` | Gemini preset's PLAN-role model |
+| `gemini_preset_build_model` | `GEMINI_PRESET_BUILD_MODEL` | `google/gemini-3.7-flash` | Gemini preset's BUILD-role model |
 | `gemini_preset_small_model` | `GEMINI_PRESET_SMALL_MODEL` | `google/gemini-3.5-flash-lite` | Gemini preset's small/housekeeping model |
 | `opencode_experimental_plan_mode` | `OPENCODE_EXPERIMENTAL_PLAN_MODE` | `true` | Enables the opencode plan agent so the PLAN-role model above is actually used |
 
@@ -259,7 +265,7 @@ Every data item Swarmer currently pushes into agent pods, its source model, the 
 
 | Category | Data | Source Model | Current K8s Mechanism | Target OpenShell API |
 |---|---|---|---|---|
-| AI Credentials | GCP Project, Vertex Location, ADC JSON, Gemini key | `OpencodeSecret` | K8s Secret → `envFrom` | Gateway `create_provider()` env injection |
+| AI Credentials | GCP Project, Vertex Location (DB); ADC JSON, Gemini key (Gateway-only, ACM-37263) | `OpencodeSecret` | Gateway provider (no K8s Secret) | `configure_google_cloud_provider()` (ADC) / `ensure_provider()` (Gemini) at credential-save time; `provider_exists()` checked at session launch |
 | Git Auth | PAT token, GitHub username | `GitHubPAT` | K8s Secret → `secretKeyRef` + init container credential store | Gateway credential injection + `clone_repos()` |
 | Git Repos | repo_url, branch, local_path (per repo) | `SessionRepo` | Init container git clone | `openshell_client.clone_repos()` |
 | MCP Tokens | Jira URL, Jira access token, Jira email | `McpServer` | K8s Secret → `envFrom` | Gateway env injection |
@@ -347,7 +353,8 @@ Runs the agent tool's TUI binary (`tool.get_tui_binary()`) with model and resume
 
 Sessions can generate git diffs from running sandboxes:
 - Executes `git diff` (or `git diff origin/{branch}` if using a working branch) via `openshell_client.exec_command()` in the sandbox
-- AI-generated commit messages via Vertex AI Claude, Anthropic API, or Gemini API (falls back to simple file-list summary)
+- AI-generated commit messages via the Gemini API, called directly from the Swarmer process (`_llm_commit_msg_gemini`), falling back to a simple file-list summary (`_fallback_commit_msg`) when unavailable
+- Since ACM-37263, the Gemini key is stored only on the OpenShell gateway (write-only, never returned in plaintext), so this feature only works for workspaces with a legacy key still present in `OpencodeSecret.google_api_key_enc` from before the key was rotated/migrated; new or rotated keys always fall through to the file-list summary
 - Patches downloadable as `.patch` files
 
 ## UI Pattern
@@ -373,11 +380,31 @@ The session detail page (`sessions/detail.html`) uses a two-column grid inside t
 | Active (Chat) | `(Status) ∙ [■ Stop] sandbox-name [Chat ↗] · · · · · [Delete]` |
 | Active (other) | `(Status) ∙ [■ Stop] sandbox-name · · · · · · · · · · [Delete]` |
 
-Launch pills are ordered TUI → CHAT → PROMPT (most-used first). TUI and CHAT use green fill (`.launch-pill-green`); PROMPT uses a dark charcoal fill with green border (`.launch-pill-muted`). Each pill POSTs the full config form to `/launch` with `mode` and `save_config=1` — no separate save step required.
+### Pill UX Architecture
 
-**Agent tool pill** — OpenCode is currently the only supported agent tool, shown as a static, always-selected pill rendering the official block-pixel SVG logo inline at 78×14px with a rainbow gradient border. The underlying registry/strategy pattern supports adding more tools in the future without further UI changes.
+Swarmer uses branded, styled interactive pills across the UI for tool selection, execution modes, logs, and status:
 
-**Cluster capacity indicator** — a single pill labelled `Sessions: X / Y active` with optional `· N queued` appended. Colour escalates: outline (0 active) → green (healthy) → gold (near/at capacity: `active >= max-1` for `max > 2`, `active == max` for `max ≤ 2`) → red (any queued). Rendered in both `detail.html` and `_list_rows.html`.
+- **Agent Tool Pills** (`.agent-pill`, `.agent-pill-oc`, `.agent-pill-shell`):
+  - Branded button pills used on both the New Session form (`new.html`) and the Configuration card (`detail.html`).
+  - **OpenCode**: Official 4×5 block-pixel SVG wordmark (`78×14px`), dark background (`#2d2d2d`) when inactive, and a 6-stop rainbow gradient border (`linear-gradient(135deg, #e06c75, #e5c07b, #98c379, #56b6c2, #61afef, #c678dd)`) on `#1e1e1e` when selected.
+  - **Shell**: Matching 4×5 block-pixel `>_ SHeLL` SVG wordmark (`66×14px`) in phosphor matrix green (`#38ef7d`) with cyan prompt glyph (`#58a6ff`), and an emerald-to-cyan terminal gradient border (`linear-gradient(135deg, #38ef7d, #11998e, #00f2fe, #4facfe)`) on `#0d130e` when selected.
+  - **Interaction**: Clicking a pill updates the underlying hidden input (`agent_tool`), toggles AI provider selector visibility (hidden for Shell), updates helper text dynamically, and triggers auto-save (`_cfgSave()`) on the detail page. In `server` mode, the Shell pill is automatically disabled (`cursor: not-allowed`, `opacity: 0.5`).
+
+- **Launch Pills** (`.launch-pill-green`, `.launch-pill-muted`):
+  - Action bar launch buttons ordered `TERM.UI` → `CHAT` → `PROMPT` (most-used first).
+  - `TERM.UI` and `CHAT` use green fill (`.launch-pill-green`); `PROMPT` uses a dark charcoal fill with green border (`.launch-pill-muted`).
+  - Submitting any launch pill POSTs the full configuration form to `/launch` with `mode` and `save_config=1` atomically.
+
+- **Log-View Toggle Pills** (`.log-pill`):
+  - Used on the Output tab and History expandable rows to toggle between processed Output and raw console logs.
+  - Selected state applies the signature rainbow gradient border on `#1e1e1e`.
+
+- **Cluster Capacity Indicator Pill**:
+  - A status pill labelled `Sessions: X / Y active` with optional `· N queued` appended.
+  - Color escalates dynamically: outline (0 active) → green (healthy) → gold (near/at capacity: `active >= max-1` for `max > 2`, `active == max` for `max ≤ 2`) → red (any queued). Rendered in both `detail.html` and `_list_rows.html`.
+
+- **History Source Pills**:
+  - Denormalized source pills in Run History rows: purple schedule pills for cron runs (`[📅 schedule-name · prompt-name]`), green `[TERM.UI]` / `[CHAT]` pills for interactive runs, and prompt name pills for manual prompt runs.
 
 ## Adding New Features
 

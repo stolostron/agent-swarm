@@ -1,0 +1,114 @@
+{% extends "base.html" %}
+{% block title %}Admins — Swarmer{% endblock %}
+
+{% block content %}
+<h1 class="pf-v6-c-title pf-m-2xl" style="margin-bottom:var(--pf-t--global--spacer--xs);">👑 Admins</h1>
+<p style="color:var(--pf-t--global--text--color--subtle); margin-bottom:var(--pf-t--global--spacer--lg);">
+  Global admins can see and manage every workspace, and manage other admins. This supplements the
+  static <code>WORKSPACE_ADMIN_USERS</code> / <code>WORKSPACE_ADMIN_GROUPS</code> deployment env vars.
+</p>
+
+{% if admin_bootstrap_available %}
+<div class="pf-v6-c-alert pf-m-info" style="margin-bottom:var(--pf-t--global--spacer--lg);">
+  <div class="pf-v6-c-alert__icon"></div>
+  <p class="pf-v6-c-alert__title">No admin has been configured yet.</p>
+  <div class="pf-v6-c-alert__description" style="margin-bottom:var(--pf-t--global--spacer--md);">
+    Be the first — this only works while no admin exists.
+  </div>
+  <form method="post" action="/admins/bootstrap">
+    <button type="submit" class="pf-v6-c-button pf-m-primary pf-m-small">Become the first Admin</button>
+  </form>
+</div>
+{% endif %}
+
+{% if is_admin %}
+<h2 class="pf-v6-c-title pf-m-lg" style="margin-bottom:var(--pf-t--global--spacer--md);">Current Admins</h2>
+<table class="pf-v6-c-table pf-m-grid-md" role="grid" style="margin-bottom:var(--pf-t--global--spacer--xl);">
+  <thead class="pf-v6-c-table__thead">
+    <tr class="pf-v6-c-table__tr" role="row">
+      <th class="pf-v6-c-table__th" role="columnheader">User</th>
+      <th class="pf-v6-c-table__th" role="columnheader">Added By</th>
+      <th class="pf-v6-c-table__th" role="columnheader">Added</th>
+      <th class="pf-v6-c-table__th pf-m-fit-content" role="columnheader" style="text-align:right;">Actions</th>
+    </tr>
+  </thead>
+  <tbody class="pf-v6-c-table__tbody" role="rowgroup">
+  {% for a in admins %}
+    <tr class="pf-v6-c-table__tr" role="row">
+      <td class="pf-v6-c-table__td" role="cell" data-label="User"><code>{{ a.user_id }}</code></td>
+      <td class="pf-v6-c-table__td" role="cell" data-label="Added By">{{ a.created_by or "—" }}</td>
+      <td class="pf-v6-c-table__td" role="cell" data-label="Added" style="color:var(--pf-t--global--text--color--subtle); font-size:var(--pf-t--global--font--size--sm);">
+        {{ a.created_at.strftime('%Y-%m-%d') if a.created_at else '' }}
+      </td>
+      <td class="pf-v6-c-table__td pf-m-fit-content" role="cell" data-label="Actions" style="text-align:right;">
+        <form method="post" action="/admins/{{ a.user_id | urlencode }}/delete"
+              style="display:inline"
+              onsubmit="return confirm('Remove admin access from \'{{ a.user_id }}\'?')">
+          <button type="submit"
+                  class="pf-v6-c-button pf-m-plain pf-m-small"
+                  title="Remove {{ a.user_id }}"
+                  style="color:var(--pf-t--global--color--status--danger--default); padding:2px 4px; line-height:1;">
+            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+              <path d="M5.5 1a.5.5 0 0 1 .5-.5h4a.5.5 0 0 1 .5.5V2H5.5V1zM4 2v-.5A1.5 1.5 0 0 1 5.5.5h5A1.5 1.5 0 0 1 12 1.5V2h2.5a.5.5 0 0 1 0 1H13v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V3H1.5a.5.5 0 0 1 0-1H4zm1 1v10h6V3H5zm1.5 2a.5.5 0 0 1 .5.5v6a.5.5 0 0 1-1 0v-6a.5.5 0 0 1 .5-.5zm3 0a.5.5 0 0 1 .5.5v6a.5.5 0 0 1-1 0v-6a.5.5 0 0 1 .5-.5z"/>
+            </svg>
+          </button>
+        </form>
+      </td>
+    </tr>
+  {% endfor %}
+  {% if not admins %}
+    <tr class="pf-v6-c-table__tr" role="row">
+      <td class="pf-v6-c-table__td" role="cell" colspan="4" style="color:var(--pf-t--global--text--color--subtle);">
+        No self-service admins yet.
+      </td>
+    </tr>
+  {% endif %}
+  </tbody>
+</table>
+
+<h2 class="pf-v6-c-title pf-m-lg" style="margin-bottom:var(--pf-t--global--spacer--md);">Add Admin</h2>
+<form method="post" action="/admins" class="pf-v6-c-form" style="max-width:600px;">
+  <div class="pf-v6-c-form__group">
+    <label class="pf-v6-c-form__label" for="admin-user-id">
+      <span class="pf-v6-c-form__label-text" style="font-weight:var(--pf-t--global--font--weight--heading--bold);">Username</span>
+      <span class="pf-v6-c-form__label-required" aria-hidden="true">&#42;</span>
+    </label>
+    <div class="pf-v6-c-form__group-control">
+      <input type="text" class="pf-v6-c-form-control" id="admin-user-id" name="user_id"
+             placeholder="alice or system:serviceaccount:swarmer:alice" required maxlength="255"
+             autocomplete="on" list="known-users-datalist">
+      {% if known_users %}
+      <datalist id="known-users-datalist">
+        {% for u in known_users %}
+        <option value="{{ u }}">
+        {% endfor %}
+      </datalist>
+      {% endif %}
+      <div class="pf-v6-c-form__helper-text">
+        <div class="pf-v6-c-helper-text__item">
+          <span class="pf-v6-c-helper-text__item-text">
+            The exact K8s ServiceAccount identity (<code>system:serviceaccount:&lt;ns&gt;:&lt;name&gt;</code>) or
+            OpenShift OAuth/OIDC username this person logs in with.
+          </span>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="pf-v6-c-form__group pf-m-action" style="margin-top:var(--pf-t--global--spacer--md);">
+    <div class="pf-v6-c-form__actions">
+      <button type="submit" class="pf-v6-c-button pf-m-primary">Add Admin</button>
+      <a href="/workspaces" class="pf-v6-c-button pf-m-link">Cancel</a>
+    </div>
+  </div>
+</form>
+{% elif not admin_bootstrap_available %}
+<div class="pf-v6-c-empty-state">
+  <div class="pf-v6-c-empty-state__content">
+    <h2 class="pf-v6-c-empty-state__title-text">You are not an admin</h2>
+    <div class="pf-v6-c-empty-state__body">
+      Ask an existing Swarmer admin to add you from this page.
+    </div>
+  </div>
+</div>
+{% endif %}
+{% endblock %}

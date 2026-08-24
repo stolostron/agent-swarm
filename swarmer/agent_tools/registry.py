@@ -28,7 +28,9 @@ def all_tools() -> list[AgentToolStrategy]:
 
 def _init() -> None:
     from swarmer.agent_tools.opencode import OpenCodeStrategy  # noqa: F811
+    from swarmer.agent_tools.shell import ShellStrategy
     register(OpenCodeStrategy())
+    register(ShellStrategy())
 
 
 _init()
