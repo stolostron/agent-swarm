@@ -557,7 +557,7 @@ The standalone Agent Swarm MCP Server (`agent-swarm-mcp-server`) exposes Swarmer
 
 ### Architecture & Data Flow
 
-```
+```text
 AI Coding Agent (OpenCode / Claude Code)
          │
          ▼  (stdio / SSE MCP transport)
@@ -592,14 +592,14 @@ The MCP server resolves Kubernetes bearer tokens in `agent_swarm_mcp_server/auth
 
 1. **`AGENT_SWARM_API_TOKEN`** env var (explicit token override; always wins).
 2. **In-cluster ServiceAccount token** at `/var/run/secrets/kubernetes.io/serviceaccount/token` (used when deployed as a sidecar or in-pod agent).
-3. **Kubeconfig Context** (`$KUBECONFIG` or `~/.kube/config`):
+3. **Kubeconfig Context** (`$KUBECONFIG` or default kubeconfig file):
    - Direct `token` field on current user.
    - Exec credential provider output (common with `oc login` and cloud IAM providers).
-   - Validated against Swarmer's `/api/v1/` endpoints with fallback resolution for OpenShift OAuth tokens (`sha256~...`).
+   - Validated against Swarmer's `/api/v1/` endpoints with fallback resolution for OpenShift OAuth tokens.
 
 ### Setup & CLI Automation
 
 - **Web UI (`/token`):** Authenticated users can visit `/token` directly from the masthead navigation to view their active token, API endpoint URL, and a ready-to-copy `opencode.json` configuration block.
 - **CLI Automation (`make mcp-setup` / `make api-info`):**
-  - `make mcp-setup TOKEN="..."`: Configures the local `opencode.json` file in the project with the detected Swarmer route and token.
+  - `make mcp-setup`: Configures the local `opencode.json` file in the project with the detected Swarmer route and token.
   - `make api-info`: Prints current API endpoint, decoded user identity, and the MCP JSON snippet.

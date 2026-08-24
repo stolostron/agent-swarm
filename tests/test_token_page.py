@@ -35,7 +35,7 @@ async def app_with_auth():
     app = FastAPI()
     app.add_middleware(
         SessionMiddleware,
-        secret_key="test-secret-key-for-token-page!",
+        secret_key=base64.urlsafe_b64encode(os.urandom(32)).decode(),
         session_cookie="swarmer_session",
     )
 
@@ -75,13 +75,14 @@ class TestTokenPage:
             # Access /token
             resp = await client.get("/token")
             assert resp.status_code == 200
+            assert resp.headers.get("cache-control") == "no-store, private"
             content = resp.text
             assert "jnpacker" in content
             assert "my-secret-bearer-token" in content
             assert "agent-swarm" in content
             assert "AGENT_SWARM_API_TOKEN" in content
             assert "AGENT_SWARM_API_URL" in content
-            assert "make mcp-setup TOKEN=" in content
+            assert "make mcp-setup" in content
 
 
 class TestMcpSetupScript:
@@ -147,5 +148,5 @@ class TestMcpSetupScript:
         assert aswarm["enabled"] is True
         assert aswarm["environment"]["AGENT_SWARM_API_URL"] == "https://swarmer.test.example.com"
         assert aswarm["environment"]["AGENT_SWARM_API_TOKEN"] == "test-token-value-xyz"
-        assert aswarm["environment"]["AGENT_SWARM_VERIFY_SSL"] == "false"
+        assert aswarm["environment"]["AGENT_SWARM_VERIFY_SSL"] == "true"
 

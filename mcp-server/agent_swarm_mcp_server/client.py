@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import urllib.parse
 from typing import Any
 
 import httpx
@@ -122,12 +123,13 @@ class AgentSwarmClient:
         self,
         ws_id: int,
         display_name: str,
-        description: str = "",
+        description: str | None = None,
     ) -> dict:
         body: dict[str, Any] = {
             "display_name": display_name,
-            "description": description,
         }
+        if description is not None:
+            body["description"] = description
         return await self._put(f"/api/v1/workspaces/{ws_id}", json=body)
 
     async def delete_workspace(self, ws_id: int) -> dict:
@@ -150,7 +152,8 @@ class AgentSwarmClient:
         return await self._post(f"/api/v1/workspaces/{ws_id}/members", json=body)
 
     async def remove_workspace_member(self, ws_id: int, user_id: str) -> dict:
-        return await self._delete(f"/api/v1/workspaces/{ws_id}/members/{user_id}")
+        quoted_user = urllib.parse.quote(user_id, safe="")
+        return await self._delete(f"/api/v1/workspaces/{ws_id}/members/{quoted_user}")
 
     # ==================================================================
     # Me / Identity & Global Admins (ACM-41659)
@@ -172,10 +175,33 @@ class AgentSwarmClient:
         return await self._post("/api/v1/admins", json={"user_id": user_id})
 
     async def remove_admin(self, user_id: str) -> dict:
-        return await self._delete(f"/api/v1/admins/{user_id}")
+        quoted_user = urllib.parse.quote(user_id, safe="")
+        return await self._delete(f"/api/v1/admins/{quoted_user}")
 
     async def bootstrap_admin(self) -> dict:
         return await self._post("/api/v1/admins/bootstrap")
+
+    # ==================================================================
+    # Dedicated Gateways (ACM-41655)
+    # ==================================================================
+
+    async def get_workspace_gateway(self, ws_id: int) -> dict:
+        return await self._get(f"/api/v1/workspaces/{ws_id}/gateway")
+
+    async def set_workspace_gateway(self, ws_id: int, payload: dict) -> dict:
+        return await self._put(f"/api/v1/workspaces/{ws_id}/gateway", json=payload)
+
+    async def delete_workspace_gateway(self, ws_id: int) -> dict:
+        return await self._delete(f"/api/v1/workspaces/{ws_id}/gateway")
+
+    async def test_gateway_connection(self, payload: dict) -> dict:
+        return await self._post("/api/v1/gateway/test", json=payload)
+
+    async def parse_gateway_command(self, command: str) -> dict:
+        return await self._post("/api/v1/gateway/parse-command", json={"command": command})
+
+    async def parse_gateway_token(self, token_input: str) -> dict:
+        return await self._post("/api/v1/gateway/parse-token", json={"token_input": token_input})
 
     # ==================================================================
     # Sessions

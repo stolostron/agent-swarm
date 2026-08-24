@@ -20,7 +20,7 @@ import re
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any, Tuple
+from typing import Any
 
 
 def _decode_jwt_sub(token: str) -> str:
@@ -37,7 +37,7 @@ def _decode_jwt_sub(token: str) -> str:
     return ""
 
 
-def _parse_pasted_token_or_json(raw: str) -> Tuple[str, str | None]:
+def _parse_pasted_token_or_json(raw: str) -> tuple[str, str | None]:
     """Parse raw input which could be a plain token or a pasted JSON snippet.
 
     Returns (token, url_or_None).
@@ -139,6 +139,7 @@ def main() -> None:
     parser.add_argument("--url", help="Swarmer API URL override")
     parser.add_argument("--config", default="opencode.json", help="Path to opencode.json")
     parser.add_argument("--namespace", default=os.environ.get("NAMESPACE", "swarmer"), help="Swarmer namespace")
+    parser.add_argument("--insecure", action="store_true", help="Disable SSL verification for self-signed certificates")
     parser.add_argument("--print-only", action="store_true", help="Print MCP config without modifying files")
     args = parser.parse_args()
 
@@ -180,7 +181,7 @@ def main() -> None:
     api_url = (url_override or _auto_detect_url(args.namespace, config_path)).rstrip("/")
 
     # 3. Build MCP configuration block
-    verify_ssl = "false" if api_url.startswith("https") else "true"
+    verify_ssl = "false" if args.insecure else "true"
     mcp_agent_swarm = {
         "type": "local",
         "command": ["agent-swarm-mcp-server"],
@@ -202,18 +203,21 @@ def main() -> None:
         print(f"API URL:   {api_url}")
         if token:
             print(f"User:      {jwt_user or '(Bearer Token)'}")
-            print(f"Token:     {token[:16]}...{token[-8:] if len(token) > 24 else ''}")
+            print("Token:     [configured]")
         else:
             print("Token:     (No active token found)")
         print("──────────────────────────────────────────────────")
         print("\nopencode.json configuration snippet:")
-        print(json.dumps({"mcp": {"agent-swarm": mcp_agent_swarm}}, indent=2))
-        print("\nRun 'make mcp-setup TOKEN=\"...\"' to apply this configuration to opencode.json.")
+        print_snippet = json.loads(json.dumps(mcp_agent_swarm))
+        if "AGENT_SWARM_API_TOKEN" in print_snippet.get("environment", {}):
+            print_snippet["environment"]["AGENT_SWARM_API_TOKEN"] = "<YOUR_TOKEN>"
+        print(json.dumps({"mcp": {"agent-swarm": print_snippet}}, indent=2))
+        print("\nRun 'make mcp-setup' to apply this configuration to opencode.json.")
         return
 
     if not token:
         print("Error: No bearer token provided or found.", file=sys.stderr)
-        print("Obtain your token from the Swarmer Web UI (/token) or run 'make mcp-setup TOKEN=\"...\"'", file=sys.stderr)
+        print("Obtain your token from the Swarmer Web UI (/token) or run 'make mcp-setup'", file=sys.stderr)
         sys.exit(1)
 
     # 4. Update opencode.json

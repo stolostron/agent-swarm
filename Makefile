@@ -107,11 +107,15 @@ user-token:  ## Issue a login token for a K8s user  (SA_USER=alice, TOKEN_DURATI
 	@echo "Grant workspace access via the UI: workspace -> Members tab -> Add Member -> that username"
 	@echo "(or POST /api/v1/workspaces/<id>/members {\"user_id\": \"system:serviceaccount:$(NAMESPACE):$(SA_USER)\"})"
 
+api-info: export _NAMESPACE := $(value NAMESPACE)
 api-info:  ## Display Swarmer API URL, current user token, and opencode.json snippet
-	@python3 scripts/mcp_setup.py --print-only --namespace "$(NAMESPACE)"
+	@python3 scripts/mcp_setup.py --print-only --namespace "$$_NAMESPACE"
 
+mcp-setup: export _TOKEN := $(value TOKEN)
+mcp-setup: export _URL := $(value URL)
+mcp-setup: export _NAMESPACE := $(value NAMESPACE)
 mcp-setup:  ## Configure opencode.json for Agent Swarm  (TOKEN=..., URL=...)
-	@python3 scripts/mcp_setup.py $(if $(TOKEN),--token "$(TOKEN)",) $(if $(URL),--url "$(URL)",) --namespace "$(NAMESPACE)"
+	@AGENT_SWARM_API_TOKEN="$$$${_TOKEN:-$$AGENT_SWARM_API_TOKEN}" AGENT_SWARM_API_URL="$$$${_URL:-$$AGENT_SWARM_API_URL}" python3 scripts/mcp_setup.py --namespace "$$_NAMESPACE"
 
 # SA_USER/OIDC_USER/WORKSPACE_NS/NAMESPACE are carried as exported shell env
 # vars (not textually substituted into the recipe) and validated against a
@@ -241,7 +245,7 @@ lint:  ## Run ruff linter
 
 test:  ## Run unit tests (excludes Playwright browser tests)
 	python3 -m pytest tests/ -q --ignore=tests/test_ui_patternfly.py
-	python3 -m pip install -q --break-system-packages -e "mcp-server[dev]" 2>/dev/null || python3 -m pip install -q -e "mcp-server[dev]" || true
+	python3 -m pip install -q --break-system-packages -e "mcp-server[dev]" 2>/dev/null || python3 -m pip install -q -e "mcp-server[dev]"
 	python3 -m pytest mcp-server/tests/ -q --rootdir=mcp-server
 
 smoke-test-jira:  ## Run Jira MCP OpenShell e2e smoke test (requires running OpenShell gateway)

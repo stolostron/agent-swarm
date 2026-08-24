@@ -145,7 +145,7 @@ make user-token SA_USER=alice   # 1. create user + print token, share with alice
 make help                      # list all Makefile targets
 make lint                      # run ruff linter
 make test                      # run unit tests and mcp-server test suite
-make mcp-setup TOKEN="..."     # configure local opencode.json for Agent Swarm
-make api-info                  # display Swarmer API URL, current token, and MCP config snippet
+make mcp-setup                 # configure local opencode.json for Agent Swarm
+make api-info                  # display Swarmer API URL, current user, and MCP config snippet
 make db-reset                  # delete the SQLite database (fresh schema on next start)
 ```

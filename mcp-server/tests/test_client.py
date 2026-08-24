@@ -186,24 +186,27 @@ async def test_delete_repo(client):
 @pytest.mark.asyncio
 async def test_workspace_crud(client):
     with respx.mock(base_url=BASE_URL) as mock:
-        mock.post("/api/v1/workspaces").mock(
+        post_route = mock.post("/api/v1/workspaces").mock(
             return_value=httpx.Response(201, json={"id": 2, "display_name": "ws2", "description": "desc"})
         )
-        mock.put("/api/v1/workspaces/2").mock(
+        put_route = mock.put("/api/v1/workspaces/2").mock(
             return_value=httpx.Response(200, json={"id": 2, "display_name": "ws2-updated", "description": "new-desc"})
         )
-        mock.delete("/api/v1/workspaces/2").mock(
+        del_route = mock.delete("/api/v1/workspaces/2").mock(
             return_value=httpx.Response(200, json={"detail": "deleted"})
         )
 
         created = await client.create_workspace("ws2", "desc")
+        assert post_route.called
         assert created["id"] == 2
         assert created["display_name"] == "ws2"
 
         updated = await client.update_workspace(2, "ws2-updated", "new-desc")
+        assert put_route.called
         assert updated["display_name"] == "ws2-updated"
 
         deleted = await client.delete_workspace(2)
+        assert del_route.called
         assert deleted == {"detail": "deleted"}
 
 
@@ -276,3 +279,49 @@ async def test_me_and_admins(client):
 
         bootstrapped = await client.bootstrap_admin()
         assert bootstrapped["created_by"] == "bootstrap"
+
+
+@pytest.mark.asyncio
+async def test_workspace_gateway_methods(client):
+    with respx.mock(base_url=BASE_URL) as mock:
+        mock.get("/api/v1/workspaces/1/gateway").mock(
+            return_value=httpx.Response(200, json={"gateway_url": "https://gw.example.com:443", "auth_mode": "oidc"})
+        )
+        mock.put("/api/v1/workspaces/1/gateway").mock(
+            return_value=httpx.Response(200, json={"gateway_url": "https://gw.example.com:443", "auth_mode": "bearer"})
+        )
+        mock.delete("/api/v1/workspaces/1/gateway").mock(
+            return_value=httpx.Response(200, json={"detail": "gateway configuration deleted"})
+        )
+
+        gw = await client.get_workspace_gateway(1)
+        assert gw["gateway_url"] == "https://gw.example.com:443"
+
+        updated = await client.set_workspace_gateway(1, {"gateway_url": "https://gw.example.com:443", "auth_mode": "bearer"})
+        assert updated["auth_mode"] == "bearer"
+
+        deleted = await client.delete_workspace_gateway(1)
+        assert deleted == {"detail": "gateway configuration deleted"}
+
+
+@pytest.mark.asyncio
+async def test_gateway_connection_and_parsing(client):
+    with respx.mock(base_url=BASE_URL) as mock:
+        mock.post("/api/v1/gateway/test").mock(
+            return_value=httpx.Response(200, json={"connected": True, "provider_count": 2})
+        )
+        mock.post("/api/v1/gateway/parse-command").mock(
+            return_value=httpx.Response(200, json={"gateway_url": "https://gw.example.com:443", "auth_mode": "oidc"})
+        )
+        mock.post("/api/v1/gateway/parse-token").mock(
+            return_value=httpx.Response(200, json={"refresh_token": "rt-123", "auth_mode": "oidc"})
+        )
+
+        test_res = await client.test_gateway_connection({"gateway_url": "https://gw.example.com:443"})
+        assert test_res["connected"] is True
+
+        parsed_cmd = await client.parse_gateway_command("openshell gateway add gw https://gw.example.com:443")
+        assert parsed_cmd["gateway_url"] == "https://gw.example.com:443"
+
+        parsed_tok = await client.parse_gateway_token("REFRESH_TOKEN=rt-123")
+        assert parsed_tok["refresh_token"] == "rt-123"

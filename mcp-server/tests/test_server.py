@@ -432,6 +432,41 @@ async def test_admins_and_me_server_methods():
     assert (await server._bootstrap_admin())["created_by"] == "bootstrap"
 
 
+@pytest.mark.asyncio
+async def test_workspace_gateway_server_methods():
+    server = make_server()
+    server.client.get_workspace_gateway = AsyncMock(return_value={"gateway_url": "https://gw.example.com:443"})
+    server.client.set_workspace_gateway = AsyncMock(return_value={"gateway_url": "https://gw.example.com:443", "auth_mode": "oidc"})
+    server.client.delete_workspace_gateway = AsyncMock(return_value={"detail": "deleted"})
+    server.client.test_gateway_connection = AsyncMock(return_value={"connected": True})
+    server.client.parse_gateway_command = AsyncMock(return_value={"gateway_url": "https://gw.example.com:443"})
+    server.client.parse_gateway_token = AsyncMock(return_value={"refresh_token": "rt-123"})
+
+    gw = await server._get_workspace_gateway(1)
+    assert gw["gateway_url"] == "https://gw.example.com:443"
+    server.client.get_workspace_gateway.assert_awaited_once_with(1)
+
+    set_gw = await server._set_workspace_gateway(1, gateway_url="https://gw.example.com:443", auth_mode="oidc")
+    assert set_gw["auth_mode"] == "oidc"
+    assert server.client.set_workspace_gateway.await_count == 1
+
+    del_gw = await server._delete_workspace_gateway(1)
+    assert del_gw == {"detail": "deleted"}
+    server.client.delete_workspace_gateway.assert_awaited_once_with(1)
+
+    test_res = await server._test_workspace_gateway("https://gw.example.com:443")
+    assert test_res["connected"] is True
+    assert server.client.test_gateway_connection.await_count == 1
+
+    parsed_cmd = await server._parse_gateway_command("openshell gateway add gw https://gw.example.com:443")
+    assert parsed_cmd["gateway_url"] == "https://gw.example.com:443"
+    server.client.parse_gateway_command.assert_awaited_once_with("openshell gateway add gw https://gw.example.com:443")
+
+    parsed_tok = await server._parse_gateway_token("REFRESH_TOKEN=rt-123")
+    assert parsed_tok["refresh_token"] == "rt-123"
+    server.client.parse_gateway_token.assert_awaited_once_with("REFRESH_TOKEN=rt-123")
+
+
 # ------------------------------------------------------------------
 # AgentSwarmConfig.from_env — SSL options
 # ------------------------------------------------------------------

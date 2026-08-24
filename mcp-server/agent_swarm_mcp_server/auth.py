@@ -12,7 +12,6 @@ import logging
 import os
 import subprocess
 from pathlib import Path
-from typing import Optional
 
 import yaml
 
@@ -39,7 +38,7 @@ def resolve_token() -> str:
     return token
 
 
-def _from_env() -> Optional[str]:
+def _from_env() -> str | None:
     token = os.environ.get("AGENT_SWARM_API_TOKEN", "").strip()
     if token:
         log.debug("auth: using AGENT_SWARM_API_TOKEN env var")
@@ -47,7 +46,7 @@ def _from_env() -> Optional[str]:
     return None
 
 
-def _from_in_cluster() -> Optional[str]:
+def _from_in_cluster() -> str | None:
     if _IN_CLUSTER_TOKEN.exists():
         try:
             token = _IN_CLUSTER_TOKEN.read_text().strip()
@@ -60,7 +59,7 @@ def _from_in_cluster() -> Optional[str]:
     return None
 
 
-def _from_kubeconfig() -> Optional[str]:
+def _from_kubeconfig() -> str | None:
     kubeconfig_path = _resolve_kubeconfig_path()
     if not kubeconfig_path or not kubeconfig_path.exists():
         return None
@@ -120,7 +119,7 @@ def _from_kubeconfig() -> Optional[str]:
     return None
 
 
-def _resolve_kubeconfig_path() -> Optional[Path]:
+def _resolve_kubeconfig_path() -> Path | None:
     kubeconfig_env = os.environ.get("KUBECONFIG", "").strip()
     if kubeconfig_env:
         # KUBECONFIG can be a colon-separated list; use the first one
@@ -132,7 +131,7 @@ def _resolve_kubeconfig_path() -> Optional[Path]:
     return None
 
 
-def _exec_credential_provider(exec_config: dict) -> Optional[str]:
+def _exec_credential_provider(exec_config: dict) -> str | None:
     """Run an exec credential provider and extract the token from its output."""
     command = exec_config.get("command")
     if not command:
