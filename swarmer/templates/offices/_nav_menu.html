@@ -9,12 +9,13 @@
     <span>All Workspaces</span>
   </a>
   {% else %}
+  {% set current_label = current_ws.display_name or current_ws.name %}
   <a class="office-nav-menu__item office-nav-menu__item--starred"
      role="listitem"
      href="/workspaces/{{ current_ws.id }}/office"
-     data-name="{{ current_ws.display_name|lower }}">
+     data-name="{{ current_label|lower }}">
     <span class="office-nav-menu__star" aria-hidden="true">★</span>
-    <span>{{ current_ws.display_name }}</span>
+    <span>{{ current_label }}</span>
   </a>
   <a class="office-nav-menu__item"
      role="listitem"
@@ -26,12 +27,13 @@
   {% endif %}
 
   {% for w in workspaces %}
+  {% set ws_label = w.display_name or w.name %}
   <a class="office-nav-menu__item"
      role="listitem"
      href="/workspaces/{{ w.id }}/office"
-     data-name="{{ w.display_name|lower }}">
+     data-name="{{ ws_label|lower }}">
     <span class="office-nav-menu__star office-nav-menu__star--spacer" aria-hidden="true"></span>
-    <span>{{ w.display_name }}</span>
+    <span>{{ ws_label }}</span>
   </a>
   {% else %}
   {% if star_all %}
