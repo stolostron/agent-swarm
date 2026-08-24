@@ -628,8 +628,8 @@ class AgentSwarmMCPServer:
                 mode: Execution mode. One of: prompt, tui, server. Default: prompt.
                 provider: AI provider preset. One of: claude, gemini. Empty string
                           uses the tool default (based on configured credentials).
-                persist: Keep workspace PVC between runs. Default: false.
-                working_branch: Git branch to create/checkout in the pod.
+                persist: Keep workspace volume between runs. Default: false.
+                working_branch: Git branch to create/checkout in the sandbox.
                 instruction_prompt: Additional instructions prepended to the base prompt (or raw command for shell).
                 github_pat_id: GitHub PAT id for private repos (from list_github_pats).
                 prompt_id: Base prompt id (from list_workspace_prompts).
@@ -693,7 +693,7 @@ class AgentSwarmMCPServer:
         ) -> dict:
             """Attach a git repository to a session.
 
-            The repo will be cloned into /workspace/<local_path> when the pod starts.
+            The repo will be cloned into /workspace/<local_path> when the sandbox starts.
             local_path is derived from the repo name if omitted.
 
             Args:
@@ -755,7 +755,7 @@ class AgentSwarmMCPServer:
 
         @mcp.tool()
         async def launch_session(workspace_id: int, session_id: int) -> dict:
-            """Launch a session pod.
+            """Launch a session sandbox.
 
             Starts the agent tool in the configured mode. For prompt mode, the session
             runs once and exits — use wait_for_session to block until completion.

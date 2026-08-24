@@ -22,7 +22,7 @@ def _username_from_jwt(token: str) -> str:
         payload_b64 = token.split(".")[1]
         payload_b64 += "=" * (-len(payload_b64) % 4)
         payload = json.loads(base64.urlsafe_b64decode(payload_b64))
-        return payload.get("sub", "")
+        return str(payload.get("sub") or "")
     except Exception:
         return ""
 
@@ -63,10 +63,15 @@ async def validate_token(token: str, api_url: str, in_cluster: bool) -> TokenIde
             status = resp.status
             if not status.authenticated:
                 return None
+            user = getattr(status, "user", None)
+            username = (getattr(user, "username", None) or "").strip() if user else ""
+            if not username:
+                logger.warning("TokenReview was authenticated but user or username was missing/empty")
+                return None
             return TokenIdentity(
-                username=status.user.username or "",
-                uid=status.user.uid or "",
-                groups=list(status.user.groups or []),
+                username=username,
+                uid=getattr(user, "uid", "") or "",
+                groups=list(getattr(user, "groups", []) or []),
             )
         except ApiException as e:
             if e.status == 403:

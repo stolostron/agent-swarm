@@ -181,6 +181,54 @@ class TestValidateTokenFallback:
             assert "system:serviceaccounts" in result.groups
 
     @pytest.mark.asyncio
+    async def test_authenticated_tokenreview_with_none_user_returns_none(self):
+        """TokenReview is authenticated but user object is None; must return None."""
+        token = "some.token.with.none.user"
+
+        with patch("kubernetes.client") as mock_k8s:
+            mock_status = MagicMock()
+            mock_status.authenticated = True
+            mock_status.user = None
+
+            mock_resp = MagicMock()
+            mock_resp.status = mock_status
+
+            auth_api = MagicMock()
+            auth_api.create_token_review.return_value = mock_resp
+            mock_k8s.AuthenticationV1Api.return_value = auth_api
+            mock_k8s.V1TokenReview = MagicMock()
+            mock_k8s.V1TokenReviewSpec = MagicMock()
+
+            result = await validate_token(token, "https://localhost:6443", False)
+
+            assert result is None
+
+    @pytest.mark.asyncio
+    async def test_authenticated_tokenreview_with_empty_username_returns_none(self):
+        """TokenReview is authenticated but user username is empty; must return None."""
+        token = "some.token.with.empty.user"
+
+        with patch("kubernetes.client") as mock_k8s:
+            mock_status = MagicMock()
+            mock_status.authenticated = True
+            mock_status.user.username = "  "
+            mock_status.user.uid = "uid-123"
+            mock_status.user.groups = []
+
+            mock_resp = MagicMock()
+            mock_resp.status = mock_status
+
+            auth_api = MagicMock()
+            auth_api.create_token_review.return_value = mock_resp
+            mock_k8s.AuthenticationV1Api.return_value = auth_api
+            mock_k8s.V1TokenReview = MagicMock()
+            mock_k8s.V1TokenReviewSpec = MagicMock()
+
+            result = await validate_token(token, "https://localhost:6443", False)
+
+            assert result is None
+
+    @pytest.mark.asyncio
     async def test_openshift_oauth_token_resolved_via_user_api(self):
         """An OpenShift OAuth token (sha256~...) has no JWT payload, but resolves via CustomObjectsApi."""
         token = "sha256~mockOpenShiftOauthBearerToken"
@@ -194,7 +242,7 @@ class TestValidateTokenFallback:
             # CustomObjectsApi returns user object from user.openshift.io
             custom_api = MagicMock()
             custom_api.get_cluster_custom_object.return_value = {
-                "metadata": {"name": "jpacker", "uid": "uid-openshift-456"},
+                "metadata": {"name": "alice", "uid": "uid-openshift-456"},
                 "groups": ["system:authenticated", "system:authenticated:oauth", "developers"],
             }
             mock_k8s.CustomObjectsApi.return_value = custom_api
@@ -211,7 +259,7 @@ class TestValidateTokenFallback:
 
         assert result is not None
         assert isinstance(result, TokenIdentity)
-        assert result.username == "jpacker"
+        assert result.username == "alice"
         assert result.uid == "uid-openshift-456"
         assert "developers" in result.groups
 

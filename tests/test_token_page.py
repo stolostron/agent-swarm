@@ -73,7 +73,7 @@ class TestTokenPage:
         transport = httpx.ASGITransport(app=app_with_auth)
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
             # Seed session
-            seed_resp = await client.get("/_seed?user=jnpacker&token=my-secret-bearer-token")
+            seed_resp = await client.get("/_seed?user=alice&token=my-secret-bearer-token")
             assert seed_resp.status_code == 200
 
             # Access /token
@@ -81,7 +81,7 @@ class TestTokenPage:
             assert resp.status_code == 200
             assert resp.headers.get("cache-control") == "no-store, private"
             content = resp.text
-            assert "jnpacker" in content
+            assert "alice" in content
             assert "my-secret-bearer-token" in content
             assert "agent-swarm" in content
             assert "AGENT_SWARM_API_TOKEN" in content

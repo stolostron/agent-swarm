@@ -71,7 +71,7 @@ def test_server_instantiates_with_config():
 
 
 def test_server_registers_all_expected_tools():
-    """Verify all 17 MCP tools are registered on the FastMCP instance.
+    """Verify all 34 MCP tools are registered on the FastMCP instance.
 
     This test catches regressions where a tool is removed, renamed, or
     fails to register due to an import/decorator error.

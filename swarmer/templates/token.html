@@ -76,16 +76,32 @@
 function copyToClipboard(elementId, buttonId) {
   const el = document.getElementById(elementId);
   const text = el.tagName === 'TEXTAREA' || el.tagName === 'INPUT' ? el.value : el.innerText;
-  navigator.clipboard.writeText(text).then(() => {
-    const btn = document.getElementById(buttonId);
+  const btn = document.getElementById(buttonId);
+  const markCopied = () => {
     const originalText = btn.innerText;
     btn.innerText = '✓ Copied!';
     setTimeout(() => {
       btn.innerText = originalText;
     }, 2000);
-  }).catch(err => {
-    console.error('Failed to copy: ', err);
-  });
+  };
+
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(markCopied).catch(err => {
+      console.error('Failed to copy: ', err);
+    });
+  } else {
+    // Fallback for non-secure HTTP contexts
+    if (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT') {
+      el.focus();
+      el.select();
+      try {
+        document.execCommand('copy');
+        markCopied();
+      } catch (err) {
+        console.error('execCommand copy failed: ', err);
+      }
+    }
+  }
 }
 </script>
 {% endblock %}
