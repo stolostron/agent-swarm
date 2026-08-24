@@ -148,15 +148,9 @@ async def _probe_with_user_token(token: str, api_url: str, in_cluster: bool) -> 
             except Exception:
                 pass
 
-            # 3. Fallback: probe with list_namespace
-            core = k8s_client.CoreV1Api(api)
-            try:
-                core.list_namespace(_request_timeout=5)
-                return TokenIdentity(username=jwt_user)
-            except ApiException as e:
-                if e.status == 403:
-                    return TokenIdentity(username=jwt_user)
-                return None
+            # Reject non-JWT tokens if neither OpenShift User API nor SelfSubjectReview yielded an identity
+            logger.warning("Could not resolve identity for non-JWT token via OpenShift User API or SelfSubjectReview")
+            return None
 
     return await asyncio.to_thread(_do_probe)
 
