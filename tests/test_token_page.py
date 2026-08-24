@@ -5,21 +5,20 @@ import base64
 import json
 import os
 import sys
-from pathlib import Path
 from unittest.mock import patch
 
 import httpx
 import pytest
 import pytest_asyncio
 from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from starlette.middleware.sessions import SessionMiddleware
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from scripts.mcp_setup import _decode_jwt_sub, _parse_pasted_token_or_json
 from swarmer.crypto import encrypt, init_crypto
-from swarmer.deps import NotAuthenticated, require_auth, get_user_token
+from swarmer.deps import NotAuthenticated
 from swarmer.routers.auth import router as auth_router
 
 
