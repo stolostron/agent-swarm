@@ -109,13 +109,13 @@ user-token:  ## Issue a login token for a K8s user  (SA_USER=alice, TOKEN_DURATI
 
 api-info: export _NAMESPACE := $(value NAMESPACE)
 api-info:  ## Display Swarmer API URL, current user token, and opencode.json snippet
-	@python3 scripts/mcp_setup.py --print-only --namespace "$$_NAMESPACE"
+	@python3 scripts/mcp_setup.py --print-only --namespace "$${_NAMESPACE:-swarmer}"
 
 mcp-setup: export _TOKEN := $(value TOKEN)
 mcp-setup: export _URL := $(value URL)
 mcp-setup: export _NAMESPACE := $(value NAMESPACE)
 mcp-setup:  ## Configure opencode.json for Agent Swarm  (TOKEN=..., URL=...)
-	@AGENT_SWARM_API_TOKEN="$$$${_TOKEN:-$$AGENT_SWARM_API_TOKEN}" AGENT_SWARM_API_URL="$$$${_URL:-$$AGENT_SWARM_API_URL}" python3 scripts/mcp_setup.py --namespace "$$_NAMESPACE"
+	@AGENT_SWARM_API_TOKEN="$${_TOKEN:-$$AGENT_SWARM_API_TOKEN}" AGENT_SWARM_API_URL="$${_URL:-$$AGENT_SWARM_API_URL}" python3 scripts/mcp_setup.py --namespace "$${_NAMESPACE:-swarmer}"
 
 # SA_USER/OIDC_USER/WORKSPACE_NS/NAMESPACE are carried as exported shell env
 # vars (not textually substituted into the recipe) and validated against a
