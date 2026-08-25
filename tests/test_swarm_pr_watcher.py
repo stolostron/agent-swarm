@@ -400,6 +400,32 @@ class TestSwarmPRWatcherLifecycle(unittest.IsolatedAsyncioTestCase):
         if os.path.exists(self.tmp.name):
             os.unlink(self.tmp.name)
 
+    async def test_find_matching_trigger_scopes(self):
+        self.config.triggers = [
+            TriggerConfig(id="t_self", name="Self", trigger_type="event", condition="ci_fail_or_conflict", author_scope="self", workspace_id=1, session_id=1, repos=["org/repo"], enabled=True),
+            TriggerConfig(id="t_team", name="Team", trigger_type="event", condition="new_pr_or_commit", author_scope="team", workspace_id=1, session_id=2, repos=["org/repo"], enabled=True),
+            TriggerConfig(id="t_bot", name="Bots", trigger_type="event", condition="ci_fail_or_conflict", author_scope="bots", workspace_id=1, session_id=3, repos=["org/repo"], enabled=True),
+            TriggerConfig(id="t_all", name="All", trigger_type="event", condition="any_actionable", author_scope="all", workspace_id=1, session_id=4, repos=["org/other-repo"], enabled=True),
+        ]
+
+        pr_self = PRState(repo="org/repo", pr_number=1, title="", body="", author_login="jpacker", author_association="OWNER", is_draft=False, head_sha="s1", head_ref="", base_ref="", mergeable_state="dirty", is_fork=False)
+        pr_team = PRState(repo="org/repo", pr_number=2, title="", body="", author_login="alice", author_association="MEMBER", is_draft=False, head_sha="s2", head_ref="", base_ref="", mergeable_state="clean", is_fork=False)
+        pr_bot = PRState(repo="org/repo", pr_number=3, title="", body="", author_login="dependabot[bot]", author_association="CONTRIBUTOR", is_draft=False, head_sha="s3", head_ref="", base_ref="", mergeable_state="dirty", is_fork=False)
+        pr_all = PRState(repo="org/other-repo", pr_number=4, title="", body="", author_login="alice", author_association="MEMBER", is_draft=False, head_sha="s4", head_ref="", base_ref="", mergeable_state="dirty", is_fork=False)
+
+        # Matching scopes
+        match_self = self.watcher.find_matching_trigger(pr_self, PRAction.FIX)
+        assert match_self is not None and match_self.id == "t_self"
+
+        match_team = self.watcher.find_matching_trigger(pr_team, PRAction.REVIEW)
+        assert match_team is not None and match_team.id == "t_team"
+
+        match_bot = self.watcher.find_matching_trigger(pr_bot, PRAction.FIX)
+        assert match_bot is not None and match_bot.id == "t_bot"
+
+        match_all = self.watcher.find_matching_trigger(pr_all, PRAction.FIX)
+        assert match_all is not None and match_all.id == "t_all"
+
     async def test_evaluate_and_dispatch_pr_dry_run(self):
         pr = PRState(
             repo="org/repo",

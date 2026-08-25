@@ -36,6 +36,7 @@ from scripts.lib.pr_state import (  # noqa: E402
     TrustPolicy,
     TrustStrategy,
     classify_pr_action,
+    is_bot_author,
     normalize_ci_checks,
     parse_iso_datetime,
 )
@@ -503,11 +504,15 @@ class SwarmPRWatcher:
             # Scope matching
             author_lower = pr.author_login.lower()
             is_self = author_lower in {a.lower() for a in self.config.fix_authors}
+            is_bot = is_bot_author(pr.author_login, self.config.bot_logins)
 
             if tr.author_scope == "self" and not is_self:
                 continue
-            if tr.author_scope == "team" and is_self:
+            if tr.author_scope == "team" and (is_self or is_bot):
                 continue
+            if tr.author_scope == "bots" and not is_bot:
+                continue
+            # tr.author_scope == "all" matches any author (self, team, bots)
 
             # Action condition matching
             if action == PRAction.FIX and tr.condition in ("ci_fail_or_conflict", "review_comments", "any_actionable"):
