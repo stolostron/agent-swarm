@@ -149,7 +149,7 @@ class TestAuthorTrustEvaluation(unittest.TestCase):
 
         # Label present, verified with trusted applier event
         label_events = [
-            {"name": "ok-to-review", "actor": {"login": "maintainer-alice", "author_association": "MEMBER"}}
+            {"name": "ok-to-review", "actor": {"login": "actor_collab_1", "author_association": "MEMBER"}}
         ]
         res = evaluate_author_trust(self.base_pr, policy, label_events=label_events)
         self.assertTrue(res.is_trusted)
@@ -480,7 +480,7 @@ class TestAsyncPRWatcherStore(unittest.IsolatedAsyncioTestCase):
             await db.commit()
             await db.refresh(ws)
 
-            pat = GitHubPAT(workspace_id=ws.id, name="my-pat", github_username="testuser", pat_enc="secret-pat")
+            pat = GitHubPAT(workspace_id=ws.id, name="my-pat", github_username="fixture_user", pat_enc="enc_fixture")
             db.add(pat)
             await db.commit()
             await db.refresh(pat)
@@ -490,25 +490,25 @@ class TestAsyncPRWatcherStore(unittest.IsolatedAsyncioTestCase):
             sched = SessionSchedule(session_id=1, trigger_type="event", label="event")
 
             # 1. Resolves from session PAT
-            with patch.object(GitHubPAT, "pat", "ghp_session_pat_value"):
+            with patch.object(GitHubPAT, "pat", "token_session_pat_val"):
                 token = await _resolve_github_token_for_workspace_repo(ws.id, "stolostron/agent-swarm", [(sched, session)], db)
-                self.assertEqual(token, "ghp_session_pat_value")
+                self.assertEqual(token, "token_session_pat_val")
 
             # 2. Resolves from GitHub App if session has no PAT
             session_no_pat = Session(workspace_id=ws.id, name="s_app", mode="prompt", provider="", agent_tool="opencode", instruction_prompt="")
             with patch("swarmer.github_app.get_workspace_github_app", new_callable=AsyncMock) as mock_get_app, \
                  patch("swarmer.github_auth.mint_installation_token", new_callable=AsyncMock) as mock_mint:
                 mock_get_app.return_value = object()
-                mock_mint.return_value = "ghs_app_iat_token"
+                mock_mint.return_value = "token_app_iat_val"
                 token = await _resolve_github_token_for_workspace_repo(ws.id, "stolostron/agent-swarm", [(sched, session_no_pat)], db)
-                self.assertEqual(token, "ghs_app_iat_token")
+                self.assertEqual(token, "token_app_iat_val")
 
             # 3. Resolves from environment variable fallback
             with patch("swarmer.github_app.get_workspace_github_app", new_callable=AsyncMock) as mock_get_app, \
-                 patch.dict("os.environ", {"GH_TOKEN_STOLOSTRON": "ghp_org_env_token"}):
+                 patch.dict("os.environ", {"GH_TOKEN_STOLOSTRON": "token_org_env_val"}):
                 mock_get_app.return_value = None
                 token = await _resolve_github_token_for_workspace_repo(ws.id, "stolostron/agent-swarm", [(sched, session_no_pat)], db)
-                self.assertEqual(token, "ghp_org_env_token")
+                self.assertEqual(token, "token_org_env_val")
 
 
 class TestPRWatcherNetworkDetails(unittest.IsolatedAsyncioTestCase):
