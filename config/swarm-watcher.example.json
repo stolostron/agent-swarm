@@ -1,0 +1,92 @@
+{
+  "api_url": "http://localhost:8090",
+  "api_token_env": "SWARM_API_TOKEN",
+  "poll_interval_seconds": 30.0,
+  "sweep_interval_seconds": 1800.0,
+  "repo_refresh_interval_seconds": 60.0,
+  "db_path": "data/swarm_watcher_state.db",
+  "max_fix_attempts": 3,
+  "quiet_period_seconds": 90.0,
+  "fix_authors": [
+    "jpacker"
+  ],
+  "bot_logins": [
+    "dependabot[bot]",
+    "renovate[bot]",
+    "coderabbitai[bot]",
+    "openshift-bot",
+    "red-hat-konflux[bot]"
+  ],
+  "trust_policy": {
+    "strategy": "org_and_collaborators",
+    "allowlist": [
+      "jpacker"
+    ],
+    "team_slug": "fleet-engineering",
+    "trusted_label": "ok-to-review"
+  },
+  "tokens": {
+    "OpenShift-Fleet": "ghp_exampleTokenForFleetOrg",
+    "stolostron": "ghp_exampleTokenForStolostronOrg"
+  },
+  "triggers": [
+    {
+      "id": "trigger-fix-my-prs",
+      "name": "Auto-Fix My PRs",
+      "trigger_type": "event",
+      "condition": "ci_fail_or_conflict",
+      "author_scope": "self",
+      "workspace_id": 1,
+      "session_id": 10,
+      "repos": [
+        "https://github.com/OpenShift-Fleet/agentic-sdlc.git",
+        "https://github.com/stolostron/agent-swarm.git"
+      ],
+      "prompt_file": "prompts/auto-pr-fix-agent.md",
+      "enabled": true
+    },
+    {
+      "id": "trigger-review-team-prs",
+      "name": "Auto-Review Team PRs",
+      "trigger_type": "event",
+      "condition": "new_pr_or_commit",
+      "author_scope": "team",
+      "workspace_id": 1,
+      "session_id": 11,
+      "repos": [
+        "https://github.com/OpenShift-Fleet/agentic-sdlc.git",
+        "https://github.com/stolostron/agent-swarm.git"
+      ],
+      "prompt_file": "prompts/auto-pr-review-agent.md",
+      "enabled": true
+    },
+    {
+      "id": "trigger-cve-daily",
+      "name": "Daily CVE Scan (Cron - Not Polled by Watcher)",
+      "trigger_type": "cron",
+      "condition": "0 9 * * 1-5",
+      "author_scope": "all",
+      "workspace_id": 1,
+      "session_id": 12,
+      "repos": [
+        "https://github.com/stolostron/agent-swarm.git"
+      ],
+      "prompt_file": "prompts/cve-audit.md",
+      "enabled": true
+    },
+    {
+      "id": "trigger-pr-hygiene",
+      "name": "PR Hygiene Sweep (Cron - Not Polled by Watcher)",
+      "trigger_type": "cron",
+      "condition": "0 0 * * *",
+      "author_scope": "all",
+      "workspace_id": 1,
+      "session_id": 13,
+      "repos": [
+        "https://github.com/stolostron/agent-swarm.git"
+      ],
+      "prompt_file": "prompts/pr-hygiene.md",
+      "enabled": true
+    }
+  ]
+}
