@@ -601,18 +601,22 @@ async def update_schedule(
             raise HTTPException(status_code=422, detail=f"Invalid cron expression: {cron_expr}")
         sched.cron_schedule = cron_expr
         sched.cron_next_run = croniter(cron_expr, datetime.now(timezone.utc)).get_next(datetime)
+        sched.event_condition = ""
+        sched.author_scope = "all"
+        sched.fix_authors = ""
     else:
         sched.cron_schedule = ""
         sched.cron_next_run = None
 
     sched.trigger_type = new_trigger_type
 
-    if body.event_condition is not None:
-        sched.event_condition = body.event_condition
-    if body.author_scope is not None:
-        sched.author_scope = body.author_scope
-    if body.fix_authors is not None:
-        sched.fix_authors = body.fix_authors
+    if new_trigger_type == "event":
+        if body.event_condition is not None:
+            sched.event_condition = body.event_condition
+        if body.author_scope is not None:
+            sched.author_scope = body.author_scope
+        if body.fix_authors is not None:
+            sched.fix_authors = body.fix_authors
 
     if body.label is not None:
         sched.label = body.label

@@ -466,7 +466,7 @@ class TestAsyncPRWatcherStore(unittest.IsolatedAsyncioTestCase):
             fan_out = await resolve_event_triggers(db)
             self.assertNotIn("stolostron/cron-only-repo", fan_out.get(ws.id, {}))
 
-    async def test_resolve_github_token_for_workspace_repo(self):
+    async def test_resolve_github_token_for_workspace_repo(self) -> None:
         from unittest.mock import AsyncMock, patch
         from swarmer.models.github_pat import GitHubPAT
         from swarmer.models.session import Session
@@ -512,7 +512,7 @@ class TestAsyncPRWatcherStore(unittest.IsolatedAsyncioTestCase):
 
 
 class TestPRWatcherNetworkDetails(unittest.IsolatedAsyncioTestCase):
-    async def test_fetch_pr_details_and_reviews(self):
+    async def test_fetch_pr_details_and_reviews(self) -> None:
         import httpx
         from swarmer.pr_watcher import _fetch_pr_details, _fetch_reviews_and_threads
 

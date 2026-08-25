@@ -37,6 +37,7 @@ def _fmt_schedule(sc: dict) -> dict:
         "trigger_type": sc.get("trigger_type", "cron"),
         "event_condition": sc.get("event_condition", ""),
         "author_scope": sc.get("author_scope", "all"),
+        "fix_authors": sc.get("fix_authors", ""),
         "cron_schedule": sc.get("cron_schedule"),
         "cron_next_run": sc.get("cron_next_run"),
         "label": sc.get("label", ""),

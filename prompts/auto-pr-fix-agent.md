@@ -58,10 +58,10 @@ Your task is to resolve **Merge Conflicts**, **Failing CI Checks**, and/or **Unr
 - Do not introduce unrelated refactoring.
 
 ### Step 5: Final Verification & Commit
-- Run full verification:
+- Run full verification using the repository-appropriate lint and test commands identified in Step 3 (e.g. `make lint && make test`, `pytest && ruff check .`, `npm test && npm run lint`, or `go test ./... && golangci-lint run`):
   ```bash
-  make lint
-  make test
+  # Execute the repo's specific lint and test suite
+  make lint && make test
   ```
 - Stage only intended files:
   ```bash

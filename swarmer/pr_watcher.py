@@ -347,7 +347,7 @@ async def _fetch_reviews_and_threads(
 async def _fetch_label_events(
     client: httpx.AsyncClient, repo: str, pr_number: int, token: str | None
 ) -> list[dict[str, Any]]:
-    """Fetch issue events for label auditing."""
+    """Fetch issue events for label auditing with resolved actor associations."""
     url = f"https://api.github.com/repos/{repo}/issues/{pr_number}/events?per_page=50"
     headers = {
         "Accept": "application/vnd.github+json",
@@ -359,9 +359,25 @@ async def _fetch_label_events(
 
     try:
         resp = await client.get(url, headers=headers, timeout=15)
-        if resp.is_success:
-            return [e for e in resp.json() if e.get("event") == "labeled"]
-        return []
+        if not resp.is_success:
+            return []
+        events = [e for e in resp.json() if e.get("event") == "labeled"]
+        for ev in events:
+            actor = ev.get("actor", {}) or {}
+            actor_login = actor.get("login")
+            if actor_login and not ev.get("author_association"):
+                perm_url = f"https://api.github.com/repos/{repo}/collaborators/{actor_login}/permission"
+                try:
+                    p_resp = await client.get(perm_url, headers=headers, timeout=10)
+                    if p_resp.is_success:
+                        perm = p_resp.json().get("permission", "").lower()
+                        if perm in ("admin", "write", "maintain"):
+                            ev["author_association"] = "COLLABORATOR"
+                        elif perm in ("triage", "read"):
+                            ev["author_association"] = "CONTRIBUTOR"
+                except Exception:
+                    pass
+        return events
     except Exception:
         return []
 
