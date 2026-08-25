@@ -441,6 +441,109 @@ async def test_record_session_run_captures_active_schedule():
 
 
 @pytest.mark.asyncio
+async def test_record_session_run_event_trigger_captures_context():
+    """Event-triggered runs snapshot trigger_type='event' and preserve event_context."""
+    import json
+
+    async with _TestSession() as db:
+        session = await _make_prompt_session(db)
+        session.event_context = json.dumps({"pr_number": 104, "action": "pr-fix", "repo": "org/repo"})
+        await db.commit()
+        await db.refresh(session)
+
+        run = await record_session_run(
+            db,
+            session,
+            phase="succeeded",
+            status_detail="",
+            last_output="fixed it",
+            completed_at=datetime.now(timezone.utc),
+        )
+        await db.commit()
+
+        assert run is not None
+        assert run.trigger_type == "event"
+        assert run.schedule_label == "PR #104 (pr-fix)"
+        assert run.event_info.get("pr_number") == 104
+
+
+@pytest.mark.asyncio
+async def test_record_session_run_cron_does_not_inherit_stale_event_context():
+    """ACM-42674 regression: a cron run following a prior event-triggered run on
+    the same session must NOT inherit the stale session.event_context — otherwise
+    Run History renders the '⚡ Event Context' drawer header on a cron entry."""
+    import json
+
+    from swarmer.models.session_schedule import SessionSchedule
+
+    async with _TestSession() as db:
+        session = await _make_prompt_session(db)
+        # Simulate a prior event-triggered run having set event_context on the
+        # session row — session.event_context is never cleared after the run.
+        session.event_context = json.dumps({"pr_number": 104, "action": "pr-fix"})
+
+        schedule = SessionSchedule(
+            session_id=session.id,
+            cron_schedule="0 9 * * 1-5",
+            label="Weekdays 9am",
+            trigger_type="cron",
+            enabled=True,
+        )
+        db.add(schedule)
+        await db.flush()
+        session.active_schedule_id = schedule.id
+        await db.commit()
+        await db.refresh(session)
+
+        run = await record_session_run(
+            db,
+            session,
+            phase="succeeded",
+            status_detail="",
+            last_output="cron output",
+            completed_at=datetime.now(timezone.utc),
+        )
+        await db.commit()
+
+        assert run is not None
+        assert run.trigger_type == "cron"
+        assert run.schedule_label == "Weekdays 9am"
+        assert run.event_context == ""
+        assert run.event_info == {}
+
+
+@pytest.mark.asyncio
+async def test_record_session_run_manual_with_no_event_context_is_manual():
+    """A manual run (no active schedule, no event_context set) records as
+    trigger_type='manual', never 'event'. The launch-time clearing of stale
+    event_context (routers/sessions.py:session_launch and
+    api/v1/sessions.py:launch_session) is what prevents a manual UI/API
+    launch from inheriting a prior event run's context in the first place —
+    this test asserts the resulting snapshot once that clearing has happened."""
+    async with _TestSession() as db:
+        session = await _make_prompt_session(db)
+        session.event_context = ""
+        session.active_schedule_id = None
+        await db.commit()
+        await db.refresh(session)
+
+        run = await record_session_run(
+            db,
+            session,
+            phase="succeeded",
+            status_detail="",
+            last_output="manual output",
+            completed_at=datetime.now(timezone.utc),
+        )
+        await db.commit()
+
+        assert run is not None
+        assert run.trigger_type == "manual"
+        assert run.event_context == ""
+        assert run.event_info == {}
+
+
+@pytest.mark.asyncio
 async def test_record_session_run_no_prompt_or_schedule():
     """Manual runs with no configured prompt leave schedule_label/prompt_name empty."""
     async with _TestSession() as db:

@@ -87,13 +87,11 @@
 
         {# Cron Fields #}
         <div id="sched-cron-edit-{{ sched.id }}" style="{% if sched.trigger_type == 'event' %}display:none;{% else %}display:block;{% endif %}">
-          <div style="display:flex; gap:var(--pf-t--global--spacer--xs); flex-wrap:wrap; align-items:center;">
+          <div>
+            <label style="font-size:var(--pf-t--global--font--size--sm); color:var(--pf-t--global--text--color--subtle);">Cron Expression (UTC)</label>
             <input type="text" name="cron_expr" class="pf-v6-c-form-control"
                    value="{{ sched.cron_schedule }}" placeholder="*/30 * * * *"
-                   style="flex:1; min-width:140px; font-family:monospace; font-size:var(--pf-t--global--font--size--sm);">
-            <input type="text" name="label" class="pf-v6-c-form-control"
-                   value="{{ sched.label }}" placeholder="Label (optional)"
-                   style="flex:1; min-width:120px; font-size:var(--pf-t--global--font--size--sm);">
+                   style="font-family:monospace; font-size:var(--pf-t--global--font--size--sm);">
           </div>
           <div style="font-size:var(--pf-t--global--font--size--xs); color:var(--pf-t--global--text--color--subtle); margin-top:var(--pf-t--global--spacer--xs);">
             min hour dom month dow (UTC) · <a href="https://crontab.guru/" target="_blank" rel="noopener">crontab.guru</a>
@@ -121,10 +119,18 @@
             </div>
           </div>
           <div style="margin-top:var(--pf-t--global--spacer--xs);">
-            <input type="text" name="label" class="pf-v6-c-form-control"
-                   value="{{ sched.label }}" placeholder="Label (optional)"
+            <label style="font-size:var(--pf-t--global--font--size--sm); color:var(--pf-t--global--text--color--subtle);">Fix Authors (GitHub Logins, comma-separated)</label>
+            <input type="text" name="fix_authors" class="pf-v6-c-form-control"
+                   value="{{ sched.fix_authors }}" placeholder="e.g. jnpacker, alice"
                    style="width:100%; font-size:var(--pf-t--global--font--size--sm);">
           </div>
+        </div>
+
+        <div>
+          <label style="font-size:var(--pf-t--global--font--size--sm); color:var(--pf-t--global--text--color--subtle);">Label (optional)</label>
+          <input type="text" name="label" class="pf-v6-c-form-control"
+                 value="{{ sched.label }}" placeholder="e.g. PR Fix / Nightly Sweep"
+                 style="width:100%; font-size:var(--pf-t--global--font--size--sm);">
         </div>
 
         <div>
@@ -197,13 +203,11 @@
           {% endfor %}
         </div>
       </div>
-      <div style="display:flex; gap:var(--pf-t--global--spacer--xs); flex-wrap:wrap; align-items:center;">
+      <div>
+        <label style="font-size:var(--pf-t--global--font--size--sm); color:var(--pf-t--global--text--color--subtle);">Cron Expression (UTC)</label>
         <input type="text" name="cron_expr" class="pf-v6-c-form-control"
                placeholder="*/30 * * * *"
-               style="flex:1; min-width:140px; font-family:monospace; font-size:var(--pf-t--global--font--size--sm);">
-        <input type="text" name="label" class="pf-v6-c-form-control"
-               placeholder="Label (optional)"
-               style="flex:1; min-width:120px; font-size:var(--pf-t--global--font--size--sm);">
+               style="font-family:monospace; font-size:var(--pf-t--global--font--size--sm);">
       </div>
       <div style="font-size:var(--pf-t--global--font--size--xs); color:var(--pf-t--global--text--color--subtle); margin-top:var(--pf-t--global--spacer--xs);">
         min hour dom month dow (UTC) · <a href="https://crontab.guru/" target="_blank" rel="noopener">crontab.guru</a>
@@ -231,10 +235,18 @@
         </div>
       </div>
       <div style="margin-top:var(--pf-t--global--spacer--xs);">
-        <input type="text" name="label" class="pf-v6-c-form-control"
-               placeholder="Label (optional)"
+        <label style="font-size:var(--pf-t--global--font--size--sm); color:var(--pf-t--global--text--color--subtle);">Fix Authors (GitHub Logins, comma-separated)</label>
+        <input type="text" name="fix_authors" class="pf-v6-c-form-control"
+               placeholder="e.g. jnpacker, alice"
                style="width:100%; font-size:var(--pf-t--global--font--size--sm);">
       </div>
+    </div>
+
+    <div>
+      <label style="font-size:var(--pf-t--global--font--size--sm); color:var(--pf-t--global--text--color--subtle);">Label (optional)</label>
+      <input type="text" name="label" class="pf-v6-c-form-control"
+             placeholder="e.g. PR Fix / Nightly Sweep"
+             style="width:100%; font-size:var(--pf-t--global--font--size--sm);">
     </div>
 
     <div>

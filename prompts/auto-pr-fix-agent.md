@@ -44,13 +44,13 @@ Your task is to resolve **Merge Conflicts**, **Failing CI Checks**, and/or **Unr
 
 ### Step 3: Diagnose & Fix CI Failures
 - Identify what failed in CI (test suite, linter, type checks, build).
-- Run the relevant build / test commands locally:
-  ```bash
-  make test || pytest || npm test || go test ./...
-  make lint || ruff check . || npm run lint || golangci-lint run
-  ```
+- Run the repository-appropriate build/test command (inspect Makefile, package.json, pyproject.toml):
+  - Python: `make test` (or `pytest` if no Makefile target exists)
+  - Python lint: `make lint` (or `ruff check .` if no Makefile target exists)
+  - Node.js: `npm test` and `npm run lint`
+  - Go: `go test ./...` and `golangci-lint run`
 - Edit the necessary files to fix the failures while preserving existing functionality and conventions.
-- Re-run the tests to verify the fix passes 100%.
+- Re-run the tests to verify the fix passes 100%. Preserving failed exit statuses is critical—never chain fallback test commands with unconditional `||`.
 
 ### Step 4: Address Review Comments & CodeRabbit Feedback
 - If review comments exist (e.g. from `coderabbitai[bot]` or human reviewers), review the recommendations.
@@ -70,9 +70,13 @@ Your task is to resolve **Merge Conflicts**, **Failing CI Checks**, and/or **Unr
   ```
 
 ### Step 6: Push Fix to PR Branch
-- Push the commit directly to the PR branch:
+- Verify the current branch matches the PR's target headRef and is never `main` or `master`:
   ```bash
-  git push origin HEAD
+  CURRENT_BRANCH="$(git branch --show-current)"
+  case "$CURRENT_BRANCH" in
+    main|master|"") echo "Refusing to push from default branch $CURRENT_BRANCH" >&2; exit 1 ;;
+  esac
+  git push origin "HEAD:${CURRENT_BRANCH}"
   ```
 - If CodeRabbit comments were addressed, comment or trigger re-review:
   ```bash

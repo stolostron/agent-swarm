@@ -43,7 +43,8 @@ class SessionRun(Base):
             return {}
         try:
             import json
-            return json.loads(self.event_context)
+            data = json.loads(self.event_context)
+            return data if isinstance(data, dict) else {}
         except Exception:
             return {}
 

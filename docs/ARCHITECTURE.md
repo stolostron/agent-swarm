@@ -17,24 +17,19 @@ agent-swarm/
 │   ├── base/common/            # Shared Deployment, PVC, SA
 │   ├── base/cluster-admin/     # Full multi-namespace + OAuthClient
 │   └── base/namespace-scoped/  # Single-namespace, no cluster-admin
-├── config/                       # Watcher & agent configuration templates
-│   └── swarm-watcher.example.json # Example multi-trigger & trust policy config
 ├── docs/                       # Documentation
 │   ├── USER_GUIDE.md           # Full user-facing guide
 │   └── ARCHITECTURE.md         # This file
 ├── practices/                  # Operational best practices
 │   └── autonomous-sdlc/        # Autonomous agent workflows
-│       └── swarm-pr-watcher.md # PR watcher daemon operations & troubleshooting
+│       └── swarm-pr-watcher.md # In-process PR watcher operations & troubleshooting
 ├── prompts/                    # Headless autonomous agent prompts
 │   └── auto-pr-fix-agent.md    # Autonomous prompt for fixing conflicts, CI, comments
 ├── scripts/                    # Automation, smoke tests, and CLI helpers
-│   ├── lib/                    # Shared automation libraries
-│   │   └── pr_state.py         # PR classifier, CI normalizer & 3-layer trust evaluator
 │   ├── mcp_setup.py            # CLI setup for opencode.json + token discovery
 │   ├── openshell_connect.py    # Multi-cluster OpenShell port-forward helper
 │   ├── openshell_smoke_test.py # Sandbox runtime e2e verification
-│   ├── openshell_jira_smoke_test.py # Jira MCP server e2e policy verification
-│   └── swarm_pr_watcher.py     # Event-driven ETag polling daemon & dispatcher (symlink: swarm-pr-watcher.py)
+│   └── openshell_jira_smoke_test.py # Jira MCP server e2e policy verification
 ├── mcp-server/                 # Standalone MCP server for session orchestration
 │   ├── pyproject.toml          # MCP server packaging
 │   ├── agent_swarm_mcp_server/ # FastMCP server, REST API client, auth resolution
@@ -115,7 +110,7 @@ agent-swarm/
 - **Session phases**: `idle` → `pending` → `running` → `succeeded`/`failed`/`stopped`
 - **Multi-Trigger Model (`SessionSchedule`)** — sessions can have multiple execution triggers (ACM-35377, ACM-42674) with `trigger_type` set to either `"cron"` or `"event"`:
   - `"cron"`: Scheduled time triggers (`cron_schedule`, `cron_next_run`). A background loop (`scheduler.py`) evaluates due schedules every 30s, atomically claims rows, sets `session.mode = "prompt"`, and launches the session.
-  - `"event"`: GitHub PR event triggers (`event_condition`, `author_scope`). Evaluated and dispatched by the Swarm PR Watcher daemon (`scripts/swarm_pr_watcher.py`) upon receiving actionable GitHub events (CI failures, conflicts, new commits, review comments).
+  - `"event"`: GitHub PR event triggers (`event_condition`, `author_scope`, `fix_authors`). Evaluated and dispatched by the in-process Swarm PR Watcher loop (`swarmer/pr_watcher.py`) upon receiving actionable GitHub events (CI failures, conflicts, new commits, review comments).
 - **SessionRun** — historical record of completed executions (`session_runs` table). Captures phase, duration, dual outputs (`last_output`, `raw_output`), `trigger_type` (`"manual"`, `"cron"`, `"event"`), `schedule_label`, and serialized `event_context` (PR metadata for event-driven runs).
 - **OpencodeSecret** — per-workspace storage for GCP project and Vertex location (plain, non-secret SQLite `Text` columns — not Fernet-encrypted, since they carry no sensitive material). Despite the legacy name, used by OpenCode. The ADC JSON and the Google AI Studio (Gemini) API key are **not** persisted here via the UI — both are pushed directly to OpenShell gateway providers at save time (`swarmer-ws-{id}-google-cloud` and `swarmer-ws-{id}-google-ai-studio` respectively) and checked at launch/display time via `provider_exists()` (ACM-37263 completed the Gemini side of this pattern, mirroring the pre-existing ADC behavior). The model's `application_default_credentials_enc` / `google_api_key_enc` columns are retained only for backward compatibility with rows written before each migration and via the raw `POST /api/v1/.../secrets/credentials` API, which still accepts and stores them encrypted. Multiple rows per workspace are tolerated (one per `user_id`); read paths use `.scalars().first()` to avoid `MultipleResultsFound` when users share a workspace. A `UNIQUE (workspace_id, user_id)` constraint prevents future duplicates, with a deduplication migration that keeps the newest row per pair.
 - **GitHubPAT** — per-workspace encrypted GitHub personal access tokens with optional org scope for HTTPS git auth. Injected into OpenShell sandboxes via Gateway credential providers. Acts as fallback when no GitHub App is configured.
@@ -433,9 +428,11 @@ Swarmer uses branded, styled interactive pills across the UI for tool selection,
 
 ## Event-Driven PR Events Watcher & Session Dispatcher
 
-The **Swarm PR Events Watcher** (`scripts/swarm_pr_watcher.py`) is an autonomous, firewall-safe daemon that monitors GitHub repositories for Pull Request state changes and dispatches Swarm sessions via the REST API (`POST /api/v1/workspaces/{ws_id}/sessions/{sid}/launch`) only when actionable work is needed from trusted contributors.
+The **Swarm PR Events Watcher** (`swarmer/pr_watcher.py`) is an in-process, firewall-safe asynchronous background loop that runs inside the Swarmer pod's FastAPI lifespan, alongside `scheduler.py`. It monitors GitHub repositories for Pull Request state changes and dispatches Swarm sessions only when actionable work is needed from trusted contributors.
 
-```
+There is **no standalone CLI or static JSON configuration** — all triggers, repositories, conditions, and author scopes are discovered directly from `swarmer.db` (configured entirely via the Web UI's Scheduling section). Dispatches happen in-process via `_do_launch()`, inheriting capacity limiting and `MAX_CONCURRENT_AGENTS` queueing automatically.
+
+```text
 GitHub Events API (Outbound ETag Polling)
                  │
   ┌──────────────┴──────────────┐
@@ -468,7 +465,7 @@ GitHub Events API (Outbound ETag Polling)
                                 │
                                 ▼
                     Dispatch Swarm Session
-             (POST /api/v1/workspaces/.../launch)
+             (In-Process or REST /launch API)
 ```
 
 ### 1. Fast Path vs. Slow Path Architecture
@@ -489,14 +486,10 @@ Each trigger defines an **Author Scope** and **Event Condition**:
 
 | Author Scope | Who Matches | Target Action | Default Behavior & Prompts |
 |---|---|---|---|
-| **`My PRs` (`self`)** | Authenticated user (automatic) or `fix_authors` | `pr-fix` | Resolves conflicts, reproduces & fixes CI failures, addresses review comments, pushes to PR branch, and tags `@coderabbitai review and approve`. **Skips external forks** without push access. |
+| **`My PRs` (`self`)** | Configured `fix_authors` (comma-separated logins in schedule) | `pr-fix` | Resolves conflicts, reproduces & fixes CI failures, addresses review comments, pushes to PR branch, and tags `@coderabbitai review and approve`. Fork PRs require maintainer edit permissions. |
 | **`Team PRs` (`team`)** | Trusted collaborators (`OWNER`, `MEMBER`, `COLLABORATOR`, or on allowlist) | `pr-review` | Detached worktree analysis, scored multi-lens review, inline feedback. Read-only on PR branches. |
 | **`Bot PRs` (`bots`)** | Automated bot logins (`dependabot[bot]`, `renovate[bot]`, `cve-*`, `app/*`) | `auto-merge-defer` | Defers to repo's GitHub Actions (`auto-merge-approved.yaml`) or triggers autonomous bot fix prompts. |
 | **`All PRs` (`all`)** | **My PRs + Team PRs + Bot PRs + External PRs** | Context-dependent | Evaluates any matching author against the trigger condition while strictly enforcing the 3-layer trust model. |
-
-#### How "My PRs" is Resolved
-- **Automatic (Zero-Config):** Swarmer inspects the GitHub PAT / GitHub App attached to the workspace/session to resolve the authenticated username (`github_pat.username`). PRs authored by this login automatically match `My PRs`.
-- **Configurable Override (`fix_authors`):** In multi-account or local development setups, `fix_authors` (env var `SWARM_FIX_AUTHORS` or `config/swarm-watcher.json`) specifies a list of usernames to treat as `self`.
 
 ### 4. 3-Layer Team-PR Trust Model & Security Guardrails
 
@@ -509,7 +502,7 @@ To prevent arbitrary code execution, compute/token exhaustion, and prompt inject
    - Configurable explicit allowlist of logins or GitHub organization team memberships (`GET /orgs/{org}/teams/{slug}/members`).
 3. **Layer 3: The `ok-to-review` Label Gate**
    - Untrusted external PRs remain ignored until a repository collaborator applies the `ok-to-review` label (Kubernetes/Prow convention).
-   - **RBAC Protected:** Applying labels on GitHub requires Triage, Write, or Admin permissions on the base repository; external fork authors cannot self-apply this label. The watcher also verifies the label applier's identity via timeline events.
+   - **RBAC Protected:** Applying labels on GitHub requires Triage, Write, or Admin permissions on the base repository; external fork authors cannot self-apply this label. When label timeline events are available, the watcher verifies the label applier's identity and falls back to base repository RBAC when timeline data is unavailable.
    - **Invalidation:** New commits pushed to an external PR automatically invalidate prior approval and require re-evaluation.
 
 ### 5. Resilience, Circuit Breaker & Concurrency
@@ -517,13 +510,66 @@ To prevent arbitrary code execution, compute/token exhaustion, and prompt inject
 - **CI Completion Barrier & Debounce:** Check runs must show 0 `IN_PROGRESS` or `QUEUED` checks, plus a 90–120s quiet-period debounce before dispatching `pr-fix`.
 - **Circuit Breaker:** Maximum 3 fix attempts per `head_sha`. If the agent fails to resolve CI after 3 attempts, the status is marked `blocked`. A new human commit to the branch resets the counter.
 - **Self-Trigger Guard:** Events generated by the bot agent's own commits are ignored to prevent feedback loops.
-- **Capacity Back-pressure:** Dispatches to `POST /api/v1/workspaces/{ws_id}/sessions/{sid}/launch` automatically inherit Swarmer's `MAX_CONCURRENT_AGENTS` queueing.
+- **Capacity Back-pressure:** Dispatches automatically inherit Swarmer's `MAX_CONCURRENT_AGENTS` queueing.
 
 ### 6. UI & Observability
 
 - **Trigger Type Selector:** Available in both Add Schedule and inline Edit forms (`_schedule_items.html`), supporting live conversion between Cron and Event triggers.
 - **Visual Pills:** Gold `⚡ Event: <label>` pills render in the Session List, Status Badges, and Run History table.
 - **Drawer Context Logging:** Expanding a run record in Run History displays full triggering metadata (`repo`, `PR #`, `head_sha`, `action`, `title`).
+
+---
+
+## Debugging & Log Retrieval Reference
+
+When diagnosing system behavior, Swarmer provides multiple layers of logs and state observability:
+
+### 1. Swarmer Server & In-Process Watcher Logs
+- **In-Cluster Pod Logs:**
+  ```sh
+  kubectl logs -n swarmer -l app=swarmer -f --tail=200
+  ```
+- **Log Level Adjustment:** Set `LOG_LEVEL=DEBUG` in `swarmer-extra-env` or `.env` to enable verbose logging for `swarmer.pr_watcher`, `swarmer.scheduler`, `swarmer.openshell_client`, and `swarmer.routers.sessions`.
+- **Local Dev Server:** Look at terminal stdout where `make dev` is running.
+
+### 2. Agent Execution Outputs (Processed vs. Raw Logs)
+- **Web UI:**
+  - On the **Output Tab** of any session: use the toggle button (`[Output] | [Raw Log]`) to switch between the clean assistant response and the raw ANSI console log.
+  - On the **History Tab**: click the expand chevron on any past run to open the execution drawer. Use the `[Output]` and `[Raw Log]` pills to view logs from that specific run.
+- **REST API:**
+  ```sh
+  # Get latest run output (clean + raw)
+  curl -s -H "Authorization: Bearer $TOKEN" "$SWARMER_URL/api/v1/workspaces/$WS_ID/sessions/$SID/output"
+  
+  # List all historical runs with metadata
+  curl -s -H "Authorization: Bearer $TOKEN" "$SWARMER_URL/api/v1/workspaces/$WS_ID/sessions/$SID/runs"
+  ```
+
+### 3. Watcher State & Circuit Breaker Inspection
+All watcher dispatch history, attempt counters, and cached ETags are stored in the SQLite database (`/data/swarmer.db`):
+```sh
+# Inspect circuit breaker and dispatch status
+sqlite3 /data/swarmer.db "SELECT repo, pr_number, head_sha, action, status, attempts, last_dispatched_at, last_error FROM pr_action_state ORDER BY updated_at DESC LIMIT 20;"
+
+# Inspect cached GitHub Events ETags
+sqlite3 /data/swarmer.db "SELECT repo, etag, last_checked_at FROM repo_etags;"
+```
+
+### 4. OpenShell Sandbox & Gateway Logs
+- **Gateway Logs (Credential Injection & Proxy Routing):**
+  ```sh
+  kubectl logs -n openshell -l app.kubernetes.io/component=gateway -f --tail=100
+  ```
+- **Supervisor Logs (Sandbox Lifecycle & gRPC Exec):**
+  ```sh
+  kubectl logs -n openshell -l app.kubernetes.io/component=supervisor -f --tail=100
+  ```
+- **Active Sandbox Pod Logs (Raw container logs):**
+  ```sh
+  # Find sandbox pod
+  kubectl get pods -n openshell-sandboxes
+  kubectl logs -n openshell-sandboxes <sandbox-pod-name> -f
+  ```
 
 ## Adding New Features
 

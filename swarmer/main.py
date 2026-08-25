@@ -100,9 +100,12 @@ async def lifespan(app: FastAPI):
     await _restart_prompt_pollers()
     if settings.openshell_gateway_url:
         await _restart_server_sessions()
-    from swarmer import scheduler
+    from swarmer import pr_watcher, scheduler
     scheduler.start_scheduler()
+    if settings.openshell_gateway_url:
+        pr_watcher.start_pr_watcher()
     yield
+    await pr_watcher.shutdown()
     await scheduler.shutdown()
 
 

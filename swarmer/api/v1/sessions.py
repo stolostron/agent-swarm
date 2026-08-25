@@ -265,8 +265,13 @@ async def launch_session(
             session.event_context = _json.dumps(body.pr_context)
         elif body.event_context is not None:
             session.event_context = body.event_context
+        else:
+            session.event_context = ""
         if body.instruction_prompt is not None:
             session.instruction_prompt = body.instruction_prompt
+        await db.commit()
+    else:
+        session.event_context = ""
         await db.commit()
 
     try:
@@ -556,6 +561,7 @@ async def create_schedule(
         trigger_type=trigger_type,
         event_condition=body.event_condition or "",
         author_scope=body.author_scope or "all",
+        fix_authors=body.fix_authors or "",
         cron_schedule=cron_schedule,
         cron_next_run=cron_next_run,
         label=body.label,
@@ -585,28 +591,28 @@ async def update_schedule(
     if sched is None or sched.session_id != sid:
         raise HTTPException(status_code=404, detail="Schedule not found")
 
-    if body.trigger_type is not None:
-        tt = body.trigger_type.lower()
-        if tt not in ("cron", "event"):
-            raise HTTPException(status_code=422, detail=f"Invalid trigger_type: {body.trigger_type}")
-        sched.trigger_type = tt
-        if tt == "event":
-            sched.cron_schedule = ""
-            sched.cron_next_run = None
+    new_trigger_type = body.trigger_type.lower() if body.trigger_type is not None else sched.trigger_type
+    if new_trigger_type not in ("cron", "event"):
+        raise HTTPException(status_code=422, detail=f"Invalid trigger_type: {body.trigger_type}")
+
+    if new_trigger_type == "cron":
+        cron_expr = body.cron_schedule if body.cron_schedule is not None else sched.cron_schedule
+        if not cron_expr or not croniter.is_valid(cron_expr):
+            raise HTTPException(status_code=422, detail=f"Invalid cron expression: {cron_expr}")
+        sched.cron_schedule = cron_expr
+        sched.cron_next_run = croniter(cron_expr, datetime.now(timezone.utc)).get_next(datetime)
+    else:
+        sched.cron_schedule = ""
+        sched.cron_next_run = None
+
+    sched.trigger_type = new_trigger_type
 
     if body.event_condition is not None:
         sched.event_condition = body.event_condition
     if body.author_scope is not None:
         sched.author_scope = body.author_scope
-
-    if body.cron_schedule is not None:
-        if sched.trigger_type == "cron":
-            if not body.cron_schedule or not croniter.is_valid(body.cron_schedule):
-                raise HTTPException(status_code=422, detail=f"Invalid cron expression: {body.cron_schedule}")
-            sched.cron_schedule = body.cron_schedule
-            sched.cron_next_run = croniter(body.cron_schedule, datetime.now(timezone.utc)).get_next(datetime)
-        else:
-            sched.cron_schedule = body.cron_schedule
+    if body.fix_authors is not None:
+        sched.fix_authors = body.fix_authors
 
     if body.label is not None:
         sched.label = body.label

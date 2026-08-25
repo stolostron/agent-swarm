@@ -1,0 +1,174 @@
+from __future__ import annotations
+
+from collections import defaultdict
+from datetime import datetime, timezone
+import logging
+
+from sqlalchemy import delete, select
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
+
+from swarmer.models.pr_watcher_state import PRActionState, RepoETag
+from swarmer.models.session import Session
+from swarmer.models.session_repo import SessionRepo
+from swarmer.models.session_schedule import SessionSchedule
+
+log = logging.getLogger(__name__)
+
+# Statuses that block re-dispatch for the same (repo, pr, head_sha, action).
+_BLOCKING_STATUSES = {"dispatched", "completed", "blocked"}
+# Statuses that consume the retry budget.
+_ATTEMPT_STATUSES = {"dispatched", "failed"}
+
+
+def extract_repo_from_url(repo_url: str) -> str:
+    """Normalize a GitHub repository URL into 'owner/repo'.
+
+    Examples:
+      - 'https://github.com/stolostron/agent-swarm.git' -> 'stolostron/agent-swarm'
+      - 'git@github.com:stolostron/agent-swarm.git'     -> 'stolostron/agent-swarm'
+      - 'stolostron/agent-swarm'                       -> 'stolostron/agent-swarm'
+    """
+    if not repo_url:
+        return ""
+    url = repo_url.strip()
+    if "github.com" in url:
+        tail = url.split("github.com", 1)[1].lstrip("/:").removesuffix(".git").strip("/")
+        parts = tail.split("/")
+        if len(parts) >= 2:
+            return f"{parts[0]}/{parts[1]}"
+    elif "/" in url and not url.startswith("http"):
+        parts = url.removesuffix(".git").strip("/").split("/")
+        if len(parts) >= 2:
+            return f"{parts[0]}/{parts[1]}"
+    return ""
+
+
+async def resolve_event_triggers(
+    db: AsyncSession,
+) -> dict[str, list[tuple[SessionSchedule, Session]]]:
+    """Resolve active event triggers and map them by normalized repo key.
+
+    Returns:
+        dict mapping 'owner/repo' -> list of (SessionSchedule, Session) tuples.
+        Sessions with only cron schedules are never returned.
+    """
+    result = await db.execute(
+        select(SessionSchedule, Session, SessionRepo)
+        .join(Session, Session.id == SessionSchedule.session_id)
+        .join(SessionRepo, SessionRepo.session_id == Session.id)
+        .where(
+            SessionSchedule.enabled.is_(True),
+            SessionSchedule.trigger_type == "event",
+        )
+        .options(
+            selectinload(SessionSchedule.prompt),
+            selectinload(Session.workspace),
+            selectinload(Session.github_pat),
+            selectinload(Session.repos),
+        )
+    )
+    fan_out: dict[str, list[tuple[SessionSchedule, Session]]] = defaultdict(list)
+    for sched, session, repo in result.all():
+        key = extract_repo_from_url(repo.repo_url)
+        if key:
+            fan_out[key].append((sched, session))
+    return dict(fan_out)
+
+
+async def get_action_state(
+    db: AsyncSession, repo: str, pr_number: int, head_sha: str, action: str
+) -> PRActionState | None:
+    result = await db.execute(
+        select(PRActionState).where(
+            PRActionState.repo == repo,
+            PRActionState.pr_number == pr_number,
+            PRActionState.head_sha == head_sha,
+            PRActionState.action == action,
+        )
+    )
+    return result.scalar_one_or_none()
+
+
+async def is_blocked(
+    db: AsyncSession, repo: str, pr_number: int, head_sha: str, action: str
+) -> bool:
+    """Check if this action is already in flight, completed, or blocked by circuit breaker."""
+    row = await get_action_state(db, repo, pr_number, head_sha, action)
+    return bool(row and row.status in _BLOCKING_STATUSES)
+
+
+async def record_dispatch(
+    db: AsyncSession,
+    *,
+    repo: str,
+    pr_number: int,
+    head_sha: str,
+    action: str,
+    session_id: int | None,
+    status: str = "dispatched",
+    error: str = "",
+) -> int:
+    """Record or update a dispatch attempt. Returns the new attempt count."""
+    now = datetime.now(timezone.utc)
+    row = await get_action_state(db, repo, pr_number, head_sha, action)
+    if row is None:
+        row = PRActionState(
+            repo=repo,
+            pr_number=pr_number,
+            head_sha=head_sha,
+            action=action,
+            session_id=session_id,
+            status=status,
+            attempts=1 if status in _ATTEMPT_STATUSES else 0,
+            last_error=error,
+            last_dispatched_at=now,
+        )
+        db.add(row)
+    else:
+        if status in _ATTEMPT_STATUSES:
+            row.attempts += 1
+        row.session_id = session_id
+        row.status = status
+        row.last_error = error
+        row.last_dispatched_at = now
+    await db.commit()
+    return row.attempts
+
+
+async def reconcile_completed(db: AsyncSession, session_id: int, phase: str) -> None:
+    """Reconcile in-flight 'dispatched' states when a session reaches terminal phase."""
+    result = await db.execute(
+        select(PRActionState).where(
+            PRActionState.session_id == session_id,
+            PRActionState.status == "dispatched",
+        )
+    )
+    for row in result.scalars().all():
+        row.status = "completed"
+    await db.commit()
+
+
+async def get_etag(db: AsyncSession, repo: str) -> str | None:
+    result = await db.execute(select(RepoETag).where(RepoETag.repo == repo))
+    row = result.scalar_one_or_none()
+    return row.etag if row else None
+
+
+async def save_etag(db: AsyncSession, repo: str, etag: str) -> None:
+    result = await db.execute(select(RepoETag).where(RepoETag.repo == repo))
+    row = result.scalar_one_or_none()
+    if row is None:
+        db.add(RepoETag(repo=repo, etag=etag))
+    else:
+        row.etag = etag
+    await db.commit()
+
+
+async def prune_etags(db: AsyncSession, active_repos: set[str]) -> None:
+    """Drop cached ETags for repos no longer in the active event-trigger poll set."""
+    result = await db.execute(select(RepoETag.repo))
+    for (repo,) in result.all():
+        if repo not in active_repos:
+            await db.execute(delete(RepoETag).where(RepoETag.repo == repo))
+    await db.commit()

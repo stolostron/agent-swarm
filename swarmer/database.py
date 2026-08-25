@@ -256,9 +256,33 @@ async def migrate_db() -> None:
         "ALTER TABLE session_schedules ADD COLUMN trigger_type VARCHAR(32) NOT NULL DEFAULT 'cron'",
         "ALTER TABLE session_schedules ADD COLUMN event_condition VARCHAR(64) NOT NULL DEFAULT ''",
         "ALTER TABLE session_schedules ADD COLUMN author_scope VARCHAR(32) NOT NULL DEFAULT 'all'",
+        "ALTER TABLE session_schedules ADD COLUMN fix_authors VARCHAR(512) NOT NULL DEFAULT ''",
         "ALTER TABLE session_runs ADD COLUMN trigger_type VARCHAR(32) NOT NULL DEFAULT 'manual'",
         "ALTER TABLE session_runs ADD COLUMN event_context TEXT NOT NULL DEFAULT ''",
         "ALTER TABLE sessions ADD COLUMN event_context TEXT NOT NULL DEFAULT ''",
+        # ACM-42674 follow-up: in-process PR watcher state & ETag caching
+        """CREATE TABLE IF NOT EXISTS pr_action_state (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            repo VARCHAR(255) NOT NULL,
+            pr_number INTEGER NOT NULL,
+            head_sha VARCHAR(64) NOT NULL,
+            action VARCHAR(32) NOT NULL,
+            session_id INTEGER,
+            status VARCHAR(32) NOT NULL DEFAULT 'dispatched',
+            attempts INTEGER NOT NULL DEFAULT 0,
+            last_error TEXT NOT NULL DEFAULT '',
+            last_dispatched_at DATETIME,
+            created_at DATETIME NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%S', 'now')),
+            updated_at DATETIME NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%S', 'now'))
+        )""",
+        """CREATE UNIQUE INDEX IF NOT EXISTS uq_pr_action_state_key
+           ON pr_action_state (repo, pr_number, head_sha, action)""",
+        """CREATE TABLE IF NOT EXISTS repo_etags (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            repo VARCHAR(255) NOT NULL UNIQUE,
+            etag VARCHAR(255) NOT NULL DEFAULT '',
+            last_checked_at DATETIME NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%S', 'now'))
+        )""",
     ]
     async with _engine.begin() as conn:
         for stmt in migrations:

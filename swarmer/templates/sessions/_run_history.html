@@ -2,10 +2,9 @@
 <table class="pf-v6-c-table pf-m-grid-md" role="grid" style="table-layout:fixed; width:100%;">
   <colgroup>
     <col style="width:2.5rem;">
-    <col>
-    <col style="width:7rem;">
+    <col style="width:11.5rem;">
+    <col style="width:6.5rem;">
     <col style="width:9rem;">
-    <col style="width:14rem;">
     <col>
   </colgroup>
   <thead class="pf-v6-c-table__thead">
@@ -15,17 +14,17 @@
       <th class="pf-v6-c-table__th" role="columnheader">Duration</th>
       <th class="pf-v6-c-table__th" role="columnheader">Status</th>
       <th class="pf-v6-c-table__th" role="columnheader">Source</th>
-      <th class="pf-v6-c-table__th" role="columnheader">Detail</th>
     </tr>
   </thead>
   <tbody class="pf-v6-c-table__tbody" role="rowgroup">
   {% for run in session_runs %}
   {% set _has_raw = run.raw_output and run.raw_output != run.last_output %}
+  {% set _is_event = run.trigger_type == 'event' and run.event_info %}
   {# ── Main data row ── #}
   <tr class="pf-v6-c-table__tr" role="row">
     <td class="pf-v6-c-table__td pf-v6-c-table__toggle" id="hist-toggle-{{ run.id }}"
-        role="cell" style="{% if not run.last_output %}visibility:hidden;{% endif %}">
-      {% if run.last_output %}
+        role="cell" style="{% if not (run.last_output or _is_event) %}visibility:hidden;{% endif %}">
+      {% if run.last_output or _is_event %}
       <button type="button"
               aria-expanded="false"
               aria-label="Expand run {{ run.id }}"
@@ -58,6 +57,11 @@
       {% else %}
         <span class="pf-v6-c-label pf-m-outline"><span class="pf-v6-c-label__content">{{ run.phase }}</span></span>
       {% endif %}
+      {% if run.status_detail %}
+        <div style="font-size:var(--pf-t--global--font--size--xs); color:var(--pf-t--global--text--color--subtle); margin-top:2px;" title="{{ run.status_detail }}">
+          {{ run.status_detail }}
+        </div>
+      {% endif %}
     </td>
     <td class="pf-v6-c-table__td" role="cell" data-label="Source">
       {% if run.trigger_type == 'event' %}
@@ -82,22 +86,13 @@
         <span style="color:var(--pf-t--global--text--color--subtle);">&#x2014;</span>
       {% endif %}
     </td>
-    <td class="pf-v6-c-table__td" role="cell" data-label="Detail">
-      {% if run.status_detail %}
-        <span class="pf-v6-c-label pf-m-outline">
-          <span class="pf-v6-c-label__content" style="font-size:var(--pf-t--global--font--size--xs);">{{ run.status_detail }}</span>
-        </span>
-      {% else %}
-        <span style="color:var(--pf-t--global--text--color--subtle);">&#x2014;</span>
-      {% endif %}
-    </td>
   </tr>
   {# ── Expandable detail row ── #}
-  {% if run.last_output or run.event_info %}
+  {% if run.last_output or _is_event %}
   <tr class="pf-v6-c-table__tr" id="hist-expand-{{ run.id }}"
       role="row" style="display:none;">
     <td class="pf-v6-c-table__td pf-v6-c-table__toggle" style="padding:0; border-bottom:none;"></td>
-    <td class="pf-v6-c-table__td" colspan="5" style="padding:0;">
+    <td class="pf-v6-c-table__td" colspan="4" style="padding:0;">
       {# Header bar: completed timestamp left, log-pills right #}
       <div style="display:flex; align-items:center; gap:var(--pf-t--global--spacer--sm);
                   width:100%; box-sizing:border-box;
@@ -111,21 +106,16 @@
           <button id="hist-btn-raw-{{ run.id }}"
                   class="log-pill"
                   onclick="switchHistoryOutput({{ run.id }}, 'raw')">Raw Log</button>
-          <span style="margin-left:var(--pf-t--global--spacer--sm);
-                       font-size:var(--pf-t--global--font--size--xs);
-                       color:var(--pf-t--global--text--color--subtle);
-                       font-family:monospace;">
-            Completed: {{ run.completed_at.strftime('%b %d %Y %H:%M') }} UTC
-          </span>
-        {% else %}
-          <span style="font-size:var(--pf-t--global--font--size--xs);
-                       color:var(--pf-t--global--text--color--subtle);
-                       font-family:monospace;">
-            Completed: {{ run.completed_at.strftime('%b %d %Y %H:%M') }} UTC
-          </span>
         {% endif %}
+        <span style="{% if not _has_raw %}margin-left:0;{% else %}margin-left:var(--pf-t--global--spacer--sm);{% endif %}
+                     font-size:var(--pf-t--global--font--size--xs);
+                     color:var(--pf-t--global--text--color--subtle);
+                     font-family:monospace;">
+          Completed: {{ run.completed_at.strftime('%b %d %Y %H:%M') }} UTC
+          {%- if run.status_detail %} &middot; {{ run.status_detail }}{% endif %}
+        </span>
       </div>
-      {% if run.event_info %}
+      {% if _is_event %}
       <div style="padding:var(--pf-t--global--spacer--sm) var(--pf-t--global--spacer--md); background:var(--pf-t--global--background--color--secondary--default); border-bottom:1px solid var(--pf-t--global--border--color--default); font-size:var(--pf-t--global--font--size--xs); font-family:monospace; color:var(--pf-t--global--text--color--subtle);">
         <strong style="color:var(--pf-t--global--text--color--regular);">⚡ Event Context:</strong>
         {% if run.event_info.repo %}Repo: {{ run.event_info.repo }} | {% endif %}

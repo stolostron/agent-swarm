@@ -844,6 +844,58 @@ class TestEventTriggers:
         assert data["label"] == "Auto-fix my PRs"
 
     @pytest.mark.asyncio
+    async def test_create_event_trigger_with_fix_authors(self, client: AsyncClient):
+        ws = await _create_workspace(client)
+        s = await _create_session(client, ws["id"])
+        ws_id = ws["id"]
+        s_id = s["id"]
+
+        resp = await client.post(
+            f"/api/v1/workspaces/{ws_id}/sessions/{s_id}/schedules",
+            json={
+                "trigger_type": "event",
+                "event_condition": "any_actionable",
+                "author_scope": "self",
+                "fix_authors": "jnpacker, alice",
+                "label": "My PR Fixes",
+            },
+        )
+        assert resp.status_code == 201
+        data = resp.json()
+        assert data["trigger_type"] == "event"
+        assert data["author_scope"] == "self"
+        assert data["fix_authors"] == "jnpacker, alice"
+
+    @pytest.mark.asyncio
+    async def test_launch_without_context_clears_event_context(self, client: AsyncClient):
+        ws = await _create_workspace(client)
+        s = await _create_session(client, ws["id"])
+        ws_id = ws["id"]
+        s_id = s["id"]
+
+        from unittest.mock import AsyncMock, patch
+
+        with patch("swarmer.routers.sessions._do_launch", new_callable=AsyncMock):
+            # 1. Launch with event context
+            resp1 = await client.post(
+                f"/api/v1/workspaces/{ws_id}/sessions/{s_id}/launch",
+                json={"pr_context": {"pr_number": 99}},
+            )
+            assert resp1.status_code == 200
+
+            # 2. Later launch without context
+            resp2 = await client.post(
+                f"/api/v1/workspaces/{ws_id}/sessions/{s_id}/launch",
+                json={},
+            )
+            assert resp2.status_code == 200
+
+            async with _TestSession() as session:
+                from swarmer.models.session import Session
+                s_obj = await session.get(Session, s_id)
+                assert s_obj.event_context == ""
+
+    @pytest.mark.asyncio
     async def test_convert_cron_to_event_trigger_api(self, client: AsyncClient):
         ws = await _create_workspace(client)
         s = await _create_session(client, ws["id"])

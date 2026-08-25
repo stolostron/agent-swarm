@@ -42,6 +42,9 @@ class SessionSchedule(Base):
     author_scope: Mapped[str] = mapped_column(
         String(32), nullable=False, default="all", server_default="all"
     )
+    fix_authors: Mapped[str] = mapped_column(
+        String(512), nullable=False, default="", server_default=""
+    )
     cron_schedule: Mapped[str] = mapped_column(String(128), nullable=False, default="", server_default="")
     cron_next_run: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     label: Mapped[str] = mapped_column(String(128), nullable=False, default="", server_default="")
@@ -67,6 +70,11 @@ class SessionSchedule(Base):
     def cron_label(self) -> str:
         """Human-readable label for common cron expressions."""
         return CRON_PRESETS.get(self.cron_schedule, self.cron_schedule) if self.cron_schedule else ""
+
+    @property
+    def fix_author_logins(self) -> set[str]:
+        """Set of lowercase GitHub logins matching the 'self' author scope."""
+        return {a.strip().lower() for a in self.fix_authors.split(",") if a.strip()}
 
     @property
     def trigger_label(self) -> str:

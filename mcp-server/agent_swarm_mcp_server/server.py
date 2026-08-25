@@ -418,6 +418,7 @@ class AgentSwarmMCPServer:
         trigger_type: str = "cron",
         event_condition: str = "",
         author_scope: str = "all",
+        fix_authors: str = "",
         label: str = "",
         prompt_id: int | None = None,
         instruction_prompt: str = "",
@@ -426,7 +427,7 @@ class AgentSwarmMCPServer:
         sc = await self.client.create_session_schedule(
             workspace_id, session_id, cron_schedule,
             trigger_type=trigger_type, event_condition=event_condition,
-            author_scope=author_scope,
+            author_scope=author_scope, fix_authors=fix_authors,
             label=label, prompt_id=prompt_id,
             instruction_prompt=instruction_prompt, enabled=enabled,
         )
@@ -863,6 +864,7 @@ class AgentSwarmMCPServer:
             trigger_type: str = "cron",
             event_condition: str = "",
             author_scope: str = "all",
+            fix_authors: str = "",
             label: str = "",
             prompt_id: int | None = None,
             instruction_prompt: str = "",
@@ -877,6 +879,7 @@ class AgentSwarmMCPServer:
                 trigger_type: 'cron' for scheduled runs, 'event' for GitHub event triggers.
                 event_condition: Event trigger condition (e.g. 'ci_fail_or_conflict', 'new_pr_or_commit').
                 author_scope: PR author scope (e.g. 'self', 'team', 'bots', 'all').
+                fix_authors: Comma-separated GitHub logins for 'self' author scope.
                 label: Human-readable name for this trigger.
                 prompt_id: ID of a workspace prompt to use instead of the session default.
                 instruction_prompt: Additional instructions; overrides session default when set.
@@ -885,7 +888,7 @@ class AgentSwarmMCPServer:
             return await self._add_session_schedule(
                 workspace_id, session_id, cron_schedule,
                 trigger_type=trigger_type, event_condition=event_condition,
-                author_scope=author_scope,
+                author_scope=author_scope, fix_authors=fix_authors,
                 label=label, prompt_id=prompt_id,
                 instruction_prompt=instruction_prompt, enabled=enabled,
             )
@@ -899,6 +902,7 @@ class AgentSwarmMCPServer:
             trigger_type: str | None = None,
             event_condition: str | None = None,
             author_scope: str | None = None,
+            fix_authors: str | None = None,
             label: str | None = None,
             prompt_id: int | None = None,
             instruction_prompt: str | None = None,
@@ -914,6 +918,7 @@ class AgentSwarmMCPServer:
                 trigger_type: 'cron' or 'event'.
                 event_condition: New event condition.
                 author_scope: New author scope ('self', 'team', 'bots', 'all').
+                fix_authors: Comma-separated GitHub logins for 'self' author scope.
                 label: New label.
                 prompt_id: New prompt id (None clears the override).
                 instruction_prompt: New additional instructions.
@@ -928,6 +933,8 @@ class AgentSwarmMCPServer:
                 fields["event_condition"] = event_condition
             if author_scope is not None:
                 fields["author_scope"] = author_scope
+            if fix_authors is not None:
+                fields["fix_authors"] = fix_authors
             if label is not None:
                 fields["label"] = label
             if prompt_id is not None:

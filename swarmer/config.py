@@ -45,6 +45,13 @@ class Settings(BaseSettings):
     sandbox_gc_interval: int = 300      # seconds between sandbox GC sweeps
     log_level: str = "INFO"             # Python logging level: DEBUG, INFO, WARNING, ERROR
 
+    # Swarm PR Events Watcher & Session Dispatcher (ACM-42674)
+    pr_watcher_enabled: bool = True
+    pr_watcher_poll_interval: int = 30
+    pr_watcher_sweep_interval: int = 1800
+    pr_watcher_debounce_seconds: int = 90
+    pr_watcher_max_fix_attempts: int = 3
+
     # Model preset mappings (ACM-37232) — configurable without code changes.
     # Each preset maps a role (plan/build/small) to a provider/model@version ID.
     # "plan" = interactive/stronger-reasoning model (used by the opencode plan agent)

@@ -1,6 +1,6 @@
 """PR State classifier, CI status normalizer, and author trust resolver.
 
-Shared library for Agent Swarm PR Event Watcher and autonomous SDLC scripts.
+Shared library for the in-process Swarm PR Events Watcher (swarmer/pr_watcher.py).
 """
 
 from __future__ import annotations
@@ -149,7 +149,7 @@ def normalize_ci_checks(check_runs_or_statuses: list[dict[str, Any]]) -> CheckSt
 
         # CheckRuns API
         if "status" in item and "conclusion" in item:
-            status = item.get("status", "").lower()
+            status = (item.get("status") or "").lower()
             conclusion = (item.get("conclusion") or "").lower()
 
             if status in ("queued", "waiting", "pending"):
@@ -297,8 +297,13 @@ def evaluate_author_trust(
                     reason=f"PR has trusted label '{policy.trusted_label}' applied by verified collaborator",
                     matched_layer="trusted_label",
                 )
+            return AuthorTrustResult(
+                is_trusted=False,
+                reason=f"PR has label '{policy.trusted_label}' but applier is not a verified collaborator",
+                matched_layer="untrusted",
+            )
 
-        # If label is present on PR, GitHub RBAC already requires Triage/Write/Admin to apply
+        # If label is present on PR and no timeline events provided, GitHub RBAC already requires Triage/Write/Admin to apply
         return AuthorTrustResult(
             is_trusted=True,
             reason=f"PR has RBAC-protected label '{policy.trusted_label}'",
@@ -319,7 +324,7 @@ def is_bot_author(author_login: str, bot_logins: set[str] | None = None) -> bool
         return True
     if author_lower.endswith("[bot]") or author_lower.startswith("app/"):
         return True
-    if re.search(r"(?:-bot|bot)$", author_lower):
+    if re.search(r"[-_.]bot$", author_lower):
         return True
     return False
 
@@ -354,10 +359,12 @@ def classify_pr_action(
     # --- 1. Fix Authors (You / Laptop Agents) ---
     if author_lower in lowered_fix_authors:
         if pr.is_fork:
-            return (
-                PRAction.IGNORE,
-                f"PR #{pr.pr_number} is from a fork ({pr.fork_owner}) — skipping pr-fix because direct push is not allowed",
-            )
+            maintainer_can_modify = pr.raw_payload.get("maintainer_can_modify", False)
+            if not maintainer_can_modify:
+                return (
+                    PRAction.IGNORE,
+                    f"PR #{pr.pr_number} is from a fork ({pr.fork_owner}) without maintainer push permissions — skipping pr-fix",
+                )
 
         # Check triggers for pr-fix in priority order:
         # A. Merge conflict (mergeable_state == 'dirty')

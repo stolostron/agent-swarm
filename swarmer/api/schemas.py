@@ -92,8 +92,9 @@ class KnownUsersOut(BaseModel):
 class ScheduleEntryCreate(BaseModel):
     trigger_type: str = Field("cron", pattern=r"^(cron|event)$")
     cron_schedule: str = Field("", max_length=128)
-    event_condition: str = Field("", max_length=64)
-    author_scope: str = Field("all", max_length=32)
+    event_condition: str = Field("", max_length=64, pattern=r"^(|ci_fail_or_conflict|new_pr_or_commit|review_comments|any_actionable)$")
+    author_scope: str = Field("all", max_length=32, pattern=r"^(self|team|bots|all)$")
+    fix_authors: str = Field("", max_length=512)
     label: str = ""
     prompt_id: int | None = None
     instruction_prompt: str = ""
@@ -103,8 +104,9 @@ class ScheduleEntryCreate(BaseModel):
 class ScheduleEntryUpdate(BaseModel):
     trigger_type: str | None = Field(None, pattern=r"^(cron|event)$")
     cron_schedule: str | None = Field(None, max_length=128)
-    event_condition: str | None = Field(None, max_length=64)
-    author_scope: str | None = Field(None, max_length=32)
+    event_condition: str | None = Field(None, max_length=64, pattern=r"^(|ci_fail_or_conflict|new_pr_or_commit|review_comments|any_actionable)$")
+    author_scope: str | None = Field(None, max_length=32, pattern=r"^(self|team|bots|all)$")
+    fix_authors: str | None = Field(None, max_length=512)
     label: str | None = None
     prompt_id: int | None = None
     instruction_prompt: str | None = None
@@ -117,6 +119,7 @@ class ScheduleEntryOut(BaseModel):
     trigger_type: str = "cron"
     event_condition: str = ""
     author_scope: str = "all"
+    fix_authors: str = ""
     cron_schedule: str
     cron_next_run: datetime | None
     label: str

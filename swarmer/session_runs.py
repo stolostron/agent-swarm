@@ -36,7 +36,8 @@ async def _run_source_snapshot(db: AsyncSession, session: Session) -> tuple[str,
     schedule_label = ""
     prompt_name = ""
     trigger_type = "manual"
-    event_context = session.event_context or ""
+    event_context = ""
+    raw_event_context = session.event_context or ""
 
     active_schedule = session.active_schedule
     if active_schedule:
@@ -44,8 +45,15 @@ async def _run_source_snapshot(db: AsyncSession, session: Session) -> tuple[str,
         schedule_label = active_schedule.label or active_schedule.trigger_label
         if active_schedule.prompt:
             prompt_name = active_schedule.prompt.display_name
-    elif event_context:
+    elif raw_event_context:
         trigger_type = "event"
+
+    # Only retain event_context when this run was actually event-triggered —
+    # session.event_context is set once by the PR watcher and otherwise never
+    # cleared, so a later cron/manual/queued run on the same session must not
+    # inherit a prior run's stale PR metadata (ACM-42674 follow-up).
+    if trigger_type == "event" and raw_event_context:
+        event_context = raw_event_context
         try:
             ctx = _json.loads(event_context)
             pr_num = ctx.get("pr_number")
@@ -103,6 +111,13 @@ async def record_session_run(
         event_context=event_context,
     )
     db.add(run)
+    # Reconcile in-flight PR watcher dispatches for this session
+    try:
+        from swarmer.pr_watcher_store import reconcile_completed
+        await reconcile_completed(db, session.id, phase)
+    except Exception:
+        log.warning("record_session_run: failed to reconcile pr_action_state for session %d", session.id, exc_info=True)
+
     await _prune_old_runs(
         db,
         session.id,
