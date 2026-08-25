@@ -65,35 +65,35 @@ async def shutdown() -> None:
             pass
 
 
-async def _resolve_github_token_for_repo(
+async def _resolve_github_token_for_workspace_repo(
+    workspace_id: int,
     repo: str,
     sched_sessions: list[tuple[SessionSchedule, Session]],
     db,
 ) -> str | None:
-    """Resolve a GitHub token to use for polling a repository.
+    """Resolve a GitHub token to use for polling a repository in a specific workspace.
 
     Order of precedence:
-      1. Explicit GitHub PAT attached to any session watching this repo.
-      2. Workspace GitHub App IAT minted for the workspace.
+      1. Explicit GitHub PAT attached to any session in this workspace watching this repo.
+      2. Workspace GitHub App IAT minted for this workspace.
       3. Organization env var GH_TOKEN_<ORG> or GITHUB_TOKEN / GH_TOKEN.
     """
     for _sched, session in sched_sessions:
         if session.github_pat and session.github_pat.pat:
             return session.github_pat.pat
 
-    for _sched, session in sched_sessions:
-        if session.workspace_id:
-            try:
-                from swarmer.github_app import get_workspace_github_app
-                from swarmer.github_auth import mint_installation_token
+    if workspace_id:
+        try:
+            from swarmer.github_app import get_workspace_github_app
+            from swarmer.github_auth import mint_installation_token
 
-                app = await get_workspace_github_app(session.workspace_id, db)
-                if app:
-                    token = await mint_installation_token(app)
-                    if token:
-                        return token
-            except Exception:
-                pass
+            app = await get_workspace_github_app(workspace_id, db)
+            if app:
+                token = await mint_installation_token(app)
+                if token:
+                    return token
+        except Exception:
+            pass
 
     org = repo.split("/")[0] if "/" in repo else repo
     org_normalized = org.replace("-", "_").upper()
@@ -160,6 +160,35 @@ async def _fetch_open_prs(
         return []
 
 
+async def _fetch_pr_details(
+    client: httpx.AsyncClient, repo: str, pr_number: int, token: str | None
+) -> dict[str, Any]:
+    """Fetch detailed single pull request metadata (including mergeable_state)."""
+    url = f"https://api.github.com/repos/{repo}/pulls/{pr_number}"
+    headers = {
+        "Accept": "application/vnd.github+json",
+        "User-Agent": "Swarmer-PR-Watcher/1.0",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+
+    try:
+        resp = await client.get(url, headers=headers, timeout=15)
+        if resp.is_success:
+            data = resp.json()
+            if data.get("mergeable_state") == "unknown":
+                await asyncio.sleep(1.0)
+                resp2 = await client.get(url, headers=headers, timeout=15)
+                if resp2.is_success:
+                    data = resp2.json()
+            return data
+        return {}
+    except Exception as exc:
+        log.warning("pr-watcher: failed to fetch PR #%d details for %s: %s", pr_number, repo, exc)
+        return {}
+
+
 async def _fetch_check_runs(
     client: httpx.AsyncClient, repo: str, head_sha: str, token: str | None
 ) -> list[dict[str, Any]]:
@@ -185,7 +214,7 @@ async def _fetch_check_runs(
 async def _fetch_review_comments(
     client: httpx.AsyncClient, repo: str, pr_number: int, token: str | None
 ) -> list[dict[str, Any]]:
-    """Fetch review comments on a pull request."""
+    """Fetch review comments on a pull request (REST fallback)."""
     url = f"https://api.github.com/repos/{repo}/pulls/{pr_number}/comments"
     headers = {
         "Accept": "application/vnd.github+json",
@@ -204,22 +233,160 @@ async def _fetch_review_comments(
         return []
 
 
+async def _fetch_reviews_rest(
+    client: httpx.AsyncClient, repo: str, pr_number: int, token: str | None
+) -> list[dict[str, Any]]:
+    """Fetch PR reviews via REST."""
+    url = f"https://api.github.com/repos/{repo}/pulls/{pr_number}/reviews"
+    headers = {
+        "Accept": "application/vnd.github+json",
+        "User-Agent": "Swarmer-PR-Watcher/1.0",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+
+    try:
+        resp = await client.get(url, headers=headers, timeout=15)
+        if resp.is_success:
+            return resp.json()
+        return []
+    except Exception:
+        return []
+
+
+async def _fetch_reviews_and_threads(
+    client: httpx.AsyncClient, repo: str, pr_number: int, head_sha: str, token: str | None
+) -> tuple[int, int, bool]:
+    """Fetch review threads and reviews.
+
+    Returns:
+        (unresolved_comments_count, coderabbit_unresolved_count, has_agent_review_on_head)
+    """
+    if "/" not in repo:
+        return 0, 0, False
+    owner, name = repo.split("/", 1)
+
+    if token:
+        gql_query = """
+        query($owner: String!, $name: String!, $number: Int!) {
+          repository(owner: $owner, name: $name) {
+            pullRequest(number: $number) {
+              reviewThreads(first: 50) {
+                nodes {
+                  isResolved
+                  isOutdated
+                  comments(first: 10) {
+                    nodes {
+                      author { login }
+                      body
+                    }
+                  }
+                }
+              }
+              reviews(last: 20) {
+                nodes {
+                  author { login }
+                  state
+                  commit { oid }
+                }
+              }
+            }
+          }
+        }
+        """
+        try:
+            gql_resp = await client.post(
+                "https://api.github.com/graphql",
+                json={"query": gql_query, "variables": {"owner": owner, "name": name, "number": pr_number}},
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "User-Agent": "Swarmer-PR-Watcher/1.0",
+                },
+                timeout=15,
+            )
+            if gql_resp.is_success:
+                pr_data = gql_resp.json().get("data", {}).get("repository", {}).get("pullRequest", {})
+                if pr_data:
+                    unresolved_count = 0
+                    cr_count = 0
+                    for thread in pr_data.get("reviewThreads", {}).get("nodes", []):
+                        if not thread.get("isResolved") and not thread.get("isOutdated"):
+                            unresolved_count += 1
+                            comments = thread.get("comments", {}).get("nodes", [])
+                            if any((c.get("author", {}).get("login") or "").lower().startswith("coderabbit") for c in comments):
+                                cr_count += 1
+
+                    has_agent_review = False
+                    for rev in pr_data.get("reviews", {}).get("nodes", []):
+                        rev_commit = (rev.get("commit", {}) or {}).get("oid", "")
+                        rev_author = ((rev.get("author", {}) or {}).get("login") or "").lower()
+                        rev_state = rev.get("state", "")
+                        if rev_commit == head_sha and rev_state in ("APPROVED", "CHANGES_REQUESTED", "COMMENTED"):
+                            if is_bot_author(rev_author) or rev_author in DEFAULT_BOT_LOGINS:
+                                has_agent_review = True
+                                break
+                    return unresolved_count, cr_count, has_agent_review
+        except Exception as exc:
+            log.debug("pr-watcher: GraphQL review query failed for %s#%d: %s", repo, pr_number, exc)
+
+    # REST fallback
+    comments = await _fetch_review_comments(client, repo, pr_number, token)
+    unresolved_count = len(comments)
+    cr_count = sum(1 for c in comments if (c.get("user", {}).get("login") or "").lower().startswith("coderabbit"))
+
+    reviews = await _fetch_reviews_rest(client, repo, pr_number, token)
+    has_agent_review = any(
+        r.get("commit_id") == head_sha and r.get("state") in ("APPROVED", "CHANGES_REQUESTED", "COMMENTED")
+        and (is_bot_author(r.get("user", {}).get("login", "")) or r.get("user", {}).get("login", "").lower() in DEFAULT_BOT_LOGINS)
+        for r in reviews
+    )
+    return unresolved_count, cr_count, has_agent_review
+
+
+async def _fetch_label_events(
+    client: httpx.AsyncClient, repo: str, pr_number: int, token: str | None
+) -> list[dict[str, Any]]:
+    """Fetch issue events for label auditing."""
+    url = f"https://api.github.com/repos/{repo}/issues/{pr_number}/events?per_page=50"
+    headers = {
+        "Accept": "application/vnd.github+json",
+        "User-Agent": "Swarmer-PR-Watcher/1.0",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+
+    try:
+        resp = await client.get(url, headers=headers, timeout=15)
+        if resp.is_success:
+            return [e for e in resp.json() if e.get("event") == "labeled"]
+        return []
+    except Exception:
+        return []
+
+
 async def _build_pr_state(
     client: httpx.AsyncClient, repo: str, raw_pr: dict[str, Any], token: str | None
-) -> PRState:
+) -> tuple[PRState, list[dict[str, Any]]]:
     pr_number = raw_pr["number"]
-    head = raw_pr.get("head", {})
-    base = raw_pr.get("base", {})
+
+    # Fetch detailed PR for accurate mergeable_state
+    detail = await _fetch_pr_details(client, repo, pr_number, token)
+    full_pr = {**raw_pr, **detail} if detail else raw_pr
+
+    head = full_pr.get("head", {})
+    base = full_pr.get("base", {})
     head_sha = head.get("sha", "")
     head_ref = head.get("ref", "")
     base_ref = base.get("ref", "")
-    user = raw_pr.get("user", {})
+    user = full_pr.get("user", {})
     author_login = user.get("login", "")
-    author_association = raw_pr.get("author_association", "NONE")
-    is_draft = raw_pr.get("draft", False)
-    title = raw_pr.get("title", "")
-    body = raw_pr.get("body", "") or ""
-    mergeable_state = raw_pr.get("mergeable_state", "unknown")
+    author_association = full_pr.get("author_association", "NONE")
+    is_draft = full_pr.get("draft", False)
+    title = full_pr.get("title", "")
+    body = full_pr.get("body", "") or ""
+    mergeable_state = full_pr.get("mergeable_state") or "unknown"
 
     # Fork detection & maintainer push capability
     is_fork = False
@@ -229,21 +396,20 @@ async def _build_pr_state(
         is_fork = True
         fork_owner = head_repo.get("owner", {}).get("login", "")
 
-    labels = {lbl.get("name") for lbl in raw_pr.get("labels", []) if lbl.get("name")}
+    labels = {lbl.get("name") for lbl in full_pr.get("labels", []) if lbl.get("name")}
 
     check_runs = await _fetch_check_runs(client, repo, head_sha, token)
     check_state = normalize_ci_checks(check_runs)
 
-    comments = await _fetch_review_comments(client, repo, pr_number, token)
-    unresolved_count = 0
-    coderabbit_count = 0
-    for c in comments:
-        c_user = c.get("user", {}).get("login", "")
-        if c_user.lower().startswith("coderabbit"):
-            coderabbit_count += 1
-        unresolved_count += 1
+    unresolved_count, cr_count, has_agent_review = await _fetch_reviews_and_threads(
+        client, repo, pr_number, head_sha, token
+    )
 
-    return PRState(
+    label_events: list[dict[str, Any]] = []
+    if "ok-to-review" in labels:
+        label_events = await _fetch_label_events(client, repo, pr_number, token)
+
+    pr_state = PRState(
         repo=repo,
         pr_number=pr_number,
         title=title,
@@ -259,12 +425,14 @@ async def _build_pr_state(
         fork_owner=fork_owner,
         labels=labels,
         unresolved_review_comments=unresolved_count,
-        coderabbit_unresolved_comments=coderabbit_count,
-        created_at=parse_iso_datetime(raw_pr.get("created_at")),
-        updated_at=parse_iso_datetime(raw_pr.get("updated_at")),
+        coderabbit_unresolved_comments=cr_count,
+        has_agent_review_on_head=has_agent_review,
+        created_at=parse_iso_datetime(full_pr.get("created_at")),
+        updated_at=parse_iso_datetime(full_pr.get("updated_at")),
         check_state=check_state,
-        raw_payload=raw_pr,
+        raw_payload=full_pr,
     )
+    return pr_state, label_events
 
 
 def _match_trigger_for_pr(
@@ -313,7 +481,7 @@ async def _evaluate_and_dispatch_prs(
         return
 
     for raw_pr in open_prs:
-        pr_state = await _build_pr_state(client, repo, raw_pr, token)
+        pr_state, label_events = await _build_pr_state(client, repo, raw_pr, token)
 
         # Collect configured fix_authors across all triggers for this repo
         all_fix_authors: set[str] = set()
@@ -325,6 +493,7 @@ async def _evaluate_and_dispatch_prs(
             fix_authors=all_fix_authors,
             bot_logins=set(DEFAULT_BOT_LOGINS),
             trust_policy=TrustPolicy(strategy=TrustStrategy.ORG_AND_COLLABORATORS),
+            label_events=label_events,
             quiet_period_seconds=float(settings.pr_watcher_debounce_seconds),
         )
 
@@ -382,8 +551,6 @@ async def _evaluate_and_dispatch_prs(
             session.mode = "prompt"
             session.active_schedule_id = sched.id
             session.event_context = json.dumps(event_ctx)
-            if sched.instruction_prompt:
-                session.instruction_prompt = sched.instruction_prompt
             await db.commit()
 
             log.info(
@@ -437,32 +604,47 @@ async def _pr_watcher_loop() -> None:
         while True:
             try:
                 async for db in get_db():
-                    triggers_by_repo = await resolve_event_triggers(db)
-                    active_repos = set(triggers_by_repo.keys())
+                    triggers_by_workspace = await resolve_event_triggers(db)
+                    all_active_repos = {
+                        repo
+                        for repo_map in triggers_by_workspace.values()
+                        for repo in repo_map.keys()
+                    }
 
-                    if active_repos:
-                        await prune_etags(db, active_repos)
+                    if all_active_repos:
+                        await prune_etags(db, all_active_repos)
 
                     now_ts = datetime.now(timezone.utc).timestamp()
                     is_sweep_due = (now_ts - last_sweep) >= settings.pr_watcher_sweep_interval
 
-                    for repo, sched_sessions in triggers_by_repo.items():
-                        try:
-                            token = await _resolve_github_token_for_repo(repo, sched_sessions, db)
-                            cached_etag = await get_etag(db, repo)
+                    for ws_id, repo_map in triggers_by_workspace.items():
+                        for repo, sched_sessions in repo_map.items():
+                            try:
+                                token = await _resolve_github_token_for_workspace_repo(
+                                    ws_id, repo, sched_sessions, db
+                                )
+                                cached_etag = await get_etag(db, repo)
 
-                            if is_sweep_due:
-                                # Periodic sweep across active event repos
-                                await _evaluate_and_dispatch_prs(client, repo, sched_sessions, token, db)
-                            else:
-                                status, events, new_etag = await _fetch_repo_events(client, repo, cached_etag, token)
-                                if status == 200:
-                                    if new_etag:
-                                        await save_etag(db, repo, new_etag)
-                                    log.info("pr-watcher: %s 200 OK (%d events) — evaluating PRs", repo, len(events))
+                                if is_sweep_due:
+                                    # Periodic sweep across active event repos
                                     await _evaluate_and_dispatch_prs(client, repo, sched_sessions, token, db)
-                        except Exception as repo_err:
-                            log.warning("pr-watcher: error processing repo %s: %s", repo, repo_err)
+                                else:
+                                    status, events, new_etag = await _fetch_repo_events(
+                                        client, repo, cached_etag, token
+                                    )
+                                    if status == 200:
+                                        if new_etag:
+                                            await save_etag(db, repo, new_etag)
+                                        log.info(
+                                            "pr-watcher: ws=%d %s 200 OK (%d events) — evaluating PRs",
+                                            ws_id, repo, len(events),
+                                        )
+                                        await _evaluate_and_dispatch_prs(client, repo, sched_sessions, token, db)
+                            except Exception as repo_err:
+                                log.warning(
+                                    "pr-watcher: error processing ws=%d repo %s: %s",
+                                    ws_id, repo, repo_err,
+                                )
 
                     if is_sweep_due:
                         last_sweep = now_ts

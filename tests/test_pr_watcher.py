@@ -143,17 +143,28 @@ class TestAuthorTrustEvaluation(unittest.TestCase):
         self.assertEqual(res.matched_layer, "github_team")
 
     def test_layer3_ok_to_review_label(self):
-        policy = TrustPolicy(strategy=TrustStrategy.ORG_AND_COLLABORATORS, trusted_label="ok-to-review")
+        policy = TrustPolicy(strategy=TrustStrategy.ORG_AND_COLLABORATORS, trusted_label="ok-to-review", require_label_applier_trusted=True)
         self.base_pr.author_association = "NONE"
         self.base_pr.labels = {"ok-to-review", "enhancement"}
 
-        # Label present, verified with applier event
+        # Label present, verified with trusted applier event
         label_events = [
             {"name": "ok-to-review", "actor": {"login": "maintainer-alice", "author_association": "MEMBER"}}
         ]
         res = evaluate_author_trust(self.base_pr, policy, label_events=label_events)
         self.assertTrue(res.is_trusted)
         self.assertEqual(res.matched_layer, "trusted_label")
+
+        # Label present, but no audit events available and applier verification is required
+        res_no_events = evaluate_author_trust(self.base_pr, policy, label_events=None)
+        self.assertFalse(res_no_events.is_trusted)
+        self.assertEqual(res_no_events.matched_layer, "untrusted")
+
+        # Label present, applier verification disabled
+        policy_no_verify = TrustPolicy(strategy=TrustStrategy.ORG_AND_COLLABORATORS, trusted_label="ok-to-review", require_label_applier_trusted=False)
+        res_no_verify = evaluate_author_trust(self.base_pr, policy_no_verify, label_events=None)
+        self.assertTrue(res_no_verify.is_trusted)
+        self.assertEqual(res_no_verify.matched_layer, "trusted_label")
 
     def test_layer3_untrusted_label_applier(self):
         policy = TrustPolicy(strategy=TrustStrategy.ORG_AND_COLLABORATORS, trusted_label="ok-to-review", require_label_applier_trusted=True)
@@ -349,10 +360,29 @@ class TestAsyncPRWatcherStore(unittest.IsolatedAsyncioTestCase):
             )
             self.assertEqual(attempts2, 2)
 
-            # 4. Reconcile completed
+            # 4. Reconcile completed (succeeded -> completed)
             await reconcile_completed(db, session_id=1, phase="succeeded")
             row_after = await get_action_state(db, "owner/repo", 10, "sha1", "pr-fix")
             self.assertEqual(row_after.status, "completed")
+
+            # 4b. Reconcile failed below max attempts -> status "failed"
+            await record_dispatch(
+                db, repo="owner/repo", pr_number=11, head_sha="sha_fail", action="pr-fix", session_id=2, status="dispatched"
+            )
+            await reconcile_completed(db, session_id=2, phase="failed")
+            row_failed = await get_action_state(db, "owner/repo", 11, "sha_fail", "pr-fix")
+            self.assertEqual(row_failed.status, "failed")
+            self.assertIn("phase 'failed'", row_failed.last_error)
+
+            # 4c. Reconcile failed at max attempts -> status "blocked"
+            for _ in range(3):
+                await record_dispatch(
+                    db, repo="owner/repo", pr_number=12, head_sha="sha_cap", action="pr-fix", session_id=3, status="dispatched"
+                )
+            await reconcile_completed(db, session_id=3, phase="failed")
+            row_blocked = await get_action_state(db, "owner/repo", 12, "sha_cap", "pr-fix")
+            self.assertEqual(row_blocked.status, "blocked")
+            self.assertIn("Max dispatch attempts", row_blocked.last_error)
 
             # 5. New head_sha resets the attempt counter
             attempts3 = await record_dispatch(
@@ -401,8 +431,9 @@ class TestAsyncPRWatcherStore(unittest.IsolatedAsyncioTestCase):
             await db.commit()
 
             fan_out = await resolve_event_triggers(db)
-            self.assertIn("stolostron/agent-swarm", fan_out)
-            items = fan_out["stolostron/agent-swarm"]
+            self.assertIn(ws.id, fan_out)
+            self.assertIn("stolostron/agent-swarm", fan_out[ws.id])
+            items = fan_out[ws.id]["stolostron/agent-swarm"]
             self.assertEqual(len(items), 1)
             sched, sess = items[0]
             self.assertEqual(sched.trigger_type, "event")
@@ -433,7 +464,106 @@ class TestAsyncPRWatcherStore(unittest.IsolatedAsyncioTestCase):
             await db.commit()
 
             fan_out = await resolve_event_triggers(db)
-            self.assertNotIn("stolostron/cron-only-repo", fan_out)
+            self.assertNotIn("stolostron/cron-only-repo", fan_out.get(ws.id, {}))
+
+    async def test_resolve_github_token_for_workspace_repo(self):
+        from unittest.mock import AsyncMock, patch
+        from swarmer.models.github_pat import GitHubPAT
+        from swarmer.models.session import Session
+        from swarmer.models.session_schedule import SessionSchedule
+        from swarmer.models.workspace import Workspace
+        from swarmer.pr_watcher import _resolve_github_token_for_workspace_repo
+
+        async with self.session_factory() as db:
+            ws = Workspace(display_name="Test Token WS", namespace="test-token-ws", description="")
+            db.add(ws)
+            await db.commit()
+            await db.refresh(ws)
+
+            pat = GitHubPAT(workspace_id=ws.id, name="my-pat", github_username="testuser", pat_enc="secret-pat")
+            db.add(pat)
+            await db.commit()
+            await db.refresh(pat)
+
+            session = Session(workspace_id=ws.id, name="s_pat", github_pat_id=pat.id, mode="prompt", provider="", agent_tool="opencode", instruction_prompt="")
+            session.github_pat = pat
+            sched = SessionSchedule(session_id=1, trigger_type="event", label="event")
+
+            # 1. Resolves from session PAT
+            with patch.object(GitHubPAT, "pat", "ghp_session_pat_value"):
+                token = await _resolve_github_token_for_workspace_repo(ws.id, "stolostron/agent-swarm", [(sched, session)], db)
+                self.assertEqual(token, "ghp_session_pat_value")
+
+            # 2. Resolves from GitHub App if session has no PAT
+            session_no_pat = Session(workspace_id=ws.id, name="s_app", mode="prompt", provider="", agent_tool="opencode", instruction_prompt="")
+            with patch("swarmer.github_app.get_workspace_github_app", new_callable=AsyncMock) as mock_get_app, \
+                 patch("swarmer.github_auth.mint_installation_token", new_callable=AsyncMock) as mock_mint:
+                mock_get_app.return_value = object()
+                mock_mint.return_value = "ghs_app_iat_token"
+                token = await _resolve_github_token_for_workspace_repo(ws.id, "stolostron/agent-swarm", [(sched, session_no_pat)], db)
+                self.assertEqual(token, "ghs_app_iat_token")
+
+            # 3. Resolves from environment variable fallback
+            with patch("swarmer.github_app.get_workspace_github_app", new_callable=AsyncMock) as mock_get_app, \
+                 patch.dict("os.environ", {"GH_TOKEN_STOLOSTRON": "ghp_org_env_token"}):
+                mock_get_app.return_value = None
+                token = await _resolve_github_token_for_workspace_repo(ws.id, "stolostron/agent-swarm", [(sched, session_no_pat)], db)
+                self.assertEqual(token, "ghp_org_env_token")
+
+
+class TestPRWatcherNetworkDetails(unittest.IsolatedAsyncioTestCase):
+    async def test_fetch_pr_details_and_reviews(self):
+        import httpx
+        from swarmer.pr_watcher import _fetch_pr_details, _fetch_reviews_and_threads
+
+        async def handler(request: httpx.Request) -> httpx.Response:
+            url_str = str(request.url)
+            if "/pulls/10" in url_str:
+                return httpx.Response(200, json={"number": 10, "mergeable_state": "dirty", "maintainer_can_modify": True})
+            if "/graphql" in url_str:
+                return httpx.Response(
+                    200,
+                    json={
+                        "data": {
+                            "repository": {
+                                "pullRequest": {
+                                    "reviewThreads": {
+                                        "nodes": [
+                                            {
+                                                "isResolved": False,
+                                                "isOutdated": False,
+                                                "comments": {"nodes": [{"author": {"login": "coderabbitai[bot]"}, "body": "fix this"}]},
+                                            },
+                                            {
+                                                "isResolved": True,
+                                                "isOutdated": False,
+                                                "comments": {"nodes": [{"author": {"login": "alice"}, "body": "resolved"}]},
+                                            },
+                                        ]
+                                    },
+                                    "reviews": {
+                                        "nodes": [
+                                            {"author": {"login": "coderabbitai[bot]"}, "state": "COMMENTED", "commit": {"oid": "sha123"}}
+                                        ]
+                                    },
+                                }
+                            }
+                        }
+                    },
+                )
+            return httpx.Response(404)
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            detail = await _fetch_pr_details(client, "stolostron/agent-swarm", 10, "dummy-token")
+            self.assertEqual(detail.get("mergeable_state"), "dirty")
+            self.assertTrue(detail.get("maintainer_can_modify"))
+
+            unresolved, cr_count, has_review = await _fetch_reviews_and_threads(
+                client, "stolostron/agent-swarm", 10, "sha123", "dummy-token"
+            )
+            self.assertEqual(unresolved, 1)
+            self.assertEqual(cr_count, 1)
+            self.assertTrue(has_review)
 
 
 if __name__ == "__main__":

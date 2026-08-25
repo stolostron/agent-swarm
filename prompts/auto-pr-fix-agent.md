@@ -72,10 +72,15 @@ Your task is to resolve **Merge Conflicts**, **Failing CI Checks**, and/or **Unr
 ### Step 6: Push Fix to PR Branch
 - Verify the current branch matches the PR's target headRef and is never `main` or `master`:
   ```bash
+  PR_HEAD_REF="<target_pr_head_ref>"
   CURRENT_BRANCH="$(git branch --show-current)"
   case "$CURRENT_BRANCH" in
     main|master|"") echo "Refusing to push from default branch $CURRENT_BRANCH" >&2; exit 1 ;;
   esac
+  if [ -n "$PR_HEAD_REF" ] && [ "$PR_HEAD_REF" != "<target_pr_head_ref>" ] && [ "$CURRENT_BRANCH" != "$PR_HEAD_REF" ]; then
+    echo "Checked-out branch $CURRENT_BRANCH does not match target PR headRef $PR_HEAD_REF" >&2
+    exit 1
+  fi
   git push origin "HEAD:${CURRENT_BRANCH}"
   ```
 - If CodeRabbit comments were addressed, comment or trigger re-review:

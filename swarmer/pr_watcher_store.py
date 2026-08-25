@@ -46,14 +46,15 @@ def extract_repo_from_url(repo_url: str) -> str:
 
 async def resolve_event_triggers(
     db: AsyncSession,
-) -> dict[str, list[tuple[SessionSchedule, Session]]]:
-    """Resolve active event triggers and map them by normalized repo key.
+    workspace_id: int | None = None,
+) -> dict[int, dict[str, list[tuple[SessionSchedule, Session]]]]:
+    """Resolve active event triggers partitioned by workspace and mapped by normalized repo key.
 
     Returns:
-        dict mapping 'owner/repo' -> list of (SessionSchedule, Session) tuples.
+        dict mapping workspace_id -> { 'owner/repo': [(SessionSchedule, Session), ...] }
         Sessions with only cron schedules are never returned.
     """
-    result = await db.execute(
+    query = (
         select(SessionSchedule, Session, SessionRepo)
         .join(Session, Session.id == SessionSchedule.session_id)
         .join(SessionRepo, SessionRepo.session_id == Session.id)
@@ -68,12 +69,16 @@ async def resolve_event_triggers(
             selectinload(Session.repos),
         )
     )
-    fan_out: dict[str, list[tuple[SessionSchedule, Session]]] = defaultdict(list)
+    if workspace_id is not None:
+        query = query.where(Session.workspace_id == workspace_id)
+
+    result = await db.execute(query)
+    fan_out: dict[int, dict[str, list[tuple[SessionSchedule, Session]]]] = defaultdict(lambda: defaultdict(list))
     for sched, session, repo in result.all():
         key = extract_repo_from_url(repo.repo_url)
-        if key:
-            fan_out[key].append((sched, session))
-    return dict(fan_out)
+        if key and session.workspace_id:
+            fan_out[session.workspace_id][key].append((sched, session))
+    return {ws_id: dict(repos) for ws_id, repos in fan_out.items()}
 
 
 async def get_action_state(
@@ -138,6 +143,8 @@ async def record_dispatch(
 
 async def reconcile_completed(db: AsyncSession, session_id: int, phase: str) -> None:
     """Reconcile in-flight 'dispatched' states when a session reaches terminal phase."""
+    from swarmer.config import settings
+
     result = await db.execute(
         select(PRActionState).where(
             PRActionState.session_id == session_id,
@@ -145,7 +152,16 @@ async def reconcile_completed(db: AsyncSession, session_id: int, phase: str) -> 
         )
     )
     for row in result.scalars().all():
-        row.status = "completed"
+        if phase == "succeeded":
+            row.status = "completed"
+            row.last_error = ""
+        else:
+            if row.attempts >= settings.pr_watcher_max_fix_attempts:
+                row.status = "blocked"
+                row.last_error = f"Max dispatch attempts ({row.attempts}) reached; last session ended in phase '{phase}'"
+            else:
+                row.status = "failed"
+                row.last_error = f"session ended in phase '{phase}'"
     await db.commit()
 
 

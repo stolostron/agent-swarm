@@ -1,5 +1,7 @@
 """Tests for session run history recording."""
 
+from __future__ import annotations
+
 import os
 import sys
 from datetime import datetime, timedelta, timezone
@@ -12,6 +14,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from swarmer.database import Base
 from swarmer.models.session import Session
+from swarmer.models.workspace_prompt import WorkspacePrompt
 from swarmer.session_runs import STOPPED_BY_USER_DETAIL, record_session_run
 
 _engine = create_async_engine("sqlite+aiosqlite://", echo=False)

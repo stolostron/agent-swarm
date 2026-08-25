@@ -281,7 +281,7 @@ def evaluate_author_trust(
             )
 
         # Defense-in-depth: Verify that the user who added the label is trusted
-        if label_events:
+        if label_events is not None:
             applier_trusted = False
             for ev in label_events:
                 if ev.get("label", {}).get("name") == policy.trusted_label or ev.get("name") == policy.trusted_label:
@@ -303,11 +303,10 @@ def evaluate_author_trust(
                 matched_layer="untrusted",
             )
 
-        # If label is present on PR and no timeline events provided, GitHub RBAC already requires Triage/Write/Admin to apply
         return AuthorTrustResult(
-            is_trusted=True,
-            reason=f"PR has RBAC-protected label '{policy.trusted_label}'",
-            matched_layer="trusted_label",
+            is_trusted=False,
+            reason=f"PR has label '{policy.trusted_label}' but applier verification required and no timeline audit events available",
+            matched_layer="untrusted",
         )
 
     return AuthorTrustResult(

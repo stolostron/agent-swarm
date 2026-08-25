@@ -465,7 +465,7 @@ GitHub Events API (Outbound ETag Polling)
                                 │
                                 ▼
                     Dispatch Swarm Session
-             (In-Process or REST /launch API)
+               (In-Process via _do_launch())
 ```
 
 ### 1. Fast Path vs. Slow Path Architecture
@@ -546,13 +546,13 @@ When diagnosing system behavior, Swarmer provides multiple layers of logs and st
   ```
 
 ### 3. Watcher State & Circuit Breaker Inspection
-All watcher dispatch history, attempt counters, and cached ETags are stored in the SQLite database (`/data/swarmer.db`):
+All watcher dispatch history, attempt counters, and cached ETags are stored in the SQLite database (`$SWARMER_DB_PATH`):
 ```sh
 # Inspect circuit breaker and dispatch status
-sqlite3 /data/swarmer.db "SELECT repo, pr_number, head_sha, action, status, attempts, last_dispatched_at, last_error FROM pr_action_state ORDER BY updated_at DESC LIMIT 20;"
+sqlite3 "$SWARMER_DB_PATH" "SELECT repo, pr_number, head_sha, action, status, attempts, last_dispatched_at, last_error FROM pr_action_state ORDER BY updated_at DESC LIMIT 20;"
 
 # Inspect cached GitHub Events ETags
-sqlite3 /data/swarmer.db "SELECT repo, etag, last_checked_at FROM repo_etags;"
+sqlite3 "$SWARMER_DB_PATH" "SELECT repo, etag, last_checked_at FROM repo_etags;"
 ```
 
 ### 4. OpenShell Sandbox & Gateway Logs
