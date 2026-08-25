@@ -10,6 +10,7 @@
   <link rel="stylesheet"
         href="https://unpkg.com/@patternfly/patternfly@6.3.0/patternfly-addons.css">
   <script src="/static/htmx.min.js"></script>
+  <script src="/static/office-nav.js"></script>
   <style>
     body { min-height: 100vh; margin: 0; }
     /* Bouncing-dot loader used for HTMX indicators */
@@ -154,25 +155,6 @@
     }
     .office-nav-menu__item.is-hidden { display: none; }
   </style>
-  <script>
-    window.__officeNavFilter = function (input) {
-      var q = (input.value || "").trim().toLowerCase();
-      var root = input.closest(".office-nav-menu__body") || input.closest(".office-nav-menu__panel");
-      if (!root) return;
-      root.querySelectorAll(".office-nav-menu__item").forEach(function (el) {
-        var name = el.getAttribute("data-name") || "";
-        el.classList.toggle("is-hidden", q !== "" && name.indexOf(q) === -1);
-      });
-    };
-    // Close Office / Settings menus when clicking outside.
-    document.addEventListener("click", function (event) {
-      document.querySelectorAll("details.office-nav-menu[open], details.ws-settings-menu[open]").forEach(function (menu) {
-        if (!menu.contains(event.target)) {
-          menu.removeAttribute("open");
-        }
-      });
-    });
-  </script>
   {% block head %}{% endblock %}
 </head>
 <body>
