@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -89,7 +90,10 @@ class KnownUsersOut(BaseModel):
 
 
 class ScheduleEntryCreate(BaseModel):
-    cron_schedule: str = Field(..., min_length=1, max_length=128)
+    trigger_type: str = Field("cron", pattern=r"^(cron|event)$")
+    cron_schedule: str = Field("", max_length=128)
+    event_condition: str = Field("", max_length=64)
+    author_scope: str = Field("all", max_length=32)
     label: str = ""
     prompt_id: int | None = None
     instruction_prompt: str = ""
@@ -97,7 +101,10 @@ class ScheduleEntryCreate(BaseModel):
 
 
 class ScheduleEntryUpdate(BaseModel):
-    cron_schedule: str | None = Field(None, min_length=1, max_length=128)
+    trigger_type: str | None = Field(None, pattern=r"^(cron|event)$")
+    cron_schedule: str | None = Field(None, max_length=128)
+    event_condition: str | None = Field(None, max_length=64)
+    author_scope: str | None = Field(None, max_length=32)
     label: str | None = None
     prompt_id: int | None = None
     instruction_prompt: str | None = None
@@ -107,6 +114,9 @@ class ScheduleEntryUpdate(BaseModel):
 class ScheduleEntryOut(BaseModel):
     id: int
     session_id: int
+    trigger_type: str = "cron"
+    event_condition: str = ""
+    author_scope: str = "all"
     cron_schedule: str
     cron_next_run: datetime | None
     label: str
@@ -195,8 +205,16 @@ class SessionRunOut(BaseModel):
     schedule_label: str = ""
     prompt_name: str = ""
     mode: str = "prompt"
+    trigger_type: str = "manual"
+    event_context: str = ""
 
     model_config = {"from_attributes": True}
+
+
+class SessionLaunchRequest(BaseModel):
+    pr_context: dict[str, Any] | None = None
+    event_context: str | None = None
+    instruction_prompt: str | None = None
 
 
 class ScheduleRequest(BaseModel):

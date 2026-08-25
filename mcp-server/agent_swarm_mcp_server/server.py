@@ -34,6 +34,9 @@ def _normalize_repo_url(url: str) -> str:
 def _fmt_schedule(sc: dict) -> dict:
     return {
         "id": sc.get("id"),
+        "trigger_type": sc.get("trigger_type", "cron"),
+        "event_condition": sc.get("event_condition", ""),
+        "author_scope": sc.get("author_scope", "all"),
         "cron_schedule": sc.get("cron_schedule"),
         "cron_next_run": sc.get("cron_next_run"),
         "label": sc.get("label", ""),
@@ -410,8 +413,11 @@ class AgentSwarmMCPServer:
         self,
         workspace_id: int,
         session_id: int,
-        cron_schedule: str,
+        cron_schedule: str = "",
         *,
+        trigger_type: str = "cron",
+        event_condition: str = "",
+        author_scope: str = "all",
         label: str = "",
         prompt_id: int | None = None,
         instruction_prompt: str = "",
@@ -419,6 +425,8 @@ class AgentSwarmMCPServer:
     ) -> dict:
         sc = await self.client.create_session_schedule(
             workspace_id, session_id, cron_schedule,
+            trigger_type=trigger_type, event_condition=event_condition,
+            author_scope=author_scope,
             label=label, prompt_id=prompt_id,
             instruction_prompt=instruction_prompt, enabled=enabled,
         )
@@ -851,25 +859,33 @@ class AgentSwarmMCPServer:
         async def add_session_schedule(
             workspace_id: int,
             session_id: int,
-            cron_schedule: str,
+            cron_schedule: str = "",
+            trigger_type: str = "cron",
+            event_condition: str = "",
+            author_scope: str = "all",
             label: str = "",
             prompt_id: int | None = None,
             instruction_prompt: str = "",
             enabled: bool = True,
         ) -> dict:
-            """Add a new schedule to a session.
+            """Add a new schedule or event trigger to a session.
 
             Args:
                 workspace_id: The workspace id.
                 session_id: The session id.
-                cron_schedule: Cron expression (e.g. '0 9 * * 1-5').
-                label: Human-readable name for this schedule.
+                cron_schedule: Cron expression (e.g. '0 9 * * 1-5'). Required for cron triggers.
+                trigger_type: 'cron' for scheduled runs, 'event' for GitHub event triggers.
+                event_condition: Event trigger condition (e.g. 'ci_fail_or_conflict', 'new_pr_or_commit').
+                author_scope: PR author scope (e.g. 'self', 'team', 'bots', 'all').
+                label: Human-readable name for this trigger.
                 prompt_id: ID of a workspace prompt to use instead of the session default.
                 instruction_prompt: Additional instructions; overrides session default when set.
                 enabled: Whether the schedule is active. Default: True.
             """
             return await self._add_session_schedule(
                 workspace_id, session_id, cron_schedule,
+                trigger_type=trigger_type, event_condition=event_condition,
+                author_scope=author_scope,
                 label=label, prompt_id=prompt_id,
                 instruction_prompt=instruction_prompt, enabled=enabled,
             )
@@ -880,18 +896,24 @@ class AgentSwarmMCPServer:
             session_id: int,
             schedule_id: int,
             cron_schedule: str | None = None,
+            trigger_type: str | None = None,
+            event_condition: str | None = None,
+            author_scope: str | None = None,
             label: str | None = None,
             prompt_id: int | None = None,
             instruction_prompt: str | None = None,
             enabled: bool | None = None,
         ) -> dict:
-            """Update an existing session schedule.
+            """Update an existing session schedule or event trigger.
 
             Args:
                 workspace_id: The workspace id.
                 session_id: The session id.
                 schedule_id: The schedule id to update.
                 cron_schedule: New cron expression.
+                trigger_type: 'cron' or 'event'.
+                event_condition: New event condition.
+                author_scope: New author scope ('self', 'team', 'bots', 'all').
                 label: New label.
                 prompt_id: New prompt id (None clears the override).
                 instruction_prompt: New additional instructions.
@@ -900,6 +922,12 @@ class AgentSwarmMCPServer:
             fields: dict[str, Any] = {}
             if cron_schedule is not None:
                 fields["cron_schedule"] = cron_schedule
+            if trigger_type is not None:
+                fields["trigger_type"] = trigger_type
+            if event_condition is not None:
+                fields["event_condition"] = event_condition
+            if author_scope is not None:
+                fields["author_scope"] = author_scope
             if label is not None:
                 fields["label"] = label
             if prompt_id is not None:

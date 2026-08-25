@@ -74,11 +74,19 @@
         {% set _asched = s.active_schedule %}
         {% if _asched %}
         <br>
+        {% if _asched.trigger_type == 'event' %}
+        <span class="pf-v6-c-label pf-m-gold pf-m-compact" title="Triggered by GitHub Event">
+          <span class="pf-v6-c-label__content">
+            ⚡ {{ _asched.label or _asched.trigger_label }}{% if _asched.prompt %} &middot; {{ _asched.prompt.display_name }}{% endif %}
+          </span>
+        </span>
+        {% else %}
         <span class="pf-v6-c-label pf-m-purple pf-m-compact" title="Triggered by scheduled run">
           <span class="pf-v6-c-label__content">
             &#128197; {{ _asched.label or _asched.cron_label }}{% if _asched.prompt %} &middot; {{ _asched.prompt.display_name }}{% endif %}
           </span>
         </span>
+        {% endif %}
         {% endif %}
       </td>
       <td class="pf-v6-c-table__td" role="cell" data-label="Last Run" style="color:var(--pf-t--global--text--color--subtle); font-size:var(--pf-t--global--font--size--sm); white-space:nowrap;">
@@ -101,11 +109,15 @@
           <span style="color:var(--pf-t--global--text--color--subtle);">—</span>
         {% elif _enabled_scheds | length == 1 %}
           <a href="/workspaces/{{ ws.id }}/sessions/{{ s.id }}#schedule" style="text-decoration:none;">
+            {% if _enabled_scheds[0].trigger_type == 'event' %}
+            <span class="pf-v6-c-label pf-m-gold"><span class="pf-v6-c-label__content">{{ _enabled_scheds[0].label or '⚡ GitHub Event' }}</span></span>
+            {% else %}
             <span class="pf-v6-c-label pf-m-purple"><span class="pf-v6-c-label__content">{{ _enabled_scheds[0].label or _enabled_scheds[0].cron_schedule }}</span></span>
+            {% endif %}
           </a>
         {% else %}
           <a href="/workspaces/{{ ws.id }}/sessions/{{ s.id }}#schedule" style="text-decoration:none;">
-            <span class="pf-v6-c-label pf-m-purple"><span class="pf-v6-c-label__content">{{ _enabled_scheds | length }} schedules</span></span>
+            <span class="pf-v6-c-label pf-m-purple"><span class="pf-v6-c-label__content">{{ _enabled_scheds | length }} triggers</span></span>
           </a>
         {% endif %}
       </td>
@@ -117,7 +129,7 @@
           {% elif _earliest %}
             {{ _earliest.strftime('%b %d %H:%M') }} UTC
           {% else %}
-            —
+            <span style="color:var(--pf-t--global--text--color--subtle); font-size:var(--pf-t--global--font--size--xs);">⚡ Event-driven</span>
           {% endif %}
         {% else %}
           —

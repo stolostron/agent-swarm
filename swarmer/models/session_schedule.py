@@ -6,6 +6,22 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from swarmer.database import Base
 from swarmer.models.session import CRON_PRESETS
 
+TRIGGER_TYPES = ("cron", "event")
+
+EVENT_CONDITIONS: dict[str, str] = {
+    "ci_fail_or_conflict": "CI Failure or Merge Conflict (pr-fix)",
+    "new_pr_or_commit": "New PR or New Commits (pr-review)",
+    "review_comments": "Review Comments (CodeRabbit / Human)",
+    "any_actionable": "Any Actionable PR State",
+}
+
+AUTHOR_SCOPES: dict[str, str] = {
+    "self": "My PRs (fix_authors)",
+    "team": "Team PRs (Collaborators)",
+    "bots": "Bot PRs (CVE / Renovate)",
+    "all": "All PRs",
+}
+
 
 class SessionSchedule(Base):
     __tablename__ = "session_schedules"
@@ -17,7 +33,16 @@ class SessionSchedule(Base):
     prompt_id: Mapped[int | None] = mapped_column(
         Integer, ForeignKey("workspace_prompts.id", ondelete="SET NULL"), nullable=True
     )
-    cron_schedule: Mapped[str] = mapped_column(String(128), nullable=False)
+    trigger_type: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="cron", server_default="cron"
+    )
+    event_condition: Mapped[str] = mapped_column(
+        String(64), nullable=False, default="", server_default=""
+    )
+    author_scope: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="all", server_default="all"
+    )
+    cron_schedule: Mapped[str] = mapped_column(String(128), nullable=False, default="", server_default="")
     cron_next_run: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     label: Mapped[str] = mapped_column(String(128), nullable=False, default="", server_default="")
     instruction_prompt: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
@@ -42,3 +67,12 @@ class SessionSchedule(Base):
     def cron_label(self) -> str:
         """Human-readable label for common cron expressions."""
         return CRON_PRESETS.get(self.cron_schedule, self.cron_schedule) if self.cron_schedule else ""
+
+    @property
+    def trigger_label(self) -> str:
+        """Human-readable label for the trigger (event or cron)."""
+        if self.trigger_type == "event":
+            cond = EVENT_CONDITIONS.get(self.event_condition, self.event_condition or "Any Event")
+            scope = AUTHOR_SCOPES.get(self.author_scope, self.author_scope)
+            return f"⚡ {cond} · {scope}"
+        return self.cron_label

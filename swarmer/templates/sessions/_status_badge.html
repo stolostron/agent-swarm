@@ -42,11 +42,19 @@
 
     {% set _asched = session.active_schedule %}
     {% if _asched %}
-      <span class="pf-v6-c-label pf-m-purple pf-m-compact" title="Triggered by scheduled run">
-        <span class="pf-v6-c-label__content">
-          &#128197; {{ _asched.label or _asched.cron_label }}{% if _asched.prompt %} &middot; {{ _asched.prompt.display_name }}{% endif %}
+      {% if _asched.trigger_type == 'event' %}
+        <span class="pf-v6-c-label pf-m-gold pf-m-compact" title="Triggered by GitHub Event">
+          <span class="pf-v6-c-label__content">
+            ⚡ {{ _asched.label or _asched.trigger_label }}{% if _asched.prompt %} &middot; {{ _asched.prompt.display_name }}{% endif %}
+          </span>
         </span>
-      </span>
+      {% else %}
+        <span class="pf-v6-c-label pf-m-purple pf-m-compact" title="Triggered by scheduled run">
+          <span class="pf-v6-c-label__content">
+            &#128197; {{ _asched.label or _asched.cron_label }}{% if _asched.prompt %} &middot; {{ _asched.prompt.display_name }}{% endif %}
+          </span>
+        </span>
+      {% endif %}
     {% endif %}
 
   </div>

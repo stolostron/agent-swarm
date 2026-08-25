@@ -60,7 +60,13 @@
       {% endif %}
     </td>
     <td class="pf-v6-c-table__td" role="cell" data-label="Source">
-      {% if run.schedule_label %}
+      {% if run.trigger_type == 'event' %}
+        <span class="pf-v6-c-label pf-m-gold pf-m-compact" title="Triggered by GitHub Event">
+          <span class="pf-v6-c-label__content">
+            ⚡ {{ run.schedule_label or 'GitHub Event' }}{% if run.prompt_name %} &middot; {{ run.prompt_name }}{% endif %}
+          </span>
+        </span>
+      {% elif run.schedule_label %}
         <span class="pf-v6-c-label pf-m-purple pf-m-compact" title="Triggered by scheduled run">
           <span class="pf-v6-c-label__content">
             &#128197; {{ run.schedule_label }}{% if run.prompt_name %} &middot; {{ run.prompt_name }}{% endif %}
@@ -87,7 +93,7 @@
     </td>
   </tr>
   {# ── Expandable detail row ── #}
-  {% if run.last_output %}
+  {% if run.last_output or run.event_info %}
   <tr class="pf-v6-c-table__tr" id="hist-expand-{{ run.id }}"
       role="row" style="display:none;">
     <td class="pf-v6-c-table__td pf-v6-c-table__toggle" style="padding:0; border-bottom:none;"></td>
@@ -119,6 +125,16 @@
           </span>
         {% endif %}
       </div>
+      {% if run.event_info %}
+      <div style="padding:var(--pf-t--global--spacer--sm) var(--pf-t--global--spacer--md); background:var(--pf-t--global--background--color--secondary--default); border-bottom:1px solid var(--pf-t--global--border--color--default); font-size:var(--pf-t--global--font--size--xs); font-family:monospace; color:var(--pf-t--global--text--color--subtle);">
+        <strong style="color:var(--pf-t--global--text--color--regular);">⚡ Event Context:</strong>
+        {% if run.event_info.repo %}Repo: {{ run.event_info.repo }} | {% endif %}
+        {% if run.event_info.pr_number %}PR: #{{ run.event_info.pr_number }} | {% endif %}
+        {% if run.event_info.head_sha %}Head SHA: {{ run.event_info.head_sha[:8] }} | {% endif %}
+        {% if run.event_info.action %}Action: {{ run.event_info.action }} | {% endif %}
+        {% if run.event_info.title %}Title: {{ run.event_info.title }}{% endif %}
+      </div>
+      {% endif %}
       {# Output content #}
       <pre id="hist-out-processed-{{ run.id }}"
            class="last-output"

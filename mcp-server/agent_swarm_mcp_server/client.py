@@ -303,16 +303,22 @@ class AgentSwarmClient:
         self,
         ws_id: int,
         sid: int,
-        cron_schedule: str,
+        cron_schedule: str = "",
         *,
+        trigger_type: str = "cron",
+        event_condition: str = "",
+        author_scope: str = "all",
         label: str = "",
         prompt_id: int | None = None,
         instruction_prompt: str = "",
         enabled: bool = True,
     ) -> dict:
-        """Create a cron execution schedule for a session."""
+        """Create a cron or event execution schedule for a session."""
         body: dict = {
+            "trigger_type": trigger_type,
             "cron_schedule": cron_schedule,
+            "event_condition": event_condition,
+            "author_scope": author_scope,
             "label": label,
             "instruction_prompt": instruction_prompt,
             "enabled": enabled,

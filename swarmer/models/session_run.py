@@ -27,6 +27,8 @@ class SessionRun(Base):
     schedule_label: Mapped[str] = mapped_column(String(255), nullable=False, default="", server_default="")
     prompt_name: Mapped[str] = mapped_column(String(255), nullable=False, default="", server_default="")
     mode: Mapped[str] = mapped_column(String(16), nullable=False, default="prompt", server_default="prompt")
+    trigger_type: Mapped[str] = mapped_column(String(32), nullable=False, default="manual", server_default="manual")
+    event_context: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
     created_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, server_default=func.now()
     )
@@ -34,6 +36,16 @@ class SessionRun(Base):
     session: Mapped["Session"] = relationship(  # noqa: F821
         back_populates="runs"
     )
+
+    @property
+    def event_info(self) -> dict:
+        if not self.event_context:
+            return {}
+        try:
+            import json
+            return json.loads(self.event_context)
+        except Exception:
+            return {}
 
     @property
     def run_duration(self) -> str:

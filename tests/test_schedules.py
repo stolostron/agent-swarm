@@ -732,7 +732,6 @@ class TestSchedulerMultiSchedule:
     @pytest.mark.asyncio
     async def test_only_one_due_schedule_fires_per_poll(self):
         """Two due schedules for the same session: only the earliest fires per poll."""
-        from sqlalchemy import select
         from swarmer.models.session import Session
         from swarmer.models.session_schedule import SessionSchedule
         from swarmer.models.workspace import Workspace
@@ -743,7 +742,6 @@ class TestSchedulerMultiSchedule:
         async def _fake_launch(session, ws, db):
             launched.append((session.id, session.active_schedule_id))
 
-        import swarmer.scheduler as _sched_mod
         import swarmer.routers.sessions as _sess_mod
         original_do_launch = getattr(_sess_mod, "_do_launch", None)
 
@@ -812,6 +810,133 @@ class TestSchedulerMultiSchedule:
             finally:
                 if original_do_launch is not None:
                     _sess_mod._do_launch = original_do_launch
+
+
+# ===========================================================================
+# Event triggers and cron-to-event conversion tests (ACM-42674)
+# ===========================================================================
+
+
+class TestEventTriggers:
+    @pytest.mark.asyncio
+    async def test_create_event_trigger_api(self, client: AsyncClient):
+        ws = await _create_workspace(client)
+        s = await _create_session(client, ws["id"])
+        ws_id = ws["id"]
+        s_id = s["id"]
+
+        resp = await client.post(
+            f"/api/v1/workspaces/{ws_id}/sessions/{s_id}/schedules",
+            json={
+                "trigger_type": "event",
+                "event_condition": "ci_fail_or_conflict",
+                "author_scope": "self",
+                "label": "Auto-fix my PRs",
+            },
+        )
+        assert resp.status_code == 201
+        data = resp.json()
+        assert data["trigger_type"] == "event"
+        assert data["event_condition"] == "ci_fail_or_conflict"
+        assert data["author_scope"] == "self"
+        assert data["cron_schedule"] == ""
+        assert data["cron_next_run"] is None
+        assert data["label"] == "Auto-fix my PRs"
+
+    @pytest.mark.asyncio
+    async def test_convert_cron_to_event_trigger_api(self, client: AsyncClient):
+        ws = await _create_workspace(client)
+        s = await _create_session(client, ws["id"])
+        ws_id = ws["id"]
+        s_id = s["id"]
+
+        # 1. Create cron schedule
+        create_resp = await client.post(
+            f"/api/v1/workspaces/{ws_id}/sessions/{s_id}/schedules",
+            json={"cron_schedule": "0 9 * * 1-5", "label": "Morning Cron"},
+        )
+        assert create_resp.status_code == 201
+        sched_id = create_resp.json()["id"]
+
+        # 2. Convert to event trigger
+        update_resp = await client.put(
+            f"/api/v1/workspaces/{ws_id}/sessions/{s_id}/schedules/{sched_id}",
+            json={
+                "trigger_type": "event",
+                "event_condition": "new_pr_or_commit",
+                "author_scope": "team",
+                "label": "Review Team PRs",
+            },
+        )
+        assert update_resp.status_code == 200
+        updated = update_resp.json()
+        assert updated["trigger_type"] == "event"
+        assert updated["event_condition"] == "new_pr_or_commit"
+        assert updated["author_scope"] == "team"
+        assert updated["cron_schedule"] == ""
+        assert updated["cron_next_run"] is None
+
+        # 3. Convert back to cron schedule
+        revert_resp = await client.put(
+            f"/api/v1/workspaces/{ws_id}/sessions/{s_id}/schedules/{sched_id}",
+            json={
+                "trigger_type": "cron",
+                "cron_schedule": "*/15 * * * *",
+                "label": "15min Cron",
+            },
+        )
+        assert revert_resp.status_code == 200
+        reverted = revert_resp.json()
+        assert reverted["trigger_type"] == "cron"
+        assert reverted["cron_schedule"] == "*/15 * * * *"
+        assert reverted["cron_next_run"] is not None
+
+    @pytest.mark.asyncio
+    async def test_launch_with_pr_context_and_run_history(self, client: AsyncClient):
+        ws = await _create_workspace(client)
+        s = await _create_session(client, ws["id"])
+        ws_id = ws["id"]
+        s_id = s["id"]
+
+        from unittest.mock import AsyncMock, patch
+
+        pr_payload = {
+            "repo": "stolostron/agent-swarm",
+            "pr_number": 104,
+            "head_sha": "7f3a8b1c",
+            "action": "pr-fix",
+            "title": "fix: update scheduler",
+        }
+
+        with patch("swarmer.routers.sessions._do_launch", new_callable=AsyncMock) as mock_launch:
+            resp = await client.post(
+                f"/api/v1/workspaces/{ws_id}/sessions/{s_id}/launch",
+                json={"pr_context": pr_payload},
+            )
+            assert resp.status_code == 200
+            mock_launch.assert_called_once()
+
+            # Verify event context is captured on session
+            async with _TestSession() as session:
+                from swarmer.models.session import Session
+                s_obj = await session.get(Session, s_id)
+                assert "104" in s_obj.event_context
+
+                # Test recording session run with event context
+                from swarmer.session_runs import record_session_run
+                s_obj.run_started_at = datetime.now(timezone.utc) - timedelta(seconds=60)
+                run = await record_session_run(
+                    session,
+                    s_obj,
+                    phase="succeeded",
+                    status_detail="Fixed 2 checks",
+                    last_output="All tests passed",
+                    completed_at=datetime.now(timezone.utc),
+                )
+                assert run is not None
+                assert run.trigger_type == "event"
+                assert run.schedule_label == "PR #104 (pr-fix)"
+                assert run.event_info.get("pr_number") == 104
 
 
 # ===========================================================================

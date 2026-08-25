@@ -24,33 +24,46 @@ def _as_utc(dt: datetime) -> datetime:
     return dt.astimezone(timezone.utc)
 
 
-async def _run_source_snapshot(db: AsyncSession, session: Session) -> tuple[str, str]:
-    """Resolve the (schedule_label, prompt_name) snapshot for a session at run time.
+async def _run_source_snapshot(db: AsyncSession, session: Session) -> tuple[str, str, str, str]:
+    """Resolve the (schedule_label, prompt_name, trigger_type, event_context) snapshot for a session.
 
     Prefers the active schedule's label/prompt (the run was triggered by a
-    schedule); falls back to the session's own configured prompt otherwise.
-
-    `session.schedules` (and each schedule's `.prompt`) is eager-loaded via
-    `lazy="selectin"` on the model, so `active_schedule`/`active_schedule.prompt`
-    are safe to access synchronously here. `session.prompt` is NOT eager-loaded
-    by default (callers fetch sessions via plain `db.get()`), so it is resolved
-    with an explicit query instead of touching the lazy relationship directly —
-    that would otherwise risk a MissingGreenlet error in async code.
+    schedule); falls back to the session's own configured prompt and event_context.
     """
+    import json as _json
     from swarmer.models.workspace_prompt import WorkspacePrompt
 
     schedule_label = ""
     prompt_name = ""
+    trigger_type = "manual"
+    event_context = session.event_context or ""
+
     active_schedule = session.active_schedule
     if active_schedule:
-        schedule_label = active_schedule.label or active_schedule.cron_label
+        trigger_type = active_schedule.trigger_type or "cron"
+        schedule_label = active_schedule.label or active_schedule.trigger_label
         if active_schedule.prompt:
             prompt_name = active_schedule.prompt.display_name
+    elif event_context:
+        trigger_type = "event"
+        try:
+            ctx = _json.loads(event_context)
+            pr_num = ctx.get("pr_number")
+            action = ctx.get("action")
+            if pr_num and action:
+                schedule_label = f"PR #{pr_num} ({action})"
+            elif pr_num:
+                schedule_label = f"PR #{pr_num}"
+            elif action:
+                schedule_label = f"{action}"
+        except Exception:
+            schedule_label = "GitHub Event"
+
     if not prompt_name and session.prompt_id:
         prompt = await db.get(WorkspacePrompt, session.prompt_id)
         if prompt:
             prompt_name = prompt.display_name
-    return schedule_label, prompt_name
+    return schedule_label, prompt_name, trigger_type, event_context
 
 
 async def record_session_run(
@@ -73,7 +86,7 @@ async def record_session_run(
         )
         return None
 
-    schedule_label, prompt_name = await _run_source_snapshot(db, session)
+    schedule_label, prompt_name, trigger_type, event_context = await _run_source_snapshot(db, session)
 
     run = SessionRun(
         session_id=session.id,
@@ -86,6 +99,8 @@ async def record_session_run(
         schedule_label=schedule_label,
         prompt_name=prompt_name,
         mode=session.mode or "prompt",
+        trigger_type=trigger_type,
+        event_context=event_context,
     )
     db.add(run)
     await _prune_old_runs(

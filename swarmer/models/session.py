@@ -90,6 +90,7 @@ class Session(Base):
     last_output: Mapped[str] = mapped_column(Text, nullable=False, default="")
     raw_output: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
     status_detail: Mapped[str] = mapped_column(String(255), nullable=False, default="", server_default="")
+    event_context: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
     # OpenShell draft policy chunks — JSON snapshot from last run (cleared on next launch)
     policy_chunks: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
     # Session-level custom network rules approved from chunks — JSON array, cumulative

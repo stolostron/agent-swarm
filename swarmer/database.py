@@ -252,6 +252,13 @@ async def migrate_db() -> None:
             created_by TEXT NOT NULL DEFAULT '',
             created_at DATETIME NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%S', 'now'))
         )""",
+        # ACM-42674: Event-driven trigger configuration and event context in run history
+        "ALTER TABLE session_schedules ADD COLUMN trigger_type VARCHAR(32) NOT NULL DEFAULT 'cron'",
+        "ALTER TABLE session_schedules ADD COLUMN event_condition VARCHAR(64) NOT NULL DEFAULT ''",
+        "ALTER TABLE session_schedules ADD COLUMN author_scope VARCHAR(32) NOT NULL DEFAULT 'all'",
+        "ALTER TABLE session_runs ADD COLUMN trigger_type VARCHAR(32) NOT NULL DEFAULT 'manual'",
+        "ALTER TABLE session_runs ADD COLUMN event_context TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE sessions ADD COLUMN event_context TEXT NOT NULL DEFAULT ''",
     ]
     async with _engine.begin() as conn:
         for stmt in migrations:
