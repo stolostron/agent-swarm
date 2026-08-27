@@ -1911,10 +1911,10 @@ async def _run_openshell_agent(
 
             async def _on_output(text: str) -> None:
                 _streamed[:] = [text]
-                # Redact secrets from shell output before persisting — the raw
-                # stdout/stderr of a shell command may contain credential values
-                # if the script calls printenv, env, or echoes config variables.
-                _safe = _redact_secrets(text, secret_values=injected_secrets) if agent_tool == "shell" else text
+                # Redact secrets before persisting streamed output for all tools.
+                # OpenCode may still surface env assignments (e.g. printenv),
+                # including gateway-injected keys not present in injected_secrets.
+                _safe = _redact_secrets(text, secret_values=injected_secrets)
                 await _update_db(last_output=_safe, raw_output=_safe)
 
             result = await openshell_client.exec_command_streaming(
@@ -1940,15 +1940,14 @@ async def _run_openshell_agent(
             _streamed_text = _streamed[0] if _streamed else ""
             if agent_tool == "shell":
                 # Use streamed stdout; fall back to stderr on failure.
-                # Apply secret redaction: the raw shell command output may contain
-                # credential values if the script echoes env vars or config.
-                output = _redact_secrets(_streamed_text or stderr, secret_values=injected_secrets)
+                _raw_output = _streamed_text or stderr
             else:
-                output = (
+                _raw_output = (
                     await openshell_client.read_opencode_response(sandbox_name)
                     or _streamed_text
                     or stderr
                 )
+            output = _redact_secrets(_raw_output, secret_values=injected_secrets)
 
             # Snapshot draft policy chunks before any sandbox deletion so the
             # Policy tab can show what was denied/proposed during this run.
@@ -1989,9 +1988,7 @@ async def _run_openshell_agent(
                     phase, session_id,
                 )
 
-            # For shell runs _streamed_text is already redacted (via _on_output);
-            # for AI-tool runs it passes through unmodified.
-            _final_raw = _streamed_text if agent_tool != "shell" else _redact_secrets(_streamed_text, secret_values=injected_secrets)
+            _final_raw = _redact_secrets(_streamed_text, secret_values=injected_secrets)
             await _update_db(
                 phase=phase,
                 last_output=output,

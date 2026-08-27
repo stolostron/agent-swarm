@@ -5,6 +5,7 @@ Overrides the auth dependency and uses an in-memory SQLite database.
 """
 
 import json
+import logging
 import os
 import sys
 
@@ -1006,9 +1007,10 @@ class TestSecrets:
         assert "openai_api_key" not in body
 
     @pytest.mark.asyncio
-    async def test_save_openai_key_failure_redacts_exception_detail(self, client, monkeypatch):
+    async def test_save_openai_key_failure_redacts_exception_detail(self, client, monkeypatch, caplog):
         ws = await _create_workspace(client)
         sentinel = "SENTINEL_OPENAI_SECRET"
+        caplog.set_level(logging.WARNING, logger="swarmer.api.v1.secrets")
 
         async def _fake_ensure_provider(_name, _provider_type, _config, _credentials):
             raise RuntimeError(f"provider failed with {sentinel}")
@@ -1027,6 +1029,7 @@ class TestSecrets:
         assert resp.status_code == 502
         assert resp.json()["detail"] == "failed to configure OpenAI provider on OpenShell"
         assert sentinel not in resp.text
+        assert sentinel not in caplog.text
 
     @pytest.mark.asyncio
     async def test_pat_crud(self, client):

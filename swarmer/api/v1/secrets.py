@@ -124,9 +124,9 @@ async def save_credentials(
             )
         except Exception as exc:
             log.warning(
-                "save_credentials: failed to configure OpenAI provider for workspace %d",
+                "save_credentials: failed to configure OpenAI provider for workspace %d (error_type=%s)",
                 ws_id,
-                exc_info=True,
+                type(exc).__name__,
             )
             raise HTTPException(
                 status_code=status.HTTP_502_BAD_GATEWAY,

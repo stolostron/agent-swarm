@@ -1594,6 +1594,56 @@ class TestRunOpenshellAgent:
         assert sess.phase == "failed"
 
     @pytest.mark.asyncio
+    async def test_prompt_mode_redacts_openai_key_in_opencode_output(self, client):
+        ws = await _create_workspace(client)
+        s = await _create_session(client, ws["id"], mode="prompt")
+
+        async with _TestSession() as db:
+            await db.execute(
+                text("UPDATE sessions SET sandbox_name='sandbox-redact', phase='pending' WHERE id=:id"),
+                {"id": s["id"]},
+            )
+            await db.commit()
+
+        sentinel = "top-secret-openai-value"
+
+        async def _fake_exec_streaming(_sandbox_name, _cmd, on_output=None, poll_interval=5.0, env=None):
+            if on_output is not None:
+                await on_output(f"stream OPENAI_API_KEY={sentinel}")
+            return MagicMock(exit_code=0, stdout="", stderr="")
+
+        with patch("swarmer.database.get_db", new=_make_test_db_provider()), \
+             patch("swarmer.openshell_client.exec_command_streaming", new=_fake_exec_streaming), \
+             patch(
+                 "swarmer.openshell_client.read_opencode_response",
+                 new=AsyncMock(return_value=f"final OPENAI_API_KEY={sentinel}"),
+             ), \
+             patch("swarmer.openshell_client.get_draft_chunks", new=AsyncMock(return_value=[])), \
+             patch("swarmer.openshell_client.delete_sandbox", new=AsyncMock()):
+            from swarmer.routers.sessions import _run_openshell_agent
+
+            await _run_openshell_agent(
+                s["id"],
+                ws["id"],
+                "sandbox-redact",
+                ["sh", "-c", "opencode run"],
+                "prompt",
+                "opencode",
+            )
+
+        async with _TestSession() as db:
+            from sqlalchemy import select
+            from swarmer.models.session import Session
+
+            sess = (await db.execute(select(Session).where(Session.id == s["id"]))).scalar_one()
+
+        assert sess.phase == "succeeded"
+        assert sentinel not in (sess.last_output or "")
+        assert sentinel not in (sess.raw_output or "")
+        assert "OPENAI_API_KEY=[REDACTED]" in (sess.last_output or "")
+        assert "OPENAI_API_KEY=[REDACTED]" in (sess.raw_output or "")
+
+    @pytest.mark.asyncio
     async def test_prompt_mode_auto_deletes_sandbox_on_success(self, client):
         ws = await _create_workspace(client)
         s = await _create_session(client, ws["id"], mode="prompt")
