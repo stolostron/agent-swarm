@@ -703,7 +703,7 @@ class TestDoLaunchOpenshell:
 
     @pytest.mark.asyncio
     async def test_openai_provider_not_attached_when_absent_from_gateway(self, client):
-        """When no OpenAI provider exists on the gateway, it must not be attached."""
+        """OpenAI model launches must fail early when the gateway provider is absent."""
         ws = await _create_workspace(client)
         s_resp = await client.post(
             f"/api/v1/workspaces/{ws['id']}/sessions",
@@ -711,24 +711,24 @@ class TestDoLaunchOpenshell:
         )
         assert s_resp.status_code == 201, s_resp.text
         s = s_resp.json()
-        openai_pname = f"swarmer-ws-{ws['id']}-openai"
 
         patches = self._patch_openshell()
         with patches["create_provider"], patches["ensure_provider"], \
              patches["configure_provider_credential"], patches["attach_sandbox_provider"], \
-             patches["create_sandbox"], patches["write_agent_config"], \
-             patches["write_agents_md"], patches["exec_command"], \
-             patches["start_agent"], patches["delete_sandbox"], \
-             patches["build_policy"], patches["run_agent"], \
-             patches["setup_sandbox"] as mock_setup, \
-             patches["provider_exists"], patches["get_image"]:
-            await client.post(
+              patches["create_sandbox"], patches["write_agent_config"], \
+              patches["write_agents_md"], patches["exec_command"], \
+              patches["start_agent"], patches["delete_sandbox"], \
+              patches["build_policy"], patches["run_agent"], \
+              patches["setup_sandbox"] as mock_setup, \
+              patches["provider_exists"], patches["get_image"]:
+            resp = await client.post(
                 f"/api/v1/workspaces/{ws['id']}/sessions/{s['id']}/launch"
             )
             await asyncio.sleep(0)
 
-        call_kwargs = mock_setup.call_args.kwargs if mock_setup.call_args else {}
-        assert openai_pname not in call_kwargs.get("provider_names", [])
+        assert resp.status_code == 500
+        assert "OpenAI API key is not configured for this workspace" in resp.text
+        mock_setup.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_launch_blocked_when_github_repo_without_pat(self, client):

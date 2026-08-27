@@ -63,22 +63,6 @@ _OPENSHELL_CUSTOM_PROFILES = [
         ],
     },
     {
-        "id": "openai",
-        "display_name": "OpenAI",
-        "inference_capable": True,
-        "credentials": [
-            {
-                # Credential name IS the env var injected into the sandbox.
-                # env_vars is used by the gateway proxy for HTTP request rewriting.
-                "name": "OPENAI_API_KEY",
-                "env_vars": ["OPENAI_API_KEY"],
-                "required": True,
-                "auth_style": "header",
-                "header_name": "authorization",
-            }
-        ],
-    },
-    {
         "id": "jira",
         "display_name": "Jira",
         "inference_capable": False,

@@ -991,7 +991,7 @@ class TestSecrets:
             json={
                 "google_cloud_project": "my-project",
                 "vertex_location": "us-central1",
-                "openai_api_key": "sk-test-openai-key",
+                "openai_api_key": "<test-openai-api-key>",
             },
         )
         assert resp.status_code == 200, resp.text
@@ -999,11 +999,34 @@ class TestSecrets:
         assert called["name"] == f"swarmer-ws-{ws['id']}-openai"
         assert called["provider_type"] == "openai"
         assert called["config"] == {}
-        assert called["credentials"] == {"OPENAI_API_KEY": "sk-test-openai-key"}
+        assert called["credentials"] == {"OPENAI_API_KEY": "<test-openai-api-key>"}
 
         # Credentials response shape remains unchanged and must not expose an OpenAI key.
         body = resp.json()
         assert "openai_api_key" not in body
+
+    @pytest.mark.asyncio
+    async def test_save_openai_key_failure_redacts_exception_detail(self, client, monkeypatch):
+        ws = await _create_workspace(client)
+        sentinel = "SENTINEL_OPENAI_SECRET"
+
+        async def _fake_ensure_provider(_name, _provider_type, _config, _credentials):
+            raise RuntimeError(f"provider failed with {sentinel}")
+
+        monkeypatch.setattr("swarmer.openshell_client.ensure_provider", _fake_ensure_provider)
+
+        resp = await client.post(
+            f"/api/v1/workspaces/{ws['id']}/secrets/credentials",
+            json={
+                "google_cloud_project": "my-project",
+                "vertex_location": "us-central1",
+                "openai_api_key": "<test-openai-api-key>",
+            },
+        )
+
+        assert resp.status_code == 502
+        assert resp.json()["detail"] == "failed to configure OpenAI provider on OpenShell"
+        assert sentinel not in resp.text
 
     @pytest.mark.asyncio
     async def test_pat_crud(self, client):

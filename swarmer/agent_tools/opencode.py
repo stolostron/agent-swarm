@@ -1,8 +1,14 @@
 import json
 import shlex
+from typing import TYPE_CHECKING
 
 from swarmer.agent_tools import AgentToolStrategy
 from swarmer.config import settings
+
+if TYPE_CHECKING:
+    from swarmer.models.mcp_server import McpServer
+    from swarmer.models.opencode_secret import OpencodeSecret
+    from swarmer.models.session import Session
 
 # Family-level model presets (ACM-37232). Preset names are stored directly in
 # Session.provider (e.g. "claude"/"gemini"/"openai") in place of a raw provider/model@version
@@ -45,7 +51,13 @@ class OpenCodeStrategy(AgentToolStrategy):
             }
         return None
 
-    def build_config_data(self, secret=None, mcp_servers=None, use_inference_local: bool = False, model: str = "") -> dict[str, str]:  # noqa: ARG002 (use_inference_local retained for interface compat)
+    def build_config_data(
+        self,
+        secret: "OpencodeSecret | None" = None,
+        mcp_servers: "list[McpServer] | None" = None,
+        use_inference_local: bool = False,
+        model: str = "",
+    ) -> dict[str, str]:  # noqa: ARG002 (use_inference_local retained for interface compat)
         preset = self.resolve_preset(model)
         _plan_model = ""
         _plan_mode = ""
@@ -74,12 +86,14 @@ class OpenCodeStrategy(AgentToolStrategy):
                 if _provider == "google-vertex-anthropic":
                     # Claude on Vertex: use haiku as the small model
                     _small_model = "google-vertex-anthropic/claude-haiku-4-5@20251001"
+                elif _provider == "openai":
+                    _small_model = settings.openai_preset_small_model
                 elif "pro" in _mid_base:
                     _small_model = f"{_provider}/{_mid.replace('pro', 'flash')}"
                 elif "flash" in _mid_base:
                     _small_model = _model  # already the small model
 
-        _enabled_providers: list[str] = [] if model == "openai" else ["google"]
+        _enabled_providers: list[str] = [] if _model.startswith("openai/") else ["google"]
         for _candidate in (_model, _small_model, _plan_model):
             if not (_candidate and "/" in _candidate):
                 continue
@@ -171,7 +185,7 @@ class OpenCodeStrategy(AgentToolStrategy):
             "> /workspace/.local/state/opencode/model.json && "
         )
 
-    def build_main_cmd(self, session, model: str, resolved_prompt: str = "") -> str:
+    def build_main_cmd(self, session: "Session", model: str, resolved_prompt: str = "") -> str:
         if session.mode == "server":
             return "opencode serve --hostname 0.0.0.0 --port 4096"
         elif session.mode == "tui":
@@ -187,7 +201,7 @@ class OpenCodeStrategy(AgentToolStrategy):
 
     def get_model_options(
         self,
-        secret=None,
+        secret: "OpencodeSecret | None" = None,
         has_vertex: bool = False,
         has_gemini: bool = False,
         has_openai: bool = False,

@@ -1280,17 +1280,21 @@ async def _do_launch_openshell(
                 session.id, exc_info=True,
             )
     # OpenAI provider — key is stored on the gateway (not in Swarmer DB).
+    # Only required for OpenAI model sessions.
     _openai_pname = f"swarmer-ws-{ws_id}-openai"
-    if tool.requires_ai_model():
+    if tool.requires_ai_model() and model.split("/", 1)[0] == "openai":
         try:
-            if await openshell_client.provider_exists(_openai_pname):
-                provider_names.append(_openai_pname)
+            has_openai_provider = await openshell_client.provider_exists(_openai_pname)
         except Exception:
             log.warning(
                 "_do_launch_openshell: could not check openai provider for session %d",
                 session.id,
                 exc_info=True,
             )
+            raise ValueError("Could not verify OpenAI API key configuration for this workspace")
+        if not has_openai_provider:
+            raise ValueError("OpenAI API key is not configured for this workspace")
+        provider_names.append(_openai_pname)
     # Vertex AI via google-cloud provider — ADC is stored on the gateway (not in Swarmer DB).
     # Attach the provider if it already exists (created via the secrets UI).
     _vertex_pname = f"swarmer-ws-{ws_id}-google-cloud"

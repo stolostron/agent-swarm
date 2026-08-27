@@ -98,7 +98,7 @@ class TestIsValidModel:
     def test_raw_model_ids_are_valid(self):
         assert _opencode.is_valid_model("google-vertex-anthropic/claude-sonnet-5@default") is True
         assert _opencode.is_valid_model("google/gemini-3.5-flash") is True
-        assert _opencode.is_valid_model("openai/gpt-5.3-codex") is True
+        assert _opencode.is_valid_model("openai/gpt-5.3-codex@default") is True
 
     def test_garbage_is_invalid(self):
         assert _opencode.is_valid_model("not-a-model") is False
@@ -262,3 +262,9 @@ class TestBuildConfigDataPresets:
         config = json.loads(data["opencode.json"])
         assert config["model"] == "google/gemini-3.7-flash"
         assert config["enabled_providers"] == ["google"]
+
+    def test_raw_openai_model_enables_only_openai_provider(self):
+        data = _opencode.build_config_data(model="openai/gpt-5.3-codex@default")
+        config = json.loads(data["opencode.json"])
+        assert config["small_model"] == settings.openai_preset_small_model
+        assert config["enabled_providers"] == ["openai"]

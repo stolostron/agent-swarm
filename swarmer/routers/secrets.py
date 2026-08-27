@@ -3,6 +3,8 @@
 All data access goes through the REST API client (/api/v1/).
 """
 
+import logging
+
 from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
 from fastapi.responses import RedirectResponse
 from fastapi.templating import Jinja2Templates
@@ -16,6 +18,7 @@ from swarmer.routers.api_client import APIError, get_api_client
 
 router = APIRouter()
 templates = Jinja2Templates(directory="swarmer/templates")
+log = logging.getLogger(__name__)
 
 _VALID_TABS = ("credentials", "pats", "github-app", "pull-secret")
 
@@ -232,8 +235,13 @@ async def opencode_secret_save(
                     "GOOGLE_GENERATIVE_AI_API_KEY": gemini_key,
                 },
             )
-        except Exception as exc:
-            flash(request, f"Failed to configure Gemini on OpenShell: {exc}", "danger")
+        except Exception:
+            log.warning(
+                "credential_save: failed to configure Gemini provider for workspace %d",
+                ws_id,
+                exc_info=True,
+            )
+            flash(request, "Failed to configure Gemini on OpenShell.", "danger")
 
     # Push the OpenAI API key to the OpenShell gateway if submitted. Blank is
     # a no-op, keeping any existing provider credential unchanged.
@@ -247,8 +255,13 @@ async def opencode_secret_save(
                 {},
                 credentials={"OPENAI_API_KEY": openai_key},
             )
-        except Exception as exc:
-            flash(request, f"Failed to configure OpenAI on OpenShell: {exc}", "danger")
+        except Exception:
+            log.warning(
+                "credential_save: failed to configure OpenAI provider for workspace %d",
+                ws_id,
+                exc_info=True,
+            )
+            flash(request, "Failed to configure OpenAI on OpenShell.", "danger")
 
     async with get_api_client(request) as api:
         try:
