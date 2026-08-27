@@ -7,7 +7,7 @@ A FastAPI + HTMX dashboard for managing AI coding agent workloads on Kubernetes.
 ## Capabilities
 
 - **Workspaces** — each workspace maps 1:1 to a Kubernetes namespace; create, rename, and delete workspaces from the UI
-- **Secrets** — Fernet-encrypted storage for provider credentials (GCP/Vertex AI, Gemini, Anthropic, OpenAI), GitHub PATs for HTTPS git auth, and OCI registry pull secrets
+- **Secrets** — Gateway-only storage for Vertex AI ADC, Gemini, and OpenAI keys; Fernet-encrypted storage for GitHub PATs, GitHub App private keys, and MCP tokens
 - **Session lifecycle** — create → launch → monitor → stop → delete sessions backed by OpenShell sandboxes
 - **Three session modes:**
   - **Prompt** — one-shot: run a prompt, stream output, sandbox exits when done

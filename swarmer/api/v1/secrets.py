@@ -106,6 +106,24 @@ async def save_credentials(
 
     if body.google_api_key.strip():
         secret.google_api_key = body.google_api_key.strip()
+    openai_key = body.openai_api_key.strip()
+    if openai_key:
+        # OpenAI key is gateway-only: store/update the workspace-scoped provider
+        # on OpenShell, never in Swarmer's DB.
+        try:
+            from swarmer import openshell_client
+
+            await openshell_client.ensure_provider(
+                f"swarmer-ws-{ws_id}-openai",
+                "openai",
+                {},
+                credentials={"OPENAI_API_KEY": openai_key},
+            )
+        except Exception as exc:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=f"failed to configure OpenAI provider on OpenShell: {exc}",
+            ) from exc
     adc = body.application_default_credentials.strip()
     if adc:
         try:

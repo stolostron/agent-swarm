@@ -636,7 +636,7 @@ class AgentSwarmMCPServer:
                 name: Unique session name within the workspace.
                 agent_tool: Agent tool. One of: opencode, shell. Default: opencode.
                 mode: Execution mode. One of: prompt, tui, server. Default: prompt.
-                provider: AI provider preset. One of: claude, gemini. Empty string
+                provider: AI provider preset. One of: claude, gemini, openai. Empty string
                           uses the tool default (based on configured credentials).
                 persist: Keep workspace volume between runs. Default: false.
                 working_branch: Git branch to create/checkout in the sandbox.
@@ -670,7 +670,7 @@ class AgentSwarmMCPServer:
                 session_id: The session id.
                 name: New session name.
                 mode: New mode (prompt/tui/server).
-                provider: New AI provider preset (claude/gemini).
+                provider: New AI provider preset (claude/gemini/openai).
                 agent_tool: New agent tool (opencode/shell).
                 instruction_prompt: New additional instructions (or raw command for shell).
                 prompt_id: New base prompt id.

@@ -63,6 +63,22 @@ _OPENSHELL_CUSTOM_PROFILES = [
         ],
     },
     {
+        "id": "openai",
+        "display_name": "OpenAI",
+        "inference_capable": True,
+        "credentials": [
+            {
+                # Credential name IS the env var injected into the sandbox.
+                # env_vars is used by the gateway proxy for HTTP request rewriting.
+                "name": "OPENAI_API_KEY",
+                "env_vars": ["OPENAI_API_KEY"],
+                "required": True,
+                "auth_style": "header",
+                "header_name": "authorization",
+            }
+        ],
+    },
+    {
         "id": "jira",
         "display_name": "Jira",
         "inference_capable": False,
@@ -200,7 +216,7 @@ async def _restart_prompt_pollers() -> None:
                 )
             else:
                 _raw_model = s.provider or _tool.get_default_model(False)
-                # s.provider is a family preset name ("claude"/"gemini", ACM-37232);
+                # s.provider is a family preset name ("claude"/"gemini"/"openai", ACM-37232);
                 # resolve it to a concrete provider/model@version ID for the CLI flag.
                 _model = _tool.resolve_build_model(_raw_model)
                 # Reconstruct the same AGENTS.md-reading command used at initial launch

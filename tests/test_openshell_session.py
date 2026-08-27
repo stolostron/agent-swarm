@@ -661,6 +661,76 @@ class TestDoLaunchOpenshell:
         assert gemini_pname not in call_kwargs.get("provider_names", [])
 
     @pytest.mark.asyncio
+    async def test_openai_provider_attached_when_configured_on_gateway(self, client):
+        """When an OpenAI provider exists on the gateway, attach it to the sandbox."""
+        ws = await _create_workspace(client)
+        s_resp = await client.post(
+            f"/api/v1/workspaces/{ws['id']}/sessions",
+            json={"name": "s-openai", "mode": "prompt", "agent_tool": "opencode", "provider": "openai"},
+        )
+        assert s_resp.status_code == 201, s_resp.text
+        s = s_resp.json()
+        expected_pname = f"swarmer-ws-{ws['id']}-openai"
+
+        patches = self._patch_openshell()
+        with patches["create_provider"], \
+             patches["ensure_provider"] as mock_ensure, \
+             patches["configure_provider_credential"], patches["attach_sandbox_provider"], \
+             patches["create_sandbox"], patches["write_agent_config"], \
+             patches["write_agents_md"], patches["exec_command"], \
+             patches["start_agent"], patches["delete_sandbox"], \
+             patches["build_policy"], patches["run_agent"], \
+             patches["setup_sandbox"] as mock_setup, \
+             patches["get_image"]:
+            with patch(
+                "swarmer.openshell_client.provider_exists",
+                new=AsyncMock(side_effect=lambda name, **kw: name == expected_pname),
+            ):
+                await client.post(
+                    f"/api/v1/workspaces/{ws['id']}/sessions/{s['id']}/launch"
+                )
+                await asyncio.sleep(0)
+
+        call_kwargs = mock_setup.call_args.kwargs if mock_setup.call_args else {}
+        assert expected_pname in call_kwargs.get("provider_names", []), (
+            f"Expected {expected_pname!r} in provider_names, got {call_kwargs.get('provider_names')}"
+        )
+        openai_ensure_calls = [
+            c for c in mock_ensure.call_args_list
+            if len(c.args) >= 1 and c.args[0] == expected_pname
+        ]
+        assert openai_ensure_calls == []
+
+    @pytest.mark.asyncio
+    async def test_openai_provider_not_attached_when_absent_from_gateway(self, client):
+        """When no OpenAI provider exists on the gateway, it must not be attached."""
+        ws = await _create_workspace(client)
+        s_resp = await client.post(
+            f"/api/v1/workspaces/{ws['id']}/sessions",
+            json={"name": "s-openai-absent", "mode": "prompt", "agent_tool": "opencode", "provider": "openai"},
+        )
+        assert s_resp.status_code == 201, s_resp.text
+        s = s_resp.json()
+        openai_pname = f"swarmer-ws-{ws['id']}-openai"
+
+        patches = self._patch_openshell()
+        with patches["create_provider"], patches["ensure_provider"], \
+             patches["configure_provider_credential"], patches["attach_sandbox_provider"], \
+             patches["create_sandbox"], patches["write_agent_config"], \
+             patches["write_agents_md"], patches["exec_command"], \
+             patches["start_agent"], patches["delete_sandbox"], \
+             patches["build_policy"], patches["run_agent"], \
+             patches["setup_sandbox"] as mock_setup, \
+             patches["provider_exists"], patches["get_image"]:
+            await client.post(
+                f"/api/v1/workspaces/{ws['id']}/sessions/{s['id']}/launch"
+            )
+            await asyncio.sleep(0)
+
+        call_kwargs = mock_setup.call_args.kwargs if mock_setup.call_args else {}
+        assert openai_pname not in call_kwargs.get("provider_names", [])
+
+    @pytest.mark.asyncio
     async def test_launch_blocked_when_github_repo_without_pat(self, client):
         """Launch must be rejected with a clear message when github.com repos have no PAT.
 
@@ -2945,4 +3015,3 @@ class TestPolicyRulesLiveApplyRevoke:
         assert trigger["policyChanged"]["live_revoked"] is False
         # Was called but returned 0 (startup rule, not in draft history).
         mock_undo.assert_awaited_once()
-

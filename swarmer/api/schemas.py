@@ -267,6 +267,7 @@ class CredentialsSave(BaseModel):
     google_cloud_project: str = ""
     vertex_location: str = ""
     google_api_key: str = ""
+    openai_api_key: str = ""
     application_default_credentials: str = ""
     shared: bool = False
 

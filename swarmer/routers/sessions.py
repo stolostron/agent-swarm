@@ -322,7 +322,19 @@ async def _get_provider_options(
         has_gemini = await openshell_client.provider_exists(f"swarmer-ws-{ws_id}-google-ai-studio")
     except Exception:
         pass
-    return tool.get_model_options(oc, has_vertex=has_vertex, has_gemini=has_gemini)
+    # Check gateway for OpenAI provider — key is stored on OpenShell, not Swarmer DB.
+    has_openai = False
+    try:
+        from swarmer import openshell_client
+        has_openai = await openshell_client.provider_exists(f"swarmer-ws-{ws_id}-openai")
+    except Exception:
+        pass
+    return tool.get_model_options(
+        oc,
+        has_vertex=has_vertex,
+        has_gemini=has_gemini,
+        has_openai=has_openai,
+    )
 
 router = APIRouter()
 templates = Jinja2Templates(directory="swarmer/templates")
@@ -1153,7 +1165,7 @@ async def _do_launch_openshell(
     tool = get_tool(session.agent_tool)
 
     # Resolve the provider first so it is available for provider registration and
-    # policy building. session.provider is a family preset name ("claude"/"gemini",
+    # policy building. session.provider is a family preset name ("claude"/"gemini"/"openai",
     # ACM-37232) — build_config_data() understands it directly. Everything else
     # (network policy, CLI --model flag, model.json state) needs a concrete model
     # ID, so it uses `model` — the provider resolved to its BUILD-role model —
@@ -1266,6 +1278,18 @@ async def _do_launch_openshell(
             log.warning(
                 "_do_launch_openshell: could not check google-ai-studio provider for session %d",
                 session.id, exc_info=True,
+            )
+    # OpenAI provider — key is stored on the gateway (not in Swarmer DB).
+    _openai_pname = f"swarmer-ws-{ws_id}-openai"
+    if tool.requires_ai_model():
+        try:
+            if await openshell_client.provider_exists(_openai_pname):
+                provider_names.append(_openai_pname)
+        except Exception:
+            log.warning(
+                "_do_launch_openshell: could not check openai provider for session %d",
+                session.id,
+                exc_info=True,
             )
     # Vertex AI via google-cloud provider — ADC is stored on the gateway (not in Swarmer DB).
     # Attach the provider if it already exists (created via the secrets UI).

@@ -161,7 +161,7 @@ async def migrate_db() -> None:
         # 'shell' is an additional supported tool and must NOT be normalised to 'opencode'.
         "UPDATE sessions SET agent_tool = 'opencode' WHERE agent_tool NOT IN ('opencode', 'shell')",
         # ACM-37232 follow-up: Session.model renamed to Session.provider — the
-        # column now stores an AI provider selection ("claude"/"gemini" preset)
+        # column now stores an AI provider selection ("claude"/"gemini"/"openai" preset)
         # rather than a specific model ID. "no such column" (fresh DB already
         # created with "provider", or already migrated) is safely suppressed.
         "ALTER TABLE sessions RENAME COLUMN model TO provider",

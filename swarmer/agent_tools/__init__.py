@@ -70,15 +70,26 @@ class AgentToolStrategy(ABC):
         return True
 
     @abstractmethod
-    def get_model_options(self, secret=None, has_vertex: bool = False, has_gemini: bool = False) -> list[dict]:
+    def get_model_options(
+        self,
+        secret=None,
+        has_vertex: bool = False,
+        has_gemini: bool = False,
+        has_openai: bool = False,
+    ) -> list[dict]:
         ...
 
     @abstractmethod
     def get_default_model(self, has_adc: bool) -> str:
         ...
 
-    def get_preset_options(self, has_vertex: bool = False, has_gemini: bool = False) -> list[dict]:
-        """Return family-level model presets (e.g. Claude/Gemini) for the UI.
+    def get_preset_options(
+        self,
+        has_vertex: bool = False,
+        has_gemini: bool = False,
+        has_openai: bool = False,
+    ) -> list[dict]:
+        """Return family-level model presets (e.g. Claude/Gemini/OpenAI) for the UI.
 
         Each dict has: value (preset name), label, group, and available (bool)
         indicating whether the required provider credential is configured.

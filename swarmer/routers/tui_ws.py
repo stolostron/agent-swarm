@@ -61,7 +61,7 @@ async def session_tui(
     tool = get_tool(session.agent_tool)
 
     tui_cmd_parts = [tool.get_tui_binary()]
-    # session.provider is a family preset name ("claude"/"gemini", ACM-37232);
+    # session.provider is a family preset name ("claude"/"gemini"/"openai", ACM-37232);
     # resolve it to a concrete provider/model@version ID for the CLI flag.
     _tui_model = tool.resolve_build_model(session.provider) if session.provider else ""
     if _tui_model:
@@ -249,6 +249,5 @@ async def _run_openshell_tui(
             await websocket.close()
         except Exception:
             pass
-
 
 
