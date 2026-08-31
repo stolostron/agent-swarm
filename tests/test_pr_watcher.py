@@ -115,7 +115,7 @@ class TestAuthorTrustEvaluation(unittest.TestCase):
 
     def test_layer1_native_untrusted_associations(self):
         policy = TrustPolicy(strategy=TrustStrategy.ORG_AND_COLLABORATORS)
-        for assoc in ("FIRST_TIME_CONTRIBUTOR", "NONE"):
+        for assoc in ("FIRST_TIME_CONTRIBUTOR", "MANNEQUIN", "NONE"):
             self.base_pr.author_association = assoc
             res = evaluate_author_trust(self.base_pr, policy)
             self.assertFalse(res.is_trusted)
