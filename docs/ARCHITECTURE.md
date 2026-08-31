@@ -497,7 +497,7 @@ To prevent arbitrary code execution, compute/token exhaustion, and prompt inject
 
 1. **Layer 1: Native GitHub Author Association (Default)**
    - Automatically trusts PR authors with `OWNER`, `MEMBER`, `COLLABORATOR`, or `CONTRIBUTOR` associations.
-   - Treats first-time and unknown associations (`FIRST_TIME_CONTRIBUTOR`, `FIRST_TIMER`, `NONE`) as **untrusted** by default.
+   - Treats first-time and unknown associations (`FIRST_TIME_CONTRIBUTOR`, `FIRST_TIMER`, `MANNEQUIN`, `NONE`) as **untrusted** by default.
 2. **Layer 2: Workspace Trust Policy**
    - Configurable explicit allowlist of logins or GitHub organization team memberships (`GET /orgs/{org}/teams/{slug}/members`).
 3. **Layer 3: The `ok-to-review` Label Gate**
