@@ -63,7 +63,9 @@ Triggers are modeled as first-class items supporting both `event` and `cron` typ
 
 | Category | Author Scope | Condition / Trigger | Target Action | Prompt |
 | :--- | :--- | :--- | :--- | :--- |
-| **Fix Authors** | `self` (per-schedule `fix_authors` GitHub logins) | CI Failure, Merge Conflict, Review Comments | `pr-fix` | `prompts/auto-pr-fix-agent.md` |
+| **Fix Authors** | `self` (per-schedule `fix_authors` GitHub logins) | CI Failure, Merge Conflict | `pr-fix` | `prompts/auto-pr-fix-agent.md` |
+| **Review Hygiene** | `all` / `team` / `self` | Review Comments (CodeRabbit / Human) | `pr-hygiene` | schedule-configured hygiene prompt |
+| **Catch-all Actionable** | any scope | Any Actionable PR State (`new_pr_or_commit`, `ci_fail_or_conflict`, `review_comments`) | `pr-fix` or `pr-review` (signal-dependent) | schedule-configured prompt |
 | **Team PRs** | `team` (Trusted Collaborators) | New PR opened, new commit pushed | `pr-review` | Session's configured prompt |
 | **Automated Bots** | `bots` (`dependabot`, `renovate`, `app/*`) | Any | `auto-merge-defer` | Defer to repo's GitHub Actions |
 | **Untrusted / External** | Non-members, first-time contributors | No `ok-to-review` label | `ignore` | Ignored |

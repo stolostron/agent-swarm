@@ -1,18 +1,11 @@
 from datetime import datetime
 
-from sqlalchemy import (
-    DateTime,
-    Integer,
-    String,
-    Text,
-    UniqueConstraint,
-    func,
-)
+from sqlalchemy import DateTime, Integer, String, Text, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from swarmer.database import Base
 
-PR_ACTION_STATUSES = ("dispatched", "completed", "failed", "blocked")
+PR_ACTION_STATUSES = ("queued", "dispatched", "completed", "failed", "blocked")
 
 
 class PRActionState(Base):
@@ -41,6 +34,7 @@ class PRActionState(Base):
     )
     attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     last_error: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
+    event_context: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
     last_dispatched_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, server_default=func.now()

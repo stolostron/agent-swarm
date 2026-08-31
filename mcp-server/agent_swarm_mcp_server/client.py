@@ -296,7 +296,7 @@ class AgentSwarmClient:
     # ==================================================================
 
     async def list_session_schedules(self, ws_id: int, sid: int) -> list[dict]:
-        """List all cron schedules for a session."""
+        """List all schedules (cron and event triggers) for a session."""
         return await self._get(f"/api/v1/workspaces/{ws_id}/sessions/{sid}/schedules")
 
     async def create_session_schedule(
@@ -314,7 +314,11 @@ class AgentSwarmClient:
         instruction_prompt: str = "",
         enabled: bool = True,
     ) -> dict:
-        """Create a cron or event execution schedule for a session."""
+        """Create a cron or event execution schedule for a session.
+
+        Event conditions include: ci_fail_or_conflict, new_pr_or_commit,
+        review_comments, and any_actionable.
+        """
         body: dict = {
             "trigger_type": trigger_type,
             "cron_schedule": cron_schedule,

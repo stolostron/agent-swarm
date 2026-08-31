@@ -277,6 +277,9 @@ async def migrate_db() -> None:
         )""",
         """CREATE UNIQUE INDEX IF NOT EXISTS uq_pr_action_state_key
            ON pr_action_state (repo, pr_number, head_sha, action)""",
+        # ACM-42978: queued PR watcher dispatches need serialized event context
+        # so same-session fan-out can run reliably after the active session ends.
+        "ALTER TABLE pr_action_state ADD COLUMN event_context TEXT NOT NULL DEFAULT ''",
         """CREATE TABLE IF NOT EXISTS repo_etags (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             repo VARCHAR(255) NOT NULL UNIQUE,

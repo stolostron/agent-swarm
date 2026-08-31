@@ -16,7 +16,7 @@ from swarmer.models.session_schedule import SessionSchedule
 log = logging.getLogger(__name__)
 
 # Statuses that block re-dispatch for the same (repo, pr, head_sha, action).
-_BLOCKING_STATUSES = {"dispatched", "completed", "blocked"}
+_BLOCKING_STATUSES = {"queued", "dispatched", "completed", "blocked"}
 # Statuses that consume the retry budget.
 _ATTEMPT_STATUSES = {"dispatched", "failed"}
 
@@ -113,6 +113,7 @@ async def record_dispatch(
     session_id: int | None,
     status: str = "dispatched",
     error: str = "",
+    event_context: str = "",
 ) -> int:
     """Record or update a dispatch attempt. Returns the new attempt count."""
     now = datetime.now(timezone.utc)
@@ -127,6 +128,7 @@ async def record_dispatch(
             status=status,
             attempts=1 if status in _ATTEMPT_STATUSES else 0,
             last_error=error,
+            event_context=event_context,
             last_dispatched_at=now,
         )
         db.add(row)
@@ -136,9 +138,20 @@ async def record_dispatch(
         row.session_id = session_id
         row.status = status
         row.last_error = error
+        row.event_context = event_context or row.event_context
         row.last_dispatched_at = now
     await db.commit()
     return row.attempts
+
+
+async def list_queued_dispatches(db: AsyncSession) -> list[PRActionState]:
+    """Return queued dispatch rows ordered oldest-first for FIFO replay."""
+    result = await db.execute(
+        select(PRActionState)
+        .where(PRActionState.status == "queued")
+        .order_by(PRActionState.last_dispatched_at.asc(), PRActionState.id.asc())
+    )
+    return list(result.scalars().all())
 
 
 async def reconcile_completed(db: AsyncSession, session_id: int, phase: str) -> None:
