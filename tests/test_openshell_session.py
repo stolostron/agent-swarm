@@ -661,6 +661,76 @@ class TestDoLaunchOpenshell:
         assert gemini_pname not in call_kwargs.get("provider_names", [])
 
     @pytest.mark.asyncio
+    async def test_openai_provider_attached_when_configured_on_gateway(self, client):
+        """When an OpenAI provider exists on the gateway, attach it to the sandbox."""
+        ws = await _create_workspace(client)
+        s_resp = await client.post(
+            f"/api/v1/workspaces/{ws['id']}/sessions",
+            json={"name": "s-openai", "mode": "prompt", "agent_tool": "opencode", "provider": "openai"},
+        )
+        assert s_resp.status_code == 201, s_resp.text
+        s = s_resp.json()
+        expected_pname = f"swarmer-ws-{ws['id']}-openai"
+
+        patches = self._patch_openshell()
+        with patches["create_provider"], \
+             patches["ensure_provider"] as mock_ensure, \
+             patches["configure_provider_credential"], patches["attach_sandbox_provider"], \
+             patches["create_sandbox"], patches["write_agent_config"], \
+             patches["write_agents_md"], patches["exec_command"], \
+             patches["start_agent"], patches["delete_sandbox"], \
+             patches["build_policy"], patches["run_agent"], \
+             patches["setup_sandbox"] as mock_setup, \
+             patches["get_image"]:
+            with patch(
+                "swarmer.openshell_client.provider_exists",
+                new=AsyncMock(side_effect=lambda name, **kw: name == expected_pname),
+            ):
+                await client.post(
+                    f"/api/v1/workspaces/{ws['id']}/sessions/{s['id']}/launch"
+                )
+                await asyncio.sleep(0)
+
+        call_kwargs = mock_setup.call_args.kwargs if mock_setup.call_args else {}
+        assert expected_pname in call_kwargs.get("provider_names", []), (
+            f"Expected {expected_pname!r} in provider_names, got {call_kwargs.get('provider_names')}"
+        )
+        openai_ensure_calls = [
+            c for c in mock_ensure.call_args_list
+            if len(c.args) >= 1 and c.args[0] == expected_pname
+        ]
+        assert openai_ensure_calls == []
+
+    @pytest.mark.asyncio
+    async def test_openai_provider_not_attached_when_absent_from_gateway(self, client):
+        """OpenAI model launches must fail early when the gateway provider is absent."""
+        ws = await _create_workspace(client)
+        s_resp = await client.post(
+            f"/api/v1/workspaces/{ws['id']}/sessions",
+            json={"name": "s-openai-absent", "mode": "prompt", "agent_tool": "opencode", "provider": "openai"},
+        )
+        assert s_resp.status_code == 201, s_resp.text
+        s = s_resp.json()
+
+        patches = self._patch_openshell()
+        with patches["create_provider"], patches["ensure_provider"], \
+             patches["configure_provider_credential"], patches["attach_sandbox_provider"], \
+              patches["create_sandbox"], patches["write_agent_config"], \
+              patches["write_agents_md"], patches["exec_command"], \
+              patches["start_agent"], patches["delete_sandbox"], \
+              patches["build_policy"], patches["run_agent"], \
+              patches["setup_sandbox"] as mock_setup, \
+              patches["provider_exists"], patches["get_image"]:
+            resp = await client.post(
+                f"/api/v1/workspaces/{ws['id']}/sessions/{s['id']}/launch"
+            )
+            await asyncio.sleep(0)
+
+        assert resp.status_code == 500
+        assert "OpenAI API key is not configured for this workspace" in resp.text
+        mock_setup.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_launch_blocked_when_github_repo_without_pat(self, client):
         """Launch must be rejected with a clear message when github.com repos have no PAT.
 
@@ -1522,6 +1592,56 @@ class TestRunOpenshellAgent:
             sess = (await db.execute(select(Session).where(Session.id == s["id"]))).scalar_one()
 
         assert sess.phase == "failed"
+
+    @pytest.mark.asyncio
+    async def test_prompt_mode_redacts_openai_key_in_opencode_output(self, client):
+        ws = await _create_workspace(client)
+        s = await _create_session(client, ws["id"], mode="prompt")
+
+        async with _TestSession() as db:
+            await db.execute(
+                text("UPDATE sessions SET sandbox_name='sandbox-redact', phase='pending' WHERE id=:id"),
+                {"id": s["id"]},
+            )
+            await db.commit()
+
+        sentinel = "top-secret-openai-value"
+
+        async def _fake_exec_streaming(_sandbox_name, _cmd, on_output=None, poll_interval=5.0, env=None):
+            if on_output is not None:
+                await on_output(f"stream OPENAI_API_KEY={sentinel}")
+            return MagicMock(exit_code=0, stdout="", stderr="")
+
+        with patch("swarmer.database.get_db", new=_make_test_db_provider()), \
+             patch("swarmer.openshell_client.exec_command_streaming", new=_fake_exec_streaming), \
+             patch(
+                 "swarmer.openshell_client.read_opencode_response",
+                 new=AsyncMock(return_value=f"final OPENAI_API_KEY={sentinel}"),
+             ), \
+             patch("swarmer.openshell_client.get_draft_chunks", new=AsyncMock(return_value=[])), \
+             patch("swarmer.openshell_client.delete_sandbox", new=AsyncMock()):
+            from swarmer.routers.sessions import _run_openshell_agent
+
+            await _run_openshell_agent(
+                s["id"],
+                ws["id"],
+                "sandbox-redact",
+                ["sh", "-c", "opencode run"],
+                "prompt",
+                "opencode",
+            )
+
+        async with _TestSession() as db:
+            from sqlalchemy import select
+            from swarmer.models.session import Session
+
+            sess = (await db.execute(select(Session).where(Session.id == s["id"]))).scalar_one()
+
+        assert sess.phase == "succeeded"
+        assert sentinel not in (sess.last_output or "")
+        assert sentinel not in (sess.raw_output or "")
+        assert "OPENAI_API_KEY=[REDACTED]" in (sess.last_output or "")
+        assert "OPENAI_API_KEY=[REDACTED]" in (sess.raw_output or "")
 
     @pytest.mark.asyncio
     async def test_prompt_mode_auto_deletes_sandbox_on_success(self, client):
@@ -2945,4 +3065,3 @@ class TestPolicyRulesLiveApplyRevoke:
         assert trigger["policyChanged"]["live_revoked"] is False
         # Was called but returned 0 (startup rule, not in draft history).
         mock_undo.assert_awaited_once()
-

@@ -376,7 +376,7 @@
                   {% if canonical_agent_tool == 'shell' %}
                     Shell: runs the prompt as a raw command — no AI agent, no token cost.
                   {% else %}
-                    OpenCode: AI coding agent powered by Claude or Gemini.
+                    OpenCode: AI coding agent powered by Claude, Gemini, or OpenAI.
                   {% endif %}
                   {% if session.mode == 'server' %}
                     (Shell is unavailable in server mode.)
@@ -399,7 +399,7 @@
                     if (hint) hint.textContent = 'Shell: runs the prompt as a raw command — no AI agent, no token cost.';
                     if (providerContainer) providerContainer.style.display = 'none';
                   } else {
-                    if (hint) hint.textContent = 'OpenCode: AI coding agent powered by Claude or Gemini.';
+                    if (hint) hint.textContent = 'OpenCode: AI coding agent powered by Claude, Gemini, or OpenAI.';
                     if (providerContainer) providerContainer.style.display = '';
                   }
                   if (window._cfgSave) {

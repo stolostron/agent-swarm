@@ -639,7 +639,7 @@ class AgentSwarmMCPServer:
                 name: Unique session name within the workspace.
                 agent_tool: Agent tool. One of: opencode, shell. Default: opencode.
                 mode: Execution mode. One of: prompt, tui, server. Default: prompt.
-                provider: AI provider preset. One of: claude, gemini. Empty string
+                provider: AI provider preset. One of: claude, gemini, openai. Empty string
                           uses the tool default (based on configured credentials).
                 persist: Keep workspace volume between runs. Default: false.
                 working_branch: Git branch to create/checkout in the sandbox.
@@ -673,7 +673,7 @@ class AgentSwarmMCPServer:
                 session_id: The session id.
                 name: New session name.
                 mode: New mode (prompt/tui/server).
-                provider: New AI provider preset (claude/gemini).
+                provider: New AI provider preset (claude/gemini/openai).
                 agent_tool: New agent tool (opencode/shell).
                 instruction_prompt: New additional instructions (or raw command for shell).
                 prompt_id: New base prompt id.
@@ -882,7 +882,7 @@ class AgentSwarmMCPServer:
                 session_id: The session id.
                 cron_schedule: Cron expression (e.g. '0 9 * * 1-5'). Required for cron triggers.
                 trigger_type: 'cron' for scheduled runs, 'event' for GitHub event triggers.
-                event_condition: Event trigger condition (e.g. 'ci_fail_or_conflict', 'new_pr_or_commit').
+                event_condition: Event trigger condition (e.g. 'ci_fail_or_conflict', 'new_pr_or_commit', 'review_comments', 'any_actionable').
                 author_scope: PR author scope (e.g. 'self', 'team', 'bots', 'all').
                 fix_authors: Comma-separated GitHub logins for 'self' author scope.
                 label: Human-readable name for this trigger.
@@ -924,7 +924,7 @@ class AgentSwarmMCPServer:
                 schedule_id: The schedule id to update.
                 cron_schedule: New cron expression.
                 trigger_type: 'cron' or 'event'.
-                event_condition: New event condition.
+                event_condition: New event condition ('ci_fail_or_conflict', 'new_pr_or_commit', 'review_comments', 'any_actionable').
                 author_scope: New author scope ('self', 'team', 'bots', 'all').
                 fix_authors: Comma-separated GitHub logins for 'self' author scope.
                 label: New label.

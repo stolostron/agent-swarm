@@ -348,6 +348,7 @@ def _endpoint(host: str) -> dict:
 def _build_agent_api_block(agent_tool: str, model: str) -> dict:
     _provider = model.split("/")[0] if "/" in model else ""
     _is_vertex = _provider in ("google-vertex-anthropic", "vertexai")
+    _is_openai = _provider == "openai"
 
     endpoints = [
         _endpoint("generativelanguage.googleapis.com"),
@@ -357,6 +358,8 @@ def _build_agent_api_block(agent_tool: str, model: str) -> dict:
     ]
     if _is_vertex:
         endpoints.append(_endpoint("aiplatform.googleapis.com"))
+    if _is_openai:
+        endpoints.append(_endpoint("api.openai.com"))
     block = {
         "name": "agent-api",
         "endpoints": endpoints,

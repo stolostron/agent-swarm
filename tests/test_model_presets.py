@@ -1,4 +1,4 @@
-"""Unit tests for the Claude/Gemini model presets feature (ACM-37232).
+"""Unit tests for the Claude/Gemini/OpenAI model presets feature (ACM-37232).
 
 Covers:
   - OpenCodeStrategy.resolve_preset() maps preset names to configured model IDs
@@ -6,7 +6,7 @@ Covers:
     model, and passes through raw model IDs unchanged
   - OpenCodeStrategy.is_valid_model() accepts preset names
   - OpenCodeStrategy.get_default_model() returns preset names
-  - OpenCodeStrategy.get_model_options() always lists both presets with an
+  - OpenCodeStrategy.get_model_options() always lists all presets with an
     "available" flag + human-readable "reason", instead of omitting options
     when a provider isn't configured
   - OpenCodeStrategy.get_preset_options() filters to just the preset entries
@@ -51,6 +51,14 @@ class TestResolvePreset:
             "small": settings.gemini_preset_small_model,
         }
 
+    def test_resolve_openai_preset(self):
+        mapping = _opencode.resolve_preset("openai")
+        assert mapping == {
+            "plan": settings.openai_preset_plan_model,
+            "build": settings.openai_preset_build_model,
+            "small": settings.openai_preset_small_model,
+        }
+
     def test_resolve_unknown_preset_returns_none(self):
         assert _opencode.resolve_preset("google/gemini-3.5-flash") is None
         assert _opencode.resolve_preset("") is None
@@ -59,6 +67,7 @@ class TestResolvePreset:
     def test_is_preset(self):
         assert _opencode.is_preset("claude") is True
         assert _opencode.is_preset("gemini") is True
+        assert _opencode.is_preset("openai") is True
         assert _opencode.is_preset("google-vertex-anthropic/claude-sonnet-5@default") is False
 
 
@@ -66,6 +75,7 @@ class TestResolveBuildModel:
     def test_preset_resolves_to_build_model(self):
         assert _opencode.resolve_build_model("claude") == settings.claude_preset_build_model
         assert _opencode.resolve_build_model("gemini") == settings.gemini_preset_build_model
+        assert _opencode.resolve_build_model("openai") == settings.openai_preset_build_model
 
     def test_raw_model_passes_through_unchanged(self):
         raw = "google-vertex-anthropic/claude-opus-4-6@default"
@@ -83,10 +93,12 @@ class TestIsValidModel:
     def test_preset_names_are_valid(self):
         assert _opencode.is_valid_model("claude") is True
         assert _opencode.is_valid_model("gemini") is True
+        assert _opencode.is_valid_model("openai") is True
 
     def test_raw_model_ids_are_valid(self):
         assert _opencode.is_valid_model("google-vertex-anthropic/claude-sonnet-5@default") is True
         assert _opencode.is_valid_model("google/gemini-3.5-flash") is True
+        assert _opencode.is_valid_model("openai/gpt-5.3-codex@default") is True
 
     def test_garbage_is_invalid(self):
         assert _opencode.is_valid_model("not-a-model") is False
@@ -107,35 +119,43 @@ class TestGetDefaultModel:
 
 class TestGetModelOptions:
     def test_presets_always_present_regardless_of_availability(self):
-        """Both presets are listed even when neither provider is configured —
+        """All presets are listed even when no provider is configured —
         an unavailable provider must surface as a visible error, not vanish."""
-        options = _opencode.get_model_options(has_vertex=False, has_gemini=False)
+        options = _opencode.get_model_options(
+            has_vertex=False,
+            has_gemini=False,
+            has_openai=False,
+        )
         presets = [o for o in options if o["type"] == "preset"]
-        assert {p["value"] for p in presets} == {"claude", "gemini"}
+        assert {p["value"] for p in presets} == {"claude", "gemini", "openai"}
         for p in presets:
             assert p["available"] is False
             assert p["reason"]  # non-empty human-readable reason
 
     def test_presets_marked_available_when_provider_configured(self):
-        options = _opencode.get_model_options(has_vertex=True, has_gemini=True)
+        options = _opencode.get_model_options(has_vertex=True, has_gemini=True, has_openai=True)
         presets = {o["value"]: o for o in options if o["type"] == "preset"}
         assert presets["claude"]["available"] is True
         assert presets["claude"]["reason"] == ""
         assert presets["gemini"]["available"] is True
         assert presets["gemini"]["reason"] == ""
+        assert presets["openai"]["available"] is True
+        assert presets["openai"]["reason"] == ""
 
     def test_partial_availability(self):
-        options = _opencode.get_model_options(has_vertex=True, has_gemini=False)
+        options = _opencode.get_model_options(has_vertex=True, has_gemini=False, has_openai=False)
         presets = {o["value"]: o for o in options if o["type"] == "preset"}
         assert presets["claude"]["available"] is True
         assert presets["gemini"]["available"] is False
         assert "Google AI Studio" in presets["gemini"]["reason"]
+        assert presets["openai"]["available"] is False
+        assert "OpenAI" in presets["openai"]["reason"]
 
     def test_only_presets_are_returned(self):
-        """The Advanced individual-model picker has been removed — only the
-        two family-level presets are ever listed."""
-        options = _opencode.get_model_options(has_vertex=True, has_gemini=True)
-        assert len(options) == 2
+        """The Advanced individual-model picker has been removed — only
+        family-level presets are listed."""
+        options = _opencode.get_model_options(has_vertex=True, has_gemini=True, has_openai=True)
+        assert len(options) == 3
         assert all(o["type"] == "preset" for o in options)
 
     def test_secret_alone_does_not_grant_gemini_availability(self):
@@ -148,18 +168,28 @@ class TestGetModelOptions:
         class _FakeSecret:
             google_api_key_enc = "encrypted-value"
 
-        options = _opencode.get_model_options(secret=_FakeSecret(), has_vertex=False, has_gemini=False)
+        options = _opencode.get_model_options(
+            secret=_FakeSecret(),
+            has_vertex=False,
+            has_gemini=False,
+            has_openai=False,
+        )
         gemini_preset = next(o for o in options if o["value"] == "gemini")
         assert gemini_preset["available"] is False
 
     def test_explicit_has_gemini_overrides_missing_secret(self):
-        options = _opencode.get_model_options(secret=None, has_vertex=False, has_gemini=True)
+        options = _opencode.get_model_options(secret=None, has_vertex=False, has_gemini=True, has_openai=False)
         gemini_preset = next(o for o in options if o["value"] == "gemini")
         assert gemini_preset["available"] is True
 
+    def test_explicit_has_openai_overrides_missing_secret(self):
+        options = _opencode.get_model_options(secret=None, has_vertex=False, has_gemini=False, has_openai=True)
+        openai_preset = next(o for o in options if o["value"] == "openai")
+        assert openai_preset["available"] is True
+
     def test_get_preset_options_filters_to_presets_only(self):
-        presets = _opencode.get_preset_options(has_vertex=True, has_gemini=False)
-        assert len(presets) == 2
+        presets = _opencode.get_preset_options(has_vertex=True, has_gemini=False, has_openai=False)
+        assert len(presets) == 3
         assert all(p["type"] == "preset" for p in presets)
 
 
@@ -205,6 +235,18 @@ class TestBuildConfigDataPresets:
         config = json.loads(data["opencode.json"])
         assert config["enabled_providers"] == ["google"]
 
+    def test_openai_preset_resolves_and_sets_plan_high_variant(self, monkeypatch):
+        monkeypatch.setattr(settings, "opencode_experimental_plan_mode", True)
+        data = _opencode.build_config_data(model="openai")
+        config = json.loads(data["opencode.json"])
+        assert config["model"] == settings.openai_preset_build_model
+        assert config["small_model"] == settings.openai_preset_small_model
+        assert config["enabled_providers"] == ["openai"]
+        assert config["agent"]["plan"]["model"] == settings.openai_preset_plan_model
+        assert config["agent"]["plan"]["mode"] == "primary"
+        assert config["agent"]["plan"]["variant"] == "high"
+        assert config["agent"]["build"]["mode"] == "primary"
+
     def test_non_preset_model_unaffected(self):
         """A raw provider/model string (e.g. from a session created before
         presets existed) keeps the pre-existing pro->flash / opus-sonnet->haiku
@@ -220,3 +262,9 @@ class TestBuildConfigDataPresets:
         config = json.loads(data["opencode.json"])
         assert config["model"] == "google/gemini-3.7-flash"
         assert config["enabled_providers"] == ["google"]
+
+    def test_raw_openai_model_enables_only_openai_provider(self):
+        data = _opencode.build_config_data(model="openai/gpt-5.3-codex@default")
+        config = json.loads(data["opencode.json"])
+        assert config["small_model"] == settings.openai_preset_small_model
+        assert config["enabled_providers"] == ["openai"]

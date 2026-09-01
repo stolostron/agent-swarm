@@ -3,6 +3,8 @@
 All data access goes through the REST API client (/api/v1/).
 """
 
+import logging
+
 from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
 from fastapi.responses import RedirectResponse
 from fastapi.templating import Jinja2Templates
@@ -16,6 +18,7 @@ from swarmer.routers.api_client import APIError, get_api_client
 
 router = APIRouter()
 templates = Jinja2Templates(directory="swarmer/templates")
+log = logging.getLogger(__name__)
 
 _VALID_TABS = ("credentials", "pats", "github-app", "pull-secret")
 
@@ -77,6 +80,16 @@ async def _secrets_context(api, ws_id: int) -> dict:
     except Exception:
         pass  # gateway may be unreachable in local dev without OpenShell
 
+    # Check gateway for the OpenAI provider — same gateway-only pattern as
+    # Gemini/Vertex: key is pushed at save time and never stored in Swarmer DB.
+    openai_provider_configured = False
+    try:
+        openai_provider_configured = await openshell_client.provider_exists(
+            f"swarmer-ws-{ws_id}-openai"
+        )
+    except Exception:
+        pass  # gateway may be unreachable in local dev without OpenShell
+
     return {
         "secret": secret,
         "pats": pats,
@@ -84,6 +97,7 @@ async def _secrets_context(api, ws_id: int) -> dict:
         "github_app": github_app,
         "vertex_provider_configured": vertex_provider_configured,
         "gemini_provider_configured": gemini_provider_configured,
+        "openai_provider_configured": openai_provider_configured,
     }
 
 
@@ -147,6 +161,7 @@ async def opencode_secret_save(
     google_cloud_project: str = Form(""),
     vertex_location: str = Form(""),
     google_api_key: str = Form(""),
+    openai_api_key: str = Form(""),
     shared: str = Form(""),
     adc_file: UploadFile | None = File(None),
 ):
@@ -220,8 +235,33 @@ async def opencode_secret_save(
                     "GOOGLE_GENERATIVE_AI_API_KEY": gemini_key,
                 },
             )
-        except Exception as exc:
-            flash(request, f"Failed to configure Gemini on OpenShell: {exc}", "danger")
+        except Exception:
+            log.warning(
+                "credential_save: failed to configure Gemini provider for workspace %d",
+                ws_id,
+                exc_info=True,
+            )
+            flash(request, "Failed to configure Gemini on OpenShell.", "danger")
+
+    # Push the OpenAI API key to the OpenShell gateway if submitted. Blank is
+    # a no-op, keeping any existing provider credential unchanged.
+    openai_key = openai_api_key.strip()
+    if openai_key:
+        pname = f"swarmer-ws-{ws_id}-openai"
+        try:
+            await openshell_client.ensure_provider(
+                pname,
+                "openai",
+                {},
+                credentials={"OPENAI_API_KEY": openai_key},
+            )
+        except Exception:
+            log.warning(
+                "credential_save: failed to configure OpenAI provider for workspace %d",
+                ws_id,
+                exc_info=True,
+            )
+            flash(request, "Failed to configure OpenAI on OpenShell.", "danger")
 
     async with get_api_client(request) as api:
         try:
@@ -239,6 +279,7 @@ async def opencode_secret_save(
                 google_cloud_project=google_cloud_project,
                 vertex_location=vertex_location,
                 google_api_key="",  # intentionally empty — gateway is the store
+                openai_api_key="",  # intentionally empty — gateway is the store
                 application_default_credentials="",  # intentionally empty — gateway is the store
                 shared=bool(shared),
             )

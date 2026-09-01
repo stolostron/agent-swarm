@@ -322,7 +322,19 @@ async def _get_provider_options(
         has_gemini = await openshell_client.provider_exists(f"swarmer-ws-{ws_id}-google-ai-studio")
     except Exception:
         pass
-    return tool.get_model_options(oc, has_vertex=has_vertex, has_gemini=has_gemini)
+    # Check gateway for OpenAI provider — key is stored on OpenShell, not Swarmer DB.
+    has_openai = False
+    try:
+        from swarmer import openshell_client
+        has_openai = await openshell_client.provider_exists(f"swarmer-ws-{ws_id}-openai")
+    except Exception:
+        pass
+    return tool.get_model_options(
+        oc,
+        has_vertex=has_vertex,
+        has_gemini=has_gemini,
+        has_openai=has_openai,
+    )
 
 router = APIRouter()
 templates = Jinja2Templates(directory="swarmer/templates")
@@ -1172,7 +1184,7 @@ async def _do_launch_openshell(
     tool = get_tool(session.agent_tool)
 
     # Resolve the provider first so it is available for provider registration and
-    # policy building. session.provider is a family preset name ("claude"/"gemini",
+    # policy building. session.provider is a family preset name ("claude"/"gemini"/"openai",
     # ACM-37232) — build_config_data() understands it directly. Everything else
     # (network policy, CLI --model flag, model.json state) needs a concrete model
     # ID, so it uses `model` — the provider resolved to its BUILD-role model —
@@ -1286,6 +1298,22 @@ async def _do_launch_openshell(
                 "_do_launch_openshell: could not check google-ai-studio provider for session %d",
                 session.id, exc_info=True,
             )
+    # OpenAI provider — key is stored on the gateway (not in Swarmer DB).
+    # Only required for OpenAI model sessions.
+    _openai_pname = f"swarmer-ws-{ws_id}-openai"
+    if tool.requires_ai_model() and model.split("/", 1)[0] == "openai":
+        try:
+            has_openai_provider = await openshell_client.provider_exists(_openai_pname)
+        except Exception:
+            log.warning(
+                "_do_launch_openshell: could not check openai provider for session %d",
+                session.id,
+                exc_info=True,
+            )
+            raise ValueError("Could not verify OpenAI API key configuration for this workspace")
+        if not has_openai_provider:
+            raise ValueError("OpenAI API key is not configured for this workspace")
+        provider_names.append(_openai_pname)
     # Vertex AI via google-cloud provider — ADC is stored on the gateway (not in Swarmer DB).
     # Attach the provider if it already exists (created via the secrets UI).
     _vertex_pname = f"swarmer-ws-{ws_id}-google-cloud"
@@ -1902,10 +1930,10 @@ async def _run_openshell_agent(
 
             async def _on_output(text: str) -> None:
                 _streamed[:] = [text]
-                # Redact secrets from shell output before persisting — the raw
-                # stdout/stderr of a shell command may contain credential values
-                # if the script calls printenv, env, or echoes config variables.
-                _safe = _redact_secrets(text, secret_values=injected_secrets) if agent_tool == "shell" else text
+                # Redact secrets before persisting streamed output for all tools.
+                # OpenCode may still surface env assignments (e.g. printenv),
+                # including gateway-injected keys not present in injected_secrets.
+                _safe = _redact_secrets(text, secret_values=injected_secrets)
                 await _update_db(last_output=_safe, raw_output=_safe)
 
             result = await openshell_client.exec_command_streaming(
@@ -1931,15 +1959,14 @@ async def _run_openshell_agent(
             _streamed_text = _streamed[0] if _streamed else ""
             if agent_tool == "shell":
                 # Use streamed stdout; fall back to stderr on failure.
-                # Apply secret redaction: the raw shell command output may contain
-                # credential values if the script echoes env vars or config.
-                output = _redact_secrets(_streamed_text or stderr, secret_values=injected_secrets)
+                _raw_output = _streamed_text or stderr
             else:
-                output = (
+                _raw_output = (
                     await openshell_client.read_opencode_response(sandbox_name)
                     or _streamed_text
                     or stderr
                 )
+            output = _redact_secrets(_raw_output, secret_values=injected_secrets)
 
             # Snapshot draft policy chunks before any sandbox deletion so the
             # Policy tab can show what was denied/proposed during this run.
@@ -1980,9 +2007,7 @@ async def _run_openshell_agent(
                     phase, session_id,
                 )
 
-            # For shell runs _streamed_text is already redacted (via _on_output);
-            # for AI-tool runs it passes through unmodified.
-            _final_raw = _streamed_text if agent_tool != "shell" else _redact_secrets(_streamed_text, secret_values=injected_secrets)
+            _final_raw = _redact_secrets(_streamed_text, secret_values=injected_secrets)
             await _update_db(
                 phase=phase,
                 last_output=output,

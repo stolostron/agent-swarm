@@ -200,7 +200,7 @@ async def _restart_prompt_pollers() -> None:
                 )
             else:
                 _raw_model = s.provider or _tool.get_default_model(False)
-                # s.provider is a family preset name ("claude"/"gemini", ACM-37232);
+                # s.provider is a family preset name ("claude"/"gemini"/"openai", ACM-37232);
                 # resolve it to a concrete provider/model@version ID for the CLI flag.
                 _model = _tool.resolve_build_model(_raw_model)
                 # Reconstruct the same AGENTS.md-reading command used at initial launch

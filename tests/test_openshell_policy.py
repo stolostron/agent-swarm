@@ -416,6 +416,11 @@ def test_agent_api_block_opencode_includes_gemini_endpoint():
     assert any("generativelanguage.googleapis.com" in h for h in hosts)
 
 
+def test_agent_api_block_openai_includes_openai_endpoint():
+    hosts = _bhosts(model="openai/gpt-5.3-codex")
+    assert "api.openai.com" in hosts
+
+
 # ---------------------------------------------------------------------------
 # 7. Prompt source raw.githubusercontent.com blocks
 # ---------------------------------------------------------------------------

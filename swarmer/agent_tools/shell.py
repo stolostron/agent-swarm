@@ -168,6 +168,7 @@ class ShellStrategy(AgentToolStrategy):
         secret: "OpencodeSecret | None" = None,
         has_vertex: bool = False,
         has_gemini: bool = False,
+        has_openai: bool = False,
     ) -> list[dict]:
         """Return an empty list — shell tool needs no AI provider.
 

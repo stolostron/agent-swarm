@@ -55,7 +55,7 @@ class Session(Base):
     mode: Mapped[str] = mapped_column(
         String(16), nullable=False, default="prompt", server_default="prompt"
     )
-    # Stores the selected AI provider ("claude"/"gemini" family preset — the
+    # Stores the selected AI provider ("claude"/"gemini"/"openai" family preset — the
     # only UX since ACM-37232 removed individual model selection). Named
     # "provider" (not "model") because it identifies which backing AI
     # provider/credential (Vertex AI vs. Google AI Studio) the session uses,

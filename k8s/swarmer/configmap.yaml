@@ -6,7 +6,7 @@ metadata:
   labels:
     app: swarmer
 data:
-  # Claude/Gemini preset -> model-ID mappings (ACM-37232). Edit these values
+  # Claude/Gemini/OpenAI preset -> model-ID mappings (ACM-37232). Edit these values
   # directly and re-apply this file, then restart the swarmer deployment
   # (kubectl rollout restart deployment/swarmer -n swarmer) to pick up new
   # Vertex AI / Google model versions — no code change or image rebuild
@@ -18,4 +18,7 @@ data:
   GEMINI_PRESET_PLAN_MODEL: "google/gemini-3.7-flash"
   GEMINI_PRESET_BUILD_MODEL: "google/gemini-3.7-flash"
   GEMINI_PRESET_SMALL_MODEL: "google/gemini-3.5-flash-lite"
+  OPENAI_PRESET_PLAN_MODEL: "openai/gpt-5.6-terra-pro@default"
+  OPENAI_PRESET_BUILD_MODEL: "openai/gpt-5.3-codex@default"
+  OPENAI_PRESET_SMALL_MODEL: "openai/gpt-5-nano@default"
   OPENCODE_EXPERIMENTAL_PLAN_MODE: "true"

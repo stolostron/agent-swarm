@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import or_, select
@@ -34,6 +35,8 @@ router = APIRouter(
     tags=["secrets"],
     dependencies=[Depends(require_api_auth)],
 )
+
+log = logging.getLogger(__name__)
 
 
 # ============================================================
@@ -106,6 +109,29 @@ async def save_credentials(
 
     if body.google_api_key.strip():
         secret.google_api_key = body.google_api_key.strip()
+    openai_key = body.openai_api_key.strip()
+    if openai_key:
+        # OpenAI key is gateway-only: store/update the workspace-scoped provider
+        # on OpenShell, never in Swarmer's DB.
+        try:
+            from swarmer import openshell_client
+
+            await openshell_client.ensure_provider(
+                f"swarmer-ws-{ws_id}-openai",
+                "openai",
+                {},
+                credentials={"OPENAI_API_KEY": openai_key},
+            )
+        except Exception as exc:
+            log.warning(
+                "save_credentials: failed to configure OpenAI provider for workspace %d (error_type=%s)",
+                ws_id,
+                type(exc).__name__,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="failed to configure OpenAI provider on OpenShell",
+            ) from exc
     adc = body.application_default_credentials.strip()
     if adc:
         try:

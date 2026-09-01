@@ -1,4 +1,10 @@
 from abc import ABC, abstractmethod
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from swarmer.models.mcp_server import McpServer
+    from swarmer.models.opencode_secret import OpencodeSecret
+    from swarmer.models.session import Session
 
 
 class AgentToolStrategy(ABC):
@@ -18,7 +24,13 @@ class AgentToolStrategy(ABC):
         ...
 
     @abstractmethod
-    def build_config_data(self, secret=None, mcp_servers=None, use_inference_local: bool = False, model: str = "") -> dict[str, str]:
+    def build_config_data(
+        self,
+        secret: "OpencodeSecret | None" = None,
+        mcp_servers: "list[McpServer] | None" = None,
+        use_inference_local: bool = False,
+        model: str = "",
+    ) -> dict[str, str]:
         ...
 
     @abstractmethod
@@ -42,7 +54,7 @@ class AgentToolStrategy(ABC):
         ...
 
     @abstractmethod
-    def build_main_cmd(self, session, model: str, resolved_prompt: str = "") -> str:
+    def build_main_cmd(self, session: "Session", model: str, resolved_prompt: str = "") -> str:
         """Return the shell command string to execute inside the sandbox.
 
         Implementations must handle at least prompt mode.  TUI mode (return a
@@ -70,15 +82,26 @@ class AgentToolStrategy(ABC):
         return True
 
     @abstractmethod
-    def get_model_options(self, secret=None, has_vertex: bool = False, has_gemini: bool = False) -> list[dict]:
+    def get_model_options(
+        self,
+        secret: "OpencodeSecret | None" = None,
+        has_vertex: bool = False,
+        has_gemini: bool = False,
+        has_openai: bool = False,
+    ) -> list[dict]:
         ...
 
     @abstractmethod
     def get_default_model(self, has_adc: bool) -> str:
         ...
 
-    def get_preset_options(self, has_vertex: bool = False, has_gemini: bool = False) -> list[dict]:
-        """Return family-level model presets (e.g. Claude/Gemini) for the UI.
+    def get_preset_options(
+        self,
+        has_vertex: bool = False,
+        has_gemini: bool = False,
+        has_openai: bool = False,
+    ) -> list[dict]:
+        """Return family-level model presets (e.g. Claude/Gemini/OpenAI) for the UI.
 
         Each dict has: value (preset name), label, group, and available (bool)
         indicating whether the required provider credential is configured.
