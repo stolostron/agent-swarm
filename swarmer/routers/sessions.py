@@ -1004,6 +1004,8 @@ def _build_expected_hosts(model: str, repos_data: list[dict], tool_name: str, mo
 
 async def _resolve_schedule_prompt(schedule_id: int, session: Session, db: AsyncSession) -> str:
     """Resolve a per-schedule prompt, falling back to session defaults for empty fields."""
+    import json as _json
+
     from swarmer.models.session_schedule import SessionSchedule
     sched = await db.get(SessionSchedule, schedule_id)
     if sched is None:
@@ -1025,11 +1027,28 @@ async def _resolve_schedule_prompt(schedule_id: int, session: Session, db: Async
     )
 
     if effective_instruction and base_prompt:
-        return effective_instruction + "\n\n" + base_prompt
+        resolved_prompt = effective_instruction + "\n\n" + base_prompt
     elif effective_instruction:
-        return effective_instruction
+        resolved_prompt = effective_instruction
     else:
-        return base_prompt
+        resolved_prompt = base_prompt
+
+    if sched.trigger_type == "event" and sched.include_event_context and session.event_context:
+        try:
+            event_context = _json.dumps(
+                _json.loads(session.event_context), indent=2, sort_keys=True
+            )
+        except (TypeError, ValueError):
+            event_context = session.event_context
+        resolved_prompt += (
+            "\n\n## GitHub Event Context\n"
+            "The following event data identifies the event that triggered this run:\n"
+            "```json\n"
+            f"{event_context}\n"
+            "```"
+        )
+
+    return resolved_prompt
 
 
 async def _do_launch(session: Session, ws: Workspace, db: AsyncSession, user_id: str = "") -> None:
@@ -2350,6 +2369,7 @@ async def schedule_create(
     label: str = Form(""),
     prompt_id: str = Form(""),
     instruction_prompt: str = Form(""),
+    include_event_context: bool = Form(False),
     enabled: str = Form("on"),
     db: AsyncSession = Depends(get_db),
 ):
@@ -2386,6 +2406,7 @@ async def schedule_create(
         label=label.strip(),
         prompt_id=pid,
         instruction_prompt=instruction_prompt,
+        include_event_context=include_event_context,
         enabled=(enabled == "on"),
     )
     db.add(sched)
@@ -2410,6 +2431,7 @@ async def schedule_edit(
     label: str = Form(""),
     prompt_id: str = Form(""),
     instruction_prompt: str = Form(""),
+    include_event_context: bool = Form(False),
     db: AsyncSession = Depends(get_db),
 ):
     from croniter import croniter as _croniter
@@ -2445,6 +2467,8 @@ async def schedule_edit(
     sched.label = label.strip()
     sched.prompt_id = int(prompt_id) if prompt_id.strip().isdigit() else None
     sched.instruction_prompt = instruction_prompt
+    if trigger_type == "event":
+        sched.include_event_context = include_event_context
     # Enabled/disabled state is managed exclusively by the schedule_toggle
     # endpoint. The inline edit form has no `enabled` field, so this handler
     # must never touch sched.enabled — doing so previously forced every edit

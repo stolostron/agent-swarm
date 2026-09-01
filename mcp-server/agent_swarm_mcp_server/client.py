@@ -312,6 +312,7 @@ class AgentSwarmClient:
         label: str = "",
         prompt_id: int | None = None,
         instruction_prompt: str = "",
+        include_event_context: bool = True,
         enabled: bool = True,
     ) -> dict:
         """Create a cron or event execution schedule for a session."""
@@ -323,6 +324,7 @@ class AgentSwarmClient:
             "fix_authors": fix_authors,
             "label": label,
             "instruction_prompt": instruction_prompt,
+            "include_event_context": include_event_context,
             "enabled": enabled,
         }
         if prompt_id is not None:

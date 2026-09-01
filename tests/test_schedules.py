@@ -156,6 +156,7 @@ class TestSessionScheduleModel:
             assert sched.session_id == session.id
             assert sched.cron_schedule == "0 * * * *"
             assert sched.label == "hourly"
+            assert sched.include_event_context is True
             assert sched.enabled is True
 
     @pytest.mark.asyncio
@@ -605,6 +606,66 @@ class TestScheduleEditHTMXEndpoint:
             updated = await db.get(SessionSchedule, sched_id)
             assert updated.enabled is False
 
+    @pytest.mark.asyncio
+    async def test_schedule_items_include_context_checkbox_and_stable_cancel_target(self, client):
+        from swarmer.models.session_schedule import SessionSchedule
+
+        ws = await _create_workspace(client)
+        s = await _create_session(client, ws["id"])
+
+        async with _TestSession() as db:
+            sched = SessionSchedule(
+                session_id=s["id"], trigger_type="event",
+                event_condition="new_pr_or_commit", label="PR review",
+            )
+            db.add(sched)
+            await db.commit()
+            await db.refresh(sched)
+
+        resp = await client.get(
+            f"/workspaces/{ws['id']}/sessions/{s['id']}/schedules/items"
+        )
+        assert resp.status_code == 200, resp.text
+        assert f'id="sched-edit-btn-{sched.id}"' in resp.text
+        assert "document.getElementById('sched-edit-btn-" in resp.text
+        assert 'name="include_event_context"' in resp.text
+        assert "value=\"1\" checked" in resp.text
+
+    @pytest.mark.asyncio
+    async def test_edit_can_disable_event_context(self, client):
+        from swarmer.models.session_schedule import SessionSchedule
+
+        ws = await _create_workspace(client)
+        s = await _create_session(client, ws["id"])
+
+        async with _TestSession() as db:
+            sched = SessionSchedule(
+                session_id=s["id"], trigger_type="event",
+                event_condition="new_pr_or_commit", include_event_context=True,
+            )
+            db.add(sched)
+            await db.commit()
+            await db.refresh(sched)
+            sched_id = sched.id
+
+        resp = await client.post(
+            f"/workspaces/{ws['id']}/sessions/{s['id']}/schedules/{sched_id}/edit",
+            data={
+                "trigger_type": "event",
+                "event_condition": "new_pr_or_commit",
+                "author_scope": "all",
+                "cron_expr": "",
+                "label": "PR review",
+                "prompt_id": "",
+                "instruction_prompt": "",
+            },
+        )
+        assert resp.status_code == 200, resp.text
+
+        async with _TestSession() as db:
+            updated = await db.get(SessionSchedule, sched_id)
+            assert updated.include_event_context is False
+
 
 class TestScheduleAPI:
     @pytest.mark.asyncio
@@ -653,6 +714,32 @@ class TestScheduleAPI:
         assert updated["cron_schedule"] == "0 0 * * *"
         assert updated["label"] == "daily"
         assert updated["enabled"] is False
+
+    @pytest.mark.asyncio
+    async def test_event_context_option_round_trip(self, client):
+        ws = await _create_workspace(client)
+        s = await _create_session(client, ws["id"])
+        ws_id, sid = ws["id"], s["id"]
+
+        resp = await client.post(
+            f"/api/v1/workspaces/{ws_id}/sessions/{sid}/schedules",
+            json={
+                "trigger_type": "event",
+                "event_condition": "new_pr_or_commit",
+                "include_event_context": True,
+            },
+        )
+        assert resp.status_code == 201, resp.text
+        sched = resp.json()
+        assert sched["include_event_context"] is True
+
+        resp = await client.put(
+            f"/api/v1/workspaces/{ws_id}/sessions/{sid}/schedules/{sched['id']}",
+            json={"include_event_context": False},
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["include_event_context"] is False
+
 
     @pytest.mark.asyncio
     async def test_delete_schedule(self, client):
@@ -721,6 +808,86 @@ class TestScheduleAPI:
         resp = await client.get(f"/api/v1/workspaces/{ws_id}/sessions/{sid}/schedules")
         assert len(resp.json()) == 1
         assert resp.json()[0]["cron_schedule"] == "0 9 * * 1-5"
+
+
+# ===========================================================================
+# Prompt resolution tests
+# ===========================================================================
+
+
+class TestSchedulePromptEventContext:
+    @pytest.mark.asyncio
+    async def test_event_context_is_appended_when_enabled(self):
+        import json
+        from swarmer.models.session import Session
+        from swarmer.models.session_schedule import SessionSchedule
+        from swarmer.models.workspace import Workspace
+        from swarmer.routers.sessions import _resolve_schedule_prompt
+
+        async with _TestSession() as db:
+            ws = Workspace(display_name="Prompt WS", namespace="prompt-ws", description="")
+            db.add(ws)
+            await db.commit()
+            await db.refresh(ws)
+            session = Session(
+                workspace_id=ws.id, name="prompt-session", mode="prompt",
+                provider="", agent_tool="opencode", instruction_prompt="Review this.",
+                event_context=json.dumps({
+                    "trigger_type": "event", "repo": "org/repo", "pr_number": 42,
+                    "action": "ci_failed", "cause": "checks failed",
+                }),
+            )
+            db.add(session)
+            await db.commit()
+            await db.refresh(session)
+            sched = SessionSchedule(
+                session_id=session.id, trigger_type="event",
+                include_event_context=True,
+            )
+            db.add(sched)
+            await db.commit()
+            await db.refresh(sched)
+
+            prompt = await _resolve_schedule_prompt(sched.id, session, db)
+
+        assert "Review this." in prompt
+        assert "## GitHub Event Context" in prompt
+        assert '"pr_number": 42' in prompt
+        assert '"repo": "org/repo"' in prompt
+
+    @pytest.mark.asyncio
+    async def test_event_context_is_omitted_when_disabled(self):
+        import json
+        from swarmer.models.session import Session
+        from swarmer.models.session_schedule import SessionSchedule
+        from swarmer.models.workspace import Workspace
+        from swarmer.routers.sessions import _resolve_schedule_prompt
+
+        async with _TestSession() as db:
+            ws = Workspace(display_name="Prompt WS 2", namespace="prompt-ws-2", description="")
+            db.add(ws)
+            await db.commit()
+            await db.refresh(ws)
+            session = Session(
+                workspace_id=ws.id, name="prompt-session-2", mode="prompt",
+                provider="", agent_tool="opencode", instruction_prompt="Review this.",
+                event_context=json.dumps({"pr_number": 42}),
+            )
+            db.add(session)
+            await db.commit()
+            await db.refresh(session)
+            sched = SessionSchedule(
+                session_id=session.id, trigger_type="event",
+                include_event_context=False,
+            )
+            db.add(sched)
+            await db.commit()
+            await db.refresh(sched)
+
+            prompt = await _resolve_schedule_prompt(sched.id, session, db)
+
+        assert "## GitHub Event Context" not in prompt
+        assert "pr_number" not in prompt
 
 
 # ===========================================================================
@@ -1014,6 +1181,7 @@ class TestMCPScheduleTools:
             "label": "hourly",
             "prompt_id": None,
             "instruction_prompt": "",
+            "include_event_context": True,
             "enabled": True,
             "created_at": "2026-06-15T00:00:00",
             "updated_at": "2026-06-15T00:00:00",
@@ -1027,13 +1195,18 @@ class TestMCPScheduleTools:
             assert len(result) == 1
             assert result[0]["cron_schedule"] == "0 * * * *"
 
-            respx.post("http://fake/api/v1/workspaces/1/sessions/10/schedules").mock(
+            create_route = respx.post("http://fake/api/v1/workspaces/1/sessions/10/schedules")
+            create_route.mock(
                 return_value=httpx.Response(201, json=sched_data)
             )
             created = await server._add_session_schedule(
-                1, 10, "0 * * * *", label="hourly"
+                1, 10, "0 * * * *", label="hourly", include_event_context=False
             )
             assert created["label"] == "hourly"
+
+            create_request = create_route.calls[0].request
+            assert create_request.content is not None
+            assert '"include_event_context":false' in create_request.content.decode()
 
             updated_data = {**sched_data, "label": "every-hour", "enabled": False}
             respx.put("http://fake/api/v1/workspaces/1/sessions/10/schedules/1").mock(

@@ -257,6 +257,7 @@ async def migrate_db() -> None:
         "ALTER TABLE session_schedules ADD COLUMN event_condition VARCHAR(64) NOT NULL DEFAULT ''",
         "ALTER TABLE session_schedules ADD COLUMN author_scope VARCHAR(32) NOT NULL DEFAULT 'all'",
         "ALTER TABLE session_schedules ADD COLUMN fix_authors VARCHAR(512) NOT NULL DEFAULT ''",
+        "ALTER TABLE session_schedules ADD COLUMN include_event_context BOOLEAN NOT NULL DEFAULT 1",
         "ALTER TABLE session_runs ADD COLUMN trigger_type VARCHAR(32) NOT NULL DEFAULT 'manual'",
         "ALTER TABLE session_runs ADD COLUMN event_context TEXT NOT NULL DEFAULT ''",
         "ALTER TABLE sessions ADD COLUMN event_context TEXT NOT NULL DEFAULT ''",

@@ -38,6 +38,7 @@
         </form>
         {# Edit — expand an inline form #}
         <button type="button" class="pf-v6-c-button pf-m-small pf-m-secondary"
+                id="sched-edit-btn-{{ sched.id }}"
                 onclick="document.getElementById('sched-edit-{{ sched.id }}').style.display='block'; this.style.display='none';">Edit</button>
         {# Delete #}
         <form method="post"
@@ -124,6 +125,12 @@
                    value="{{ sched.fix_authors }}" placeholder="e.g. jnpacker, alice"
                    style="width:100%; font-size:var(--pf-t--global--font--size--sm);">
           </div>
+          <div class="pf-v6-c-check" style="margin-top:var(--pf-t--global--spacer--xs);">
+            <input class="pf-v6-c-check__input" type="checkbox" id="sched-include-context-{{ sched.id }}"
+                   name="include_event_context" value="1" {% if sched.include_event_context %}checked{% endif %}>
+            <label class="pf-v6-c-check__label" for="sched-include-context-{{ sched.id }}">Pass event details to the agent prompt</label>
+            <span class="pf-v6-c-check__description">Include the triggering GitHub event data in the run prompt.</span>
+          </div>
         </div>
 
         <div>
@@ -155,7 +162,7 @@
         <div style="display:flex; gap:var(--pf-t--global--spacer--xs);">
           <button type="submit" class="pf-v6-c-button pf-m-primary pf-m-small">Save</button>
           <button type="button" class="pf-v6-c-button pf-m-secondary pf-m-small"
-                  onclick="document.getElementById('sched-edit-{{ sched.id }}').style.display='none'; this.closest('form').previousElementSibling.previousElementSibling.previousElementSibling.querySelector('button[onclick]').style.display='inline-block';">Cancel</button>
+                  onclick="document.getElementById('sched-edit-{{ sched.id }}').style.display='none'; document.getElementById('sched-edit-btn-{{ sched.id }}').style.display='inline-block';">Cancel</button>
         </div>
       </form>
     </div>
@@ -239,6 +246,12 @@
         <input type="text" name="fix_authors" class="pf-v6-c-form-control"
                placeholder="e.g. jnpacker, alice"
                style="width:100%; font-size:var(--pf-t--global--font--size--sm);">
+      </div>
+      <div class="pf-v6-c-check" style="margin-top:var(--pf-t--global--spacer--xs);">
+        <input class="pf-v6-c-check__input" type="checkbox" id="sched-add-include-context"
+               name="include_event_context" value="1" checked>
+        <label class="pf-v6-c-check__label" for="sched-add-include-context">Pass event details to the agent prompt</label>
+        <span class="pf-v6-c-check__description">Include the triggering GitHub event data in the run prompt.</span>
       </div>
     </div>
 

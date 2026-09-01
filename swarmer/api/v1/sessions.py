@@ -567,6 +567,7 @@ async def create_schedule(
         label=body.label,
         prompt_id=body.prompt_id,
         instruction_prompt=body.instruction_prompt,
+        include_event_context=body.include_event_context,
         enabled=body.enabled,
     )
     db.add(sched)
@@ -624,6 +625,8 @@ async def update_schedule(
         sched.prompt_id = body.prompt_id
     if body.instruction_prompt is not None:
         sched.instruction_prompt = body.instruction_prompt
+    if body.include_event_context is not None:
+        sched.include_event_context = body.include_event_context
     if body.enabled is not None:
         sched.enabled = body.enabled
     await db.commit()

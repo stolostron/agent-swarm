@@ -49,6 +49,9 @@ class SessionSchedule(Base):
     cron_next_run: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     label: Mapped[str] = mapped_column(String(128), nullable=False, default="", server_default="")
     instruction_prompt: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
+    include_event_context: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default="1"
+    )
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="1")
     created_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, server_default=func.now()

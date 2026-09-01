@@ -43,6 +43,7 @@ def _fmt_schedule(sc: dict) -> dict:
         "label": sc.get("label", ""),
         "prompt_id": sc.get("prompt_id"),
         "instruction_prompt": sc.get("instruction_prompt", ""),
+        "include_event_context": sc.get("include_event_context", True),
         "enabled": sc.get("enabled", True),
     }
 
@@ -423,6 +424,7 @@ class AgentSwarmMCPServer:
         label: str = "",
         prompt_id: int | None = None,
         instruction_prompt: str = "",
+        include_event_context: bool = True,
         enabled: bool = True,
     ) -> dict:
         sc = await self.client.create_session_schedule(
@@ -430,7 +432,8 @@ class AgentSwarmMCPServer:
             trigger_type=trigger_type, event_condition=event_condition,
             author_scope=author_scope, fix_authors=fix_authors,
             label=label, prompt_id=prompt_id,
-            instruction_prompt=instruction_prompt, enabled=enabled,
+            instruction_prompt=instruction_prompt,
+            include_event_context=include_event_context, enabled=enabled,
         )
         return _fmt_schedule(sc)
 
@@ -907,6 +910,7 @@ class AgentSwarmMCPServer:
             label: str | None = None,
             prompt_id: int | None = None,
             instruction_prompt: str | None = None,
+            include_event_context: bool | None = None,
             enabled: bool | None = None,
         ) -> dict:
             """Update an existing session schedule or event trigger.
@@ -923,6 +927,7 @@ class AgentSwarmMCPServer:
                 label: New label.
                 prompt_id: New prompt id (None clears the override).
                 instruction_prompt: New additional instructions.
+                include_event_context: Include triggering event data in the agent prompt.
                 enabled: Enable or disable the schedule.
             """
             fields: dict[str, Any] = {}
@@ -942,6 +947,8 @@ class AgentSwarmMCPServer:
                 fields["prompt_id"] = prompt_id
             if instruction_prompt is not None:
                 fields["instruction_prompt"] = instruction_prompt
+            if include_event_context is not None:
+                fields["include_event_context"] = include_event_context
             if enabled is not None:
                 fields["enabled"] = enabled
             return await self._update_session_schedule(workspace_id, session_id, schedule_id, **fields)
