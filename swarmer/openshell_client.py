@@ -24,12 +24,19 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import pathlib
 import queue
 import shlex
+import tempfile
 import time
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
+from datetime import timezone
 from typing import Any
+from urllib.parse import urlparse
+
+from sqlalchemy.ext.asyncio import AsyncSession
 
 log = logging.getLogger(__name__)
 
@@ -53,27 +60,236 @@ _provider_cache: dict[str, tuple[bool, float]] = {}  # name → (exists, expires
 SANDBOX_EPHEMERAL_STORAGE = "10Gi"
 
 
-def _get_client():
-    """Internal factory — reads settings and returns a configured SandboxClient."""
-    from openshell import SandboxClient, TlsConfig  # noqa: F401 (optional dep)
+@dataclass(frozen=True)
+class GatewayConfig:
+    """Descriptor for connecting to an OpenShell gateway."""
+    gateway_url: str
+    auth_mode: str = "default"  # "default", "oidc", "bearer", "mtls", "none"
+    tls_ca: str | None = None
+    tls_cert: str | None = None
+    tls_key: str | None = None
+    tls_verify: bool = True
+    bearer_token: str | None = None
+    bearer_callable: Callable[[], str] | None = None
+    workspace_id: int | None = None
+
+
+def default_gateway_config() -> GatewayConfig:
+    """Build GatewayConfig from global settings."""
     from swarmer.config import settings
 
-    tls = None
-    if settings.openshell_tls_ca:
-        tls = TlsConfig(
-            ca_path=pathlib.Path(settings.openshell_tls_ca),
-            cert_path=pathlib.Path(settings.openshell_tls_cert),
-            key_path=pathlib.Path(settings.openshell_tls_key),
-        )
-    # When mTLS is configured, use certificate auth for gateway admin operations
-    # (provider create/update, sandbox create). Bearer tokens in 0.0.55+ use a
-    # sandbox-scoped format that doesn't authorize admin RPCs.
-    bearer = None if tls else (settings.openshell_bearer_token or None)
-    return SandboxClient(
-        settings.openshell_gateway_url,
-        tls=tls,
-        bearer_token=bearer,
+    auth_mode = (
+        "mtls"
+        if settings.openshell_tls_cert
+        else ("bearer" if settings.openshell_bearer_token else "default")
     )
+    return GatewayConfig(
+        gateway_url=settings.openshell_gateway_url,
+        auth_mode=auth_mode,
+        tls_ca=settings.openshell_tls_ca or None,
+        tls_cert=settings.openshell_tls_cert or None,
+        tls_key=settings.openshell_tls_key or None,
+        bearer_token=settings.openshell_bearer_token or None,
+    )
+
+
+def _tls_material_path(value: str) -> tuple[pathlib.Path, bool]:
+    """Resolve a TLS material value to a filesystem path the SDK can read.
+
+    `GatewayConfig.tls_ca/tls_cert/tls_key` carry two different shapes
+    depending on the source: the global env-var settings
+    (`default_gateway_config()`) already point at real files on disk, but
+    per-workspace `WorkspaceGateway.tls_ca/tls_cert/tls_key` store raw PEM
+    *content* in the encrypted database (ACM-41655/41656) — there is no
+    filesystem path to give the openshell SDK's path-only `TlsConfig`.
+
+    If *value* names an existing file, use it as-is. Otherwise treat it as
+    inline PEM content and spool it to a private (0600) temp file so
+    `TlsConfig`/`SandboxClient` can read it; the caller deletes the temp
+    file once the (synchronous, constructor-time) read is done.
+
+    Returns (path, is_temp_file).
+    """
+    try:
+        existing = pathlib.Path(value)
+        if existing.exists():
+            return existing, False
+    except OSError:
+        pass  # e.g. ENAMETOOLONG for inline PEM content — fall through
+
+    fd, tmp_path = tempfile.mkstemp(prefix="swarmer-tls-", suffix=".pem")
+    try:
+        with os.fdopen(fd, "w") as f:
+            f.write(value)
+        os.chmod(tmp_path, 0o600)
+    except Exception:
+        os.unlink(tmp_path)
+        raise
+    return pathlib.Path(tmp_path), True
+
+
+def get_client_for_config(config: GatewayConfig):
+    """Factory — builds a SandboxClient from a GatewayConfig."""
+    from openshell import SandboxClient, TlsConfig  # noqa: F401 (optional dep)
+
+    endpoint = _normalize_gateway_endpoint(config.gateway_url)
+    tls = None
+    temp_paths: list[pathlib.Path] = []
+    try:
+        if config.tls_cert and config.tls_key:
+            ca_path = None
+            if config.tls_ca:
+                ca_path, ca_is_tmp = _tls_material_path(config.tls_ca)
+                if ca_is_tmp:
+                    temp_paths.append(ca_path)
+            cert_path, cert_is_tmp = _tls_material_path(config.tls_cert)
+            if cert_is_tmp:
+                temp_paths.append(cert_path)
+            key_path, key_is_tmp = _tls_material_path(config.tls_key)
+            if key_is_tmp:
+                temp_paths.append(key_path)
+            tls = TlsConfig(ca_path=ca_path, cert_path=cert_path, key_path=key_path)
+        elif config.tls_ca:
+            ca_path, ca_is_tmp = _tls_material_path(config.tls_ca)
+            if ca_is_tmp:
+                temp_paths.append(ca_path)
+            tls = TlsConfig(ca_path=ca_path)
+        elif config.auth_mode == "oidc" or (config.gateway_url and config.gateway_url.startswith("https://")):
+            tls = TlsConfig()
+
+        bearer = config.bearer_callable or (config.bearer_token if config.auth_mode == "bearer" else None)
+        # SandboxClient reads tls.*_path files synchronously in its
+        # constructor (grpc.ssl_channel_credentials(...read_bytes())), so it
+        # is safe to delete any temp files in `finally` below once this
+        # returns — the credential bytes are already copied into the gRPC
+        # channel by then.
+        return SandboxClient(
+            endpoint,
+            tls=tls,
+            bearer_token=bearer,
+        )
+    finally:
+        for p in temp_paths:
+            try:
+                p.unlink(missing_ok=True)
+            except OSError:
+                pass
+
+
+async def resolve_gateway_config(
+    ws_or_id: Any | None,
+    db: AsyncSession | None = None,
+) -> GatewayConfig:
+    """Resolve GatewayConfig for a workspace or ID, falling back to default."""
+    if ws_or_id is None:
+        return default_gateway_config()
+
+    from swarmer.models.workspace import Workspace
+    from swarmer.models.workspace_gateway import WorkspaceGateway
+    from swarmer.openshell_oidc import oidc_manager
+
+    ws_id: int | None = None
+    gw: WorkspaceGateway | None = None
+
+    if isinstance(ws_or_id, Workspace):
+        ws_id = ws_or_id.id
+        if "gateway" in ws_or_id.__dict__ and ws_or_id.__dict__["gateway"] is not None:
+            gw = ws_or_id.__dict__["gateway"]
+    elif isinstance(ws_or_id, int):
+        ws_id = ws_or_id
+
+    if ws_id is None:
+        return default_gateway_config()
+
+    if gw is None:
+        if db is not None:
+            from sqlalchemy import select
+            gw = (
+                await db.execute(
+                    select(WorkspaceGateway).where(WorkspaceGateway.workspace_id == ws_id)
+                )
+            ).scalar_one_or_none()
+        else:
+            from swarmer.database import _AsyncSessionLocal, get_db
+            if _AsyncSessionLocal is not None:
+                async for s in get_db():
+                    from sqlalchemy import select
+                    gw = (
+                        await s.execute(
+                            select(WorkspaceGateway).where(WorkspaceGateway.workspace_id == ws_id)
+                        )
+                    ).scalar_one_or_none()
+                    break
+
+    if gw is None or not gw.gateway_url:
+        return default_gateway_config()
+
+    bearer_callable = None
+    if gw.auth_mode == "oidc" and gw.oidc_issuer and gw.oidc_client_id:
+        auth = oidc_manager.get_or_create(
+            workspace_id=gw.workspace_id,
+            issuer=gw.oidc_issuer,
+            client_id=gw.oidc_client_id,
+            audience=gw.oidc_audience or "",
+            refresh_token=gw.refresh_token,
+            access_token=gw.access_token,
+            expires_at=(
+                int(gw.access_token_expires_at.replace(tzinfo=timezone.utc).timestamp())
+                if gw.access_token_expires_at
+                else None
+            ),
+            tls_ca=gw.tls_ca,
+        )
+        bearer_callable = auth.current_access_token
+
+    return GatewayConfig(
+        gateway_url=gw.gateway_url,
+        auth_mode=gw.auth_mode,
+        tls_ca=gw.tls_ca,
+        tls_cert=gw.tls_cert,
+        tls_key=gw.tls_key,
+        tls_verify=gw.tls_verify,
+        bearer_token=gw.bearer_token if gw.auth_mode == "bearer" else None,
+        bearer_callable=bearer_callable,
+        workspace_id=gw.workspace_id,
+    )
+
+
+async def get_client_for_workspace(
+    ws_or_id: Any | None,
+    db: AsyncSession | None = None,
+):
+    """Build or retrieve a configured SandboxClient for the given workspace, or None for default."""
+    config = await resolve_gateway_config(ws_or_id, db)
+    if config.workspace_id is None:
+        return None
+    return get_client_for_config(config)
+
+
+def _get_client(gateway: GatewayConfig | None = None):
+    """Internal factory — reads config or settings and returns a configured SandboxClient."""
+    if gateway is not None:
+        return get_client_for_config(gateway)
+    return get_client_for_config(default_gateway_config())
+
+
+async def probe_gateway_connectivity(config: GatewayConfig) -> dict:
+    """Test connection and auth to an OpenShell gateway."""
+    def _do_test() -> dict:
+        client = get_client_for_config(config)
+        try:
+            sandboxes = client.list()
+            return {
+                "status": "ok",
+                "gateway_url": config.gateway_url,
+                "auth_mode": config.auth_mode,
+                "sandboxes_count": len(sandboxes),
+            }
+        finally:
+            close = getattr(client, "close", None)
+            if callable(close):
+                close()
+    return await asyncio.to_thread(_do_test)
 
 
 def get_client(
@@ -85,14 +301,43 @@ def get_client(
     """Public factory for e2e tests and direct usage."""
     from openshell import SandboxClient, TlsConfig  # noqa: F401 (optional dep)
 
+    endpoint = _normalize_gateway_endpoint(gateway_url)
     tls = None
-    if tls_ca_path:
+    if tls_ca_path or (tls_cert_path and tls_key_path):
         tls = TlsConfig(
-            ca_path=pathlib.Path(tls_ca_path),
-            cert_path=pathlib.Path(tls_cert_path),
-            key_path=pathlib.Path(tls_key_path),
+            ca_path=pathlib.Path(tls_ca_path) if tls_ca_path else None,
+            cert_path=pathlib.Path(tls_cert_path) if tls_cert_path else None,
+            key_path=pathlib.Path(tls_key_path) if tls_key_path else None,
         )
-    return SandboxClient(gateway_url, tls=tls)
+    return SandboxClient(endpoint, tls=tls)
+
+
+def _normalize_gateway_endpoint(gateway_url: str) -> str:
+    """Normalize a gateway URL into gRPC endpoint form `host:port`.
+
+    SandboxClient expects a gRPC target endpoint, not a full URL. We keep the
+    original gateway URL elsewhere for HTTP proxying, but strip scheme and
+    validate format here before constructing the client.
+    """
+    raw = (gateway_url or "").strip()
+    if not raw:
+        raise ValueError("Gateway URL is required.")
+
+    if "://" in raw:
+        parsed = urlparse(raw)
+        if not parsed.hostname:
+            raise ValueError("Gateway URL must include a hostname.")
+        if parsed.path not in ("", "/") or parsed.params or parsed.query or parsed.fragment:
+            raise ValueError("Gateway URL must not include a path, query, or fragment.")
+        if parsed.username or parsed.password:
+            raise ValueError("Gateway URL must not include user info.")
+        if parsed.port is not None:
+            return f"{parsed.hostname}:{parsed.port}"
+        return parsed.hostname
+
+    if any(c in raw for c in ("/", "?", "#")):
+        raise ValueError("Gateway URL must be host[:port] without path, query, or fragment.")
+    return raw
 
 
 async def create_provider(
@@ -876,7 +1121,7 @@ async def create_sandbox(
         spec.environment[k] = v
     for pname in (provider_names or []):
         spec.providers.append(pname)
-    if policy is not None:
+    if policy is not None and hasattr(policy, "DESCRIPTOR"):
         spec.policy.CopyFrom(policy)
 
     from google.protobuf import struct_pb2

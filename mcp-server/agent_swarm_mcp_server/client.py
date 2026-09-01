@@ -192,6 +192,24 @@ class AgentSwarmClient:
         """Claim the initial global administrator role if none exist."""
         return await self._post("/api/v1/admins/bootstrap")
 
+    async def get_workspace_gateway(self, ws_id: int) -> dict:
+        return await self._get(f"/api/v1/workspaces/{ws_id}/gateway")
+
+    async def set_workspace_gateway(self, ws_id: int, gateway_data: dict) -> dict:
+        return await self._post(f"/api/v1/workspaces/{ws_id}/gateway", json=gateway_data)
+
+    async def delete_workspace_gateway(self, ws_id: int) -> dict:
+        return await self._delete(f"/api/v1/workspaces/{ws_id}/gateway")
+
+    async def parse_gateway_command(self, command: str) -> dict:
+        return await self._post("/api/v1/workspaces/gateway/parse-command", json={"command": command})
+
+    async def parse_gateway_token(self, token_input: str) -> dict:
+        return await self._post("/api/v1/workspaces/gateway/parse-token", json={"token_input": token_input})
+
+    async def test_gateway_connection(self, gateway_data: dict) -> dict:
+        return await self._post("/api/v1/workspaces/gateway/test-connection", json=gateway_data)
+
     # ==================================================================
     # Sessions
     # ==================================================================

@@ -563,6 +563,28 @@ class TestDoLaunchOpenshell:
         mock_setup.assert_called_once()
 
     @pytest.mark.asyncio
+    async def test_passes_workspace_gateway_client_to_setup_task(self, client):
+        """Launch passes the selected workspace client through to setup unchanged."""
+        ws = await _create_workspace(client)
+        s = await _create_session(client, ws["id"])
+
+        patches = self._patch_openshell()
+        with patches["create_provider"], patches["ensure_provider"], \
+             patches["configure_provider_credential"], patches["attach_sandbox_provider"], \
+             patches["create_sandbox"], patches["write_agent_config"], \
+             patches["write_agents_md"], patches["exec_command"], \
+             patches["start_agent"], patches["delete_sandbox"], \
+             patches["build_policy"], patches["run_agent"], \
+             patches["setup_sandbox"] as mock_setup, \
+             patch("swarmer.openshell_client.get_client_for_workspace", new=AsyncMock(return_value=None)), \
+             patches["provider_exists"], patches["get_image"]:
+            await client.post(f"/api/v1/workspaces/{ws['id']}/sessions/{s['id']}/launch")
+            await asyncio.sleep(0)
+
+        mock_setup.assert_called_once()
+        assert mock_setup.call_args.kwargs["client"] is None
+
+    @pytest.mark.asyncio
     async def test_uses_provider_api_not_env_vars_for_credentials(self, client):
         """AI credentials must flow through the gateway Provider API, not SandboxSpec.environment."""
         ws = await _create_workspace(client)
@@ -950,6 +972,56 @@ class TestDoLaunchOpenshell:
             f"Expected no 'gh auth setup-git' call when no PAT is set, "
             f"got {len(setup_git_calls)}. All exec calls:\n" + "\n".join(all_cmds)
         )
+
+    @pytest.mark.asyncio
+    async def test_setup_uses_explicit_client_without_relookup(self, client):
+        from swarmer.routers.sessions import _setup_openshell_sandbox
+
+        ws = await _create_workspace(client)
+        s = await _create_session(client, ws["id"], mode="prompt")
+
+        async with _TestSession() as db:
+            await db.execute(
+                text("UPDATE sessions SET phase='pending' WHERE id=:id"), {"id": s["id"]}
+            )
+            await db.commit()
+
+        ref = _fake_sandbox_ref("sandbox-explicit-client")
+        with patch("swarmer.database.get_db", new=_make_test_db_provider()), \
+             patch(
+                 "swarmer.openshell_client.get_client_for_workspace",
+                 new=AsyncMock(side_effect=AssertionError("unexpected client re-lookup")),
+             ), \
+             patch("swarmer.openshell_client.create_sandbox", new=AsyncMock(return_value=ref)), \
+             patch("swarmer.openshell_client.write_agent_config", new=AsyncMock()), \
+             patch("swarmer.openshell_client.write_agents_md", new=AsyncMock()), \
+             patch("swarmer.openshell_client.exec_command", new=AsyncMock(return_value=MagicMock(exit_code=0, stdout="", stderr=""))), \
+             patch("swarmer.routers.sessions._run_openshell_agent", new=AsyncMock()) as mock_run:
+            await _setup_openshell_sandbox(
+                session_id=s["id"],
+                workspace_id=ws["id"],
+                provider_names=[],
+                env_vars={},
+                policy=None,
+                image="quay.io/opencode:latest",
+                tool_name="opencode",
+                model="google-vertex-anthropic/claude-sonnet-5@default",
+                model_setup_cmd="",
+                share_cmd="",
+                mcp_patch={},
+                repos_data=[],
+                git_username="",
+                pat_token="",
+                working_branch="",
+                agents_md="",
+                mode="prompt",
+                main_cmd="opencode run",
+                resolved_prompt="",
+                client=None,
+            )
+
+        mock_run.assert_called_once()
+        assert mock_run.call_args.kwargs["client"] is None
 
     @pytest.mark.asyncio
     async def test_repo_branch_checked_out_before_working_branch(self, client):
@@ -1671,6 +1743,46 @@ class TestRunOpenshellAgent:
             from swarmer.models.session import Session
             sess = (await db.execute(select(Session).where(Session.id == s["id"]))).scalar_one()
         assert sess.sandbox_name is None
+
+    @pytest.mark.asyncio
+    async def test_prompt_mode_cleanup_uses_provided_client_without_relookup(self, client):
+        ws = await _create_workspace(client)
+        s = await _create_session(client, ws["id"], mode="prompt")
+
+        async with _TestSession() as db:
+            await db.execute(
+                text("UPDATE sessions SET sandbox_name='sandbox-autoclean', phase='pending' WHERE id=:id"),
+                {"id": s["id"]},
+            )
+            await db.commit()
+
+        exec_result = MagicMock(exit_code=0, stdout="done", stderr="")
+        with patch("swarmer.database.get_db", new=_make_test_db_provider()), \
+             patch(
+                 "swarmer.openshell_client.get_client_for_workspace",
+                 new=AsyncMock(side_effect=AssertionError("unexpected client re-lookup")),
+             ), \
+             patch("swarmer.openshell_client.exec_command_streaming", new=AsyncMock(return_value=exec_result)), \
+             patch("swarmer.openshell_client.read_opencode_response", new=AsyncMock(return_value="done")), \
+             patch("swarmer.openshell_client.get_draft_chunks", new=AsyncMock(return_value=[])), \
+             patch("swarmer.openshell_client.delete_sandbox", new=AsyncMock()) as mock_del, \
+             patch("swarmer.routers.sessions._delete_github_app_provider", new=AsyncMock()) as mock_del_app, \
+             patch("swarmer.routers.sessions._delete_pat_provider", new=AsyncMock()) as mock_del_pat:
+            from swarmer.routers.sessions import _run_openshell_agent
+            await _run_openshell_agent(
+                s["id"],
+                ws["id"],
+                "sandbox-autoclean",
+                ["sh", "-c", "opencode run"],
+                "prompt",
+                "opencode",
+                pat_id=77,
+                client=None,
+            )
+
+        mock_del.assert_called_once_with("sandbox-autoclean")
+        mock_del_app.assert_awaited_once_with(ws["id"], s["id"], client=None)
+        mock_del_pat.assert_awaited_once_with(ws["id"], 77, s["id"], client=None)
 
     @pytest.mark.asyncio
     async def test_prompt_mode_sets_phase_running_first(self, client):

@@ -143,7 +143,7 @@ class TestStartTokenRefreshLoop:
             calls.append("mint")
             return "ghs_refreshed"
 
-        async def fake_ensure(name, ptype, config, credentials):
+        async def fake_ensure(name, ptype, config, credentials, **kwargs):
             calls.append(("provider", name, credentials))
 
         with patch("swarmer.github_auth.IAT_REFRESH_INTERVAL", 0):  # fire immediately
@@ -179,7 +179,7 @@ class TestStartTokenRefreshLoop:
                 raise RuntimeError("GitHub API error")
             return "ghs_ok"
 
-        async def fake_ensure(name, ptype, config, credentials):
+        async def fake_ensure(name, ptype, config, credentials, **kwargs):
             pass
 
         with patch("swarmer.github_auth.IAT_REFRESH_INTERVAL", 0):

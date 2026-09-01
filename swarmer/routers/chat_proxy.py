@@ -48,11 +48,11 @@ _HOP_BY_HOP = frozenset({
 
 # ── OpenShell mTLS helpers ────────────────────────────────────────────────────
 
-def _openshell_ssl_context() -> ssl.SSLContext | None:
+def _openshell_ssl_context(gateway_config=None) -> ssl.SSLContext | None:
     """Return an SSL context with the OpenShell client cert, or None for plain HTTP."""
     from swarmer.config import settings
-    cert = settings.openshell_tls_cert
-    key = settings.openshell_tls_key
+    cert = (gateway_config.tls_cert if gateway_config else settings.openshell_tls_cert) or ""
+    key = (gateway_config.tls_key if gateway_config else settings.openshell_tls_key) or ""
     if not cert or not key:
         return None
     ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
@@ -62,28 +62,28 @@ def _openshell_ssl_context() -> ssl.SSLContext | None:
     return ctx
 
 
-def _openshell_httpx_kwargs() -> dict:
+def _openshell_httpx_kwargs(gateway_config=None) -> dict:
     """Return httpx kwargs for connecting to an OpenShell gateway service URL."""
     from swarmer.config import settings
-    cert = settings.openshell_tls_cert
-    key = settings.openshell_tls_key
+    cert = (gateway_config.tls_cert if gateway_config else settings.openshell_tls_cert) or ""
+    key = (gateway_config.tls_key if gateway_config else settings.openshell_tls_key) or ""
     if cert and key:
         return {"verify": False, "cert": (cert, key)}
     return {"verify": False}
 
 
-def _resolve_upstream(service_url: str) -> tuple[str, str]:
+def _resolve_upstream(service_url: str, gateway_config=None) -> tuple[str, str]:
     """Return (connectable_url, virtual_host) for an OpenShell service URL.
 
     The OpenShell gateway assigns virtual-host domain URLs like
       https://oriented-lizardfish--agent.openshell.localhost:8080
     whose hostnames are not resolvable from the Swarmer pod.  We rewrite
     the hostname to the gateway's real address (derived from
-    OPENSHELL_GATEWAY_URL) so httpx/websockets can open a TCP connection,
-    while returning the original domain as the Host header value so the
-    gateway's HTTP router can identify the target sandbox.
+    OPENSHELL_GATEWAY_URL or workspace gateway_url) so httpx/websockets can
+    open a TCP connection, while returning the original domain as the Host
+    header value so the gateway's HTTP router can identify the target sandbox.
 
-    If OPENSHELL_GATEWAY_URL is not configured, the original URL is returned
+    If gateway URL is not configured, the original URL is returned
     unchanged (useful when wildcard DNS is set up at the cluster level).
     """
     from swarmer.config import settings
@@ -92,9 +92,9 @@ def _resolve_upstream(service_url: str) -> tuple[str, str]:
     virtual_host = parsed.hostname or ""
     port = parsed.port
 
-    gw = settings.openshell_gateway_url or ""
+    gw = (gateway_config.gateway_url if gateway_config else settings.openshell_gateway_url) or ""
     if gw:
-        # Parse the real gateway hostname from OPENSHELL_GATEWAY_URL.
+        # Parse the real gateway hostname from the gateway URL.
         # The URL may be bare "host:port" (no scheme) or "grpc://host:port".
         gw_with_scheme = gw if "://" in gw else f"https://{gw}"
         gw_parsed = urlparse(gw_with_scheme)
@@ -288,7 +288,10 @@ async def _chat_http_proxy(
 
     assert session is not None  # _session_ok returns error if session is None
 
-    connectable_base, virtual_host = _resolve_upstream(session.service_url or "")
+    from swarmer.openshell_client import resolve_gateway_config
+    gw_config = await resolve_gateway_config(ws_obj, db)
+
+    connectable_base, virtual_host = _resolve_upstream(session.service_url or "", gw_config)
     upstream_base = connectable_base.rstrip("/")
 
     query = str(request.url.query)
@@ -299,6 +302,19 @@ async def _chat_http_proxy(
     fwd_headers = {k: v for k, v in request.headers.items() if k.lower() not in _HOP_BY_HOP}
     # Set the virtual host so the OpenShell gateway routes to the right sandbox.
     fwd_headers["host"] = virtual_host
+    if gw_config.bearer_callable:
+        try:
+            # bearer_callable is a synchronous callable (the OpenShell SDK's
+            # gRPC interceptor contract) that may perform a blocking HTTP
+            # refresh against the OIDC IdP when the cached access token is
+            # stale. Off-load it so a slow/stale refresh can't stall the
+            # asyncio event loop for every other in-flight request.
+            token = await asyncio.to_thread(gw_config.bearer_callable)
+            fwd_headers["authorization"] = f"Bearer {token}"
+        except Exception:
+            pass
+    elif gw_config.bearer_token:
+        fwd_headers["authorization"] = f"Bearer {gw_config.bearer_token}"
     # Set x-opencode-directory only if the client did not already supply it.
     # OpenCode's JS SDK passes directory as a ?directory= query param and also
     # sets x-opencode-directory; we honour whatever the client sent and only
@@ -328,7 +344,7 @@ async def _chat_http_proxy(
 
     log.debug("chat proxy: %s %s → %s (sse=%s)", request.method, path, upstream_url, is_sse)
 
-    _tls_kwargs = _openshell_httpx_kwargs()
+    _tls_kwargs = _openshell_httpx_kwargs(gw_config)
 
     if is_sse:
         # Stream SSE responses — long-lived connection, no timeout buffering
@@ -469,7 +485,10 @@ async def chat_ws_proxy(
         await websocket.close(code=4004, reason="Session unavailable")
         return
 
-    connectable_base, virtual_host = _resolve_upstream(session.service_url or "")
+    from swarmer.openshell_client import resolve_gateway_config
+    gw_config = await resolve_gateway_config(ws_obj)
+
+    connectable_base, virtual_host = _resolve_upstream(session.service_url or "", gw_config)
     upstream_base = connectable_base.rstrip("/")
 
     query = websocket.url.query
@@ -477,8 +496,18 @@ async def chat_ws_proxy(
     if query:
         upstream_url += f"?{query}"
 
-    _ws_ssl = _openshell_ssl_context() if upstream_url.startswith("wss://") else None
+    _ws_ssl = _openshell_ssl_context(gw_config) if upstream_url.startswith("wss://") else None
     _ws_extra_headers = {"Host": virtual_host} if virtual_host else {}
+    if gw_config.bearer_callable:
+        try:
+            # See the HTTP proxy path above: bearer_callable() can block on a
+            # synchronous OIDC refresh, so run it off the event loop.
+            token = await asyncio.to_thread(gw_config.bearer_callable)
+            _ws_extra_headers["Authorization"] = f"Bearer {token}"
+        except Exception:
+            pass
+    elif gw_config.bearer_token:
+        _ws_extra_headers["Authorization"] = f"Bearer {gw_config.bearer_token}"
 
     try:
         async with websockets.connect(upstream_url, ssl=_ws_ssl, additional_headers=_ws_extra_headers) as upstream_ws:

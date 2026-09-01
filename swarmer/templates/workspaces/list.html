@@ -18,6 +18,7 @@
   <thead class="pf-v6-c-table__thead">
     <tr class="pf-v6-c-table__tr" role="row">
       <th class="pf-v6-c-table__th" role="columnheader">Name</th>
+      <th class="pf-v6-c-table__th" role="columnheader">Runtime</th>
       <th class="pf-v6-c-table__th" role="columnheader">Namespace</th>
       <th class="pf-v6-c-table__th" role="columnheader">Description</th>
       <th class="pf-v6-c-table__th" role="columnheader">Created</th>
@@ -31,6 +32,17 @@
         <a href="/workspaces/{{ ws.id }}" style="font-weight:var(--pf-t--global--font--weight--heading--bold); text-decoration:none;">
           {{ ws.display_name }}
         </a>
+      </td>
+      <td class="pf-v6-c-table__td" role="cell" data-label="Runtime">
+        {% if ws.gateway and ws.gateway.gateway_url %}
+        <span class="pf-v6-c-label pf-m-purple" title="{{ ws.gateway.gateway_url }}">
+          <span class="pf-v6-c-label__content">Dedicated</span>
+        </span>
+        {% else %}
+        <span class="pf-v6-c-label pf-m-blue" title="Shared cluster OpenShell gateway">
+          <span class="pf-v6-c-label__content">Shared</span>
+        </span>
+        {% endif %}
       </td>
       <td class="pf-v6-c-table__td" role="cell" data-label="Namespace">
         <code class="namespace-badge">{{ ws.namespace }}</code>

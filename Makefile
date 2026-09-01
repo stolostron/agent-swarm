@@ -58,7 +58,7 @@ OPENSHELL_WORKSPACE_STORAGE ?= 10Gi
 .PHONY: setup-secret user-token api-info mcp-setup grant-workspace grant-workspace-access grant-workspace-create \
         dev lint test smoke-test-jira \
         sync-images image-build image-push \
-        deploy delete connect openshell-register connect-openshell status \
+        deploy delete connect mcp-setup mcp-api mcp-url api-url openshell-register connect-openshell status \
         kind-deploy kind-delete \
         help
 
@@ -512,6 +512,97 @@ connect:  ## Port-forward the swarmer dashboard to localhost:$(LOCAL_PORT)
 	@echo "Forwarding http://localhost:$(LOCAL_PORT) → swarmer service..."
 	kubectl port-forward -n $(NAMESPACE) service/swarmer $(LOCAL_PORT):8080
 
+mcp-url: export _URL := $(value URL)
+mcp-url:  ## Resolve Swarmer API URL and update opencode.json MCP config
+	@set -e; \
+	if [ -n "$$_URL" ]; then \
+	  RESOLVED_URL="$$_URL"; \
+	  echo "Using explicit URL override: $$RESOLVED_URL"; \
+	  echo "export AGENT_SWARM_API_URL=\"$$RESOLVED_URL\""; \
+	  python3 scripts/update_opencode_config.py "$$RESOLVED_URL" "opencode.json"; \
+	  exit 0; \
+	fi; \
+	if ! command -v kubectl >/dev/null 2>&1; then \
+	  echo "Error: kubectl is not installed or not in PATH" >&2; \
+	  exit 1; \
+	fi; \
+	CTX=$$(kubectl config current-context 2>/dev/null || true); \
+	if [ -z "$$CTX" ]; then \
+	  echo "Error: No Kubernetes context found. Connect to a cluster first (e.g. 'oc login' or 'kubectl config use-context <name>')." >&2; \
+	  exit 1; \
+	fi; \
+	if ! kubectl get deployment swarmer -n $(NAMESPACE) >/dev/null 2>&1 && \
+	   ! kubectl get svc swarmer -n $(NAMESPACE) >/dev/null 2>&1; then \
+	  echo "Error: Swarmer deployment/service not found in namespace '$(NAMESPACE)' on context '$$CTX' (or cluster unreachable / insufficient permissions)." >&2; \
+	  exit 1; \
+	fi; \
+	RESOLVED_URL=""; \
+	ROUTE_HOST=$$(kubectl get route swarmer -n $(NAMESPACE) -o jsonpath='{.spec.host}' 2>/dev/null || true); \
+	if [ -n "$$ROUTE_HOST" ]; then \
+	  ROUTE_TLS=$$(kubectl get route swarmer -n $(NAMESPACE) -o jsonpath='{.spec.tls}' 2>/dev/null || true); \
+	  if [ -n "$$ROUTE_TLS" ]; then \
+	    SCHEME="https"; \
+	  else \
+	    SCHEME="http"; \
+	  fi; \
+	  RESOLVED_URL="$$SCHEME://$$ROUTE_HOST"; \
+	fi; \
+	if [ -z "$$RESOLVED_URL" ]; then \
+	  IS_KIND=0; \
+	  case "$$CTX" in \
+	    kind-*) IS_KIND=1 ;; \
+	  esac; \
+	  if [ "$$IS_KIND" -eq 0 ]; then \
+	    NODE_PROVIDER=$$(kubectl get nodes -o jsonpath='{.items[0].spec.providerID}' 2>/dev/null || true); \
+	    case "$$NODE_PROVIDER" in \
+	      kind://*) IS_KIND=1 ;; \
+	    esac; \
+	  fi; \
+	  if [ "$$IS_KIND" -eq 1 ]; then \
+	    RESOLVED_URL="http://localhost:$(LOCAL_PORT)"; \
+	  fi; \
+	fi; \
+	if [ -z "$$RESOLVED_URL" ]; then \
+	  INGRESS_HOST=$$(kubectl get ingress swarmer -n $(NAMESPACE) -o jsonpath='{.spec.rules[0].host}' 2>/dev/null || true); \
+	  if [ -n "$$INGRESS_HOST" ]; then \
+	    INGRESS_TLS=$$(kubectl get ingress swarmer -n $(NAMESPACE) -o jsonpath='{.spec.tls[0]}' 2>/dev/null || true); \
+	    if [ -n "$$INGRESS_TLS" ]; then \
+	      SCHEME="https"; \
+	    else \
+	      SCHEME="http"; \
+	    fi; \
+	    RESOLVED_URL="$$SCHEME://$$INGRESS_HOST"; \
+	  fi; \
+	fi; \
+	if [ -z "$$RESOLVED_URL" ]; then \
+	  LB_HOST=$$(kubectl get svc swarmer -n $(NAMESPACE) -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' 2>/dev/null || true); \
+	  LB_IP=$$(kubectl get svc swarmer -n $(NAMESPACE) -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || true); \
+	  HOST_OR_IP="$${LB_HOST:-$$LB_IP}"; \
+	  if [ -n "$$HOST_OR_IP" ]; then \
+	    PORT=$$(kubectl get svc swarmer -n $(NAMESPACE) -o jsonpath='{.spec.ports[?(@.name=="http")].port}' 2>/dev/null || true); \
+	    PORT="$${PORT:-8080}"; \
+	    RESOLVED_URL="http://$$HOST_OR_IP:$$PORT"; \
+	  fi; \
+	fi; \
+	if [ -z "$$RESOLVED_URL" ]; then \
+	  NODE_IP=$$(kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="ExternalIP")].address}' 2>/dev/null || true); \
+	  if [ -z "$$NODE_IP" ]; then \
+	    NODE_IP=$$(kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}' 2>/dev/null || true); \
+	  fi; \
+	  NODE_PORT=$$(kubectl get svc swarmer -n $(NAMESPACE) -o jsonpath='{.spec.ports[?(@.name=="http")].nodePort}' 2>/dev/null || true); \
+	  if [ -n "$$NODE_IP" ] && [ -n "$$NODE_PORT" ]; then \
+	    RESOLVED_URL="http://$$NODE_IP:$$NODE_PORT"; \
+	  fi; \
+	fi; \
+	if [ -z "$$RESOLVED_URL" ]; then \
+	  RESOLVED_URL="http://localhost:$(LOCAL_PORT)"; \
+	fi; \
+	echo "export AGENT_SWARM_API_URL=\"$$RESOLVED_URL\""; \
+	python3 scripts/update_opencode_config.py "$$RESOLVED_URL" "opencode.json"
+
+mcp-api: mcp-setup  ## Alias for mcp-setup
+api-url: mcp-url  ## Alias for mcp-url
+
 openshell-register:  ## Register (or refresh) the active cluster's OpenShell gateway in the local CLI
 	@# Derive a stable gateway name from the current kubectl context
 	@CTX=$$(kubectl config current-context 2>/dev/null || echo "unknown"); \
@@ -630,6 +721,9 @@ kind-deploy:  ## One-shot local dev: create kind cluster + build + load image + 
 	fi
 	@echo "✓ Image loaded."
 	$(MAKE) deploy SILENT=1
+	@echo "Restarting swarmer deployment to ensure latest loaded image is running..."
+	kubectl rollout restart deployment/swarmer -n $(NAMESPACE)
+	kubectl rollout status deployment/swarmer -n $(NAMESPACE) --timeout=120s
 	@echo ""
 	@echo "╔══════════════════════════════════════════════════════╗"
 	@echo "║  Swarmer is running in kind!                         ║"

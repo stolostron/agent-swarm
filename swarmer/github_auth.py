@@ -24,7 +24,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from typing import TYPE_CHECKING
+from typing import Any, TYPE_CHECKING
 
 import httpx
 import jwt  # PyJWT
@@ -126,6 +126,9 @@ async def start_token_refresh_loop(
     session_id: int,
     provider_name: str,
     repo_names: list[str] | None = None,
+    workspace_id: int | None = None,
+    client: Any | None = None,
+    resolve_workspace_client: bool = True,
 ) -> None:
     """Background task: re-mint an IAT and update the OpenShell provider on a fixed schedule.
 
@@ -140,6 +143,13 @@ async def start_token_refresh_loop(
         provider_name: The OpenShell Gateway provider name to update.
         repo_names:    Repository names to scope the refreshed IAT to (same
                        scope as the initial token minted at launch).
+        workspace_id:  Optional workspace ID to resolve the gateway client.
+        client:        Optional pre-configured SandboxClient.
+        resolve_workspace_client:
+                       When True, and no explicit client is provided, resolve
+                       a workspace-specific gateway client at refresh time.
+                       Set False to preserve the launch-time/default-gateway
+                       selection and avoid re-resolving after config changes.
     """
     from swarmer import openshell_client
 
@@ -148,6 +158,9 @@ async def start_token_refresh_loop(
     app_id = app.app_id
     installation_id = app.installation_id
     private_key = app.private_key  # decrypts here; stored in local var
+    ws_id = None
+    if resolve_workspace_client:
+        ws_id = workspace_id or getattr(app, "workspace_id", None)
 
     # Build a lightweight stand-in to avoid holding the ORM object.
     class _AppSnapshot:
@@ -167,6 +180,9 @@ async def start_token_refresh_loop(
             await asyncio.sleep(IAT_REFRESH_INTERVAL)
             try:
                 new_token = await mint_installation_token(snap, repo_names=repo_names)  # type: ignore[arg-type]
+                oc_client = client
+                if oc_client is None and ws_id is not None:
+                    oc_client = await openshell_client.get_client_for_workspace(ws_id)
                 await openshell_client.ensure_provider(
                     provider_name,
                     "github",
@@ -175,6 +191,7 @@ async def start_token_refresh_loop(
                         "GITHUB_TOKEN": new_token,
                         "GH_TOKEN": new_token,
                     },
+                    client=oc_client,
                 )
                 log.info(
                     "github_auth: refreshed IAT for session %d provider %s",

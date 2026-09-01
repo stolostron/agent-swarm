@@ -291,12 +291,11 @@ async def delete_pat(
     provider_name = f"swarmer-ws-{ws_id}-github-pat-{pat_id}"
     try:
         from swarmer import openshell_client
-        from swarmer.config import settings
-        if settings.openshell_gateway_url:
-            sandboxes = await openshell_client.list_sandboxes()
-            for sandbox_name in sandboxes:
-                await openshell_client.detach_sandbox_provider(sandbox_name, provider_name)
-            await openshell_client.delete_provider(provider_name)
+        oc_client = await openshell_client.get_client_for_workspace(ws_id, db)
+        sandboxes = await openshell_client.list_sandboxes(client=oc_client)
+        for sandbox_name in sandboxes:
+            await openshell_client.detach_sandbox_provider(sandbox_name, provider_name, client=oc_client)
+        await openshell_client.delete_provider(provider_name, client=oc_client)
     except Exception:
         import logging
         logging.getLogger(__name__).warning(

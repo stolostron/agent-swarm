@@ -24,6 +24,9 @@ class Workspace(Base):
         DateTime, nullable=False, server_default=func.now(), onupdate=func.now()
     )
 
+    gateway: Mapped["WorkspaceGateway | None"] = relationship(  # noqa: F821
+        "WorkspaceGateway", back_populates="workspace", uselist=False, cascade="all, delete-orphan"
+    )
     opencode_secret: Mapped["OpencodeSecret"] = relationship(  # noqa: F821
         back_populates="workspace", uselist=False, cascade="all, delete-orphan"
     )
@@ -31,7 +34,7 @@ class Workspace(Base):
         back_populates="workspace", cascade="all, delete-orphan"
     )
     github_app: Mapped["GitHubApp | None"] = relationship(  # noqa: F821
-        back_populates="workspace", uselist=False, cascade="all, delete-orphan"
+        "GitHubApp", back_populates="workspace", uselist=False, cascade="all, delete-orphan"
     )
     sessions: Mapped[list["Session"]] = relationship(  # noqa: F821
         back_populates="workspace", cascade="all, delete-orphan"
@@ -44,9 +47,6 @@ class Workspace(Base):
     )
     env_vars: Mapped[list["SandboxEnvVar"]] = relationship(  # noqa: F821
         "SandboxEnvVar", back_populates="workspace", cascade="all, delete-orphan"
-    )
-    github_app: Mapped["GitHubApp | None"] = relationship(  # noqa: F821
-        "GitHubApp", back_populates="workspace", uselist=False, cascade="all, delete-orphan"
     )
     members: Mapped[list["WorkspaceMember"]] = relationship(  # noqa: F821
         "WorkspaceMember", back_populates="workspace", cascade="all, delete-orphan"

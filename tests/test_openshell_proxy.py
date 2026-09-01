@@ -494,6 +494,53 @@ class TestChatHttpProxy:
             f"Expected Host header to be set to virtual domain, got: {headers}"
         )
 
+    @pytest.mark.asyncio
+    async def test_proxy_bearer_callable_sets_auth_header_off_event_loop(self, client):
+        """HTTP proxy forwards `Authorization: Bearer <token>` from a dedicated
+        gateway's OIDC bearer_callable, and invokes it via asyncio.to_thread so a
+        blocking token-refresh HTTP call cannot stall the event loop for other
+        in-flight requests (ACM-41655/41656)."""
+        ws = await _create_workspace(client)
+        s = await _create_session(client, ws["id"], mode="server", agent_tool="opencode")
+
+        async with _TestSession() as db:
+            from swarmer.models.session import Session as _Session
+            session_obj = await db.get(_Session, s["id"])
+            session_obj.phase = "running"
+            session_obj.sandbox_name = "sandbox-test-abc"
+            session_obj.service_url = "http://agent.openshell.internal:4096"
+            await db.commit()
+
+        to_thread_calls = []
+        real_to_thread = asyncio.to_thread
+
+        async def _tracking_to_thread(func, *args, **kwargs):
+            to_thread_calls.append(func)
+            return await real_to_thread(func, *args, **kwargs)
+
+        gw_config = MagicMock()
+        gw_config.gateway_url = ""
+        gw_config.bearer_callable = MagicMock(return_value="<test-oidc-access-token>")
+        gw_config.bearer_token = None
+        gw_config.tls_cert = None
+        gw_config.tls_key = None
+        gw_config.tls_ca = None
+
+        mock_cls, mock_instance = self._make_mock_client()
+        with patch("swarmer.openshell_client.resolve_gateway_config", new=AsyncMock(return_value=gw_config)), \
+             patch("swarmer.routers.chat_proxy.httpx.AsyncClient", mock_cls), \
+             patch("swarmer.routers.chat_proxy.asyncio.to_thread", new=_tracking_to_thread):
+            await client.get(f"/workspaces/{ws['id']}/sessions/{s['id']}/chat/api")
+
+        mock_instance.request.assert_called_once()
+        _, call_kwargs = mock_instance.request.call_args
+        headers = call_kwargs.get("headers", {})
+        assert headers.get("authorization") == "Bearer <test-oidc-access-token>"
+        assert gw_config.bearer_callable in to_thread_calls, (
+            "bearer_callable() must be invoked via asyncio.to_thread, not called "
+            "directly on the event loop"
+        )
+
 
 # ===========================================================================
 # 4. Session lifecycle: expose_service and delete_service

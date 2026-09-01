@@ -228,13 +228,20 @@ async def delete_session(
     if session.sandbox_name:
         # OpenShell session — delete sandbox
         from swarmer import openshell_client
+        oc_client = await openshell_client.get_client_for_workspace(ws_id, db)
         if session.service_url:
             try:
-                await openshell_client.delete_service(session.sandbox_name, "agent")
+                if oc_client is not None:
+                    await openshell_client.delete_service(session.sandbox_name, "agent", client=oc_client)
+                else:
+                    await openshell_client.delete_service(session.sandbox_name, "agent")
             except Exception:
                 pass
         try:
-            await openshell_client.delete_sandbox(session.sandbox_name)
+            if oc_client is not None:
+                await openshell_client.delete_sandbox(session.sandbox_name, client=oc_client)
+            else:
+                await openshell_client.delete_sandbox(session.sandbox_name)
         except Exception:
             pass
 
@@ -312,13 +319,20 @@ async def stop_session(
 
     if session.sandbox_name:
         from swarmer import openshell_client
+        oc_client = await openshell_client.get_client_for_workspace(ws_id, db)
         if session.service_url:
             try:
-                await openshell_client.delete_service(session.sandbox_name, "agent")
+                if oc_client is not None:
+                    await openshell_client.delete_service(session.sandbox_name, "agent", client=oc_client)
+                else:
+                    await openshell_client.delete_service(session.sandbox_name, "agent")
             except Exception:
                 pass
         try:
-            await openshell_client.delete_sandbox(session.sandbox_name)
+            if oc_client is not None:
+                await openshell_client.delete_sandbox(session.sandbox_name, client=oc_client)
+            else:
+                await openshell_client.delete_sandbox(session.sandbox_name)
         except Exception:
             pass
         session.sandbox_name = None
@@ -724,11 +738,18 @@ async def generate_patch(
         cmd = ["git", "diff"]
 
     try:
-        result = await openshell_client.exec_command(
-            sandbox_name=session.sandbox_name,
-            cmd=cmd,
-            client=openshell_client._get_client(),
-        )
+        oc_client = await openshell_client.get_client_for_workspace(ws_id, db)
+        if oc_client is not None:
+            result = await openshell_client.exec_command(
+                sandbox_name=session.sandbox_name,
+                cmd=cmd,
+                client=oc_client,
+            )
+        else:
+            result = await openshell_client.exec_command(
+                sandbox_name=session.sandbox_name,
+                cmd=cmd,
+            )
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Git diff failed: {exc}")
 

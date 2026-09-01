@@ -37,6 +37,7 @@ from swarmer.models.workspace import Workspace
 from swarmer.models.workspace_prompt import WorkspacePrompt, WorkspacePromptSource
 
 log = logging.getLogger(__name__)
+_CLIENT_UNSET = object()
 
 # ── Security model overview ───────────────────────────────────────────────────
 #
@@ -211,7 +212,11 @@ def _github_app_provider_name(workspace_id: int, session_id: int) -> str:
     return f"swarmer-ws-{workspace_id}-github-app-s{session_id}"
 
 
-async def _delete_github_app_provider(workspace_id: int, session_id: int) -> None:
+async def _delete_github_app_provider(
+    workspace_id: int,
+    session_id: int,
+    client=_CLIENT_UNSET,
+) -> None:
     """Delete the session-scoped GitHub App provider from the OpenShell Gateway.
 
     Safe to call even when no GitHub App was used — delete_provider is a no-op
@@ -229,13 +234,24 @@ async def _delete_github_app_provider(workspace_id: int, session_id: int) -> Non
             log.info("_delete_github_app_provider: cancelled iat-refresh task for session %d", session_id)
             break
     try:
-        await openshell_client.delete_provider(pname)
+        oc_client = client
+        if oc_client is _CLIENT_UNSET:
+            oc_client = await openshell_client.get_client_for_workspace(workspace_id)
+        if oc_client is not None:
+            await openshell_client.delete_provider(pname, client=oc_client)
+        else:
+            await openshell_client.delete_provider(pname)
         log.info("_delete_github_app_provider: deleted provider %s", pname)
     except Exception:
         log.warning("_delete_github_app_provider: failed to delete provider %s", pname, exc_info=True)
 
 
-async def _delete_pat_provider(workspace_id: int, pat_id: int | None, session_id: int | None = None) -> None:
+async def _delete_pat_provider(
+    workspace_id: int,
+    pat_id: int | None,
+    session_id: int | None = None,
+    client=_CLIENT_UNSET,
+) -> None:
     """Delete the session-scoped PAT provider from the OpenShell Gateway.
 
     Safe to call when pat_id is None (no PAT was used) — returns immediately.
@@ -246,11 +262,29 @@ async def _delete_pat_provider(workspace_id: int, pat_id: int | None, session_id
         return
     from swarmer import openshell_client
 
+    oc_client = client
+    if oc_client is _CLIENT_UNSET:
+        try:
+            oc_client = await openshell_client.get_client_for_workspace(workspace_id)
+        except Exception:
+            # Do not fall back to the default gateway when the workspace has a
+            # dedicated gateway but credential/client resolution fails. Also do not
+            # bubble this cleanup failure into run-state transitions.
+            log.warning(
+                "_delete_pat_provider: unable to resolve workspace gateway client for ws %d",
+                workspace_id,
+                exc_info=True,
+            )
+            return
+
     # Session-scoped name (current format).
     if session_id:
         pname = f"swarmer-ws-{workspace_id}-github-pat-{pat_id}-s{session_id}"
         try:
-            await openshell_client.delete_provider(pname)
+            if oc_client is not None:
+                await openshell_client.delete_provider(pname, client=oc_client)
+            else:
+                await openshell_client.delete_provider(pname)
             log.info("_delete_pat_provider: deleted provider %s", pname)
         except Exception:
             log.warning("_delete_pat_provider: failed to delete provider %s", pname, exc_info=True)
@@ -258,7 +292,10 @@ async def _delete_pat_provider(workspace_id: int, pat_id: int | None, session_id
     # Legacy workspace-scoped name — clean up if still present.
     legacy_pname = f"swarmer-ws-{workspace_id}-github-pat-{pat_id}"
     try:
-        await openshell_client.delete_provider(legacy_pname)
+        if oc_client is not None:
+            await openshell_client.delete_provider(legacy_pname, client=oc_client)
+        else:
+            await openshell_client.delete_provider(legacy_pname)
         log.info("_delete_pat_provider: deleted legacy provider %s", legacy_pname)
     except Exception:
         log.warning("_delete_pat_provider: failed to delete legacy provider %s", legacy_pname, exc_info=True)
@@ -309,17 +346,16 @@ async def _get_provider_options(
     oc = result.scalars().first()
     # Check gateway for Vertex AI provider — ADC is stored on OpenShell, not Swarmer DB.
     has_vertex = False
-    try:
-        from swarmer import openshell_client
-        has_vertex = await openshell_client.provider_exists(f"swarmer-ws-{ws_id}-google-cloud")
-    except Exception:
-        pass
-    # Check gateway for Google AI Studio (Gemini) provider — key is stored on
-    # OpenShell, not Swarmer DB (ACM-37263).
     has_gemini = False
     try:
         from swarmer import openshell_client
-        has_gemini = await openshell_client.provider_exists(f"swarmer-ws-{ws_id}-google-ai-studio")
+        oc_client = await openshell_client.get_client_for_workspace(ws_id, db)
+        has_vertex = await openshell_client.provider_exists(
+            f"swarmer-ws-{ws_id}-google-cloud", client=oc_client
+        )
+        has_gemini = await openshell_client.provider_exists(
+            f"swarmer-ws-{ws_id}-google-ai-studio", client=oc_client
+        )
     except Exception:
         pass
     # Check gateway for OpenAI provider — key is stored on OpenShell, not Swarmer DB.
@@ -1259,6 +1295,8 @@ async def _do_launch_openshell(
     # session attributes remain valid because expire_on_commit=False.
     await db.commit()
 
+    oc_client = await openshell_client.get_client_for_workspace(ws, db)
+
     # 1. Collect sandbox extra env vars (non-credential; AI creds go through provider API)
     env_vars = await openshell_client.create_provider(
         session=session,
@@ -1266,6 +1304,7 @@ async def _do_launch_openshell(
         github_pat=session.github_pat,
         mcp_servers=mcp_servers or [],
         extra_env=extra_env,
+        client=oc_client,
     )
     # Point OpenCode at the config file written by write_agent_config() via the
     # OPENCODE_CONFIG env var (there is no --config CLI flag).
@@ -1291,7 +1330,7 @@ async def _do_launch_openshell(
     _gemini_pname = f"swarmer-ws-{ws_id}-google-ai-studio"
     if tool.requires_ai_model():
         try:
-            if await openshell_client.provider_exists(_gemini_pname):
+            if await openshell_client.provider_exists(_gemini_pname, client=oc_client):
                 provider_names.append(_gemini_pname)
         except Exception:
             log.warning(
@@ -1320,7 +1359,7 @@ async def _do_launch_openshell(
     _has_google_cloud_provider = False
     if tool.requires_ai_model():
         try:
-            if await openshell_client.provider_exists(_vertex_pname):
+            if await openshell_client.provider_exists(_vertex_pname, client=oc_client):
                 provider_names.append(_vertex_pname)
                 _has_google_cloud_provider = True
         except Exception:
@@ -1342,7 +1381,7 @@ async def _do_launch_openshell(
             await openshell_client.ensure_provider(pname, "github", {}, credentials={
                 "GITHUB_TOKEN": iat,
                 "GH_TOKEN": iat,
-            })
+            }, client=oc_client)
             provider_names.append(pname)
             _app_pname = pname
             log.info(
@@ -1363,7 +1402,7 @@ async def _do_launch_openshell(
         await openshell_client.ensure_provider(pname, "github", {}, credentials={
             "GITHUB_TOKEN": pat_token,
             "GH_TOKEN": pat_token,
-        })
+        }, client=oc_client)
         provider_names.append(pname)
     for mcp in (mcp_servers or []):
         if "jira" in getattr(mcp, "slug", "") and getattr(mcp, "jira_access_token_enc", ""):
@@ -1380,6 +1419,7 @@ async def _do_launch_openshell(
                     "JIRA_EMAIL": mcp.jira_email or "",
                 },
                 credentials={"JIRA_ACCESS_TOKEN": mcp.jira_access_token},
+                client=oc_client,
             )
             provider_names.append(pname)
             # URL and email are non-secret; pass them as plain env vars so the
@@ -1486,6 +1526,7 @@ async def _do_launch_openshell(
         _setup_openshell_sandbox(
             session_id=session.id,
             workspace_id=session.workspace_id,
+            client=oc_client,
             provider_names=provider_names,
             env_vars=env_vars,
             policy=policy,
@@ -1545,6 +1586,7 @@ async def _setup_openshell_sandbox(
     iat_provider_name: str = "",
     iat_repo_names: list[str] | None = None,
     pat_id: int | None = None,  # PAT DB ID for provider cleanup on completion
+    client=_CLIENT_UNSET,
 ) -> None:
     """Background task: create sandbox and run all setup steps, then launch agent."""
     from swarmer import openshell_client
@@ -1570,13 +1612,25 @@ async def _setup_openshell_sandbox(
             break
 
     try:
+        oc_client = client
+        if oc_client is _CLIENT_UNSET:
+            oc_client = await openshell_client.get_client_for_workspace(workspace_id)
         await _update_db(status_detail="Creating sandbox…")
-        ref = await openshell_client.create_sandbox(
-            image=image,
-            env_vars=env_vars,
-            policy=policy,
-            provider_names=provider_names,
-        )
+        if oc_client is not None:
+            ref = await openshell_client.create_sandbox(
+                image=image,
+                env_vars=env_vars,
+                policy=policy,
+                provider_names=provider_names,
+                client=oc_client,
+            )
+        else:
+            ref = await openshell_client.create_sandbox(
+                image=image,
+                env_vars=env_vars,
+                policy=policy,
+                provider_names=provider_names,
+            )
         await _update_db(sandbox_name=ref.name, status_detail="Applying network policies…")
 
         # Check if the session was stopped while sandbox was being created (race condition).
@@ -1592,7 +1646,10 @@ async def _setup_openshell_sandbox(
             log.info("_setup_openshell_sandbox: session %d no longer pending (phase=%s), cleaning up sandbox %s",
                      session_id, current_phase, ref.name)
             try:
-                await openshell_client.delete_sandbox(ref.name)
+                if oc_client is not None:
+                    await openshell_client.delete_sandbox(ref.name, client=oc_client)
+                else:
+                    await openshell_client.delete_sandbox(ref.name)
             except Exception:
                 pass
             return
@@ -1616,11 +1673,19 @@ async def _setup_openshell_sandbox(
             model=config_model or model,
         )
         _config_json = _config_data.get(f"{tool_name}.json", "{}")
-        await openshell_client.write_agent_config(
-            sandbox_name=ref.name,
-            tool_name=tool_name,
-            config_json=_config_json,
-        )
+        if oc_client is not None:
+            await openshell_client.write_agent_config(
+                sandbox_name=ref.name,
+                tool_name=tool_name,
+                config_json=_config_json,
+                client=oc_client,
+            )
+        else:
+            await openshell_client.write_agent_config(
+                sandbox_name=ref.name,
+                tool_name=tool_name,
+                config_json=_config_json,
+            )
 
         # Share/state dir setup runs FIRST so the $HOME/.local/share/<tool> symlink
         # is in place before model_setup_cmd writes the model config through it.
@@ -1629,25 +1694,38 @@ async def _setup_openshell_sandbox(
         # environment automatically — no explicit injection needed.
         if share_cmd.strip():
             clean_share = share_cmd.rstrip().rstrip(";").rstrip()
-            await openshell_client.exec_command(
-                ref.name, ["sh", "-c", f"export HOME=/sandbox; {clean_share}"],
-                client=None,
-            )
+            if oc_client is not None:
+                await openshell_client.exec_command(
+                    ref.name, ["sh", "-c", f"export HOME=/sandbox; {clean_share}"],
+                    client=oc_client,
+                )
+            else:
+                await openshell_client.exec_command(
+                    ref.name, ["sh", "-c", f"export HOME=/sandbox; {clean_share}"],
+                )
 
         # Model selection config
         if model_setup_cmd.strip():
             clean_cmd = model_setup_cmd.rstrip().rstrip("&").rstrip()
-            await openshell_client.exec_command(
-                ref.name, ["sh", "-c", f"export HOME=/sandbox; {clean_cmd}"],
-                client=None,
-            )
+            if oc_client is not None:
+                await openshell_client.exec_command(
+                    ref.name, ["sh", "-c", f"export HOME=/sandbox; {clean_cmd}"],
+                    client=oc_client,
+                )
+            else:
+                await openshell_client.exec_command(
+                    ref.name, ["sh", "-c", f"export HOME=/sandbox; {clean_cmd}"],
+                )
 
         # Write AGENTS.md for all modes (prompt, tui, server).
         # TUI/server: the agent reads it automatically as system-level instructions.
         # Prompt mode: the agent command reads it via "$(</sandbox/AGENTS.md)" shell
         # expansion, giving the full context (prompt + repo layout) identically to TUI.
         if agents_md:
-            await openshell_client.write_agents_md(sandbox_name=ref.name, content=agents_md)
+            if oc_client is not None:
+                await openshell_client.write_agents_md(sandbox_name=ref.name, content=agents_md, client=oc_client)
+            else:
+                await openshell_client.write_agents_md(sandbox_name=ref.name, content=agents_md)
 
         await _update_db(status_detail="")
 
@@ -1656,11 +1734,17 @@ async def _setup_openshell_sandbox(
         # Must run before any git clone calls.  Guarded by has_git_token: sessions
         # without any git credential cannot have GitHub repos (enforced at launch time).
         if has_git_token:
-            await openshell_client.exec_command(
-                ref.name,
-                ["sh", "-c", "export HOME=/sandbox; gh auth setup-git"],
-                client=None,
-            )
+            if oc_client is not None:
+                await openshell_client.exec_command(
+                    ref.name,
+                    ["sh", "-c", "export HOME=/sandbox; gh auth setup-git"],
+                    client=oc_client,
+                )
+            else:
+                await openshell_client.exec_command(
+                    ref.name,
+                    ["sh", "-c", "export HOME=/sandbox; gh auth setup-git"],
+                )
 
         # Clone repos — network policies are pre-applied via SandboxSpec.policy so the
         # git binary has Landlock network access to github.com immediately at sandbox
@@ -1672,9 +1756,14 @@ async def _setup_openshell_sandbox(
                 # HOME=/sandbox must match the gh auth setup-git call above so git
                 # reads /sandbox/.gitconfig where the credential helper was registered.
                 clone_cmd = f"cd /sandbox && HOME=/sandbox git clone {shlex.quote(repo_url)} {shlex.quote(local_path)}"
-                result = await openshell_client.exec_command(
-                    ref.name, ["sh", "-c", clone_cmd], client=None
-                )
+                if oc_client is not None:
+                    result = await openshell_client.exec_command(
+                        ref.name, ["sh", "-c", clone_cmd], client=oc_client
+                    )
+                else:
+                    result = await openshell_client.exec_command(
+                        ref.name, ["sh", "-c", clone_cmd]
+                    )
                 if getattr(result, "exit_code", 0) != 0:
                     _stdout = getattr(result, "stdout", "") or ""
                     _stderr = getattr(result, "stderr", "") or ""
@@ -1684,9 +1773,14 @@ async def _setup_openshell_sandbox(
                         getattr(result, "exit_code", "?"),
                         (_stdout + _stderr).strip(),
                     )
-            await openshell_client.exec_command(
-                ref.name, ["sh", "-c", "git config --global --add safe.directory '*'"], client=None
-            )
+            if oc_client is not None:
+                await openshell_client.exec_command(
+                    ref.name, ["sh", "-c", "git config --global --add safe.directory '*'"], client=oc_client
+                )
+            else:
+                await openshell_client.exec_command(
+                    ref.name, ["sh", "-c", "git config --global --add safe.directory '*'"]
+                )
             # Checkout each repo's configured branch before creating the working
             # branch so the working branch is based on the correct upstream ref
             # (e.g. "develop") rather than always the repository default branch.
@@ -1697,9 +1791,14 @@ async def _setup_openshell_sandbox(
                         f"cd /sandbox/{shlex.quote(rd['local_path'])} && "
                         f"git checkout {shlex.quote(repo_branch)}"
                     )
-                    result = await openshell_client.exec_command(
-                        ref.name, ["sh", "-c", checkout_base_cmd], client=None
-                    )
+                    if oc_client is not None:
+                        result = await openshell_client.exec_command(
+                            ref.name, ["sh", "-c", checkout_base_cmd], client=oc_client
+                        )
+                    else:
+                        result = await openshell_client.exec_command(
+                            ref.name, ["sh", "-c", checkout_base_cmd]
+                        )
                     if getattr(result, "exit_code", 0) != 0:
                         _stdout = getattr(result, "stdout", "") or ""
                         _stderr = getattr(result, "stderr", "") or ""
@@ -1717,9 +1816,14 @@ async def _setup_openshell_sandbox(
                         f"git checkout -b {shlex.quote(working_branch)} 2>/dev/null "
                         f"|| git checkout {shlex.quote(working_branch)}"
                     )
-                    result = await openshell_client.exec_command(
-                        ref.name, ["sh", "-c", branch_cmd], client=None
-                    )
+                    if oc_client is not None:
+                        result = await openshell_client.exec_command(
+                            ref.name, ["sh", "-c", branch_cmd], client=oc_client
+                        )
+                    else:
+                        result = await openshell_client.exec_command(
+                            ref.name, ["sh", "-c", branch_cmd]
+                        )
                     if getattr(result, "exit_code", 0) != 0:
                         _stdout = getattr(result, "stdout", "") or ""
                         _stderr = getattr(result, "stderr", "") or ""
@@ -1774,6 +1878,7 @@ async def _setup_openshell_sandbox(
             _run_openshell_agent(
                 session_id=session_id,
                 workspace_id=workspace_id,
+                client=oc_client,
                 sandbox_name=ref.name,
                 cmd=["sh", "-c", agent_cmd],
                 mode=mode,
@@ -1797,6 +1902,7 @@ async def _setup_openshell_sandbox(
                 app_id = iat_app_id
                 installation_id = iat_installation_id
                 private_key = iat_private_key
+                workspace_id = workspace_id
 
             asyncio.create_task(
                 start_token_refresh_loop(
@@ -1804,6 +1910,9 @@ async def _setup_openshell_sandbox(
                     session_id=session_id,
                     provider_name=iat_provider_name,
                     repo_names=iat_repo_names or None,
+                    workspace_id=workspace_id,
+                    client=oc_client,
+                    resolve_workspace_client=False,
                 ),
                 name=f"iat-refresh-{session_id}",
             )
@@ -1812,7 +1921,11 @@ async def _setup_openshell_sandbox(
         raise
     except Exception:
         log.exception("_setup_openshell_sandbox failed for session %d", session_id)
-        await _update_db(phase="failed", run_completed_at=datetime.now(timezone.utc))
+        await _update_db(
+            phase="failed",
+            status_detail="OpenShell sandbox setup failed",
+            run_completed_at=datetime.now(timezone.utc),
+        )
 
 
 async def _run_openshell_agent(
@@ -1824,6 +1937,7 @@ async def _run_openshell_agent(
     agent_tool: str,
     env_vars: dict | None = None,
     pat_id: int | None = None,
+    client=_CLIENT_UNSET,
 ) -> None:
     """Background task: starts the agent in the sandbox and tracks completion."""
     from swarmer import openshell_client
@@ -1915,6 +2029,9 @@ async def _run_openshell_agent(
             break
 
     try:
+        oc_client = client
+        if oc_client is _CLIENT_UNSET:
+            oc_client = await openshell_client.get_client_for_workspace(workspace_id)
         if mode != "server":
             # Server mode stays "pending" until expose_service succeeds and the
             # service_url is stored — the Chat tab only becomes accessible then.
@@ -1936,12 +2053,21 @@ async def _run_openshell_agent(
                 _safe = _redact_secrets(text, secret_values=injected_secrets)
                 await _update_db(last_output=_safe, raw_output=_safe)
 
-            result = await openshell_client.exec_command_streaming(
-                sandbox_name, cmd,
-                on_output=_on_output,
-                poll_interval=5.0,
-                env=env_vars or {},
-            )
+            if oc_client is not None:
+                result = await openshell_client.exec_command_streaming(
+                    sandbox_name, cmd,
+                    on_output=_on_output,
+                    poll_interval=5.0,
+                    env=env_vars or {},
+                    client=oc_client,
+                )
+            else:
+                result = await openshell_client.exec_command_streaming(
+                    sandbox_name, cmd,
+                    on_output=_on_output,
+                    poll_interval=5.0,
+                    env=env_vars or {},
+                )
             exit_code = getattr(result, "exit_code", None)
             stderr = getattr(result, "stderr", "") or ""
             phase = "succeeded" if exit_code == 0 else "failed"
@@ -1961,8 +2087,12 @@ async def _run_openshell_agent(
                 # Use streamed stdout; fall back to stderr on failure.
                 _raw_output = _streamed_text or stderr
             else:
+                if oc_client is not None:
+                    res_opencode = await openshell_client.read_opencode_response(sandbox_name, client=oc_client)
+                else:
+                    res_opencode = await openshell_client.read_opencode_response(sandbox_name)
                 _raw_output = (
-                    await openshell_client.read_opencode_response(sandbox_name)
+                    res_opencode
                     or _streamed_text
                     or stderr
                 )
@@ -1972,7 +2102,10 @@ async def _run_openshell_agent(
             # Policy tab can show what was denied/proposed during this run.
             chunks_json = ""
             try:
-                chunks = await openshell_client.get_draft_chunks(sandbox_name)
+                if oc_client is not None:
+                    chunks = await openshell_client.get_draft_chunks(sandbox_name, client=oc_client)
+                else:
+                    chunks = await openshell_client.get_draft_chunks(sandbox_name)
                 if chunks:
                     import json as _json_chunks
                     chunks_json = _json_chunks.dumps(chunks)
@@ -1982,14 +2115,17 @@ async def _run_openshell_agent(
             new_sandbox_name: str | None = sandbox_name
             if phase == "succeeded":
                 try:
-                    await openshell_client.delete_sandbox(sandbox_name)
+                    if oc_client is not None:
+                        await openshell_client.delete_sandbox(sandbox_name, client=oc_client)
+                    else:
+                        await openshell_client.delete_sandbox(sandbox_name)
                     new_sandbox_name = None
                 except Exception:
                     log.warning("Auto-cleanup of sandbox %s failed", sandbox_name, exc_info=True)
                 # Providers can only be deleted after sandbox is gone (Gateway rejects
                 # DeleteProvider with FAILED_PRECONDITION while sandbox is still attached).
-                await _delete_github_app_provider(workspace_id, session_id)
-                await _delete_pat_provider(workspace_id, pat_id, session_id)
+                await _delete_github_app_provider(workspace_id, session_id, client=oc_client)
+                await _delete_pat_provider(workspace_id, pat_id, session_id, client=oc_client)
             else:
                 # failed/stopped — sandbox intentionally left running so the user
                 # can inspect stdout/stderr and re-run.  Providers (GitHub PAT,
@@ -2024,7 +2160,10 @@ async def _run_openshell_agent(
                 # immediately; the sandbox stays alive serving HTTP.
                 # Provider env vars (GOOGLE_API_KEY etc.) are inherited from the
                 # sandbox environment automatically — no explicit injection needed.
-                await openshell_client.start_agent(sandbox_name, cmd, env=env_vars or {})
+                if oc_client is not None:
+                    await openshell_client.start_agent(sandbox_name, cmd, env=env_vars or {}, client=oc_client)
+                else:
+                    await openshell_client.start_agent(sandbox_name, cmd, env=env_vars or {})
 
             # TUI mode: the sandbox is ready; the TUI WebSocket handler starts the
             # agent interactively via exec_interactive when the user connects.
@@ -2037,9 +2176,14 @@ async def _run_openshell_agent(
                 try:
                     await _update_db(status_detail="Waiting for server to start…")
                     await asyncio.sleep(8)  # let the server process start listening
-                    service_url = await openshell_client.expose_service(
-                        sandbox_name, "agent", port
-                    )
+                    if oc_client is not None:
+                        service_url = await openshell_client.expose_service(
+                            sandbox_name, "agent", port, client=oc_client
+                        )
+                    else:
+                        service_url = await openshell_client.expose_service(
+                            sandbox_name, "agent", port
+                        )
                     # Transition to running and store the URL atomically so the
                     # Chat tab is only accessible once it's reachable.
                     await _update_db(phase="running", service_url=service_url, status_detail="")
@@ -2194,12 +2338,18 @@ async def session_stop(
             _t.cancel()
             log.info("session_stop: cancelled background task %s", _t.get_name())
 
+    provider_client = _CLIENT_UNSET
     if session.sandbox_name:
         from swarmer import openshell_client
+        client = await openshell_client.get_client_for_workspace(ws_id, db)
+        provider_client = client
         # Snapshot draft policy chunks before deleting the sandbox so the
         # Policy tab remains useful after the session is stopped.
         try:
-            chunks = await openshell_client.get_draft_chunks(session.sandbox_name)
+            if client is not None:
+                chunks = await openshell_client.get_draft_chunks(session.sandbox_name, client=client)
+            else:
+                chunks = await openshell_client.get_draft_chunks(session.sandbox_name)
             if chunks:
                 import json as _json_stop
                 session.policy_chunks = _json_stop.dumps(chunks)
@@ -2207,11 +2357,17 @@ async def session_stop(
             log.warning("Failed to snapshot policy chunks on stop for session %d", sid, exc_info=True)
         if session.service_url:
             try:
-                await openshell_client.delete_service(session.sandbox_name, "agent")
+                if client is not None:
+                    await openshell_client.delete_service(session.sandbox_name, "agent", client=client)
+                else:
+                    await openshell_client.delete_service(session.sandbox_name, "agent")
             except Exception as exc:
                 log.warning("DeleteService failed for session %d: %s", sid, exc)
         try:
-            await openshell_client.delete_sandbox(session.sandbox_name)
+            if client is not None:
+                await openshell_client.delete_sandbox(session.sandbox_name, client=client)
+            else:
+                await openshell_client.delete_sandbox(session.sandbox_name)
         except Exception as exc:
             flash(request, f"Sandbox deletion failed: {exc}", "warning")
         session.sandbox_name = None
@@ -2219,8 +2375,8 @@ async def session_stop(
 
     # Clean up GitHub credentials providers AFTER sandbox deletion — the Gateway
     # rejects DeleteProvider with FAILED_PRECONDITION if the sandbox is still attached.
-    await _delete_github_app_provider(ws_id, sid)
-    await _delete_pat_provider(ws_id, session.github_pat_id, sid)
+    await _delete_github_app_provider(ws_id, sid, client=provider_client)
+    await _delete_pat_provider(ws_id, session.github_pat_id, sid, client=provider_client)
 
     from swarmer.session_runs import STOPPED_BY_USER_DETAIL, record_session_run
 
@@ -2663,7 +2819,8 @@ async def session_policy_chunks(
         # Live fetch from gateway while sandbox is running
         from swarmer import openshell_client
         try:
-            chunks = await openshell_client.get_draft_chunks(session.sandbox_name)
+            client = await openshell_client.get_client_for_workspace(ws_id, db)
+            chunks = await openshell_client.get_draft_chunks(session.sandbox_name, client=client)
         except Exception:
             pass  # get_draft_chunks logs internally; [] is the safe fallback
     elif session.policy_chunks:
@@ -2842,7 +2999,8 @@ async def session_policy_rules_add(
             ]
             if chunk_ids:
                 try:
-                    n = await _oc.approve_chunks_by_id(session.sandbox_name, chunk_ids)
+                    oc_client = await _oc.get_client_for_workspace(ws_id, db)
+                    n = await _oc.approve_chunks_by_id(session.sandbox_name, chunk_ids, client=oc_client)
                     live_applied = n > 0
                 except Exception as exc:
                     log.warning(
@@ -2906,10 +3064,12 @@ async def session_policy_rules_delete(
         stored_chunk_id = deleted_rule.get("chunk_id", "")
         chunk_ids = [stored_chunk_id] if stored_chunk_id else []
         try:
+            oc_client = await _oc.get_client_for_workspace(ws_id, db)
             n = await _oc.undo_chunks_by_rule_name(
                 session.sandbox_name,
                 rule_names=[rule_name],
                 chunk_ids=chunk_ids or None,
+                client=oc_client,
             )
             live_revoked = n > 0
         except Exception as exc:
@@ -2975,22 +3135,31 @@ async def session_delete(
         flash(request, "Stop the session before deleting it.", "danger")
         return RedirectResponse(url=f"/workspaces/{ws_id}/sessions/{sid}", status_code=302)
 
+    provider_client = _CLIENT_UNSET
     if session.sandbox_name:
         # OpenShell session — delete sandbox
         from swarmer import openshell_client
+        client = await openshell_client.get_client_for_workspace(ws_id, db)
+        provider_client = client
         if session.service_url:
             try:
-                await openshell_client.delete_service(session.sandbox_name, "agent")
+                if client is not None:
+                    await openshell_client.delete_service(session.sandbox_name, "agent", client=client)
+                else:
+                    await openshell_client.delete_service(session.sandbox_name, "agent")
             except Exception as exc:
                 log.warning("DeleteService failed for session %d: %s", sid, exc)
         try:
-            await openshell_client.delete_sandbox(session.sandbox_name)
+            if client is not None:
+                await openshell_client.delete_sandbox(session.sandbox_name, client=client)
+            else:
+                await openshell_client.delete_sandbox(session.sandbox_name)
         except Exception as exc:
             flash(request, f"Sandbox deletion failed: {exc}", "warning")
 
     # Clean up GitHub credentials providers (App IAT and PAT).
-    await _delete_github_app_provider(ws_id, sid)
-    await _delete_pat_provider(ws_id, session.github_pat_id, sid)
+    await _delete_github_app_provider(ws_id, sid, client=provider_client)
+    await _delete_pat_provider(ws_id, session.github_pat_id, sid, client=provider_client)
 
     await db.delete(session)
     await db.commit()

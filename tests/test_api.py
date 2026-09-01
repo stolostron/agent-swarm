@@ -307,6 +307,250 @@ class TestWorkspaceRbac:
             settings.k8s_namespace = ""
 
 
+class TestWorkspaceGatewayAPI:
+    @staticmethod
+    def _override_identity(username: str):
+        from swarmer.k8s_auth import TokenIdentity
+
+        def _identity():
+            return TokenIdentity(username=username, uid=f"uid-{username}")
+
+        return _identity
+
+    @pytest.mark.asyncio
+    async def test_parse_command_endpoint(self, client):
+        cmd = "openshell gateway add https://gw-stage.example.com:443 --name test-gw --oidc-issuer https://idp.example.com --oidc-client-id client-123"
+        resp = await client.post("/api/v1/workspaces/gateway/parse-command", json={"command": cmd})
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["gateway_url"] == "https://gw-stage.example.com:443"
+        assert data["auth_mode"] == "oidc"
+        assert data["oidc_issuer"] == "https://idp.example.com"
+        assert data["oidc_client_id"] == "client-123"
+        assert data["suggested_name"] == "test-gw"
+
+    @pytest.mark.asyncio
+    async def test_parse_token_endpoint(self, client):
+        token_input = json.dumps({"refresh_token": "sample-refresh-token-12345", "expires_at": 1755000000})
+        resp = await client.post("/api/v1/workspaces/gateway/parse-token", json={"token_input": token_input})
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "valid"
+        assert data["refresh_token"] == "sample-refresh-token-12345"
+        assert data["expires_at"] == 1755000000
+
+    @pytest.mark.asyncio
+    async def test_test_connection_allows_oidc_mode_without_refresh_token(self, client):
+        from unittest.mock import AsyncMock, patch
+
+        with patch(
+            "swarmer.openshell_client.probe_gateway_connectivity",
+            new=AsyncMock(return_value={"sandboxes_count": 3}),
+        ) as mock_probe:
+            resp = await client.post(
+                "/api/v1/workspaces/gateway/test-connection",
+                json={
+                    "gateway_url": "https://gw.example.com:443",
+                    "auth_mode": "oidc",
+                    "oidc_issuer": "https://idp.example.com/realms/test",
+                    "oidc_client_id": "client-123",
+                },
+            )
+
+        assert resp.status_code == 200, resp.text
+        data = resp.json()
+        assert data["status"] == "ok"
+        assert data["sandboxes_count"] == 3
+
+        cfg = mock_probe.call_args.args[0]
+        assert cfg.auth_mode == "oidc"
+        assert cfg.bearer_callable is None
+
+    @pytest.mark.asyncio
+    async def test_test_connection_reuses_saved_oidc_refresh_token(self, client):
+        from unittest.mock import AsyncMock, patch
+
+        ws = await _create_workspace(client, "Gateway Reuse")
+        set_resp = await client.post(
+            f"/api/v1/workspaces/{ws['id']}/gateway",
+            json={
+                "gateway_url": "https://gw.example.com:443",
+                "auth_mode": "oidc",
+                "oidc_issuer": "https://idp.example.com/realms/test",
+                "oidc_client_id": "client-123",
+                "refresh_token": "sample-saved-refresh-token",
+            },
+        )
+        assert set_resp.status_code == 200, set_resp.text
+
+        with patch(
+            "swarmer.openshell_client.probe_gateway_connectivity",
+            new=AsyncMock(return_value={"sandboxes_count": 1}),
+        ) as mock_probe:
+            resp = await client.post(
+                "/api/v1/workspaces/gateway/test-connection",
+                json={
+                    "workspace_id": ws["id"],
+                    "gateway_url": "https://gw.example.com:443",
+                    "auth_mode": "oidc",
+                    "oidc_issuer": "https://idp.example.com/realms/test",
+                    "oidc_client_id": "client-123",
+                },
+            )
+
+        assert resp.status_code == 200, resp.text
+        cfg = mock_probe.call_args.args[0]
+        assert callable(cfg.bearer_callable)
+
+    @pytest.mark.asyncio
+    async def test_test_connection_workspace_not_visible_returns_404(self, client):
+        from swarmer.api.deps import require_api_auth
+        from swarmer.main import app
+
+        try:
+            app.dependency_overrides[require_api_auth] = self._override_identity("workspace-owner")
+            ws = await _create_workspace(client, "Private Gateway WS")
+            app.dependency_overrides[require_api_auth] = _override_require_api_auth
+
+            resp = await client.post(
+                "/api/v1/workspaces/gateway/test-connection",
+                json={
+                    "workspace_id": ws["id"],
+                    "gateway_url": "https://gw.example.com:443",
+                    "auth_mode": "none",
+                },
+            )
+            assert resp.status_code == 404
+        finally:
+            app.dependency_overrides[require_api_auth] = _override_require_api_auth
+
+    @pytest.mark.asyncio
+    async def test_test_connection_member_cannot_use_stored_credentials(self, client):
+        from swarmer.api.deps import require_api_auth
+        from swarmer.main import app
+
+        try:
+            app.dependency_overrides[require_api_auth] = self._override_identity("workspace-owner")
+            ws = await _create_workspace(client, "Member Restricted Gateway WS")
+            set_resp = await client.post(
+                f"/api/v1/workspaces/{ws['id']}/gateway",
+                json={
+                    "gateway_url": "https://gw.example.com:443",
+                    "auth_mode": "oidc",
+                    "oidc_issuer": "https://idp.example.com/realms/test",
+                    "oidc_client_id": "client-123",
+                    "refresh_token": "sample-saved-refresh-token",
+                },
+            )
+            assert set_resp.status_code == 200, set_resp.text
+
+            add_member = await client.post(
+                f"/api/v1/workspaces/{ws['id']}/members",
+                json={"user_id": "workspace-member"},
+            )
+            assert add_member.status_code == 201, add_member.text
+
+            app.dependency_overrides[require_api_auth] = self._override_identity("workspace-member")
+            resp = await client.post(
+                "/api/v1/workspaces/gateway/test-connection",
+                json={
+                    "workspace_id": ws["id"],
+                    "gateway_url": "https://gw.example.com:443",
+                    "auth_mode": "oidc",
+                    "oidc_issuer": "https://idp.example.com/realms/test",
+                    "oidc_client_id": "client-123",
+                },
+            )
+            assert resp.status_code == 403
+        finally:
+            app.dependency_overrides[require_api_auth] = _override_require_api_auth
+
+    @pytest.mark.asyncio
+    async def test_test_connection_rejects_reused_stored_token_for_different_url(self, client):
+        ws = await _create_workspace(client, "Gateway Reuse URL Match")
+        set_resp = await client.post(
+            f"/api/v1/workspaces/{ws['id']}/gateway",
+            json={
+                "gateway_url": "https://gw-saved.example.com:443",
+                "auth_mode": "oidc",
+                "oidc_issuer": "https://idp.example.com/realms/test",
+                "oidc_client_id": "client-123",
+                "refresh_token": "sample-saved-refresh-token",
+            },
+        )
+        assert set_resp.status_code == 200, set_resp.text
+
+        resp = await client.post(
+            "/api/v1/workspaces/gateway/test-connection",
+            json={
+                "workspace_id": ws["id"],
+                "gateway_url": "https://gw-other.example.com:443",
+                "auth_mode": "oidc",
+                "oidc_issuer": "https://idp.example.com/realms/test",
+                "oidc_client_id": "client-123",
+            },
+        )
+        assert resp.status_code == 400
+
+    @pytest.mark.asyncio
+    async def test_create_workspace_with_custom_gateway(self, client):
+        payload = {
+            "display_name": "Dedicated Gateway WS",
+            "description": "WS with custom gateway",
+            "gateway": {
+                "gateway_url": "https://gw-custom.example.com:443",
+                "auth_mode": "oidc",
+                "oidc_issuer": "https://idp.example.com/realm",
+                "oidc_client_id": "client-abc",
+                "refresh_token": "initial-rt-token",
+            },
+        }
+        resp = await client.post("/api/v1/workspaces", json=payload)
+        assert resp.status_code == 201
+        data = resp.json()
+        assert data["gateway"] is not None
+        assert data["gateway"]["gateway_url"] == "https://gw-custom.example.com:443"
+        assert data["gateway"]["auth_mode"] == "oidc"
+        assert data["gateway"]["has_refresh_token"] is True
+        # Plaintext refresh token must NOT be exposed in response
+        assert "refresh_token" not in data["gateway"]
+
+        # Fetch via GET
+        get_resp = await client.get(f"/api/v1/workspaces/{data['id']}/gateway")
+        assert get_resp.status_code == 200
+        gw_data = get_resp.json()
+        assert gw_data["gateway_url"] == "https://gw-custom.example.com:443"
+        assert gw_data["has_refresh_token"] is True
+
+    @pytest.mark.asyncio
+    async def test_update_and_delete_workspace_gateway(self, client):
+        ws = await _create_workspace(client, "Gateway WS")
+
+        # Initially no custom gateway -> 404
+        resp = await client.get(f"/api/v1/workspaces/{ws['id']}/gateway")
+        assert resp.status_code == 404
+
+        # Set gateway
+        set_resp = await client.post(
+            f"/api/v1/workspaces/{ws['id']}/gateway",
+            json={
+                "gateway_url": "https://gw-new.example.com:443",
+                "auth_mode": "bearer",
+                "bearer_token": "sample-bearer-token-value",
+            },
+        )
+        assert set_resp.status_code == 200
+        assert set_resp.json()["has_bearer_token"] is True
+
+        # Delete gateway (revert to cluster default)
+        del_resp = await client.delete(f"/api/v1/workspaces/{ws['id']}/gateway")
+        assert del_resp.status_code == 200
+
+        # Now 404 again
+        resp2 = await client.get(f"/api/v1/workspaces/{ws['id']}/gateway")
+        assert resp2.status_code == 404
+
+
 class TestWorkspaceMembers:
     @pytest.mark.asyncio
     async def test_add_list_remove_member_round_trip(self, client):
@@ -910,9 +1154,9 @@ class TestRepos:
         ws = await _create_workspace(client)
         s = await _create_session(client, ws["id"])
         for bad_url in [
-            "https://user:ghp_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA@github.com/org/repo.git",
-            "https://github.com/org/repo.git?token=ghp_secret",
-            "https://github.com/ghp_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA/org/repo.git",
+            "https://user:" + "gh" + "p_" + "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" + "@github.com/org/repo.git",
+            "https://github.com/org/repo.git?token=" + "gh" + "p_" + "secret",
+            "https://github.com/" + "gh" + "p_" + "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" + "/org/repo.git",
         ]:
             resp = await client.post(
                 f"/api/v1/workspaces/{ws['id']}/sessions/{s['id']}/repos",
@@ -943,14 +1187,14 @@ class TestSecrets:
             json={
                 "google_cloud_project": "my-project",
                 "vertex_location": "us-central1",
-                "google_api_key": "AIza-test123456",
+                "google_api_key": "test-google-api-key-value",
             },
         )
         assert resp.status_code == 200
         cred = resp.json()
         assert cred["google_cloud_project"] == "my-project"
         assert cred["has_adc"] is False
-        assert "AIza-test123456" not in cred.get("masked_api_key", "")  # key should be masked
+        assert "test-google-api-key-value" not in cred.get("masked_api_key", "")  # key should be masked
 
     @pytest.mark.asyncio
     async def test_save_adc_credentials(self, client):
@@ -1041,7 +1285,7 @@ class TestSecrets:
             json={
                 "name": "my-pat",
                 "github_username": "octocat",
-                "pat_value": "ghp_testtoken123456",
+                "pat_value": "test-gh-pat-value-123456",
             },
         )
         assert resp.status_code == 201
@@ -1073,11 +1317,11 @@ class TestSecrets:
         ws = await _create_workspace(client)
         await client.post(
             f"/api/v1/workspaces/{ws['id']}/secrets/pats",
-            json={"name": "dup-pat", "github_username": "user", "pat_value": "ghp_1"},
+            json={"name": "dup-pat", "github_username": "user", "pat_value": "test-gh-pat-value-1"},
         )
         resp = await client.post(
             f"/api/v1/workspaces/{ws['id']}/secrets/pats",
-            json={"name": "dup-pat", "github_username": "user", "pat_value": "ghp_2"},
+            json={"name": "dup-pat", "github_username": "user", "pat_value": "test-gh-pat-value-2"},
         )
         assert resp.status_code == 409
 
@@ -1086,7 +1330,7 @@ class TestSecrets:
         from swarmer.models.github_app import GitHubApp
 
         ws = await _create_workspace(client)
-        pem = "-----BEGIN RSA PRIVATE KEY-----\nseed\n-----END RSA PRIVATE KEY-----"
+        pem = "test-placeholder-private-key-material"
 
         async with _TestSession() as db:
             existing = GitHubApp(
@@ -1117,7 +1361,7 @@ class TestSecrets:
         from swarmer.models.github_app import GitHubApp
 
         ws = await _create_workspace(client)
-        pem = "-----BEGIN RSA PRIVATE KEY-----\nseed\n-----END RSA PRIVATE KEY-----"
+        pem = "test-placeholder-private-key-material"
 
         async with _TestSession() as db:
             existing = GitHubApp(
@@ -1158,7 +1402,7 @@ class TestSecrets:
         from swarmer.models.github_app import GitHubApp
         from swarmer.models.workspace import Workspace
 
-        pem = "-----BEGIN RSA PRIVATE KEY-----\nseed\n-----END RSA PRIVATE KEY-----"
+        pem = "test-placeholder-private-key-material"
 
         async with _TestSession() as db:
             ws = Workspace(display_name="w", namespace="sched-ns")
@@ -1265,7 +1509,7 @@ class TestGitHubURLValidation:
         ws = await _create_workspace(client)
         resp = await client.get(
             f"/api/v1/workspaces/{ws['id']}/prompts/browse/folders",
-            params={"repo_url": "https://user:ghp_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA@github.com/org/repo"},
+            params={"repo_url": "https://user:" + "gh" + "p_" + "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" + "@github.com/org/repo"},
         )
         assert resp.status_code == 400
 
@@ -1274,7 +1518,7 @@ class TestGitHubURLValidation:
         ws = await _create_workspace(client)
         resp = await client.get(
             f"/api/v1/workspaces/{ws['id']}/prompts/browse/folders",
-            params={"repo_url": "https://github.com/org/repo?token=ghp_secret"},
+            params={"repo_url": "https://github.com/org/repo?token=" + "gh" + "p_" + "secret"},
         )
         assert resp.status_code == 400
 

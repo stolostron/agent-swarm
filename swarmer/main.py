@@ -250,7 +250,7 @@ async def _restart_server_sessions() -> None:
     from swarmer.agent_tools.registry import get as _get_tool
 
     try:
-        live_sandboxes = set(await openshell_client.list_sandboxes())
+        default_live_sandboxes = set(await openshell_client.list_sandboxes())
     except Exception:
         log.warning("_restart_server_sessions: could not list sandboxes — skipping", exc_info=True)
         return
@@ -271,6 +271,16 @@ async def _restart_server_sessions() -> None:
 
         for s in sessions:
             sandbox_name = s.sandbox_name
+            oc_client = await openshell_client.get_client_for_workspace(s.workspace_id, db)
+            if oc_client is not None:
+                try:
+                    live_sandboxes = set(await openshell_client.list_sandboxes(client=oc_client))
+                except Exception:
+                    log.warning("_restart_server_sessions: could not list sandboxes for workspace %d — skipping", s.workspace_id, exc_info=True)
+                    continue
+            else:
+                live_sandboxes = default_live_sandboxes
+
             if sandbox_name not in live_sandboxes:
                 # Sandbox is gone — stop the session cleanly.
                 log.warning(
@@ -288,7 +298,7 @@ async def _restart_server_sessions() -> None:
                 try:
                     _tool = _get_tool(s.agent_tool)
                     port = _tool.get_server_port() or 4096
-                    service_url = await openshell_client.expose_service(sandbox_name, "agent", port)
+                    service_url = await openshell_client.expose_service(sandbox_name, "agent", port, client=oc_client)
                     s.service_url = service_url
                     s.phase = "running"
                     log.info(
@@ -348,11 +358,13 @@ async def _restart_github_app_iat_refresh(session: Session, db: AsyncSession) ->
             except Exception:
                 pass
 
+        oc_client = await openshell_client.get_client_for_workspace(session.workspace_id, db)
         provider_name = _github_app_provider_name(session.workspace_id, session.id)
         iat = await mint_installation_token(app, repo_names=repo_names or None)
         await openshell_client.ensure_provider(
             provider_name, "github", {},
             credentials={"GITHUB_TOKEN": iat, "GH_TOKEN": iat},
+            client=oc_client,
         )
         # Keep a strong reference in _iat_refresh_restart_tasks — asyncio's own
         # reference to the task is weak, so without this the task could be
@@ -360,7 +372,11 @@ async def _restart_github_app_iat_refresh(session: Session, db: AsyncSession) ->
         # interval. The done-callback removes it from the set once it finishes
         # (normal completion, exception, or cancellation via session stop/delete).
         refresh_task = asyncio.create_task(
-            start_token_refresh_loop(app, session.id, provider_name, repo_names=repo_names or None),
+            start_token_refresh_loop(
+                app, session.id, provider_name, repo_names=repo_names or None,
+                workspace_id=session.workspace_id, client=oc_client,
+                resolve_workspace_client=False,
+            ),
             name=f"iat-refresh-{session.id}",
         )
         _iat_refresh_restart_tasks.add(refresh_task)

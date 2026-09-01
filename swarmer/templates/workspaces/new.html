@@ -24,42 +24,218 @@
 </div>
 {% endif %}
 
-<form method="post" action="/workspaces" class="pf-v6-c-form">
+<form method="post" action="/workspaces" class="pf-v6-c-form" id="workspace-create-form">
   <div class="pf-v6-l-grid pf-m-gutter" style="--pf-v6-l-grid--m-gutter--GridGap:var(--pf-t--global--spacer--lg);">
-    <div class="pf-v6-l-grid__item pf-m-6-col-on-md">
-      <div class="pf-v6-c-form__group">
-        <label class="pf-v6-c-form__label" for="display_name">
-          <span class="pf-v6-c-form__label-text">Workspace Name</span>
-          <span class="pf-v6-c-form__label-required" aria-hidden="true">&#42;</span>
-        </label>
-        <div class="pf-v6-c-form__group-control">
-          <input type="text" class="pf-v6-c-form-control" id="display_name" name="display_name"
-                 value="{{ display_name or '' }}"
-                 placeholder="e.g. My Agent Workspace"
-                 hx-get="/workspaces/preview-namespace"
-                 hx-trigger="input delay:300ms"
-                 hx-target="#namespace-preview"
-                 hx-include="[name='display_name']"
-                 required autofocus>
-          <div class="pf-v6-c-form__helper-text">
-            <div class="pf-v6-c-helper-text__item">
-              <span class="pf-v6-c-helper-text__item-text">The display name for this workspace.</span>
+    <div class="pf-v6-l-grid__item pf-m-7-col-on-md">
+      
+      {# ── Section 1: Workspace Basics ── #}
+      <div class="pf-v6-c-card" style="margin-bottom:var(--pf-t--global--spacer--lg);">
+        <div class="pf-v6-c-card__header">
+          <h2 class="pf-v6-c-title pf-m-lg">Workspace Details</h2>
+        </div>
+        <div class="pf-v6-c-card__body">
+          <div class="pf-v6-c-form__group">
+            <label class="pf-v6-c-form__label" for="display_name">
+              <span class="pf-v6-c-form__label-text">Workspace Name</span>
+              <span class="pf-v6-c-form__label-required" aria-hidden="true">&#42;</span>
+            </label>
+            <div class="pf-v6-c-form__group-control">
+              <input type="text" class="pf-v6-c-form-control" id="display_name" name="display_name"
+                     value="{{ display_name or '' }}"
+                     placeholder="e.g. My Agent Workspace"
+                     hx-get="/workspaces/preview-namespace"
+                     hx-trigger="input delay:300ms"
+                     hx-target="#namespace-preview"
+                     hx-include="[name='display_name']"
+                     required autofocus>
+              <div class="pf-v6-c-form__helper-text">
+                <div class="pf-v6-c-helper-text__item">
+                  <span class="pf-v6-c-helper-text__item-text">The display name for this workspace.</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="pf-v6-c-form__group" style="margin-top:var(--pf-t--global--spacer--md);">
+            <label class="pf-v6-c-form__label" for="description">
+              <span class="pf-v6-c-form__label-text">Description</span>
+            </label>
+            <div class="pf-v6-c-form__group-control">
+              <textarea class="pf-v6-c-form-control" id="description" name="description"
+                        rows="2" placeholder="Optional description">{{ description or '' }}</textarea>
             </div>
           </div>
         </div>
       </div>
 
-      <div class="pf-v6-c-form__group">
-        <label class="pf-v6-c-form__label" for="description">
-          <span class="pf-v6-c-form__label-text">Description</span>
-        </label>
-        <div class="pf-v6-c-form__group-control">
-          <textarea class="pf-v6-c-form-control" id="description" name="description"
-                    rows="3" placeholder="Optional description">{{ description or '' }}</textarea>
+      {# ── Section 2: OpenShell Runtime Gateway ── #}
+      <div class="pf-v6-c-card" style="margin-bottom:var(--pf-t--global--spacer--lg);">
+        <div class="pf-v6-c-card__header">
+          <h2 class="pf-v6-c-title pf-m-lg">OpenShell Gateway Runtime</h2>
+        </div>
+        <div class="pf-v6-c-card__body">
+          <div class="pf-v6-c-form__group">
+            <div class="pf-v6-c-form__group-control" style="display:flex; flex-direction:column; gap:var(--pf-t--global--spacer--sm);">
+              <label class="pf-v6-c-radio" style="display:flex; align-items:center; cursor:pointer;">
+                <input class="pf-v6-c-radio__input" type="radio" id="gw-mode-default" name="gateway_mode" value="default"
+                       {% if not gateway_mode or gateway_mode == 'default' %}checked{% endif %}
+                       onchange="toggleGatewayMode('default')">
+                <span class="pf-v6-c-radio__label" style="margin-left:var(--pf-t--global--spacer--xs); font-weight:var(--pf-t--global--font--weight--heading--bold);">
+                  Default Cluster Gateway (Shared)
+                </span>
+                <span style="display:block; font-size:var(--pf-t--global--font--size--sm); color:var(--pf-t--global--text--color--subtle); margin-left:var(--pf-t--global--spacer--lg);">
+                  Uses the shared local/in-cluster OpenShell gateway installation.
+                </span>
+              </label>
+
+              <label class="pf-v6-c-radio" style="display:flex; align-items:center; cursor:pointer; margin-top:var(--pf-t--global--spacer--xs);">
+                <input class="pf-v6-c-radio__input" type="radio" id="gw-mode-custom" name="gateway_mode" value="custom"
+                       {% if gateway_mode == 'custom' %}checked{% endif %}
+                       onchange="toggleGatewayMode('custom')">
+                <span class="pf-v6-c-radio__label" style="margin-left:var(--pf-t--global--spacer--xs); font-weight:var(--pf-t--global--font--weight--heading--bold);">
+                  Dedicated / Remote OpenShell Gateway
+                </span>
+                <span style="display:block; font-size:var(--pf-t--global--font--size--sm); color:var(--pf-t--global--text--color--subtle); margin-left:var(--pf-t--global--spacer--lg);">
+                  Point this workspace to its own dedicated remote/hosted OpenShell installation.
+                </span>
+              </label>
+            </div>
+          </div>
+
+          {# ── Custom Gateway Panel ── #}
+          <div id="custom-gateway-panel" style="display:{% if gateway_mode == 'custom' %}block{% else %}none{% endif %}; margin-top:var(--pf-t--global--spacer--md); border-top:1px solid var(--pf-t--global--border--color--subtle); padding-top:var(--pf-t--global--spacer--md);">
+            
+            {# Quick Setup Paste Box #}
+            <div class="pf-v6-c-card pf-m-plain" style="background:var(--pf-t--global--background--color--secondary--default); border:1px dashed var(--pf-t--global--color--brand--default); padding:var(--pf-t--global--spacer--md); border-radius:var(--pf-t--global--border--radius--md); margin-bottom:var(--pf-t--global--spacer--md);">
+              <label class="pf-v6-c-form__label" for="cmd_paste_box">
+                <span class="pf-v6-c-form__label-text" style="font-weight:var(--pf-t--global--font--weight--heading--bold); color:var(--pf-t--global--color--brand--default);">⚡ Quick Setup: Paste CLI Command or JSON Metadata</span>
+              </label>
+              <textarea class="pf-v6-c-form-control" id="cmd_paste_box" rows="2"
+                        placeholder="Paste 'openshell gateway add ...' command or metadata.json"
+                        style="font-family:monospace; font-size:var(--pf-t--global--font--size--sm); margin-top:var(--pf-t--global--spacer--xs);"></textarea>
+              <div style="display:flex; justify-content:space-between; align-items:center; margin-top:var(--pf-t--global--spacer--xs);">
+                <button type="button" class="pf-v6-c-button pf-m-secondary pf-m-small" onclick="parseCommandBox()">
+                  Apply & Populate Fields
+                </button>
+                <span id="parse-status-msg" style="font-size:var(--pf-t--global--font--size--sm); color:var(--pf-t--global--text--color--subtle);"></span>
+              </div>
+            </div>
+
+            {# Structured Gateway Fields #}
+            <div class="pf-v6-c-form__group">
+              <label class="pf-v6-c-form__label" for="gateway_url">
+                <span class="pf-v6-c-form__label-text">Gateway Endpoint URL</span>
+                <span class="pf-v6-c-form__label-required" aria-hidden="true">&#42;</span>
+              </label>
+              <div class="pf-v6-c-form__group-control">
+                <input type="text" class="pf-v6-c-form-control" id="gateway_url" name="gateway_url"
+                       value="{{ gateway_url or '' }}" placeholder="https://gw-xyz.openshell.stage.devshift.net:443">
+              </div>
+            </div>
+
+            <div class="pf-v6-c-form__group" style="margin-top:var(--pf-t--global--spacer--md);">
+              <label class="pf-v6-c-form__label" for="gateway_auth_mode">
+                <span class="pf-v6-c-form__label-text">Authentication Mode</span>
+              </label>
+              <div class="pf-v6-c-form__group-control">
+                <select class="pf-v6-c-form-control" id="gateway_auth_mode" name="gateway_auth_mode" onchange="toggleAuthFields(this.value)">
+                  <option value="oidc" {% if not gateway_auth_mode or gateway_auth_mode == 'oidc' %}selected{% endif %}>OIDC (OpenID Connect / Keycloak)</option>
+                  <option value="bearer" {% if gateway_auth_mode == 'bearer' %}selected{% endif %}>Bearer Token (Static / API Key)</option>
+                  <option value="none" {% if gateway_auth_mode == 'none' %}selected{% endif %}>None (Plain HTTP / Direct)</option>
+                </select>
+              </div>
+            </div>
+
+            {# OIDC Fields #}
+            <div id="oidc-fields-container" style="display:{% if not gateway_auth_mode or gateway_auth_mode == 'oidc' %}block{% else %}none{% endif %}; margin-top:var(--pf-t--global--spacer--md);">
+              <div class="pf-v6-l-grid pf-m-gutter">
+                <div class="pf-v6-l-grid__item pf-m-12-col">
+                  <div class="pf-v6-c-form__group">
+                    <label class="pf-v6-c-form__label" for="gateway_oidc_issuer">
+                      <span class="pf-v6-c-form__label-text">OIDC Issuer URL</span>
+                    </label>
+                    <div class="pf-v6-c-form__group-control">
+                      <input type="text" class="pf-v6-c-form-control" id="gateway_oidc_issuer" name="gateway_oidc_issuer"
+                             value="{{ gateway_oidc_issuer or '' }}" placeholder="https://keycloak.../realms/ambient-code">
+                    </div>
+                  </div>
+                </div>
+
+                <div class="pf-v6-l-grid__item pf-m-6-col">
+                  <div class="pf-v6-c-form__group">
+                    <label class="pf-v6-c-form__label" for="gateway_oidc_client_id">
+                      <span class="pf-v6-c-form__label-text">Client ID</span>
+                    </label>
+                    <div class="pf-v6-c-form__group-control">
+                      <input type="text" class="pf-v6-c-form-control" id="gateway_oidc_client_id" name="gateway_oidc_client_id"
+                             value="{{ gateway_oidc_client_id or '' }}" placeholder="e.g. swarm-123">
+                    </div>
+                  </div>
+                </div>
+
+                <div class="pf-v6-l-grid__item pf-m-6-col">
+                  <div class="pf-v6-c-form__group">
+                    <label class="pf-v6-c-form__label" for="gateway_oidc_audience">
+                      <span class="pf-v6-c-form__label-text">Audience (optional)</span>
+                    </label>
+                    <div class="pf-v6-c-form__group-control">
+                      <input type="text" class="pf-v6-c-form-control" id="gateway_oidc_audience" name="gateway_oidc_audience"
+                             value="{{ gateway_oidc_audience or '' }}" placeholder="Defaults to Client ID">
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {# OIDC Token / Credential Helper #}
+              <div class="pf-v6-c-form__group" style="margin-top:var(--pf-t--global--spacer--md);">
+                <label class="pf-v6-c-form__label" for="gateway_refresh_token">
+                  <span class="pf-v6-c-form__label-text">OIDC Refresh Token / Credential Payload</span>
+                </label>
+                <div class="pf-v6-c-form__group-control">
+                  <textarea class="pf-v6-c-form-control" id="gateway_refresh_token" name="gateway_refresh_token" rows="3"
+                            placeholder="Paste raw token string, oidc_token.json bundle, or REFRESH_TOKEN=..."
+                            oninput="formatTokenInput(this.value)"></textarea>
+                  <div class="pf-v6-c-form__helper-text">
+                    <div class="pf-v6-c-helper-text__item">
+                      <span class="pf-v6-c-helper-text__item-text" id="token-helper-text">
+                        Paste your refresh token from <code>openshell gateway login</code> or your hosting dashboard. Encrypted at rest.
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {# Bearer Token Field #}
+            <div id="bearer-fields-container" style="display:{% if gateway_auth_mode == 'bearer' %}block{% else %}none{% endif %}; margin-top:var(--pf-t--global--spacer--md);">
+              <div class="pf-v6-c-form__group">
+                <label class="pf-v6-c-form__label" for="gateway_bearer_token">
+                  <span class="pf-v6-c-form__label-text">Bearer / API Token</span>
+                </label>
+                <div class="pf-v6-c-form__group-control">
+                  <input type="password" class="pf-v6-c-form-control" id="gateway_bearer_token" name="gateway_bearer_token"
+                         placeholder="Paste static bearer token">
+                </div>
+              </div>
+            </div>
+
+            {# Live Test Connection #}
+            <div style="margin-top:var(--pf-t--global--spacer--lg); padding-top:var(--pf-t--global--spacer--md); border-top:1px solid var(--pf-t--global--border--color--subtle); display:flex; align-items:center; gap:var(--pf-t--global--spacer--md);">
+              <button type="button" class="pf-v6-c-button pf-m-secondary"
+                      hx-post="/workspaces/test-gateway"
+                      hx-include="#custom-gateway-panel input, #custom-gateway-panel select, #custom-gateway-panel textarea"
+                      hx-target="#gateway-test-result"
+                      hx-swap="innerHTML">
+                🔍 Test Gateway Connection
+              </button>
+              <div id="gateway-test-result" style="flex-grow:1;"></div>
+            </div>
+
+          </div>
         </div>
       </div>
 
-      <div class="pf-v6-c-form__group pf-m-action">
+      <div class="pf-v6-c-form__group pf-m-action" style="margin-top:var(--pf-t--global--spacer--lg);">
         <div class="pf-v6-c-form__actions">
           <button type="submit" class="pf-v6-c-button pf-m-primary">Create Workspace</button>
           <a href="/workspaces" class="pf-v6-c-button pf-m-link">Cancel</a>
@@ -67,8 +243,8 @@
       </div>
     </div>
 
-    <div class="pf-v6-l-grid__item pf-m-6-col-on-md">
-      <div class="pf-v6-c-card">
+    <div class="pf-v6-l-grid__item pf-m-5-col-on-md">
+      <div class="pf-v6-c-card" style="margin-bottom:var(--pf-t--global--spacer--lg);">
         <div class="pf-v6-c-card__body">
           <h6 class="pf-v6-c-title pf-m-md" style="color:var(--pf-t--global--text--color--subtle); text-transform:uppercase; margin-bottom:var(--pf-t--global--spacer--sm);">Kubernetes Namespace</h6>
           <code id="namespace-preview" style="font-size:var(--pf-t--global--font--size--lg); color:var(--pf-t--global--color--status--info--default);">
@@ -76,12 +252,122 @@
           </code>
           <hr style="margin:var(--pf-t--global--spacer--md) 0;">
           <p style="font-size:var(--pf-t--global--font--size--sm); color:var(--pf-t--global--text--color--subtle); margin:0;">
-            The namespace is derived automatically from the workspace name.
-            It is <strong>immutable</strong> after creation and must be unique.
+            The namespace is derived automatically from the workspace name. It is <strong>immutable</strong> after creation.
+          </p>
+        </div>
+      </div>
+
+      <div class="pf-v6-c-card">
+        <div class="pf-v6-c-card__body">
+          <h6 class="pf-v6-c-title pf-m-md" style="color:var(--pf-t--global--text--color--subtle); text-transform:uppercase; margin-bottom:var(--pf-t--global--spacer--sm);">Runtime Isolation</h6>
+          <p style="font-size:var(--pf-t--global--font--size--sm); color:var(--pf-t--global--text--color--subtle); margin-bottom:var(--pf-t--global--spacer--sm);">
+            <strong>Default:</strong> Sessions run inside the shared cluster OpenShell instance.
+          </p>
+          <p style="font-size:var(--pf-t--global--font--size--sm); color:var(--pf-t--global--text--color--subtle); margin:0;">
+            <strong>Dedicated:</strong> Sessions run on an isolated, external OpenShell gateway. Zero pod restarts required on Swarmer.
           </p>
         </div>
       </div>
     </div>
   </div>
 </form>
+
+<script>
+function toggleGatewayMode(mode) {
+  const panel = document.getElementById('custom-gateway-panel');
+  if (mode === 'custom') {
+    panel.style.display = 'block';
+  } else {
+    panel.style.display = 'none';
+  }
+}
+
+function toggleAuthFields(mode) {
+  const oidc = document.getElementById('oidc-fields-container');
+  const bearer = document.getElementById('bearer-fields-container');
+  if (mode === 'oidc') {
+    oidc.style.display = 'block';
+    bearer.style.display = 'none';
+  } else if (mode === 'bearer') {
+    oidc.style.display = 'none';
+    bearer.style.display = 'block';
+  } else {
+    oidc.style.display = 'none';
+    bearer.style.display = 'none';
+  }
+}
+
+async function parseCommandBox() {
+  const text = document.getElementById('cmd_paste_box').value.trim();
+  const statusEl = document.getElementById('parse-status-msg');
+  if (!text) {
+    statusEl.textContent = 'Paste a command or JSON snippet first.';
+    statusEl.style.color = 'var(--pf-t--global--color--status--danger--default)';
+    return;
+  }
+  try {
+    const res = await fetch('/workspaces/gateway/parse-command', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({command: text})
+    });
+    if (!res.ok) throw new Error('Parse failed');
+    const data = await res.json();
+    if (data.gateway_url) document.getElementById('gateway_url').value = data.gateway_url;
+    if (data.auth_mode) {
+      document.getElementById('gateway_auth_mode').value = data.auth_mode;
+      toggleAuthFields(data.auth_mode);
+    }
+    if (data.oidc_issuer) document.getElementById('gateway_oidc_issuer').value = data.oidc_issuer;
+    if (data.oidc_client_id) document.getElementById('gateway_oidc_client_id').value = data.oidc_client_id;
+    if (data.oidc_audience) document.getElementById('gateway_oidc_audience').value = data.oidc_audience;
+    if (data.bearer_token) document.getElementById('gateway_bearer_token').value = data.bearer_token;
+    if (data.suggested_name && !document.getElementById('display_name').value) {
+      document.getElementById('display_name').value = data.suggested_name;
+      const preview = document.getElementById('namespace-preview');
+      if (preview) preview.textContent = data.suggested_name.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+    }
+    statusEl.textContent = '✓ Parsed & applied successfully';
+    statusEl.style.color = 'var(--pf-t--global--color--status--success--default)';
+  } catch (err) {
+    statusEl.textContent = 'Failed to parse input: ' + err.message;
+    statusEl.style.color = 'var(--pf-t--global--color--status--danger--default)';
+  }
+}
+
+async function formatTokenInput(val) {
+  val = val.trim();
+  const helper = document.getElementById('token-helper-text');
+  if (!val) {
+    helper.textContent = 'Paste your refresh token from openshell gateway login or your hosting dashboard.';
+    helper.style.color = 'var(--pf-t--global--text--color--subtle)';
+    return;
+  }
+  try {
+    const res = await fetch('/workspaces/gateway/parse-token', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({token_input: val})
+    });
+    if (!res.ok) return;
+    const data = await res.json();
+    if (data.status === 'valid') {
+      if (data.format_detected === 'json_bundle' && data.refresh_token) {
+        document.getElementById('gateway_refresh_token').value = data.refresh_token;
+        if (data.issuer && !document.getElementById('gateway_oidc_issuer').value) {
+          document.getElementById('gateway_oidc_issuer').value = data.issuer;
+        }
+        if (data.client_id && !document.getElementById('gateway_oidc_client_id').value) {
+          document.getElementById('gateway_oidc_client_id').value = data.client_id;
+        }
+      }
+      helper.textContent = `✓ ${data.message}`;
+      helper.style.color = 'var(--pf-t--global--color--status--success--default)';
+    } else {
+      helper.textContent = `⚠ ${data.message}`;
+      helper.style.color = 'var(--pf-t--global--color--status--warning--default)';
+    }
+  } catch (e) {}
+}
+</script>
 {% endblock %}

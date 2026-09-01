@@ -103,9 +103,16 @@ async def _run_openshell_tui(
 
     sandbox_name = session.sandbox_name
 
+    client = await openshell_client.get_client_for_workspace(session.workspace_id)
+    if client is None:
+        # Default (cluster-shared) gateway path: get_client_for_workspace()
+        # intentionally returns None, so build the default client explicitly
+        # before calling helpers that require a concrete client instance.
+        client = openshell_client._get_client()
+
     # Resolve sandbox_id synchronously (brief blocking call)
     try:
-        sandbox_id = await openshell_client._sandbox_id(sandbox_name, openshell_client._get_client())
+        sandbox_id = await openshell_client._sandbox_id(sandbox_name, client)
     except Exception as exc:
         log.error("TUI: sandbox_id lookup failed for %s: %s", sandbox_name, exc)
         await websocket.close(code=4004, reason="Sandbox lookup failed")
@@ -150,7 +157,6 @@ async def _run_openshell_tui(
     command = ["sh", "-c", tui_shell]
 
     try:
-        client = openshell_client._get_client()
         response_stream, input_q = openshell_client.exec_interactive(
             sandbox_name=sandbox_name,
             sandbox_id=sandbox_id,

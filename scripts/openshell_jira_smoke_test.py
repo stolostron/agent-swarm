@@ -387,7 +387,7 @@ async def run_jira_smoke_test(model: str) -> bool:
             if "policy_denied" in ln or "DENY" in ln.upper()
         ]
         if denial_lines:
-            print(f"\n  OPA policy denials — add to _JIRA_MCP_BLOCK in openshell_policy.py:")
+            print("\n  OPA policy denials — add to _JIRA_MCP_BLOCK in openshell_policy.py:")
             for ln in denial_lines[:10]:
                 print(f"    {ln}")
             step("No OPA network denials", False,

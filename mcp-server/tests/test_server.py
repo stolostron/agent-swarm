@@ -52,6 +52,13 @@ EXPECTED_TOOLS = {
     "add_admin",
     "remove_admin",
     "bootstrap_admin",
+    # ACM-41655: dedicated gateway tools
+    "get_workspace_gateway",
+    "set_workspace_gateway",
+    "delete_workspace_gateway",
+    "test_workspace_gateway",
+    "parse_gateway_command",
+    "parse_gateway_token",
 }
 
 
@@ -445,3 +452,55 @@ def test_config_ssl_ca_bundle_unset(monkeypatch):
     with patch("agent_swarm_mcp_server.config.resolve_token", return_value="tok"):
         cfg = AgentSwarmConfig.from_env()
     assert cfg.ssl_ca_bundle is None
+
+
+# ------------------------------------------------------------------
+# ACM-41655/41656: dedicated gateway parse helpers
+# ------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_parse_gateway_command_delegates_to_client():
+    server = make_server()
+    server.client.parse_gateway_command = AsyncMock(return_value={
+        "gateway_url": "https://gw.example.com:443",
+        "auth_mode": "oidc",
+        "oidc_issuer": "https://keycloak.example.com/realms/test",
+        "oidc_client_id": "swarm-1",
+        "oidc_audience": None,
+        "bearer_token": None,
+        "tls_verify": True,
+        "suggested_name": "gw",
+        "errors": [],
+    })
+
+    result = await server._parse_gateway_command("openshell gateway add gw --url https://gw.example.com:443")
+
+    server.client.parse_gateway_command.assert_awaited_once_with(
+        "openshell gateway add gw --url https://gw.example.com:443"
+    )
+    assert result["gateway_url"] == "https://gw.example.com:443"
+    assert result["oidc_client_id"] == "swarm-1"
+
+
+@pytest.mark.asyncio
+async def test_parse_gateway_token_delegates_to_client():
+    server = make_server()
+    server.client.parse_gateway_token = AsyncMock(return_value={
+        "refresh_token": "<test-refresh-token>",
+        "access_token": None,
+        "expires_at": None,
+        "issuer": "https://keycloak.example.com/realms/test",
+        "client_id": "swarm-1",
+        "format_detected": "json_bundle",
+        "status": "valid",
+        "message": "Parsed refresh token from JSON bundle.",
+        "char_count": 42,
+    })
+
+    result = await server._parse_gateway_token('{"refresh_token": "<test-refresh-token>"}')
+
+    server.client.parse_gateway_token.assert_awaited_once_with(
+        '{"refresh_token": "<test-refresh-token>"}'
+    )
+    assert result["status"] == "valid"
+    assert result["format_detected"] == "json_bundle"

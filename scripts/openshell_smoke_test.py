@@ -58,8 +58,7 @@ def _redact_secret(value: str) -> str:
 async def run_smoke_test(model: str) -> bool:
     from swarmer.crypto import init_crypto
     from swarmer.openshell_client import (
-        _get_client, ensure_provider, create_sandbox, _wait_sandbox_ready,
-        write_agent_config,
+        _get_client, ensure_provider, create_sandbox, write_agent_config,
     )
     from swarmer.agent_tools.opencode import OpenCodeStrategy
     from swarmer.openshell_policy import build_session_policy
@@ -495,7 +494,7 @@ async def run_vertex_smoke_test(
             statuses = {c.credential_key: c.status for c in sr.credentials}
             if statuses.get("gcloud_adc_token") == "configured":
                 print(" ready")
-                step("Token refreshed", True, f"gcloud_adc_token: configured")
+                step("Token refreshed", True, "gcloud_adc_token: configured")
                 break
             print(".", end="", flush=True)
         except Exception:

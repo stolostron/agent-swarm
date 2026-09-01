@@ -252,6 +252,26 @@ async def migrate_db() -> None:
             created_by TEXT NOT NULL DEFAULT '',
             created_at DATETIME NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%S', 'now'))
         )""",
+        # ACM-41655: Dedicated OpenShell gateway per workspace.
+        """CREATE TABLE IF NOT EXISTS workspace_gateways (
+            workspace_id INTEGER PRIMARY KEY,
+            gateway_url VARCHAR(1024) NOT NULL,
+            auth_mode VARCHAR(32) NOT NULL DEFAULT 'oidc',
+            oidc_issuer VARCHAR(1024),
+            oidc_client_id VARCHAR(255),
+            oidc_audience VARCHAR(255),
+            refresh_token_enc TEXT,
+            access_token_enc TEXT,
+            access_token_expires_at DATETIME,
+            bearer_token_enc TEXT,
+            tls_ca TEXT,
+            tls_cert TEXT,
+            tls_key_enc TEXT,
+            tls_verify BOOLEAN NOT NULL DEFAULT 1,
+            created_at DATETIME NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%S', 'now')),
+            updated_at DATETIME NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%S', 'now')),
+            FOREIGN KEY(workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE
+        )""",
         # ACM-42674: Event-driven trigger configuration and event context in run history
         "ALTER TABLE session_schedules ADD COLUMN trigger_type VARCHAR(32) NOT NULL DEFAULT 'cron'",
         "ALTER TABLE session_schedules ADD COLUMN event_condition VARCHAR(64) NOT NULL DEFAULT ''",

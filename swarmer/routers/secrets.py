@@ -62,20 +62,14 @@ async def _secrets_context(api, ws_id: int) -> dict:
     # Check gateway for Vertex AI (google-cloud) provider — ADC is stored on OpenShell,
     # not in the Swarmer DB, so the gateway is the source of truth for this status.
     vertex_provider_configured = False
-    try:
-        vertex_provider_configured = await openshell_client.provider_exists(
-            f"swarmer-ws-{ws_id}-google-cloud"
-        )
-    except Exception:
-        pass  # gateway may be unreachable in local dev without OpenShell
-
-    # Check gateway for the Google AI Studio (Gemini) provider — same pattern as
-    # Vertex ADC: the key is pushed to the gateway at save time and never stored
-    # encrypted in the Swarmer DB (ACM-37263).
     gemini_provider_configured = False
     try:
+        oc_client = await openshell_client.get_client_for_workspace(ws_id)
+        vertex_provider_configured = await openshell_client.provider_exists(
+            f"swarmer-ws-{ws_id}-google-cloud", client=oc_client
+        )
         gemini_provider_configured = await openshell_client.provider_exists(
-            f"swarmer-ws-{ws_id}-google-ai-studio"
+            f"swarmer-ws-{ws_id}-google-ai-studio", client=oc_client
         )
     except Exception:
         pass  # gateway may be unreachable in local dev without OpenShell
@@ -209,13 +203,25 @@ async def opencode_secret_save(
 
     # Push Vertex AI credentials to OpenShell gateway if ADC was provided.
     # The gateway stores and auto-refreshes the credential; Swarmer never persists it.
+    try:
+        oc_client = await openshell_client.get_client_for_workspace(ws_id)
+    except Exception as exc:
+        flash(
+            request,
+            f"Failed to resolve workspace OpenShell gateway client: {exc}",
+            "danger",
+        )
+        return RedirectResponse(url=f"/workspaces/{ws_id}/secrets?tab=credentials", status_code=302)
+
     if adc_content and google_cloud_project and vertex_location:
         provider_name = f"swarmer-ws-{ws_id}-google-cloud"
         try:
             await openshell_client.create_google_cloud_provider(
-                provider_name, google_cloud_project, vertex_location
+                provider_name, google_cloud_project, vertex_location, client=oc_client
             )
-            await openshell_client.configure_google_cloud_provider(provider_name, adc_content)
+            await openshell_client.configure_google_cloud_provider(
+                provider_name, adc_content, client=oc_client
+            )
         except Exception as exc:
             flash(request, f"Failed to configure Vertex AI on OpenShell: {exc}", "danger")
     elif adc_content and not (google_cloud_project and vertex_location):
@@ -234,6 +240,7 @@ async def opencode_secret_save(
                     "GOOGLE_API_KEY": gemini_key,
                     "GOOGLE_GENERATIVE_AI_API_KEY": gemini_key,
                 },
+                client=oc_client,
             )
         except Exception:
             log.warning(
