@@ -1035,9 +1035,18 @@ async def _resolve_schedule_prompt(schedule_id: int, session: Session, db: Async
 
     if sched.trigger_type == "event" and sched.include_event_context and session.event_context:
         try:
-            event_context = _json.dumps(
-                _json.loads(session.event_context), indent=2, sort_keys=True
-            )
+            raw_ctx = _json.loads(session.event_context)
+            if isinstance(raw_ctx, dict):
+                # Exclude contributor-controlled free-form text fields (e.g. title, body)
+                # to prevent prompt injection in downstream agent instructions.
+                excluded_keys = {"title", "body", "description"}
+                filtered_ctx = {
+                    k: v for k, v in raw_ctx.items()
+                    if k not in excluded_keys and not k.startswith("_")
+                }
+                event_context = _json.dumps(filtered_ctx, indent=2, sort_keys=True)
+            else:
+                event_context = session.event_context
         except (TypeError, ValueError):
             event_context = session.event_context
         resolved_prompt += (

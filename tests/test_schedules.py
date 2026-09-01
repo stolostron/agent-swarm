@@ -835,6 +835,7 @@ class TestSchedulePromptEventContext:
                 event_context=json.dumps({
                     "trigger_type": "event", "repo": "org/repo", "pr_number": 42,
                     "action": "ci_failed", "cause": "checks failed",
+                    "title": "fix: update docs",
                 }),
             )
             db.add(session)
@@ -854,6 +855,8 @@ class TestSchedulePromptEventContext:
         assert "## GitHub Event Context" in prompt
         assert '"pr_number": 42' in prompt
         assert '"repo": "org/repo"' in prompt
+        assert '"title"' not in prompt
+        assert "fix: update docs" not in prompt
 
     @pytest.mark.asyncio
     async def test_event_context_is_omitted_when_disabled(self):
