@@ -353,3 +353,70 @@ class TestSessionFormCreatePath:
         assert resp2.status_code == 422, (
             f"Expected 422 for duplicate name, got {resp2.status_code}: {resp2.text[:200]}"
         )
+
+
+class TestPrActionStateMigration:
+    """ACM-43054: migrate_db() must idempotently add session_id to pr_action_state
+    and recreate uq_pr_action_state_key index including session_id."""
+
+    @pytest.mark.asyncio
+    async def test_migrate_db_adds_session_id_to_legacy_pr_action_state(self):
+        # Recreate a legacy pr_action_state table without session_id
+        async with _engine.begin() as conn:
+            await conn.execute(text("DROP TABLE IF EXISTS pr_action_state"))
+            await conn.execute(text("""
+                CREATE TABLE pr_action_state (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    repo VARCHAR(255) NOT NULL,
+                    pr_number INTEGER NOT NULL,
+                    head_sha VARCHAR(64) NOT NULL,
+                    action VARCHAR(32) NOT NULL,
+                    status VARCHAR(32) NOT NULL DEFAULT 'dispatched',
+                    attempts INTEGER NOT NULL DEFAULT 0,
+                    last_error TEXT NOT NULL DEFAULT '',
+                    last_dispatched_at DATETIME,
+                    created_at DATETIME NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%S', 'now')),
+                    updated_at DATETIME NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%S', 'now'))
+                )
+            """))
+            await conn.execute(text("""
+                CREATE UNIQUE INDEX uq_pr_action_state_key
+                ON pr_action_state (repo, pr_number, head_sha, action)
+            """))
+
+        # Verify session_id does not exist before migration
+        async with _engine.begin() as conn:
+            result = await conn.execute(text("PRAGMA table_info(pr_action_state)"))
+            cols_before = [row[1] for row in result.fetchall()]
+        assert "session_id" not in cols_before
+
+        # Run migrate_db()
+        import swarmer.database as db_module
+
+        orig_engine = db_module._engine
+        db_module._engine = _engine
+        try:
+            await db_module.migrate_db()
+
+            # Verify session_id column exists
+            async with _engine.begin() as conn:
+                result = await conn.execute(text("PRAGMA table_info(pr_action_state)"))
+                cols_after = [row[1] for row in result.fetchall()]
+            assert "session_id" in cols_after
+
+            # Verify multiple sessions can now record actions for the same PR and head SHA
+            async with _engine.begin() as conn:
+                await conn.execute(text("""
+                    INSERT INTO pr_action_state (repo, pr_number, head_sha, action, session_id)
+                    VALUES ('owner/repo', 1, 'sha1', 'ci_fail_or_conflict', 10)
+                """))
+                await conn.execute(text("""
+                    INSERT INTO pr_action_state (repo, pr_number, head_sha, action, session_id)
+                    VALUES ('owner/repo', 1, 'sha1', 'ci_fail_or_conflict', 20)
+                """))
+
+            # Running migrate_db() again must be idempotent and succeed without error
+            await db_module.migrate_db()
+        finally:
+            db_module._engine = orig_engine
+

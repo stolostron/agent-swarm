@@ -276,6 +276,8 @@ async def migrate_db() -> None:
             created_at DATETIME NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%S', 'now')),
             updated_at DATETIME NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%S', 'now'))
         )""",
+        # ACM-43054: pr_action_state dispatch key includes session_id for multi-session fan-out
+        "ALTER TABLE pr_action_state ADD COLUMN session_id INTEGER DEFAULT NULL",
         "DROP INDEX IF EXISTS uq_pr_action_state_key",
         """CREATE UNIQUE INDEX IF NOT EXISTS uq_pr_action_state_key
            ON pr_action_state (repo, pr_number, head_sha, action, session_id)""",
