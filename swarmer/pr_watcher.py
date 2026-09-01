@@ -456,12 +456,19 @@ async def _build_pr_state(
 
 
 def _extract_event_pr_numbers(events: list[dict[str, Any]]) -> set[int]:
-    """Extract PR numbers from GitHub repository events payloads."""
+    """Extract PR numbers from GitHub repository events payloads.
+
+    Returns an empty set when a PushEvent is present, because push payloads
+    carry only a ref. Callers treat an empty set as "evaluate all open PRs".
+    """
     pr_numbers: set[int] = set()
     for event in events:
         payload = event.get("payload") or {}
         event_type = event.get("type", "")
         number: int | None = None
+
+        if event_type == "PushEvent":
+            return set()
 
         if event_type in ("PullRequestEvent", "PullRequestReviewEvent", "PullRequestReviewCommentEvent"):
             number = (payload.get("pull_request") or {}).get("number")
@@ -676,6 +683,17 @@ async def _dispatch_session_run(
 
     ws = session.workspace
     if not ws:
+        await record_dispatch(
+            db,
+            repo=repo,
+            pr_number=pr_number,
+            head_sha=head_sha,
+            action=action_key,
+            session_id=session.id,
+            status="failed",
+            error="session has no workspace",
+            event_context=event_ctx_json,
+        )
         return False
 
     try:

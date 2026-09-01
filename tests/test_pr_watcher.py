@@ -650,10 +650,15 @@ class TestPRWatcherSignalRouting(unittest.TestCase):
             {"type": "PullRequestEvent", "payload": {"pull_request": {"number": 153}}},
             {"type": "IssueCommentEvent", "payload": {"issue": {"number": 153, "pull_request": {"url": "x"}}}},
             {"type": "CheckRunEvent", "payload": {"check_run": {"pull_requests": [{"number": 153}, {"number": 154}]}}},
-            {"type": "PushEvent", "payload": {}},
         ]
 
         self.assertEqual(_extract_event_pr_numbers(events), {153, 154})
+
+        events_with_push = [
+            {"type": "PullRequestEvent", "payload": {"pull_request": {"number": 153}}},
+            {"type": "PushEvent", "payload": {}},
+        ]
+        self.assertEqual(_extract_event_pr_numbers(events_with_push), set())
 
 
 class TestPRWatcherDispatchFlow(unittest.IsolatedAsyncioTestCase):
@@ -897,6 +902,35 @@ class TestPRWatcherDispatchFlow(unittest.IsolatedAsyncioTestCase):
             review_row = await get_action_state(db, "stolostron/agent-swarm", 153, "sha154", review_key)
             self.assertIsNotNone(review_row)
             self.assertEqual(review_row.status, "dispatched")
+
+    async def test_dispatch_session_run_missing_workspace_records_failed(self):
+        from swarmer.pr_watcher import _action_dedupe_key, _dispatch_session_run
+        from swarmer.pr_watcher_store import get_action_state
+
+        session_id = await self._seed_session_with_schedules()
+
+        async with self.session_factory() as db:
+            session, sched_hygiene, _sched_catchall = await self._load_session_with_schedules(db, session_id)
+            session.workspace = None
+            action_key = _action_dedupe_key(PRAction.HYGIENE, sched_hygiene.id)
+
+            res = await _dispatch_session_run(
+                db,
+                session=session,
+                sched=sched_hygiene,
+                event_ctx_json="{}",
+                action_key=action_key,
+                repo="stolostron/agent-swarm",
+                pr_number=153,
+                head_sha="sha153",
+                queue_if_active=False,
+            )
+            self.assertFalse(res)
+
+            row = await get_action_state(db, "stolostron/agent-swarm", 153, "sha153", action_key)
+            self.assertIsNotNone(row)
+            self.assertEqual(row.status, "failed")
+            self.assertEqual(row.last_error, "session has no workspace")
 
 
 if __name__ == "__main__":
