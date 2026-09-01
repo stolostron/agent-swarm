@@ -872,6 +872,7 @@ class AgentSwarmMCPServer:
             label: str = "",
             prompt_id: int | None = None,
             instruction_prompt: str = "",
+            include_event_context: bool = True,
             enabled: bool = True,
         ) -> dict:
             """Add a new schedule or event trigger to a session.
@@ -887,6 +888,7 @@ class AgentSwarmMCPServer:
                 label: Human-readable name for this trigger.
                 prompt_id: ID of a workspace prompt to use instead of the session default.
                 instruction_prompt: Additional instructions; overrides session default when set.
+                include_event_context: Include triggering event data in the agent prompt. Default: True.
                 enabled: Whether the schedule is active. Default: True.
             """
             return await self._add_session_schedule(
@@ -894,7 +896,9 @@ class AgentSwarmMCPServer:
                 trigger_type=trigger_type, event_condition=event_condition,
                 author_scope=author_scope, fix_authors=fix_authors,
                 label=label, prompt_id=prompt_id,
-                instruction_prompt=instruction_prompt, enabled=enabled,
+                instruction_prompt=instruction_prompt,
+                include_event_context=include_event_context,
+                enabled=enabled,
             )
 
         @mcp.tool()

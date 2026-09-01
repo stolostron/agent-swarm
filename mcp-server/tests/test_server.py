@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -87,10 +88,13 @@ def test_server_registers_all_expected_tools():
         mock_mcp = MagicMock()
         registered_names: list[str] = []
 
+        registered_tools_by_name: dict[str, Any] = {}
+
         def capture_tool():
-            """Capture the name of each @mcp.tool() decorated function."""
+            """Capture each @mcp.tool() decorated function."""
             def decorator(fn):
                 registered_names.append(fn.__name__)
+                registered_tools_by_name[fn.__name__] = fn
                 return fn
             return decorator
 
@@ -107,6 +111,15 @@ def test_server_registers_all_expected_tools():
         f"  Missing: {EXPECTED_TOOLS - registered_tools}\n"
         f"  Extra:   {registered_tools - EXPECTED_TOOLS}"
     )
+
+    import inspect
+    add_sched_params = inspect.signature(registered_tools_by_name["add_session_schedule"]).parameters
+    assert "include_event_context" in add_sched_params
+    assert add_sched_params["include_event_context"].default is True
+
+    update_sched_params = inspect.signature(registered_tools_by_name["update_session_schedule"]).parameters
+    assert "include_event_context" in update_sched_params
+    assert update_sched_params["include_event_context"].default is None
 
 
 # ------------------------------------------------------------------
@@ -423,6 +436,37 @@ async def test_admins_and_me_server_methods():
     assert (await server._add_admin("bob"))["user_id"] == "bob"
     assert (await server._remove_admin("bob"))["detail"] == "removed"
     assert (await server._bootstrap_admin())["created_by"] == "bootstrap"
+
+
+@pytest.mark.asyncio
+async def test_session_schedules_server_methods():
+    server = make_server()
+    server.client.create_session_schedule = AsyncMock(return_value={
+        "id": 1, "session_id": 10, "cron_schedule": "0 * * * *", "label": "hourly",
+        "prompt_id": None, "instruction_prompt": "", "include_event_context": False,
+        "enabled": True, "created_at": "2026-06-15T00:00:00", "updated_at": "2026-06-15T00:00:00",
+    })
+    server.client.update_session_schedule = AsyncMock(return_value={
+        "id": 1, "session_id": 10, "cron_schedule": "0 * * * *", "label": "hourly",
+        "prompt_id": None, "instruction_prompt": "", "include_event_context": True,
+        "enabled": True, "created_at": "2026-06-15T00:00:00", "updated_at": "2026-06-15T00:00:00",
+    })
+
+    created = await server._add_session_schedule(
+        1, 10, "0 * * * *", label="hourly", include_event_context=False
+    )
+    assert created["include_event_context"] is False
+    server.client.create_session_schedule.assert_awaited_once_with(
+        1, 10, "0 * * * *", trigger_type="cron", event_condition="",
+        author_scope="all", fix_authors="", label="hourly", prompt_id=None,
+        instruction_prompt="", include_event_context=False, enabled=True,
+    )
+
+    updated = await server._update_session_schedule(1, 10, 1, include_event_context=True)
+    assert updated["include_event_context"] is True
+    server.client.update_session_schedule.assert_awaited_once_with(
+        1, 10, 1, include_event_context=True
+    )
 
 
 # ------------------------------------------------------------------
