@@ -88,17 +88,19 @@ async def get_dispatch_state(
     head_sha: str,
     condition: str = "",
     action: str = "",
+    session_id: int | None = None,
 ) -> PRActionState | None:
     key = condition or action
-    result = await db.execute(
-        select(PRActionState).where(
-            PRActionState.repo == repo,
-            PRActionState.pr_number == pr_number,
-            PRActionState.head_sha == head_sha,
-            PRActionState.action == key,
-        )
+    stmt = select(PRActionState).where(
+        PRActionState.repo == repo,
+        PRActionState.pr_number == pr_number,
+        PRActionState.head_sha == head_sha,
+        PRActionState.action == key,
     )
-    return result.scalar_one_or_none()
+    if session_id is not None:
+        stmt = stmt.where(PRActionState.session_id == session_id)
+    result = await db.execute(stmt)
+    return result.scalars().first()
 
 
 get_action_state = get_dispatch_state
@@ -111,9 +113,18 @@ async def is_blocked(
     head_sha: str,
     condition: str = "",
     action: str = "",
+    session_id: int | None = None,
 ) -> bool:
     """Check if this condition is already in flight, completed, or blocked."""
-    row = await get_dispatch_state(db, repo, pr_number, head_sha, condition=condition, action=action)
+    row = await get_dispatch_state(
+        db,
+        repo,
+        pr_number,
+        head_sha,
+        condition=condition,
+        action=action,
+        session_id=session_id,
+    )
     return bool(row and row.status in _BLOCKING_STATUSES)
 
 
@@ -125,7 +136,7 @@ async def record_dispatch(
     head_sha: str,
     condition: str = "",
     action: str = "",
-    session_id: int | None,
+    session_id: int | None = None,
     status: str = "dispatched",
     error: str = "",
     event_context: str = "",
@@ -133,7 +144,9 @@ async def record_dispatch(
     """Record or update a dispatch attempt. Returns the new attempt count."""
     now = datetime.now(timezone.utc)
     key = condition or action
-    row = await get_dispatch_state(db, repo, pr_number, head_sha, condition=key)
+    row = await get_dispatch_state(
+        db, repo, pr_number, head_sha, condition=key, session_id=session_id
+    )
     if row is None:
         row = PRActionState(
             repo=repo,

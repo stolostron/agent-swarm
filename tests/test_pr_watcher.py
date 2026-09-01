@@ -130,8 +130,8 @@ class TestAuthorTrustEvaluation(unittest.TestCase):
         self.assertEqual(res.matched_layer, "untrusted")
 
     def test_layer2_explicit_allowlist(self):
-        policy = TrustPolicy(strategy=TrustStrategy.EXPLICIT_ALLOWLIST, allowlist={"alice", "jnpacker"})
-        self.base_pr.author_login = "jnpacker"
+        policy = TrustPolicy(strategy=TrustStrategy.EXPLICIT_ALLOWLIST, allowlist={"alice", "bob"})
+        self.base_pr.author_login = "bob"
         self.base_pr.author_association = "NONE"
         res = evaluate_author_trust(self.base_pr, policy)
         self.assertTrue(res.is_trusted)
@@ -201,7 +201,7 @@ class TestPRConditionEvaluation(unittest.TestCase):
             pr_number=1,
             title="WIP",
             body="",
-            author_login="jnpacker",
+            author_login="author-1",
             author_association="OWNER",
             is_draft=True,
             head_sha="111",
@@ -218,7 +218,7 @@ class TestPRConditionEvaluation(unittest.TestCase):
             pr_number=2,
             title="My feature",
             body="",
-            author_login="jnpacker",
+            author_login="author-1",
             author_association="OWNER",
             is_draft=False,
             head_sha="222",
@@ -238,7 +238,7 @@ class TestPRConditionEvaluation(unittest.TestCase):
             pr_number=3,
             title="External fix attempt",
             body="",
-            author_login="jnpacker",
+            author_login="author-1",
             author_association="OWNER",
             is_draft=False,
             head_sha="333",
@@ -260,7 +260,7 @@ class TestPRConditionEvaluation(unittest.TestCase):
             pr_number=3,
             title="Needs comments addressed",
             body="",
-            author_login="jnpacker",
+            author_login="author-1",
             author_association="OWNER",
             is_draft=False,
             head_sha="333",
@@ -432,7 +432,7 @@ class TestAsyncPRWatcherStore(unittest.IsolatedAsyncioTestCase):
                 trigger_type="event",
                 event_condition="any_actionable",
                 author_scope="self",
-                fix_authors="jnpacker",
+                fix_authors="alice",
                 label="event trigger",
             )
             db.add_all([repo, cron_sched, event_sched])
@@ -445,7 +445,7 @@ class TestAsyncPRWatcherStore(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(len(items), 1)
             sched, sess = items[0]
             self.assertEqual(sched.trigger_type, "event")
-            self.assertEqual(sched.fix_author_logins, {"jnpacker"})
+            self.assertEqual(sched.fix_author_logins, {"alice"})
             self.assertEqual(sess.id, session.id)
 
     async def test_resolve_event_triggers_excludes_cron_only_sessions(self):
@@ -580,7 +580,7 @@ class TestPRWatcherSignalRouting(unittest.TestCase):
             pr_number=153,
             title="Test PR",
             body="",
-            author_login="jnpacker",
+            author_login="author-1",
             author_association="MEMBER",
             is_draft=False,
             head_sha="abc123def",
@@ -617,7 +617,7 @@ class TestPRWatcherSignalRouting(unittest.TestCase):
         matched = evaluate_pr_conditions(pr, {"review_comments", "any_actionable"})
 
         sched_hygiene = self._make_schedule(25, "review_comments", "all")
-        sched_catchall = self._make_schedule(17, "any_actionable", "self", fix_authors="jnpacker")
+        sched_catchall = self._make_schedule(17, "any_actionable", "self", fix_authors="author-1")
         matches = _match_triggers_for_pr(
             pr,
             matched,
@@ -703,7 +703,7 @@ class TestPRWatcherDispatchFlow(unittest.IsolatedAsyncioTestCase):
                 trigger_type="event",
                 event_condition="any_actionable",
                 author_scope="self",
-                fix_authors="jnpacker",
+                fix_authors="author-1",
                 label="Catch all",
             )
             db.add_all([sched_hygiene, sched_catchall])
@@ -744,7 +744,7 @@ class TestPRWatcherDispatchFlow(unittest.IsolatedAsyncioTestCase):
             pr_number=153,
             title="PR 153",
             body="",
-            author_login="jnpacker",
+            author_login="author-1",
             author_association="MEMBER",
             is_draft=False,
             head_sha="sha153",
@@ -778,8 +778,8 @@ class TestPRWatcherDispatchFlow(unittest.IsolatedAsyncioTestCase):
 
                 self.assertEqual(launch_mock.await_count, 1)
 
-                hygiene_row = await get_dispatch_state(db, "stolostron/agent-swarm", 153, "sha153", "review_comments")
-                catchall_row = await get_dispatch_state(db, "stolostron/agent-swarm", 153, "sha153", "any_actionable")
+                hygiene_row = await get_dispatch_state(db, "stolostron/agent-swarm", 153, "sha153", "review_comments", session_id=session.id)
+                catchall_row = await get_dispatch_state(db, "stolostron/agent-swarm", 153, "sha153", "any_actionable", session_id=session.id)
 
                 self.assertIsNotNone(hygiene_row)
                 self.assertEqual(hygiene_row.status, "dispatched")
@@ -823,7 +823,7 @@ class TestPRWatcherDispatchFlow(unittest.IsolatedAsyncioTestCase):
                 await _drain_queued_dispatches(db)
                 self.assertEqual(launch_mock.await_count, 1)
 
-            row = await get_dispatch_state(db, "stolostron/agent-swarm", 153, "sha153", "review_comments")
+            row = await get_dispatch_state(db, "stolostron/agent-swarm", 153, "sha153", "review_comments", session_id=session.id)
             self.assertIsNotNone(row)
             self.assertEqual(row.status, "dispatched")
             self.assertEqual(row.attempts, 1)
@@ -844,7 +844,7 @@ class TestPRWatcherDispatchFlow(unittest.IsolatedAsyncioTestCase):
             pr_number=153,
             title="PR 153",
             body="",
-            author_login="jnpacker",
+            author_login="author-1",
             author_association="MEMBER",
             is_draft=False,
             head_sha="sha154",
@@ -884,9 +884,115 @@ class TestPRWatcherDispatchFlow(unittest.IsolatedAsyncioTestCase):
                         db,
                     )
 
-            review_row = await get_dispatch_state(db, "stolostron/agent-swarm", 153, "sha154", "new_pr_or_commit")
+            review_row = await get_dispatch_state(db, "stolostron/agent-swarm", 153, "sha154", "new_pr_or_commit", session_id=session.id)
             self.assertIsNotNone(review_row)
             self.assertEqual(review_row.status, "dispatched")
+
+    async def test_evaluate_dispatches_multiple_independent_sessions_same_condition(self):
+        import httpx
+        from unittest.mock import AsyncMock, patch
+        from sqlalchemy import select
+        from sqlalchemy.orm import selectinload
+
+        from swarmer.models.session import Session
+        from swarmer.models.session_repo import SessionRepo
+        from swarmer.models.session_schedule import SessionSchedule
+        from swarmer.models.workspace import Workspace
+        from swarmer.pr_state import CheckState, PRState
+        from swarmer.pr_watcher import _evaluate_and_dispatch_prs
+        from swarmer.pr_watcher_store import get_dispatch_state
+
+        async with self.session_factory() as db:
+            ws = Workspace(display_name="Multi-session WS", namespace="multi-ws", description="")
+            db.add(ws)
+            await db.commit()
+            await db.refresh(ws)
+
+            session1 = Session(workspace_id=ws.id, name="s1", mode="prompt", provider="", agent_tool="opencode", instruction_prompt="")
+            session2 = Session(workspace_id=ws.id, name="s2", mode="prompt", provider="", agent_tool="opencode", instruction_prompt="")
+            db.add_all([session1, session2])
+            await db.commit()
+            await db.refresh(session1)
+            await db.refresh(session2)
+
+            repo1 = SessionRepo(session_id=session1.id, repo_url="https://github.com/stolostron/agent-swarm.git", local_path="agent-swarm")
+            repo2 = SessionRepo(session_id=session2.id, repo_url="https://github.com/stolostron/agent-swarm.git", local_path="agent-swarm")
+            sched1 = SessionSchedule(
+                session_id=session1.id,
+                trigger_type="event",
+                event_condition="new_pr_or_commit",
+                author_scope="all",
+                label="Reviewer 1",
+            )
+            sched2 = SessionSchedule(
+                session_id=session2.id,
+                trigger_type="event",
+                event_condition="new_pr_or_commit",
+                author_scope="all",
+                label="Reviewer 2",
+            )
+            db.add_all([repo1, repo2, sched1, sched2])
+            await db.commit()
+            await db.refresh(sched1)
+            await db.refresh(sched2)
+
+            # Reload with relationships
+            q1 = await db.execute(
+                select(Session)
+                .options(selectinload(Session.workspace), selectinload(Session.github_pat), selectinload(Session.repos), selectinload(Session.schedules))
+                .where(Session.id == session1.id)
+            )
+            s1 = q1.scalar_one()
+            q2 = await db.execute(
+                select(Session)
+                .options(selectinload(Session.workspace), selectinload(Session.github_pat), selectinload(Session.repos), selectinload(Session.schedules))
+                .where(Session.id == session2.id)
+            )
+            s2 = q2.scalar_one()
+
+            pr_state = PRState(
+                repo="stolostron/agent-swarm",
+                pr_number=200,
+                title="PR 200",
+                body="",
+                author_login="author-1",
+                author_association="MEMBER",
+                is_draft=False,
+                head_sha="sha200",
+                head_ref="feature",
+                base_ref="main",
+                mergeable_state="clean",
+                is_fork=False,
+                unresolved_review_comments=0,
+                coderabbit_unresolved_comments=0,
+                check_state=CheckState(total=1, passing=1),
+                raw_payload={},
+            )
+
+            with patch("swarmer.pr_watcher._fetch_open_prs", new=AsyncMock(return_value=[{"number": 200}])), \
+                 patch("swarmer.pr_watcher._build_pr_state", new=AsyncMock(return_value=(pr_state, []))), \
+                 patch("swarmer.routers.sessions._do_launch", new=AsyncMock()) as launch_mock:
+                async with httpx.AsyncClient() as client:
+                    await _evaluate_and_dispatch_prs(
+                        client,
+                        "stolostron/agent-swarm",
+                        [(sched1, s1), (sched2, s2)],
+                        None,
+                        db,
+                    )
+
+                self.assertEqual(launch_mock.await_count, 2)
+
+            row1 = await get_dispatch_state(db, "stolostron/agent-swarm", 200, "sha200", "new_pr_or_commit", session_id=s1.id)
+            row2 = await get_dispatch_state(db, "stolostron/agent-swarm", 200, "sha200", "new_pr_or_commit", session_id=s2.id)
+
+            self.assertIsNotNone(row1)
+            self.assertEqual(row1.status, "dispatched")
+            self.assertEqual(row1.session_id, s1.id)
+
+            self.assertIsNotNone(row2)
+            self.assertEqual(row2.status, "dispatched")
+            self.assertEqual(row2.session_id, s2.id)
 
 
 if __name__ == "__main__":

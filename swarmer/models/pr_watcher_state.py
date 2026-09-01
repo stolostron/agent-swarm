@@ -9,7 +9,7 @@ PR_ACTION_STATUSES = ("queued", "dispatched", "completed", "failed", "blocked")
 
 
 class PRActionState(Base):
-    """Per-(repo, PR, head_sha, event condition) dispatch + circuit-breaker record.
+    """Per-(repo, PR, head_sha, event condition, session_id) dispatch + circuit-breaker record.
 
     Stored in swarmer.db and written only via AsyncSession so SQLite single-writer
     invariants are preserved.
@@ -18,7 +18,7 @@ class PRActionState(Base):
     __tablename__ = "pr_action_state"
     __table_args__ = (
         UniqueConstraint(
-            "repo", "pr_number", "head_sha", "action",
+            "repo", "pr_number", "head_sha", "action", "session_id",
             name="uq_pr_action_state_key",
         ),
     )

@@ -1082,7 +1082,7 @@ class TestEventTriggers:
                 "trigger_type": "event",
                 "event_condition": "any_actionable",
                 "author_scope": "self",
-                "fix_authors": "jnpacker, alice",
+                "fix_authors": "bob, alice",
                 "label": "My PR Fixes",
                 "prompt_id": prompt_id,
             },
@@ -1091,7 +1091,7 @@ class TestEventTriggers:
         data = resp.json()
         assert data["trigger_type"] == "event"
         assert data["author_scope"] == "self"
-        assert data["fix_authors"] == "jnpacker, alice"
+        assert data["fix_authors"] == "bob, alice"
 
     @pytest.mark.asyncio
     async def test_launch_without_context_clears_event_context(self, client: AsyncClient):

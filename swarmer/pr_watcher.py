@@ -771,12 +771,20 @@ async def _evaluate_and_dispatch_prs(
             )
             event_ctx_json = json.dumps(event_ctx)
 
-            if await is_blocked(db, repo, pr_state.pr_number, pr_state.head_sha, condition):
+            if await is_blocked(
+                db,
+                repo,
+                pr_state.pr_number,
+                pr_state.head_sha,
+                condition,
+                session_id=session.id,
+            ):
                 log.debug(
-                    "pr-watcher: PR %s#%d [%s] schedule=%d already in-flight, completed, or blocked on head SHA %s",
+                    "pr-watcher: PR %s#%d [%s] session=%d schedule=%d already in-flight, completed, or blocked on head SHA %s",
                     repo,
                     pr_state.pr_number,
                     condition,
+                    session.id,
                     sched.id,
                     pr_state.head_sha[:8],
                 )
