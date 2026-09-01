@@ -360,7 +360,7 @@ class TestPrActionStateMigration:
     and recreate uq_pr_action_state_key index including session_id."""
 
     @pytest.mark.asyncio
-    async def test_migrate_db_adds_session_id_to_legacy_pr_action_state(self):
+    async def test_migrate_db_adds_session_id_to_legacy_pr_action_state(self) -> None:
         # Recreate a legacy pr_action_state table without session_id
         async with _engine.begin() as conn:
             await conn.execute(text("DROP TABLE IF EXISTS pr_action_state"))
@@ -404,16 +404,32 @@ class TestPrActionStateMigration:
                 cols_after = [row[1] for row in result.fetchall()]
             assert "session_id" in cols_after
 
+            # Verify the unique index includes all 5 columns
+            async with _engine.begin() as conn:
+                result = await conn.execute(text("PRAGMA index_info(uq_pr_action_state_key)"))
+                indexed_cols = [row[2] for row in result.fetchall()]
+            assert indexed_cols == ["repo", "pr_number", "head_sha", "action", "session_id"]
+
             # Verify multiple sessions can now record actions for the same PR and head SHA
             async with _engine.begin() as conn:
                 await conn.execute(text("""
                     INSERT INTO pr_action_state (repo, pr_number, head_sha, action, session_id)
-                    VALUES ('owner/repo', 1, 'sha1', 'ci_fail_or_conflict', 10)
+                    VALUES ('test-repository', 1, 'sha1', 'ci_fail_or_conflict', 10)
                 """))
                 await conn.execute(text("""
                     INSERT INTO pr_action_state (repo, pr_number, head_sha, action, session_id)
-                    VALUES ('owner/repo', 1, 'sha1', 'ci_fail_or_conflict', 20)
+                    VALUES ('test-repository', 1, 'sha1', 'ci_fail_or_conflict', 20)
                 """))
+
+            # Verify unique constraint enforces duplicate prevention for identical keys
+            from sqlalchemy.exc import IntegrityError
+
+            with pytest.raises(IntegrityError):
+                async with _engine.begin() as conn:
+                    await conn.execute(text("""
+                        INSERT INTO pr_action_state (repo, pr_number, head_sha, action, session_id)
+                        VALUES ('test-repository', 1, 'sha1', 'ci_fail_or_conflict', 10)
+                    """))
 
             # Running migrate_db() again must be idempotent and succeed without error
             await db_module.migrate_db()
