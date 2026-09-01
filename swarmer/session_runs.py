@@ -57,13 +57,13 @@ async def _run_source_snapshot(db: AsyncSession, session: Session) -> tuple[str,
         try:
             ctx = _json.loads(event_context)
             pr_num = ctx.get("pr_number")
-            action = ctx.get("action")
-            if pr_num and action:
-                schedule_label = f"PR #{pr_num} ({action})"
+            event_condition = ctx.get("event_condition")
+            if pr_num and event_condition:
+                schedule_label = f"PR #{pr_num} ({event_condition})"
             elif pr_num:
                 schedule_label = f"PR #{pr_num}"
-            elif action:
-                schedule_label = f"{action}"
+            elif event_condition:
+                schedule_label = f"{event_condition}"
         except Exception:
             schedule_label = "GitHub Event"
 

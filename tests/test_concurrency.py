@@ -977,7 +977,7 @@ class TestListPageLaunchModeCoercion:
 
         async with _TestSession() as db:
             sess = await db.get(Session, s["id"])
-            sess.event_context = json.dumps({"pr_number": 104, "action": "pr-fix"})
+            sess.event_context = json.dumps({"pr_number": 104, "event_condition": "ci_fail_or_conflict"})
             await db.commit()
 
         async def _fake_do_launch(session, workspace, db, user_id=""):

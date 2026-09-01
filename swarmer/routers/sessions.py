@@ -2395,6 +2395,15 @@ async def schedule_create(
         cron_next_run = _croniter(cron_expr, datetime.now(timezone.utc)).get_next(datetime)
 
     pid = int(prompt_id) if prompt_id.strip().isdigit() else None
+    if pid is None:
+        return HTMLResponse("", status_code=422, headers={"HX-Trigger": "scheduleFormError"})
+    prompt_result = await db.execute(
+        select(WorkspacePrompt)
+        .join(WorkspacePromptSource, WorkspacePrompt.source_id == WorkspacePromptSource.id)
+        .where(WorkspacePrompt.id == pid, WorkspacePromptSource.workspace_id == ws_id)
+    )
+    if prompt_result.scalar_one_or_none() is None:
+        return HTMLResponse("", status_code=422, headers={"HX-Trigger": "scheduleFormError"})
     sched = SessionSchedule(
         session_id=sid,
         trigger_type=trigger_type,
@@ -2443,6 +2452,17 @@ async def schedule_edit(
     if ws is None or session is None or session.workspace_id != ws_id or sched is None or sched.session_id != sid:
         return HTMLResponse("", status_code=404)
 
+    pid = int(prompt_id) if prompt_id.strip().isdigit() else None
+    if pid is None:
+        return HTMLResponse("", status_code=422, headers={"HX-Trigger": "scheduleFormError"})
+    prompt_result = await db.execute(
+        select(WorkspacePrompt)
+        .join(WorkspacePromptSource, WorkspacePrompt.source_id == WorkspacePromptSource.id)
+        .where(WorkspacePrompt.id == pid, WorkspacePromptSource.workspace_id == ws_id)
+    )
+    if prompt_result.scalar_one_or_none() is None:
+        return HTMLResponse("", status_code=422, headers={"HX-Trigger": "scheduleFormError"})
+
     trigger_type = trigger_type.strip().lower()
     if trigger_type not in ("cron", "event"):
         trigger_type = "cron"
@@ -2465,7 +2485,7 @@ async def schedule_edit(
         sched.fix_authors = ""
 
     sched.label = label.strip()
-    sched.prompt_id = int(prompt_id) if prompt_id.strip().isdigit() else None
+    sched.prompt_id = pid
     sched.instruction_prompt = instruction_prompt
     if trigger_type == "event":
         sched.include_event_context = include_event_context

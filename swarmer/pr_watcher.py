@@ -12,11 +12,11 @@ import httpx
 from swarmer.config import settings
 from swarmer.pr_state import (
     DEFAULT_BOT_LOGINS,
-    PRAction,
     PRState,
     TrustPolicy,
     TrustStrategy,
-    classify_pr_action,
+    evaluate_author_trust,
+    evaluate_pr_conditions,
     is_bot_author,
     normalize_ci_checks,
     parse_iso_datetime,
@@ -233,38 +233,16 @@ async def _fetch_review_comments(
         return []
 
 
-async def _fetch_reviews_rest(
-    client: httpx.AsyncClient, repo: str, pr_number: int, token: str | None
-) -> list[dict[str, Any]]:
-    """Fetch PR reviews via REST."""
-    url = f"https://api.github.com/repos/{repo}/pulls/{pr_number}/reviews"
-    headers = {
-        "Accept": "application/vnd.github+json",
-        "User-Agent": "Swarmer-PR-Watcher/1.0",
-        "X-GitHub-Api-Version": "2022-11-28",
-    }
-    if token:
-        headers["Authorization"] = f"Bearer {token}"
-
-    try:
-        resp = await client.get(url, headers=headers, timeout=15)
-        if resp.is_success:
-            return resp.json()
-        return []
-    except Exception:
-        return []
-
-
 async def _fetch_reviews_and_threads(
-    client: httpx.AsyncClient, repo: str, pr_number: int, head_sha: str, token: str | None
-) -> tuple[int, int, bool]:
-    """Fetch review threads and reviews.
+    client: httpx.AsyncClient, repo: str, pr_number: int, token: str | None
+) -> tuple[int, int]:
+    """Fetch unresolved review-thread counts.
 
     Returns:
-        (unresolved_comments_count, coderabbit_unresolved_count, has_agent_review_on_head)
+        (unresolved_comments_count, coderabbit_unresolved_count)
     """
     if "/" not in repo:
-        return 0, 0, False
+        return 0, 0
     owner, name = repo.split("/", 1)
 
     if token:
@@ -282,13 +260,6 @@ async def _fetch_reviews_and_threads(
                       body
                     }
                   }
-                }
-              }
-              reviews(last: 20) {
-                nodes {
-                  author { login }
-                  state
-                  commit { oid }
                 }
               }
             }
@@ -317,16 +288,7 @@ async def _fetch_reviews_and_threads(
                             if any((c.get("author", {}).get("login") or "").lower().startswith("coderabbit") for c in comments):
                                 cr_count += 1
 
-                    has_agent_review = False
-                    for rev in pr_data.get("reviews", {}).get("nodes", []):
-                        rev_commit = (rev.get("commit", {}) or {}).get("oid", "")
-                        rev_author = ((rev.get("author", {}) or {}).get("login") or "").lower()
-                        rev_state = rev.get("state", "")
-                        if rev_commit == head_sha and rev_state in ("APPROVED", "CHANGES_REQUESTED", "COMMENTED"):
-                            if is_bot_author(rev_author) or rev_author in DEFAULT_BOT_LOGINS:
-                                has_agent_review = True
-                                break
-                    return unresolved_count, cr_count, has_agent_review
+                    return unresolved_count, cr_count
         except Exception as exc:
             log.debug("pr-watcher: GraphQL review query failed for %s#%d: %s", repo, pr_number, exc)
 
@@ -335,13 +297,7 @@ async def _fetch_reviews_and_threads(
     unresolved_count = len(comments)
     cr_count = sum(1 for c in comments if (c.get("user", {}).get("login") or "").lower().startswith("coderabbit"))
 
-    reviews = await _fetch_reviews_rest(client, repo, pr_number, token)
-    has_agent_review = any(
-        r.get("commit_id") == head_sha and r.get("state") in ("APPROVED", "CHANGES_REQUESTED", "COMMENTED")
-        and (is_bot_author(r.get("user", {}).get("login", "")) or r.get("user", {}).get("login", "").lower() in DEFAULT_BOT_LOGINS)
-        for r in reviews
-    )
-    return unresolved_count, cr_count, has_agent_review
+    return unresolved_count, cr_count
 
 
 async def _fetch_label_events(
@@ -417,9 +373,7 @@ async def _build_pr_state(
     check_runs = await _fetch_check_runs(client, repo, head_sha, token)
     check_state = normalize_ci_checks(check_runs)
 
-    unresolved_count, cr_count, has_agent_review = await _fetch_reviews_and_threads(
-        client, repo, pr_number, head_sha, token
-    )
+    unresolved_count, cr_count = await _fetch_reviews_and_threads(client, repo, pr_number, token)
 
     label_events: list[dict[str, Any]] = []
     if "ok-to-review" in labels:
@@ -442,7 +396,6 @@ async def _build_pr_state(
         labels=labels,
         unresolved_review_comments=unresolved_count,
         coderabbit_unresolved_comments=cr_count,
-        has_agent_review_on_head=has_agent_review,
         created_at=parse_iso_datetime(full_pr.get("created_at")),
         updated_at=parse_iso_datetime(full_pr.get("updated_at")),
         check_state=check_state,
@@ -453,15 +406,24 @@ async def _build_pr_state(
 
 def _match_trigger_for_pr(
     pr: PRState,
-    action: PRAction,
+    matched_conditions: set[str],
     sched_sessions: list[tuple[SessionSchedule, Session]],
+    label_events: list[dict[str, Any]] | None = None,
+    blocked_conditions: set[str] | None = None,
 ) -> tuple[SessionSchedule, Session] | None:
-    """Find a matching (SessionSchedule, Session) for an actionable PR."""
+    """Find a schedule whose condition matches, then apply its author scope."""
     for sched, session in sched_sessions:
         if not sched.enabled or sched.trigger_type != "event":
             continue
 
-        # Check author scope
+        # Conditions are evaluated independently from author routing. This
+        # allows any selected Prompt to handle any matching event.
+        if sched.event_condition not in matched_conditions:
+            continue
+        if blocked_conditions and sched.event_condition in blocked_conditions:
+            continue
+
+        # Apply author scope only after the event condition matched.
         author_lower = pr.author_login.lower()
         fix_logins = sched.fix_author_logins
         is_self = author_lower in fix_logins if fix_logins else False
@@ -471,15 +433,19 @@ def _match_trigger_for_pr(
             continue
         if sched.author_scope == "team" and (is_self or is_bot):
             continue
+        if sched.author_scope == "team":
+            trust = evaluate_author_trust(
+                pr,
+                policy=TrustPolicy(strategy=TrustStrategy.ORG_AND_COLLABORATORS),
+                label_events=label_events,
+            )
+            if not trust.is_trusted:
+                continue
         if sched.author_scope == "bots" and not is_bot:
             continue
         # sched.author_scope == "all" matches any author
 
-        # Check action condition
-        if action == PRAction.FIX and sched.event_condition in ("ci_fail_or_conflict", "review_comments", "any_actionable"):
-            return sched, session
-        if action == PRAction.REVIEW and sched.event_condition in ("new_pr_or_commit", "any_actionable"):
-            return sched, session
+        return sched, session
 
     return None
 
@@ -499,38 +465,34 @@ async def _evaluate_and_dispatch_prs(
     for raw_pr in open_prs:
         pr_state, label_events = await _build_pr_state(client, repo, raw_pr, token)
 
-        # Collect configured fix_authors across all triggers for this repo
-        all_fix_authors: set[str] = set()
-        for sched, _sess in sched_sessions:
-            all_fix_authors.update(sched.fix_author_logins)
-
-        action, reason = classify_pr_action(
+        event_conditions = {
+            sched.event_condition
+            for sched, _sess in sched_sessions
+            if sched.enabled and sched.trigger_type == "event"
+        }
+        matched_conditions = evaluate_pr_conditions(
             pr_state,
-            fix_authors=all_fix_authors,
-            bot_logins=set(DEFAULT_BOT_LOGINS),
-            trust_policy=TrustPolicy(strategy=TrustStrategy.ORG_AND_COLLABORATORS),
-            label_events=label_events,
+            event_conditions=event_conditions,
             quiet_period_seconds=float(settings.pr_watcher_debounce_seconds),
         )
-
-        if action in (PRAction.IGNORE, PRAction.AUTO_MERGE_DEFER):
-            log.debug("pr-watcher: PR %s#%d -> %s (%s)", repo, pr_state.pr_number, action.value, reason)
-            continue
-
-        # Check circuit breaker and deduplication
-        if await is_blocked(db, repo, pr_state.pr_number, pr_state.head_sha, action.value):
-            log.debug(
-                "pr-watcher: PR %s#%d [%s] already in-flight, completed, or blocked on head SHA %s",
-                repo, pr_state.pr_number, action.value, pr_state.head_sha[:8],
-            )
-            continue
-
-        match = _match_trigger_for_pr(pr_state, action, sched_sessions)
+        blocked_conditions = {
+            condition
+            for condition in matched_conditions
+            if await is_blocked(db, repo, pr_state.pr_number, pr_state.head_sha, condition)
+        }
+        match = _match_trigger_for_pr(
+            pr_state,
+            matched_conditions,
+            sched_sessions,
+            label_events,
+            blocked_conditions,
+        )
         if not match:
-            log.debug("pr-watcher: PR %s#%d [%s] matched no active trigger condition", repo, pr_state.pr_number, action.value)
+            log.debug("pr-watcher: PR %s#%d matched no active trigger condition or author scope", repo, pr_state.pr_number)
             continue
 
         sched, session = match
+        condition = sched.event_condition
 
         # Per-session serialization: if session is already active, skip this cycle (will re-evaluate next loop)
         if session.is_active:
@@ -556,8 +518,11 @@ async def _evaluate_and_dispatch_prs(
             "base_ref": pr_state.base_ref,
             "title": pr_state.title,
             "author": pr_state.author_login,
-            "action": action.value,
-            "cause": reason,
+            "event_condition": condition,
+            "fork_no_push": bool(
+                pr_state.is_fork and not pr_state.raw_payload.get("maintainer_can_modify", False)
+            ),
+            "cause": f"Matched event condition: {condition}",
         }
 
         # Attempt dispatch
@@ -570,8 +535,8 @@ async def _evaluate_and_dispatch_prs(
             await db.commit()
 
             log.info(
-                "pr-watcher: dispatching session %d (%s) for PR %s#%d [%s: %s]",
-                session.id, session.name, repo, pr_state.pr_number, action.value, reason,
+                "pr-watcher: dispatching session %d (%s) for PR %s#%d [%s]",
+                session.id, session.name, repo, pr_state.pr_number, condition,
             )
             await _do_launch(session, ws, db)
 
@@ -580,7 +545,7 @@ async def _evaluate_and_dispatch_prs(
                 repo=repo,
                 pr_number=pr_state.pr_number,
                 head_sha=pr_state.head_sha,
-                action=action.value,
+                condition=condition,
                 session_id=session.id,
                 status="dispatched",
             )
@@ -593,7 +558,7 @@ async def _evaluate_and_dispatch_prs(
                 repo=repo,
                 pr_number=pr_state.pr_number,
                 head_sha=pr_state.head_sha,
-                action=action.value,
+                condition=condition,
                 session_id=session.id,
                 status="failed",
                 error=str(exc),
@@ -604,7 +569,7 @@ async def _evaluate_and_dispatch_prs(
                     repo=repo,
                     pr_number=pr_state.pr_number,
                     head_sha=pr_state.head_sha,
-                    action=action.value,
+                    condition=condition,
                     session_id=session.id,
                     status="blocked",
                     error=f"Max dispatch attempts ({attempts}) reached",

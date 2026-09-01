@@ -37,6 +37,7 @@ from swarmer.api.schemas import (
 from swarmer.models.session import Session
 from swarmer.models.session_run import SessionRun
 from swarmer.models.workspace import Workspace
+from swarmer.models.workspace_prompt import WorkspacePrompt, WorkspacePromptSource
 
 
 class PatchResult(BaseModel):
@@ -440,6 +441,23 @@ async def set_provider(
 # ---------- Scheduling ----------
 
 
+async def _validate_schedule_prompt(
+    db: AsyncSession, workspace_id: int, prompt_id: int
+) -> WorkspacePrompt:
+    result = await db.execute(
+        select(WorkspacePrompt)
+        .join(WorkspacePromptSource, WorkspacePrompt.source_id == WorkspacePromptSource.id)
+        .where(
+            WorkspacePrompt.id == prompt_id,
+            WorkspacePromptSource.workspace_id == workspace_id,
+        )
+    )
+    prompt = result.scalar_one_or_none()
+    if prompt is None:
+        raise HTTPException(status_code=422, detail="prompt_id must refer to a prompt in this workspace")
+    return prompt
+
+
 @router.post("/{sid}/schedule", response_model=SessionOut)
 async def schedule_session(
     ws_id: int,
@@ -543,6 +561,7 @@ async def create_schedule(
     from croniter import croniter
     from swarmer.models.session_schedule import SessionSchedule
     await _get_session_or_404(ws_id, sid, db)
+    await _validate_schedule_prompt(db, ws_id, body.prompt_id)
 
     trigger_type = (body.trigger_type or "cron").lower()
     if trigger_type not in ("cron", "event"):
@@ -591,6 +610,8 @@ async def update_schedule(
     sched = await db.get(SessionSchedule, sched_id)
     if sched is None or sched.session_id != sid:
         raise HTTPException(status_code=404, detail="Schedule not found")
+    if body.prompt_id is None and sched.prompt_id is None:
+        raise HTTPException(status_code=422, detail="prompt_id is required for scheduled runs")
 
     new_trigger_type = body.trigger_type.lower() if body.trigger_type is not None else sched.trigger_type
     if new_trigger_type not in ("cron", "event"):
@@ -622,6 +643,7 @@ async def update_schedule(
     if body.label is not None:
         sched.label = body.label
     if body.prompt_id is not None:
+        await _validate_schedule_prompt(db, ws_id, body.prompt_id)
         sched.prompt_id = body.prompt_id
     if body.instruction_prompt is not None:
         sched.instruction_prompt = body.instruction_prompt

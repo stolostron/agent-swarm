@@ -424,7 +424,7 @@ Swarmer uses branded, styled interactive pills across the UI for tool selection,
   - Color escalates dynamically: outline (0 active) → green (healthy) → gold (near/at capacity: `active >= max-1` for `max > 2`, `active == max` for `max ≤ 2`) → red (any queued). Rendered in both `detail.html` and `_list_rows.html`.
 
 - **History Source Pills**:
-  - Denormalized source pills in Run History rows: purple schedule pills for cron runs (`[📅 schedule-name · prompt-name]`), gold event pills for event-driven runs (`[⚡ Event: PR #104 (pr-fix)]`), green `[TERM.UI]` / `[CHAT]` pills for interactive runs, and prompt name pills for manual prompt runs.
+  - Denormalized source pills in Run History rows: purple schedule pills for cron runs (`[📅 schedule-name · prompt-name]`), gold event pills for event-driven runs (`[⚡ Event: PR #104 (event-condition)]`), green `[TERM.UI]` / `[CHAT]` pills for interactive runs, and prompt name pills for manual prompt runs.
 
 ## Event-Driven PR Events Watcher & Session Dispatcher
 
@@ -482,21 +482,28 @@ To minimize API consumption and avoid unnecessary network calls:
 
 ### 3. Author Routing Taxonomy & "My PRs" Resolution
 
-Each trigger defines an **Author Scope** and **Event Condition**:
+Each trigger defines an **Author Scope**, an **Event Condition**, and a required
+**Prompt**. The watcher evaluates the event condition first, then applies the
+author scope. The selected Prompt determines what the agent does after a match.
 
-| Author Scope | Who Matches | Target Action | Default Behavior & Prompts |
+| Author Scope | Who Matches | Behavior |
 |---|---|---|---|
-| **`My PRs` (`self`)** | Configured `fix_authors` (comma-separated logins in schedule) | `pr-fix` | Resolves conflicts, reproduces & fixes CI failures, addresses review comments, pushes to PR branch, and tags `@coderabbitai review and approve`. Fork PRs require maintainer edit permissions. |
-| **`Team PRs` (`team`)** | Trusted collaborators (`OWNER`, `MEMBER`, `COLLABORATOR`, `CONTRIBUTOR`, or on allowlist) | `pr-review` | Detached worktree analysis, scored multi-lens review, inline feedback. Read-only on PR branches. |
-| **`Bot PRs` (`bots`)** | Automated bot logins (`dependabot[bot]`, `renovate[bot]`, `cve-*`, `app/*`) | `auto-merge-defer` | Defers to repo's GitHub Actions (`auto-merge-approved.yaml`) or triggers autonomous bot fix prompts. |
-| **`All PRs` (`all`)** | **My PRs + Team PRs + Bot PRs + External PRs** | Context-dependent | Evaluates any matching author against the trigger condition while strictly enforcing the 3-layer trust model. |
+| **`My PRs` (`self`)** | Configured `fix_authors` (comma-separated logins in schedule) | Matches only those author logins. |
+| **`Team PRs` (`team`)** | Trusted collaborators (`OWNER`, `MEMBER`, `COLLABORATOR`, `CONTRIBUTOR`, or on allowlist) | Matches trusted non-bot authors. |
+| **`Bot PRs` (`bots`)** | Automated bot logins (`dependabot[bot]`, `renovate[bot]`, `cve-*`, `app/*`) | Matches recognized bot authors. |
+| **`All PRs` (`all`)** | Any PR author | Does not apply an author restriction. |
+
+Supported event conditions are **CI Failure or Merge Conflict**, **New PR or
+New Commits** (once per head SHA), **Review Comments**, and **Any Actionable PR State**. A fork PR
+is still eligible; the event context includes `fork_no_push` when the base
+repository cannot push to the fork branch.
 
 ### 4. 3-Layer Team-PR Trust Model & Security Guardrails
 
 To prevent arbitrary code execution, compute/token exhaustion, and prompt injection attacks from untrusted external contributors:
 
 1. **Layer 1: Native GitHub Author Association (Default)**
-   - Automatically trusts PR authors with `OWNER`, `MEMBER`, `COLLABORATOR`, or `CONTRIBUTOR` associations.
+    - Automatically trusts team-scope PR authors with `OWNER`, `MEMBER`, `COLLABORATOR`, or `CONTRIBUTOR` associations.
    - Treats first-time and unknown associations (`FIRST_TIME_CONTRIBUTOR`, `FIRST_TIMER`, `MANNEQUIN`, `NONE`) as **untrusted** by default.
 2. **Layer 2: Workspace Trust Policy**
    - Configurable explicit allowlist of logins or GitHub organization team memberships (`GET /orgs/{org}/teams/{slug}/members`).
@@ -507,8 +514,8 @@ To prevent arbitrary code execution, compute/token exhaustion, and prompt inject
 
 ### 5. Resilience, Circuit Breaker & Concurrency
 
-- **CI Completion Barrier & Debounce:** Check runs must show 0 `IN_PROGRESS` or `QUEUED` checks, plus a 90–120s quiet-period debounce before dispatching `pr-fix`.
-- **Circuit Breaker:** Maximum 3 fix attempts per `head_sha`. If the agent fails to resolve CI after 3 attempts, the status is marked `blocked`. A new human commit to the branch resets the counter.
+- **CI Completion Barrier & Debounce:** Check runs must show 0 `IN_PROGRESS` or `QUEUED` checks, plus a 90–120s quiet-period debounce before dispatching a matching schedule.
+- **Circuit Breaker:** Maximum 3 attempts per `(event condition, head_sha)`. If the agent fails after 3 attempts, the status is marked `blocked`. A new human commit to the branch resets the counter.
 - **Self-Trigger Guard:** Events generated by the bot agent's own commits are ignored to prevent feedback loops.
 - **Capacity Back-pressure:** Dispatches automatically inherit Swarmer's `MAX_CONCURRENT_AGENTS` queueing.
 
@@ -516,7 +523,8 @@ To prevent arbitrary code execution, compute/token exhaustion, and prompt inject
 
 - **Trigger Type Selector:** Available in both Add Schedule and inline Edit forms (`_schedule_items.html`), supporting live conversion between Cron and Event triggers.
 - **Visual Pills:** Gold `⚡ Event: <label>` pills render in the Session List, Status Badges, and Run History table.
-- **Drawer Context Logging:** Expanding a run record in Run History displays full triggering metadata (`repo`, `PR #`, `head_sha`, `action`, `title`).
+- **Drawer Context Logging:** Expanding a run record in Run History displays full triggering metadata (`repo`, `PR #`, `head_sha`, `event_condition`, `title`).
+- **Event Help Popover:** The Scheduling card explains condition matching, author scopes, and how the selected Prompt controls the run.
 
 ---
 

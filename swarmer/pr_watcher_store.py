@@ -15,7 +15,7 @@ from swarmer.models.session_schedule import SessionSchedule
 
 log = logging.getLogger(__name__)
 
-# Statuses that block re-dispatch for the same (repo, pr, head_sha, action).
+# Statuses that block re-dispatch for the same (repo, pr, head_sha, condition).
 _BLOCKING_STATUSES = {"dispatched", "completed", "blocked"}
 # Statuses that consume the retry budget.
 _ATTEMPT_STATUSES = {"dispatched", "failed"}
@@ -81,25 +81,25 @@ async def resolve_event_triggers(
     return {ws_id: dict(repos) for ws_id, repos in fan_out.items()}
 
 
-async def get_action_state(
-    db: AsyncSession, repo: str, pr_number: int, head_sha: str, action: str
+async def get_dispatch_state(
+    db: AsyncSession, repo: str, pr_number: int, head_sha: str, condition: str
 ) -> PRActionState | None:
     result = await db.execute(
         select(PRActionState).where(
             PRActionState.repo == repo,
             PRActionState.pr_number == pr_number,
             PRActionState.head_sha == head_sha,
-            PRActionState.action == action,
+            PRActionState.action == condition,
         )
     )
     return result.scalar_one_or_none()
 
 
 async def is_blocked(
-    db: AsyncSession, repo: str, pr_number: int, head_sha: str, action: str
+    db: AsyncSession, repo: str, pr_number: int, head_sha: str, condition: str
 ) -> bool:
-    """Check if this action is already in flight, completed, or blocked by circuit breaker."""
-    row = await get_action_state(db, repo, pr_number, head_sha, action)
+    """Check if this condition is already in flight, completed, or blocked."""
+    row = await get_dispatch_state(db, repo, pr_number, head_sha, condition)
     return bool(row and row.status in _BLOCKING_STATUSES)
 
 
@@ -109,20 +109,20 @@ async def record_dispatch(
     repo: str,
     pr_number: int,
     head_sha: str,
-    action: str,
+    condition: str,
     session_id: int | None,
     status: str = "dispatched",
     error: str = "",
 ) -> int:
     """Record or update a dispatch attempt. Returns the new attempt count."""
     now = datetime.now(timezone.utc)
-    row = await get_action_state(db, repo, pr_number, head_sha, action)
+    row = await get_dispatch_state(db, repo, pr_number, head_sha, condition)
     if row is None:
         row = PRActionState(
             repo=repo,
             pr_number=pr_number,
             head_sha=head_sha,
-            action=action,
+            action=condition,
             session_id=session_id,
             status=status,
             attempts=1 if status in _ATTEMPT_STATUSES else 0,

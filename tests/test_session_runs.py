@@ -450,7 +450,7 @@ async def test_record_session_run_event_trigger_captures_context():
 
     async with _TestSession() as db:
         session = await _make_prompt_session(db)
-        session.event_context = json.dumps({"pr_number": 104, "action": "pr-fix", "repo": "org/repo"})
+        session.event_context = json.dumps({"pr_number": 104, "event_condition": "ci_fail_or_conflict", "repo": "org/repo"})
         await db.commit()
         await db.refresh(session)
 
@@ -466,8 +466,9 @@ async def test_record_session_run_event_trigger_captures_context():
 
         assert run is not None
         assert run.trigger_type == "event"
-        assert run.schedule_label == "PR #104 (pr-fix)"
+        assert run.schedule_label == "PR #104 (ci_fail_or_conflict)"
         assert run.event_info.get("pr_number") == 104
+        assert run.event_info.get("event_condition") == "ci_fail_or_conflict"
 
 
 @pytest.mark.asyncio
@@ -483,7 +484,7 @@ async def test_record_session_run_cron_does_not_inherit_stale_event_context():
         session = await _make_prompt_session(db)
         # Simulate a prior event-triggered run having set event_context on the
         # session row — session.event_context is never cleared after the run.
-        session.event_context = json.dumps({"pr_number": 104, "action": "pr-fix"})
+        session.event_context = json.dumps({"pr_number": 104, "event_condition": "ci_fail_or_conflict"})
 
         schedule = SessionSchedule(
             session_id=session.id,

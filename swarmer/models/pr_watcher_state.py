@@ -16,7 +16,7 @@ PR_ACTION_STATUSES = ("dispatched", "completed", "failed", "blocked")
 
 
 class PRActionState(Base):
-    """Per-(repo, PR, head_sha, action) dispatch + circuit-breaker record.
+    """Per-(repo, PR, head_sha, event condition) dispatch + circuit-breaker record.
 
     Stored in swarmer.db and written only via AsyncSession so SQLite single-writer
     invariants are preserved.
@@ -34,7 +34,8 @@ class PRActionState(Base):
     repo: Mapped[str] = mapped_column(String(255), nullable=False)
     pr_number: Mapped[int] = mapped_column(Integer, nullable=False)
     head_sha: Mapped[str] = mapped_column(String(64), nullable=False)
-    action: Mapped[str] = mapped_column(String(32), nullable=False)  # "pr-fix" | "pr-review"
+    # Column name is retained for the existing SQLite schema; values are event conditions.
+    action: Mapped[str] = mapped_column(String(32), nullable=False)
     session_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     status: Mapped[str] = mapped_column(
         String(32), nullable=False, default="dispatched", server_default="dispatched"

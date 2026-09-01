@@ -422,7 +422,7 @@ class AgentSwarmMCPServer:
         author_scope: str = "all",
         fix_authors: str = "",
         label: str = "",
-        prompt_id: int | None = None,
+        prompt_id: int,
         instruction_prompt: str = "",
         include_event_context: bool = True,
         enabled: bool = True,
@@ -864,14 +864,15 @@ class AgentSwarmMCPServer:
         async def add_session_schedule(
             workspace_id: int,
             session_id: int,
+            prompt_id: int,
             cron_schedule: str = "",
             trigger_type: str = "cron",
             event_condition: str = "",
             author_scope: str = "all",
             fix_authors: str = "",
             label: str = "",
-            prompt_id: int | None = None,
             instruction_prompt: str = "",
+            include_event_context: bool = True,
             enabled: bool = True,
         ) -> dict:
             """Add a new schedule or event trigger to a session.
@@ -885,8 +886,9 @@ class AgentSwarmMCPServer:
                 author_scope: PR author scope (e.g. 'self', 'team', 'bots', 'all').
                 fix_authors: Comma-separated GitHub logins for 'self' author scope.
                 label: Human-readable name for this trigger.
-                prompt_id: ID of a workspace prompt to use instead of the session default.
+                prompt_id: Required ID of the workspace prompt to run.
                 instruction_prompt: Additional instructions; overrides session default when set.
+                include_event_context: Include triggering event data in the agent prompt.
                 enabled: Whether the schedule is active. Default: True.
             """
             return await self._add_session_schedule(
@@ -894,7 +896,8 @@ class AgentSwarmMCPServer:
                 trigger_type=trigger_type, event_condition=event_condition,
                 author_scope=author_scope, fix_authors=fix_authors,
                 label=label, prompt_id=prompt_id,
-                instruction_prompt=instruction_prompt, enabled=enabled,
+                instruction_prompt=instruction_prompt,
+                include_event_context=include_event_context, enabled=enabled,
             )
 
         @mcp.tool()
@@ -925,7 +928,7 @@ class AgentSwarmMCPServer:
                 author_scope: New author scope ('self', 'team', 'bots', 'all').
                 fix_authors: Comma-separated GitHub logins for 'self' author scope.
                 label: New label.
-                prompt_id: New prompt id (None clears the override).
+                prompt_id: New prompt id. Existing schedules retain their prompt when omitted.
                 instruction_prompt: New additional instructions.
                 include_event_context: Include triggering event data in the agent prompt.
                 enabled: Enable or disable the schedule.

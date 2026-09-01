@@ -96,7 +96,7 @@ class ScheduleEntryCreate(BaseModel):
     author_scope: str = Field("all", max_length=32, pattern=r"^(self|team|bots|all)$")
     fix_authors: str = Field("", max_length=512)
     label: str = ""
-    prompt_id: int | None = None
+    prompt_id: int
     instruction_prompt: str = ""
     include_event_context: bool = True
     enabled: bool = True

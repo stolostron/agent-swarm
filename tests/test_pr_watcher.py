@@ -10,13 +10,12 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from swarmer.pr_state import (  # noqa: E402
     CheckState,
-    PRAction,
     PRState,
     TrustPolicy,
     TrustStrategy,
-    classify_pr_action,
     evaluate_author_trust,
     evaluate_ci_completion_barrier,
+    evaluate_pr_conditions,
     is_bot_author,
     normalize_ci_checks,
 )
@@ -193,13 +192,8 @@ class TestAuthorTrustEvaluation(unittest.TestCase):
         self.assertTrue(is_bot_author("my-app.bot"))
 
 
-class TestClassifyPRAction(unittest.TestCase):
-    def setUp(self):
-        self.fix_authors = {"jnpacker"}
-        self.bot_logins = {"dependabot[bot]", "renovate[bot]"}
-        self.policy = TrustPolicy()
-
-    def test_draft_pr_ignored(self):
+class TestPRConditionEvaluation(unittest.TestCase):
+    def test_draft_pr_has_no_conditions(self):
         pr = PRState(
             repo="org/repo",
             pr_number=1,
@@ -214,10 +208,9 @@ class TestClassifyPRAction(unittest.TestCase):
             mergeable_state="dirty",
             is_fork=False,
         )
-        action, reason = classify_pr_action(pr, self.fix_authors, self.bot_logins, self.policy)
-        self.assertEqual(action, PRAction.IGNORE)
+        self.assertEqual(evaluate_pr_conditions(pr, {"any_actionable"}), set())
 
-    def test_fix_author_merge_conflict(self):
+    def test_merge_conflict_matches_condition_without_author_routing(self):
         pr = PRState(
             repo="org/repo",
             pr_number=2,
@@ -232,11 +225,12 @@ class TestClassifyPRAction(unittest.TestCase):
             mergeable_state="dirty",
             is_fork=False,
         )
-        action, reason = classify_pr_action(pr, self.fix_authors, self.bot_logins, self.policy)
-        self.assertEqual(action, PRAction.FIX)
-        self.assertIn("merge conflict", reason.lower())
+        self.assertEqual(
+            evaluate_pr_conditions(pr, {"ci_fail_or_conflict", "new_pr_or_commit"}),
+            {"ci_fail_or_conflict", "new_pr_or_commit"},
+        )
 
-    def test_fix_author_fork_skipped(self):
+    def test_fork_without_push_access_still_matches(self):
         pr = PRState(
             repo="org/repo",
             pr_number=3,
@@ -253,15 +247,16 @@ class TestClassifyPRAction(unittest.TestCase):
             fork_owner="fork-owner",
             raw_payload={"maintainer_can_modify": False},
         )
-        action, reason = classify_pr_action(pr, self.fix_authors, self.bot_logins, self.policy)
-        self.assertEqual(action, PRAction.IGNORE)
-        self.assertIn("without maintainer push permissions", reason.lower())
+        self.assertIn(
+            "ci_fail_or_conflict",
+            evaluate_pr_conditions(pr, {"ci_fail_or_conflict"}),
+        )
 
-    def test_fix_author_fork_allowed_when_maintainer_can_modify(self):
+    def test_review_comments_match_condition(self):
         pr = PRState(
             repo="org/repo",
             pr_number=3,
-            title="Maintainer editable fork fix",
+            title="Needs comments addressed",
             body="",
             author_login="jnpacker",
             author_association="OWNER",
@@ -269,34 +264,36 @@ class TestClassifyPRAction(unittest.TestCase):
             head_sha="333",
             head_ref="branch",
             base_ref="main",
-            mergeable_state="dirty",
-            is_fork=True,
-            fork_owner="fork-owner",
-            raw_payload={"maintainer_can_modify": True},
+            mergeable_state="clean",
+            is_fork=False,
+            unresolved_review_comments=2,
         )
-        action, reason = classify_pr_action(pr, self.fix_authors, self.bot_logins, self.policy)
-        self.assertEqual(action, PRAction.FIX)
-        self.assertIn("merge conflict", reason.lower())
+        self.assertEqual(
+            evaluate_pr_conditions(pr, {"review_comments"}),
+            {"review_comments"},
+        )
 
-    def test_bot_author_deferred_to_auto_merge(self):
+    def test_new_pr_or_commit_matches_unreviewed_head(self):
         pr = PRState(
             repo="org/repo",
             pr_number=4,
             title="Bump lodash",
             body="",
-            author_login="dependabot[bot]",
-            author_association="CONTRIBUTOR",
+            author_login="teammate",
+            author_association="MEMBER",
             is_draft=False,
             head_sha="444",
-            head_ref="dependabot/npm_and_yarn/lodash",
+            head_ref="feature",
             base_ref="main",
             mergeable_state="clean",
             is_fork=False,
         )
-        action, reason = classify_pr_action(pr, self.fix_authors, self.bot_logins, self.policy)
-        self.assertEqual(action, PRAction.AUTO_MERGE_DEFER)
+        self.assertEqual(
+            evaluate_pr_conditions(pr, {"new_pr_or_commit"}),
+            {"new_pr_or_commit"},
+        )
 
-    def test_team_pr_routed_to_review(self):
+    def test_any_actionable_expands_to_matching_conditions(self):
         pr = PRState(
             repo="org/repo",
             pr_number=5,
@@ -310,10 +307,12 @@ class TestClassifyPRAction(unittest.TestCase):
             base_ref="main",
             mergeable_state="clean",
             is_fork=False,
-            has_agent_review_on_head=False,
+            unresolved_review_comments=1,
         )
-        action, reason = classify_pr_action(pr, self.fix_authors, self.bot_logins, self.policy)
-        self.assertEqual(action, PRAction.REVIEW)
+        self.assertEqual(
+            evaluate_pr_conditions(pr, {"any_actionable"}),
+            {"any_actionable", "new_pr_or_commit", "review_comments"},
+        )
 
 
 class TestExtractRepoFromUrl(unittest.TestCase):
@@ -339,7 +338,7 @@ class TestAsyncPRWatcherStore(unittest.IsolatedAsyncioTestCase):
 
     async def test_async_state_store_record_and_reconcile(self):
         from swarmer.pr_watcher_store import (
-            get_action_state,
+            get_dispatch_state,
             get_etag,
             is_blocked,
             prune_etags,
@@ -351,49 +350,49 @@ class TestAsyncPRWatcherStore(unittest.IsolatedAsyncioTestCase):
         async with self.session_factory() as db:
             # 1. Record first attempt
             attempts = await record_dispatch(
-                db, repo="owner/repo", pr_number=10, head_sha="sha1", action="pr-fix", session_id=1, status="dispatched"
+                db, repo="owner/repo", pr_number=10, head_sha="sha1", condition="ci_fail_or_conflict", session_id=1, status="dispatched"
             )
             self.assertEqual(attempts, 1)
-            self.assertTrue(await is_blocked(db, "owner/repo", 10, "sha1", "pr-fix"))
+            self.assertTrue(await is_blocked(db, "owner/repo", 10, "sha1", "ci_fail_or_conflict"))
 
             # 2. Check state
-            row = await get_action_state(db, "owner/repo", 10, "sha1", "pr-fix")
+            row = await get_dispatch_state(db, "owner/repo", 10, "sha1", "ci_fail_or_conflict")
             self.assertIsNotNone(row)
             self.assertEqual(row.status, "dispatched")
 
             # 3. Second attempt increments the counter
             attempts2 = await record_dispatch(
-                db, repo="owner/repo", pr_number=10, head_sha="sha1", action="pr-fix", session_id=1, status="dispatched"
+                db, repo="owner/repo", pr_number=10, head_sha="sha1", condition="ci_fail_or_conflict", session_id=1, status="dispatched"
             )
             self.assertEqual(attempts2, 2)
 
             # 4. Reconcile completed (succeeded -> completed)
             await reconcile_completed(db, session_id=1, phase="succeeded")
-            row_after = await get_action_state(db, "owner/repo", 10, "sha1", "pr-fix")
+            row_after = await get_dispatch_state(db, "owner/repo", 10, "sha1", "ci_fail_or_conflict")
             self.assertEqual(row_after.status, "completed")
 
             # 4b. Reconcile failed below max attempts -> status "failed"
             await record_dispatch(
-                db, repo="owner/repo", pr_number=11, head_sha="sha_fail", action="pr-fix", session_id=2, status="dispatched"
+                db, repo="owner/repo", pr_number=11, head_sha="sha_fail", condition="ci_fail_or_conflict", session_id=2, status="dispatched"
             )
             await reconcile_completed(db, session_id=2, phase="failed")
-            row_failed = await get_action_state(db, "owner/repo", 11, "sha_fail", "pr-fix")
+            row_failed = await get_dispatch_state(db, "owner/repo", 11, "sha_fail", "ci_fail_or_conflict")
             self.assertEqual(row_failed.status, "failed")
             self.assertIn("phase 'failed'", row_failed.last_error)
 
             # 4c. Reconcile failed at max attempts -> status "blocked"
             for _ in range(3):
                 await record_dispatch(
-                    db, repo="owner/repo", pr_number=12, head_sha="sha_cap", action="pr-fix", session_id=3, status="dispatched"
+                    db, repo="owner/repo", pr_number=12, head_sha="sha_cap", condition="ci_fail_or_conflict", session_id=3, status="dispatched"
                 )
             await reconcile_completed(db, session_id=3, phase="failed")
-            row_blocked = await get_action_state(db, "owner/repo", 12, "sha_cap", "pr-fix")
+            row_blocked = await get_dispatch_state(db, "owner/repo", 12, "sha_cap", "ci_fail_or_conflict")
             self.assertEqual(row_blocked.status, "blocked")
             self.assertIn("Max dispatch attempts", row_blocked.last_error)
 
             # 5. New head_sha resets the attempt counter
             attempts3 = await record_dispatch(
-                db, repo="owner/repo", pr_number=10, head_sha="sha2", action="pr-fix", session_id=1, status="dispatched"
+                db, repo="owner/repo", pr_number=10, head_sha="sha2", condition="ci_fail_or_conflict", session_id=1, status="dispatched"
             )
             self.assertEqual(attempts3, 1)
 
@@ -565,12 +564,11 @@ class TestPRWatcherNetworkDetails(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(detail.get("mergeable_state"), "dirty")
             self.assertTrue(detail.get("maintainer_can_modify"))
 
-            unresolved, cr_count, has_review = await _fetch_reviews_and_threads(
-                client, "stolostron/agent-swarm", 10, "sha123", "dummy-token"
+            unresolved, cr_count = await _fetch_reviews_and_threads(
+                client, "stolostron/agent-swarm", 10, "dummy-token"
             )
             self.assertEqual(unresolved, 1)
             self.assertEqual(cr_count, 1)
-            self.assertTrue(has_review)
 
 
 if __name__ == "__main__":

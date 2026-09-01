@@ -121,7 +121,7 @@
         {% if run.event_info.repo %}Repo: {{ run.event_info.repo }} | {% endif %}
         {% if run.event_info.pr_number %}PR: #{{ run.event_info.pr_number }} | {% endif %}
         {% if run.event_info.head_sha %}Head SHA: {{ run.event_info.head_sha[:8] }} | {% endif %}
-        {% if run.event_info.action %}Action: {{ run.event_info.action }} | {% endif %}
+         {% if run.event_info.event_condition %}Condition: {{ run.event_info.event_condition }} | {% endif %}
         {% if run.event_info.title %}Title: {{ run.event_info.title }}{% endif %}
       </div>
       {% endif %}

@@ -52,14 +52,6 @@ class TrustStrategy(str, Enum):
     GITHUB_TEAM = "github_team"
 
 
-class PRAction(str, Enum):
-    FIX = "pr-fix"
-    REVIEW = "pr-review"
-    HYGIENE = "pr-hygiene"
-    AUTO_MERGE_DEFER = "auto-merge-defer"
-    IGNORE = "ignore"
-
-
 @dataclass
 class TrustPolicy:
     strategy: TrustStrategy = TrustStrategy.ORG_AND_COLLABORATORS
@@ -113,7 +105,6 @@ class PRState:
     labels: set[str] = field(default_factory=set)
     unresolved_review_comments: int = 0
     coderabbit_unresolved_comments: int = 0
-    has_agent_review_on_head: bool = False
     created_at: datetime | None = None
     updated_at: datetime | None = None
     check_state: CheckState = field(default_factory=CheckState)
@@ -330,88 +321,42 @@ def is_bot_author(author_login: str, bot_logins: set[str] | None = None) -> bool
     return False
 
 
-def classify_pr_action(
+def evaluate_pr_conditions(
     pr: PRState,
-    fix_authors: set[str],
-    bot_logins: set[str] | None = None,
-    trust_policy: TrustPolicy | None = None,
-    org_team_members: set[str] | None = None,
-    label_events: list[dict[str, Any]] | None = None,
+    event_conditions: set[str],
     quiet_period_seconds: float = 90.0,
     current_time: datetime | None = None,
-) -> tuple[PRAction, str]:
-    """Classify what action should be taken for a PR.
+) -> set[str]:
+    """Return the configured event conditions currently satisfied by a PR.
 
-    Routing precedence:
-    1. Draft PRs -> IGNORE
-    2. Fix Authors (Self / Laptop agents) -> PR-FIX (merge conflicts, failing CI, review comments)
-       - If fork without push access -> SKIP/IGNORE
-    3. Bot PRs (Renovate, Dependabot, CVE bot) -> AUTO_MERGE_DEFER or Bot Fix
-    4. Trusted Team / Collaborators -> PR-REVIEW (if new PR / new head commit without review)
-    5. Untrusted External PRs -> IGNORE (unless 'ok-to-review' label present)
+    Event conditions describe *when* to run. The selected schedule Prompt
+    determines what the agent does, and author scopes are evaluated separately
+    by the watcher after this function returns.
     """
+    matched: set[str] = set()
     if pr.is_draft:
-        return PRAction.IGNORE, "Draft PR — ignoring until marked ready for review"
+        return matched
 
-    author_lower = pr.author_login.lower()
-    lowered_fix_authors = {a.lower() for a in fix_authors}
-    policy = trust_policy or TrustPolicy()
-
-    # --- 1. Fix Authors (You / Laptop Agents) ---
-    if author_lower in lowered_fix_authors:
-        if pr.is_fork:
-            maintainer_can_modify = pr.raw_payload.get("maintainer_can_modify", False)
-            if not maintainer_can_modify:
-                return (
-                    PRAction.IGNORE,
-                    f"PR #{pr.pr_number} is from a fork ({pr.fork_owner}) without maintainer push permissions — skipping pr-fix",
-                )
-
-        # Check triggers for pr-fix in priority order:
-        # A. Merge conflict (mergeable_state == 'dirty')
+    if "ci_fail_or_conflict" in event_conditions or "any_actionable" in event_conditions:
         if pr.mergeable_state == "dirty":
-            return PRAction.FIX, f"Merge conflict detected (mergeable_state={pr.mergeable_state})"
-
-        # B. CI Failure (must satisfy barrier + debounce)
-        if pr.check_state.has_failures:
-            ready, reason = evaluate_ci_completion_barrier(
+            matched.add("ci_fail_or_conflict")
+        elif pr.check_state.has_failures:
+            ready, _reason = evaluate_ci_completion_barrier(
                 pr.check_state,
                 quiet_period_seconds=quiet_period_seconds,
                 current_time=current_time,
             )
             if ready:
-                failed_str = ", ".join(pr.check_state.failed_check_names[:3])
-                return PRAction.FIX, f"CI failure detected ({failed_str})"
-            else:
-                return PRAction.IGNORE, f"CI has failures but barrier not ready: {reason}"
+                matched.add("ci_fail_or_conflict")
 
-        # C. Unresolved Review Comments
+    if "review_comments" in event_conditions or "any_actionable" in event_conditions:
         if pr.unresolved_review_comments > 0 or pr.coderabbit_unresolved_comments > 0:
-            count = pr.coderabbit_unresolved_comments or pr.unresolved_review_comments
-            return PRAction.FIX, f"{count} unresolved review comment(s) found on PR"
+            matched.add("review_comments")
 
-        return PRAction.IGNORE, "No actionable failures, conflicts, or unresolved comments on fix_author PR"
+    if "new_pr_or_commit" in event_conditions or "any_actionable" in event_conditions:
+        matched.add("new_pr_or_commit")
 
-    # --- 2. Automated Bots (Renovate / Dependabot / CVEs) ---
-    if is_bot_author(pr.author_login, bot_logins):
-        return (
-            PRAction.AUTO_MERGE_DEFER,
-            f"Bot PR by '{pr.author_login}' — deferring to repo's auto-merge-approved GitHub Actions",
-        )
+    if "any_actionable" in event_conditions and matched:
+        matched.add("any_actionable")
 
-    # --- 3. Team / External PRs (Review & Hygiene) ---
-    trust = evaluate_author_trust(
-        pr,
-        policy=policy,
-        org_team_members=org_team_members,
-        label_events=label_events,
-    )
-
-    if not trust.is_trusted:
-        return PRAction.IGNORE, f"Untrusted author: {trust.reason}"
-
-    # Trusted author: check if review is needed
-    if not pr.has_agent_review_on_head:
-        return PRAction.REVIEW, f"Trusted team PR by '{pr.author_login}' needs review on head SHA {pr.head_sha[:8]}"
-
-    return PRAction.IGNORE, f"Trusted team PR already reviewed on head SHA {pr.head_sha[:8]}"
+    return matched

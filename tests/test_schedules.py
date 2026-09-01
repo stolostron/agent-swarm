@@ -118,6 +118,32 @@ async def _create_session(client: AsyncClient, ws_id: int, name: str = "s1") -> 
     return resp.json()
 
 
+async def _create_prompt(ws_id: int, name: str = "Test Prompt") -> int:
+    from swarmer.models.workspace_prompt import WorkspacePrompt, WorkspacePromptSource
+
+    async with _TestSession() as db:
+        source = WorkspacePromptSource(
+            workspace_id=ws_id,
+            name=f"source-{name}",
+            repo_url="https://example.com/prompts",
+            branch="main",
+        )
+        db.add(source)
+        await db.commit()
+        await db.refresh(source)
+        prompt = WorkspacePrompt(
+            source_id=source.id,
+            filename=f"{name}.md",
+            display_name=name,
+            content="Run the requested task.",
+            content_hash=name,
+        )
+        db.add(prompt)
+        await db.commit()
+        await db.refresh(prompt)
+        return prompt.id
+
+
 # ===========================================================================
 # Model-level tests (direct DB access via ORM)
 # ===========================================================================
@@ -545,11 +571,12 @@ class TestScheduleEditHTMXEndpoint:
         ws = await _create_workspace(client)
         s = await _create_session(client, ws["id"])
         ws_id, sid = ws["id"], s["id"]
+        prompt_id = await _create_prompt(ws_id)
 
         async with _TestSession() as db:
             sched = SessionSchedule(
                 session_id=sid, cron_schedule="0 * * * *",
-                enabled=True, label="hourly",
+                enabled=True, label="hourly", prompt_id=prompt_id,
             )
             db.add(sched)
             await db.commit()
@@ -561,7 +588,7 @@ class TestScheduleEditHTMXEndpoint:
             data={
                 "cron_expr": "0 0 * * *",
                 "label": "daily",
-                "prompt_id": "",
+                "prompt_id": str(prompt_id),
                 "instruction_prompt": "",
             },
         )
@@ -580,11 +607,12 @@ class TestScheduleEditHTMXEndpoint:
         ws = await _create_workspace(client)
         s = await _create_session(client, ws["id"])
         ws_id, sid = ws["id"], s["id"]
+        prompt_id = await _create_prompt(ws_id)
 
         async with _TestSession() as db:
             sched = SessionSchedule(
                 session_id=sid, cron_schedule="0 * * * *",
-                enabled=False, label="hourly",
+                enabled=False, label="hourly", prompt_id=prompt_id,
             )
             db.add(sched)
             await db.commit()
@@ -596,7 +624,7 @@ class TestScheduleEditHTMXEndpoint:
             data={
                 "cron_expr": "0 0 * * *",
                 "label": "daily",
-                "prompt_id": "",
+                "prompt_id": str(prompt_id),
                 "instruction_prompt": "",
             },
         )
@@ -612,11 +640,12 @@ class TestScheduleEditHTMXEndpoint:
 
         ws = await _create_workspace(client)
         s = await _create_session(client, ws["id"])
+        prompt_id = await _create_prompt(ws["id"])
 
         async with _TestSession() as db:
             sched = SessionSchedule(
                 session_id=s["id"], trigger_type="event",
-                event_condition="new_pr_or_commit", label="PR review",
+                event_condition="new_pr_or_commit", label="PR review", prompt_id=prompt_id,
             )
             db.add(sched)
             await db.commit()
@@ -630,6 +659,8 @@ class TestScheduleEditHTMXEndpoint:
         assert "document.getElementById('sched-edit-btn-" in resp.text
         assert 'name="include_event_context"' in resp.text
         assert "value=\"1\" checked" in resp.text
+        assert "schedule-help-popover" in resp.text
+        assert 'Prompt <span' in resp.text
 
     @pytest.mark.asyncio
     async def test_edit_can_disable_event_context(self, client):
@@ -637,11 +668,12 @@ class TestScheduleEditHTMXEndpoint:
 
         ws = await _create_workspace(client)
         s = await _create_session(client, ws["id"])
+        prompt_id = await _create_prompt(ws["id"])
 
         async with _TestSession() as db:
             sched = SessionSchedule(
                 session_id=s["id"], trigger_type="event",
-                event_condition="new_pr_or_commit", include_event_context=True,
+                event_condition="new_pr_or_commit", include_event_context=True, prompt_id=prompt_id,
             )
             db.add(sched)
             await db.commit()
@@ -656,7 +688,7 @@ class TestScheduleEditHTMXEndpoint:
                 "author_scope": "all",
                 "cron_expr": "",
                 "label": "PR review",
-                "prompt_id": "",
+                "prompt_id": str(prompt_id),
                 "instruction_prompt": "",
             },
         )
@@ -672,12 +704,13 @@ class TestScheduleAPI:
     async def test_create_and_list(self, client):
         ws = await _create_workspace(client)
         s = await _create_session(client, ws["id"])
+        prompt_id = await _create_prompt(ws["id"])
         ws_id, sid = ws["id"], s["id"]
 
         # Create a schedule
         resp = await client.post(
             f"/api/v1/workspaces/{ws_id}/sessions/{sid}/schedules",
-            json={"cron_schedule": "0 * * * *", "label": "hourly"},
+            json={"cron_schedule": "0 * * * *", "label": "hourly", "prompt_id": prompt_id},
         )
         assert resp.status_code == 201, resp.text
         sched = resp.json()
@@ -697,11 +730,12 @@ class TestScheduleAPI:
     async def test_update_schedule(self, client):
         ws = await _create_workspace(client)
         s = await _create_session(client, ws["id"])
+        prompt_id = await _create_prompt(ws["id"])
         ws_id, sid = ws["id"], s["id"]
 
         resp = await client.post(
             f"/api/v1/workspaces/{ws_id}/sessions/{sid}/schedules",
-            json={"cron_schedule": "0 * * * *"},
+            json={"cron_schedule": "0 * * * *", "prompt_id": prompt_id},
         )
         sched_id = resp.json()["id"]
 
@@ -719,6 +753,7 @@ class TestScheduleAPI:
     async def test_event_context_option_round_trip(self, client):
         ws = await _create_workspace(client)
         s = await _create_session(client, ws["id"])
+        prompt_id = await _create_prompt(ws["id"])
         ws_id, sid = ws["id"], s["id"]
 
         resp = await client.post(
@@ -727,6 +762,7 @@ class TestScheduleAPI:
                 "trigger_type": "event",
                 "event_condition": "new_pr_or_commit",
                 "include_event_context": True,
+                "prompt_id": prompt_id,
             },
         )
         assert resp.status_code == 201, resp.text
@@ -745,11 +781,12 @@ class TestScheduleAPI:
     async def test_delete_schedule(self, client):
         ws = await _create_workspace(client)
         s = await _create_session(client, ws["id"])
+        prompt_id = await _create_prompt(ws["id"])
         ws_id, sid = ws["id"], s["id"]
 
         resp = await client.post(
             f"/api/v1/workspaces/{ws_id}/sessions/{sid}/schedules",
-            json={"cron_schedule": "*/30 * * * *"},
+            json={"cron_schedule": "*/30 * * * *", "prompt_id": prompt_id},
         )
         sched_id = resp.json()["id"]
 
@@ -774,14 +811,33 @@ class TestScheduleAPI:
         assert resp.status_code == 422
 
     @pytest.mark.asyncio
-    async def test_session_out_includes_schedules(self, client):
+    async def test_schedule_requires_prompt(self, client):
         ws = await _create_workspace(client)
         s = await _create_session(client, ws["id"])
         ws_id, sid = ws["id"], s["id"]
 
+        resp = await client.post(
+            f"/api/v1/workspaces/{ws_id}/sessions/{sid}/schedules",
+            json={"cron_schedule": "0 * * * *"},
+        )
+        assert resp.status_code == 422
+
+        resp = await client.post(
+            f"/api/v1/workspaces/{ws_id}/sessions/{sid}/schedules",
+            json={"trigger_type": "event", "event_condition": "new_pr_or_commit"},
+        )
+        assert resp.status_code == 422
+
+    @pytest.mark.asyncio
+    async def test_session_out_includes_schedules(self, client):
+        ws = await _create_workspace(client)
+        s = await _create_session(client, ws["id"])
+        prompt_id = await _create_prompt(ws["id"])
+        ws_id, sid = ws["id"], s["id"]
+
         await client.post(
             f"/api/v1/workspaces/{ws_id}/sessions/{sid}/schedules",
-            json={"cron_schedule": "0 * * * *", "label": "hourly"},
+            json={"cron_schedule": "0 * * * *", "label": "hourly", "prompt_id": prompt_id},
         )
 
         resp = await client.get(f"/api/v1/workspaces/{ws_id}/sessions/{sid}")
@@ -989,6 +1045,7 @@ class TestEventTriggers:
     async def test_create_event_trigger_api(self, client: AsyncClient):
         ws = await _create_workspace(client)
         s = await _create_session(client, ws["id"])
+        prompt_id = await _create_prompt(ws["id"])
         ws_id = ws["id"]
         s_id = s["id"]
 
@@ -999,6 +1056,7 @@ class TestEventTriggers:
                 "event_condition": "ci_fail_or_conflict",
                 "author_scope": "self",
                 "label": "Auto-fix my PRs",
+                "prompt_id": prompt_id,
             },
         )
         assert resp.status_code == 201
@@ -1014,6 +1072,7 @@ class TestEventTriggers:
     async def test_create_event_trigger_with_fix_authors(self, client: AsyncClient):
         ws = await _create_workspace(client)
         s = await _create_session(client, ws["id"])
+        prompt_id = await _create_prompt(ws["id"])
         ws_id = ws["id"]
         s_id = s["id"]
 
@@ -1025,6 +1084,7 @@ class TestEventTriggers:
                 "author_scope": "self",
                 "fix_authors": "jnpacker, alice",
                 "label": "My PR Fixes",
+                "prompt_id": prompt_id,
             },
         )
         assert resp.status_code == 201
@@ -1066,13 +1126,14 @@ class TestEventTriggers:
     async def test_convert_cron_to_event_trigger_api(self, client: AsyncClient):
         ws = await _create_workspace(client)
         s = await _create_session(client, ws["id"])
+        prompt_id = await _create_prompt(ws["id"])
         ws_id = ws["id"]
         s_id = s["id"]
 
         # 1. Create cron schedule
         create_resp = await client.post(
             f"/api/v1/workspaces/{ws_id}/sessions/{s_id}/schedules",
-            json={"cron_schedule": "0 9 * * 1-5", "label": "Morning Cron"},
+            json={"cron_schedule": "0 9 * * 1-5", "label": "Morning Cron", "prompt_id": prompt_id},
         )
         assert create_resp.status_code == 201
         sched_id = create_resp.json()["id"]
@@ -1123,7 +1184,7 @@ class TestEventTriggers:
             "repo": "stolostron/agent-swarm",
             "pr_number": 104,
             "head_sha": "7f3a8b1c",
-            "action": "pr-fix",
+            "event_condition": "ci_fail_or_conflict",
             "title": "fix: update scheduler",
         }
 
@@ -1154,7 +1215,7 @@ class TestEventTriggers:
                 )
                 assert run is not None
                 assert run.trigger_type == "event"
-                assert run.schedule_label == "PR #104 (pr-fix)"
+                assert run.schedule_label == "PR #104 (ci_fail_or_conflict)"
                 assert run.event_info.get("pr_number") == 104
 
 
@@ -1179,7 +1240,7 @@ class TestMCPScheduleTools:
             "cron_schedule": "0 * * * *",
             "cron_next_run": "2026-06-16T00:00:00",
             "label": "hourly",
-            "prompt_id": None,
+            "prompt_id": 42,
             "instruction_prompt": "",
             "include_event_context": True,
             "enabled": True,
@@ -1200,7 +1261,7 @@ class TestMCPScheduleTools:
                 return_value=httpx.Response(201, json=sched_data)
             )
             created = await server._add_session_schedule(
-                1, 10, "0 * * * *", label="hourly", include_event_context=False
+                1, 10, "0 * * * *", label="hourly", prompt_id=42, include_event_context=False
             )
             assert created["label"] == "hourly"
 
