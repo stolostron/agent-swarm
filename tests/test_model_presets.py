@@ -119,6 +119,12 @@ class TestGetDefaultModel:
     def test_has_adc_false_returns_gemini_preset(self):
         assert _opencode.get_default_model(False) == "gemini"
 
+    def test_openai_is_selected_when_gemini_is_unavailable(self):
+        assert _opencode.get_default_model(False, has_gemini=False, has_openai=True) == "openai"
+
+    def test_no_provider_returns_empty_selection(self):
+        assert _opencode.get_default_model(False, has_gemini=False, has_openai=False) == ""
+
 
 # ---------------------------------------------------------------------------
 # get_model_options() / get_preset_options() — always-listed + error states
