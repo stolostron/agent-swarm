@@ -927,6 +927,15 @@ class TestRepos:
 
 
 class TestSecrets:
+    @pytest.fixture(autouse=True)
+    def _mock_openshell_providers(self, monkeypatch):
+        async def _noop(*args, **kwargs):
+            return None
+
+        monkeypatch.setattr("swarmer.openshell_client.ensure_provider", _noop)
+        monkeypatch.setattr("swarmer.openshell_client.create_google_cloud_provider", _noop)
+        monkeypatch.setattr("swarmer.openshell_client.configure_google_cloud_provider", _noop)
+
     @pytest.mark.asyncio
     async def test_credentials_initially_none(self, client):
         ws = await _create_workspace(client)
@@ -1061,6 +1070,77 @@ class TestSecrets:
         resp = await client.get(f"/api/v1/workspaces/{ws['id']}/secrets/credentials")
         assert resp.status_code == 200
         assert resp.json() is None
+
+    @pytest.mark.asyncio
+    async def test_save_gemini_and_vertex_provisions_openshell_providers(self, client, monkeypatch):
+        ws = await _create_workspace(client)
+
+        calls = {}
+
+        async def _mock_ensure(name, provider_type, config, credentials):
+            calls["ensure"] = (name, provider_type, config, credentials)
+
+        async def _mock_create_gc(name, project, location):
+            calls["create_gc"] = (name, project, location)
+
+        async def _mock_conf_gc(name, adc_json):
+            calls["conf_gc"] = (name, adc_json)
+
+        monkeypatch.setattr("swarmer.openshell_client.ensure_provider", _mock_ensure)
+        monkeypatch.setattr("swarmer.openshell_client.create_google_cloud_provider", _mock_create_gc)
+        monkeypatch.setattr("swarmer.openshell_client.configure_google_cloud_provider", _mock_conf_gc)
+
+        adc = json.dumps({"type": "authorized_user", "client_id": "x", "client_secret": "y"})
+        resp = await client.post(
+            f"/api/v1/workspaces/{ws['id']}/secrets/credentials",
+            json={
+                "google_cloud_project": "gcp-proj",
+                "vertex_location": "us-central1",
+                "google_api_key": "gemini-key-123",
+                "application_default_credentials": adc,
+            },
+        )
+        assert resp.status_code == 200
+        assert calls["ensure"][0] == f"swarmer-ws-{ws['id']}-google-ai-studio"
+        assert calls["ensure"][3]["GOOGLE_API_KEY"] == "gemini-key-123"
+        assert calls["create_gc"] == (f"swarmer-ws-{ws['id']}-google-cloud", "gcp-proj", "us-central1")
+        assert calls["conf_gc"] == (f"swarmer-ws-{ws['id']}-google-cloud", adc)
+
+    @pytest.mark.asyncio
+    async def test_delete_shared_credentials_requires_manager(self, client):
+        from swarmer.models.opencode_secret import OpencodeSecret
+
+        ws = await _create_workspace(client)
+        async with _TestSession() as db:
+            from swarmer.models.workspace_member import WorkspaceMember
+            db.add(WorkspaceMember(workspace_id=ws["id"], user_id="alice", role="member"))
+            secret = OpencodeSecret(
+                workspace_id=ws["id"],
+                user_id="other-user",
+                shared=True,
+                google_cloud_project="proj",
+                vertex_location="us-central1",
+            )
+            db.add(secret)
+            await db.commit()
+
+        from swarmer.k8s_auth import TokenIdentity
+        from swarmer.api.deps import require_api_auth
+        from swarmer.main import app
+
+        # Regular member without management permission should get 403
+        app.dependency_overrides[require_api_auth] = lambda: TokenIdentity(username="alice", uid="uid-alice")
+        resp = await client.delete(
+            f"/api/v1/workspaces/{ws['id']}/secrets/credentials/google-cloud"
+        )
+        assert resp.status_code == 403
+
+        # Workspace owner can delete shared credentials
+        app.dependency_overrides[require_api_auth] = _override_require_api_auth
+        owner_resp = await client.delete(
+            f"/api/v1/workspaces/{ws['id']}/secrets/credentials/google-cloud"
+        )
+        assert owner_resp.status_code == 200
 
     @pytest.mark.asyncio
     async def test_pat_crud(self, client):

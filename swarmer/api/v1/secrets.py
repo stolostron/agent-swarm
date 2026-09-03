@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from swarmer import k8s
 from swarmer.database import get_db
+from swarmer.k8s_auth import TokenIdentity
 from swarmer.api.deps import get_current_user, get_workspace_or_404, require_api_auth
 from swarmer.api.schemas import (
     CredentialsOut,
@@ -112,8 +113,31 @@ async def save_credentials(
         secret.openai_configured = body.openai_configured
 
     if body.google_api_key.strip():
-        secret.google_api_key = body.google_api_key.strip()
+        gemini_key = body.google_api_key.strip()
+        secret.google_api_key = gemini_key
         secret.gemini_configured = True
+        try:
+            from swarmer import openshell_client
+
+            await openshell_client.ensure_provider(
+                f"swarmer-ws-{ws_id}-google-ai-studio",
+                "google-ai-studio",
+                {},
+                credentials={
+                    "GOOGLE_API_KEY": gemini_key,
+                    "GOOGLE_GENERATIVE_AI_API_KEY": gemini_key,
+                },
+            )
+        except Exception as exc:
+            log.warning(
+                "save_credentials: failed to configure Gemini provider for workspace %d (error_type=%s)",
+                ws_id,
+                type(exc).__name__,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="failed to configure Gemini provider on OpenShell",
+            ) from exc
     openai_key = body.openai_api_key.strip()
     if openai_key:
         secret.openai_configured = True
@@ -148,6 +172,25 @@ async def save_credentials(
                 detail="application_default_credentials must be valid JSON",
             ) from exc
         secret.application_default_credentials = adc
+        if secret.google_cloud_project and secret.vertex_location:
+            try:
+                from swarmer import openshell_client
+
+                provider_name = f"swarmer-ws-{ws_id}-google-cloud"
+                await openshell_client.create_google_cloud_provider(
+                    provider_name, secret.google_cloud_project, secret.vertex_location
+                )
+                await openshell_client.configure_google_cloud_provider(provider_name, adc)
+            except Exception as exc:
+                log.warning(
+                    "save_credentials: failed to configure Vertex AI provider for workspace %d (error_type=%s)",
+                    ws_id,
+                    type(exc).__name__,
+                )
+                raise HTTPException(
+                    status_code=status.HTTP_502_BAD_GATEWAY,
+                    detail="failed to configure Vertex AI provider on OpenShell",
+                ) from exc
 
     await db.commit()
     await db.refresh(secret)
@@ -161,8 +204,9 @@ async def delete_credential(
     provider: str,
     ws: Workspace = Depends(get_workspace_or_404),
     db: AsyncSession = Depends(get_db),
-    user: str = Depends(get_current_user),
+    identity: TokenIdentity = Depends(require_api_auth),
 ) -> MessageOut:
+    user = identity.username
     provider_names = {
         "vertex": "google-cloud",
         "google-cloud": "google-cloud",
@@ -183,7 +227,17 @@ async def delete_credential(
     secrets = result.scalars().all()
     secret = next((item for item in secrets if item.user_id == user), None)
     if secret is None and secrets:
-        secret = secrets[0]
+        candidate = secrets[0]
+        from swarmer import workspace_acl
+
+        if not await workspace_acl.can_manage_members(
+            db, ws, identity.username, identity.groups
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Only the credential owner, workspace owner, or an admin can delete shared credentials.",
+            )
+        secret = candidate
     if secret is None:
         raise HTTPException(status_code=404, detail="Credentials not configured")
 

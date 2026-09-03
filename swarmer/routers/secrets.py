@@ -28,10 +28,10 @@ def _current_user(request: Request) -> str:
     return request.session.get("username", "")
 
 
-def _csrf_redirect(ws_id: int, request: Request) -> RedirectResponse:
+def _csrf_redirect(ws_id: int, request: Request, tab: str = "github-app") -> RedirectResponse:
     flash(request, "Invalid or missing CSRF token.", "danger")
     return RedirectResponse(
-        url=f"/workspaces/{ws_id}/secrets?tab=github-app",
+        url=f"/workspaces/{ws_id}/secrets?tab={tab}",
         status_code=302,
     )
 
@@ -312,8 +312,16 @@ async def opencode_secret_save(
     dependencies=[Depends(require_auth)],
 )
 async def opencode_credential_delete(
-    ws_id: int, provider: str, request: Request,
-):
+    ws_id: int,
+    provider: str,
+    request: Request,
+    csrf_token: str = Form(""),
+) -> RedirectResponse:
+    try:
+        validate_csrf_token(request, csrf_token)
+    except CSRFError:
+        return _csrf_redirect(ws_id, request, tab="credentials")
+
     try:
         async with get_api_client(request) as api:
             await api.delete_credential(ws_id, provider)
@@ -340,7 +348,7 @@ async def github_pat_new(ws_id: int, request: Request):
     return templates.TemplateResponse(
         request,
         "secrets/github_pat_form.html",
-        {"ws": ws, "pat": None},
+        {"ws": ws, "pat": None, "csrf_token": ensure_csrf_token(request)},
     )
 
 
@@ -357,7 +365,13 @@ async def github_pat_create(
     pat_value: str = Form(...),
     description: str = Form(""),
     shared: str = Form(""),
+    csrf_token: str = Form(""),
 ):
+    try:
+        validate_csrf_token(request, csrf_token)
+    except CSRFError:
+        return _csrf_redirect(ws_id, request, tab="pats")
+
     async with get_api_client(request) as api:
         try:
             ws = await api.get_workspace(ws_id)
@@ -381,6 +395,7 @@ async def github_pat_create(
                 {
                     "ws": ws,
                     "pat": None,
+                    "csrf_token": ensure_csrf_token(request),
                     "error": exc.detail,
                     "form": {
                         "name": name,
@@ -425,7 +440,7 @@ async def github_pat_edit_form(
     return templates.TemplateResponse(
         request,
         "secrets/github_pat_form.html",
-        {"ws": ws, "pat": pat},
+        {"ws": ws, "pat": pat, "csrf_token": ensure_csrf_token(request)},
     )
 
 
@@ -443,7 +458,13 @@ async def github_pat_update(
     pat_value: str = Form(""),
     description: str = Form(""),
     shared: str = Form(""),
+    csrf_token: str = Form(""),
 ):
+    try:
+        validate_csrf_token(request, csrf_token)
+    except CSRFError:
+        return _csrf_redirect(ws_id, request, tab="pats")
+
     fields: dict = {
         "name": name.strip(),
         "github_username": github_username.strip(),
@@ -475,7 +496,13 @@ async def github_pat_delete(
     ws_id: int,
     pat_id: int,
     request: Request,
-):
+    csrf_token: str = Form(""),
+) -> RedirectResponse:
+    try:
+        validate_csrf_token(request, csrf_token)
+    except CSRFError:
+        return _csrf_redirect(ws_id, request, tab="pats")
+
     async with get_api_client(request) as api:
         try:
             await api.delete_pat(ws_id, pat_id)
