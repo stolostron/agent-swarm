@@ -33,6 +33,8 @@ class SessionSchedule(Base):
     prompt_id: Mapped[int | None] = mapped_column(
         Integer, ForeignKey("workspace_prompts.id", ondelete="SET NULL"), nullable=True
     )
+    # Empty means inherit the session's provider.
+    provider: Mapped[str] = mapped_column(String(128), nullable=False, default="", server_default="")
     trigger_type: Mapped[str] = mapped_column(
         String(32), nullable=False, default="cron", server_default="cron"
     )

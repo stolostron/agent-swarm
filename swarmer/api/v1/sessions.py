@@ -123,9 +123,9 @@ async def create_session(
         workspace_id=ws_id,
         github_pat_id=body.github_pat_id,
         prompt_id=body.prompt_id,
+        provider=body.provider.strip(),
         name=body.name.strip(),
         mode=body.mode,
-        provider=body.provider.strip(),
         instruction_prompt=body.instruction_prompt.strip(),
         agent_tool=agent_tool,
         working_branch=wb,
@@ -645,6 +645,8 @@ async def update_schedule(
     if body.prompt_id is not None:
         await _validate_schedule_prompt(db, ws_id, body.prompt_id)
         sched.prompt_id = body.prompt_id
+    if body.provider is not None:
+        sched.provider = body.provider.strip()
     if body.instruction_prompt is not None:
         sched.instruction_prompt = body.instruction_prompt
     if body.include_event_context is not None:

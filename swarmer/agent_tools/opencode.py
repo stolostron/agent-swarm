@@ -247,7 +247,16 @@ class OpenCodeStrategy(AgentToolStrategy):
             if opt.get("type") == "preset"
         ]
 
-    def get_default_model(self, has_adc: bool) -> str:
+    def get_default_model(
+        self,
+        has_adc: bool,
+        has_gemini: bool | None = None,
+        has_openai: bool | None = None,
+    ) -> str:
         if has_adc:
             return "claude"
-        return "gemini"
+        if has_gemini is not False:
+            return "gemini"
+        if has_openai:
+            return "openai"
+        return ""

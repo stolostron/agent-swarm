@@ -42,6 +42,7 @@ def _fmt_schedule(sc: dict) -> dict:
         "cron_next_run": sc.get("cron_next_run"),
         "label": sc.get("label", ""),
         "prompt_id": sc.get("prompt_id"),
+        "provider": sc.get("provider", ""),
         "instruction_prompt": sc.get("instruction_prompt", ""),
         "include_event_context": sc.get("include_event_context", True),
         "enabled": sc.get("enabled", True),
@@ -423,6 +424,7 @@ class AgentSwarmMCPServer:
         fix_authors: str = "",
         label: str = "",
         prompt_id: int,
+        provider: str = "",
         instruction_prompt: str = "",
         include_event_context: bool = True,
         enabled: bool = True,
@@ -432,6 +434,7 @@ class AgentSwarmMCPServer:
             trigger_type=trigger_type, event_condition=event_condition,
             author_scope=author_scope, fix_authors=fix_authors,
             label=label, prompt_id=prompt_id,
+            provider=provider,
             instruction_prompt=instruction_prompt,
             include_event_context=include_event_context, enabled=enabled,
         )
@@ -871,6 +874,7 @@ class AgentSwarmMCPServer:
             author_scope: str = "all",
             fix_authors: str = "",
             label: str = "",
+            provider: str = "",
             instruction_prompt: str = "",
             include_event_context: bool = True,
             enabled: bool = True,
@@ -887,6 +891,8 @@ class AgentSwarmMCPServer:
                 fix_authors: Comma-separated GitHub logins for 'self' author scope.
                 label: Human-readable name for this trigger.
                 prompt_id: Required ID of the workspace prompt to run.
+                provider: Optional AI provider override ('claude', 'gemini', or 'openai').
+                    Empty means use the session provider.
                 instruction_prompt: Additional instructions; overrides session default when set.
                 include_event_context: Include triggering event data in the agent prompt.
                 enabled: Whether the schedule is active. Default: True.
@@ -896,6 +902,7 @@ class AgentSwarmMCPServer:
                 trigger_type=trigger_type, event_condition=event_condition,
                 author_scope=author_scope, fix_authors=fix_authors,
                 label=label, prompt_id=prompt_id,
+                provider=provider,
                 instruction_prompt=instruction_prompt,
                 include_event_context=include_event_context, enabled=enabled,
             )
@@ -912,6 +919,7 @@ class AgentSwarmMCPServer:
             fix_authors: str | None = None,
             label: str | None = None,
             prompt_id: int | None = None,
+            provider: str | None = None,
             instruction_prompt: str | None = None,
             include_event_context: bool | None = None,
             enabled: bool | None = None,
@@ -929,6 +937,7 @@ class AgentSwarmMCPServer:
                 fix_authors: Comma-separated GitHub logins for 'self' author scope.
                 label: New label.
                 prompt_id: New prompt id. Existing schedules retain their prompt when omitted.
+                provider: AI provider override; empty uses the session provider.
                 instruction_prompt: New additional instructions.
                 include_event_context: Include triggering event data in the agent prompt.
                 enabled: Enable or disable the schedule.
@@ -948,6 +957,8 @@ class AgentSwarmMCPServer:
                 fields["label"] = label
             if prompt_id is not None:
                 fields["prompt_id"] = prompt_id
+            if provider is not None:
+                fields["provider"] = provider
             if instruction_prompt is not None:
                 fields["instruction_prompt"] = instruction_prompt
             if include_event_context is not None:

@@ -99,6 +99,7 @@ class ScheduleEntryCreate(BaseModel):
     fix_authors: str = Field("", max_length=512)
     label: str = ""
     prompt_id: int
+    provider: str = Field("", max_length=128, pattern=r"^(|claude|gemini|openai)$")
     instruction_prompt: str = ""
     include_event_context: bool = True
     enabled: bool = True
@@ -112,6 +113,7 @@ class ScheduleEntryUpdate(BaseModel):
     fix_authors: str | None = Field(None, max_length=512)
     label: str | None = None
     prompt_id: int | None = None
+    provider: str | None = Field(None, max_length=128, pattern=r"^(|claude|gemini|openai)$")
     instruction_prompt: str | None = None
     include_event_context: bool | None = None
     enabled: bool | None = None
@@ -128,6 +130,7 @@ class ScheduleEntryOut(BaseModel):
     cron_next_run: datetime | None
     label: str
     prompt_id: int | None
+    provider: str = ""
     instruction_prompt: str
     include_event_context: bool = True
     enabled: bool
