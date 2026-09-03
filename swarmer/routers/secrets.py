@@ -96,9 +96,7 @@ async def _secrets_context(api, ws_id: int) -> dict:
         openai_provider_check_failed = True
         pass  # gateway may be unreachable in local dev without OpenShell
 
-    vertex_intent = bool(secret and (secret.get("has_adc") or (
-        secret.get("google_cloud_project") and secret.get("vertex_location")
-    )))
+    vertex_intent = bool(secret and secret.get("has_vertex"))
     gemini_intent = bool(secret and secret.get("has_gemini"))
     openai_intent = bool(secret and secret.get("has_openai"))
 

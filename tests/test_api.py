@@ -932,9 +932,15 @@ class TestSecrets:
         async def _noop(*args, **kwargs):
             return None
 
+        async def _empty_list(*args, **kwargs):
+            return []
+
         monkeypatch.setattr("swarmer.openshell_client.ensure_provider", _noop)
         monkeypatch.setattr("swarmer.openshell_client.create_google_cloud_provider", _noop)
         monkeypatch.setattr("swarmer.openshell_client.configure_google_cloud_provider", _noop)
+        monkeypatch.setattr("swarmer.openshell_client.list_sandboxes", _empty_list)
+        monkeypatch.setattr("swarmer.openshell_client.detach_sandbox_provider", _noop)
+        monkeypatch.setattr("swarmer.openshell_client.delete_provider", _noop)
 
     @pytest.mark.asyncio
     async def test_credentials_initially_none(self, client):
@@ -1257,6 +1263,113 @@ class TestSecrets:
         )
         assert mgr_resp.status_code == 200
         assert f"swarmer-ws-{ws['id']}-google-cloud" in deleted_providers
+
+    @pytest.mark.asyncio
+    async def test_save_credentials_requires_manager_for_shared_and_providers(self, client):
+        from swarmer.models.workspace_member import WorkspaceMember
+        from swarmer.k8s_auth import TokenIdentity
+        from swarmer.api.deps import require_api_auth
+        from swarmer.main import app
+
+        ws = await _create_workspace(client)
+        async with _TestSession() as db:
+            db.add(WorkspaceMember(workspace_id=ws["id"], user_id="alice", role="member"))
+            await db.commit()
+
+        # Regular member attempting to configure shared credentials -> 403
+        app.dependency_overrides[require_api_auth] = lambda: TokenIdentity(username="alice", uid="uid-alice")
+        resp = await client.post(
+            f"/api/v1/workspaces/{ws['id']}/secrets/credentials",
+            json={
+                "google_cloud_project": "alice-proj",
+                "vertex_location": "us-central1",
+                "shared": True,
+            },
+        )
+        assert resp.status_code == 403
+
+        # Regular member attempting to configure Gemini provider -> 403
+        resp = await client.post(
+            f"/api/v1/workspaces/{ws['id']}/secrets/credentials",
+            json={"google_api_key": "gemini-key"},
+        )
+        assert resp.status_code == 403
+
+        # Regular member attempting to configure OpenAI provider -> 403
+        resp = await client.post(
+            f"/api/v1/workspaces/{ws['id']}/secrets/credentials",
+            json={"openai_api_key": "openai-key"},
+        )
+        assert resp.status_code == 403
+
+        # Regular member attempting to configure ADC / Vertex provider -> 403
+        adc = json.dumps({"type": "authorized_user", "client_id": "x", "client_secret": "y"})
+        resp = await client.post(
+            f"/api/v1/workspaces/{ws['id']}/secrets/credentials",
+            json={"application_default_credentials": adc},
+        )
+        assert resp.status_code == 403
+
+        # Workspace owner (manager) can configure successfully
+        app.dependency_overrides[require_api_auth] = _override_require_api_auth
+        resp = await client.post(
+            f"/api/v1/workspaces/{ws['id']}/secrets/credentials",
+            json={
+                "google_cloud_project": "proj",
+                "vertex_location": "us-central1",
+                "google_api_key": "gemini-key",
+                "shared": True,
+            },
+        )
+        assert resp.status_code == 200
+
+    @pytest.mark.asyncio
+    async def test_provider_status_incomplete_vertex_not_missing(self, client, monkeypatch):
+        from sqlalchemy import select
+        from swarmer.models.opencode_secret import OpencodeSecret
+        from swarmer.provider_status import get_missing_provider_names_bulk
+
+        ws = await _create_workspace(client)
+        adc = json.dumps({"type": "authorized_user", "client_id": "x", "client_secret": "y"})
+
+        # Setup an incomplete Vertex config (ADC only, project/location empty)
+        async with _TestSession() as db:
+            secret = OpencodeSecret(
+                workspace_id=ws["id"],
+                user_id="",
+                shared=True,
+                google_cloud_project="",
+                vertex_location="",
+            )
+            secret.application_default_credentials = adc
+            db.add(secret)
+            await db.commit()
+
+        # provider_exists returns False (provider not on gateway)
+        async def _mock_not_exists(name):
+            return False
+
+        monkeypatch.setattr("swarmer.openshell_client.provider_exists", _mock_not_exists)
+
+        async with _TestSession() as db:
+            missing = await get_missing_provider_names_bulk([ws["id"]], db)
+            # Incomplete config must NOT trigger a missing-provider warning
+            assert missing.get(ws["id"]) == []
+
+        # Now complete the configuration with project and location
+        async with _TestSession() as db:
+            result = await db.execute(
+                select(OpencodeSecret).where(OpencodeSecret.workspace_id == ws["id"])
+            )
+            s = result.scalars().first()
+            s.google_cloud_project = "my-proj"
+            s.vertex_location = "us-central1"
+            await db.commit()
+
+        async with _TestSession() as db:
+            missing = await get_missing_provider_names_bulk([ws["id"]], db)
+            # Fully configured but missing on gateway -> reports Vertex AI as missing
+            assert missing.get(ws["id"]) == ["Vertex AI"]
 
     def test_pat_delete_confirmation_attribute_escaping(self):
         from starlette.requests import Request

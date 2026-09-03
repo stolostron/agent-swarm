@@ -29,7 +29,7 @@ async def get_missing_provider_names_bulk(
     for secret in secrets:
         if secret.workspace_id not in expected_by_ws:
             continue
-        if secret.has_adc or secret.has_vertex:
+        if secret.has_vertex:
             expected_by_ws[secret.workspace_id].add("Vertex AI")
         if secret.has_gemini:
             expected_by_ws[secret.workspace_id].add("Gemini")

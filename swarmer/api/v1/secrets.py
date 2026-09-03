@@ -79,8 +79,21 @@ async def save_credentials(
     body: CredentialsSave,
     ws: Workspace = Depends(get_workspace_or_404),
     db: AsyncSession = Depends(get_db),
-    user: str = Depends(get_current_user),
+    identity: TokenIdentity = Depends(require_api_auth),
 ):
+    user = identity.username
+    from swarmer import workspace_acl
+
+    is_manager = await workspace_acl.can_manage_members(
+        db, ws, identity.username, identity.groups
+    )
+
+    if body.shared and not is_manager:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only workspace managers can configure shared credentials.",
+        )
+
     result = await db.execute(
         select(OpencodeSecret).where(
             OpencodeSecret.workspace_id == ws_id,
@@ -97,22 +110,49 @@ async def save_credentials(
             secret = s
             break
     if secret is None and all_matches:
-        secret = all_matches[0]
+        candidate = all_matches[0]
+        if (candidate.shared or candidate.user_id != user) and not is_manager:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Only workspace managers can update shared credentials.",
+            )
+        secret = candidate
     if secret is None:
         secret = OpencodeSecret(workspace_id=ws_id, user_id=user)
         db.add(secret)
     elif not secret.user_id:
         secret.user_id = user
 
+    if secret.shared and not is_manager:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only workspace managers can update shared credentials.",
+        )
+
     secret.google_cloud_project = body.google_cloud_project.strip()
     secret.vertex_location = body.vertex_location.strip()
     secret.shared = body.shared
     if body.gemini_configured is not None:
+        if not is_manager:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Only workspace managers can configure workspace AI providers.",
+            )
         secret.gemini_configured = body.gemini_configured
     if body.openai_configured is not None:
+        if not is_manager:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Only workspace managers can configure workspace AI providers.",
+            )
         secret.openai_configured = body.openai_configured
 
     if body.google_api_key.strip():
+        if not is_manager:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Only workspace managers can configure workspace AI providers.",
+            )
         gemini_key = body.google_api_key.strip()
         secret.google_api_key = gemini_key
         secret.gemini_configured = True
@@ -140,6 +180,11 @@ async def save_credentials(
             ) from exc
     openai_key = body.openai_api_key.strip()
     if openai_key:
+        if not is_manager:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Only workspace managers can configure workspace AI providers.",
+            )
         secret.openai_configured = True
         # OpenAI key is gateway-only: store/update the workspace-scoped provider
         # on OpenShell, never in Swarmer's DB.
@@ -164,6 +209,11 @@ async def save_credentials(
             ) from exc
     adc = body.application_default_credentials.strip()
     if adc:
+        if not is_manager:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Only workspace managers can configure workspace AI providers.",
+            )
         try:
             json.loads(adc)
         except json.JSONDecodeError as exc:
@@ -178,6 +228,11 @@ async def save_credentials(
         and secret.google_cloud_project
         and secret.vertex_location
     ):
+        if not is_manager:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Only workspace managers can configure workspace AI providers.",
+            )
         try:
             from swarmer import openshell_client
 
