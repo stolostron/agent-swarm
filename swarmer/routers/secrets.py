@@ -62,33 +62,45 @@ async def _secrets_context(api, ws_id: int) -> dict:
     # Check gateway for Vertex AI (google-cloud) provider — ADC is stored on OpenShell,
     # not in the Swarmer DB, so the gateway is the source of truth for this status.
     vertex_provider_configured = False
+    vertex_provider_check_failed = False
     try:
         vertex_provider_configured = await openshell_client.provider_exists(
             f"swarmer-ws-{ws_id}-google-cloud"
         )
     except Exception:
+        vertex_provider_check_failed = True
         pass  # gateway may be unreachable in local dev without OpenShell
 
     # Check gateway for the Google AI Studio (Gemini) provider — same pattern as
     # Vertex ADC: the key is pushed to the gateway at save time and never stored
     # encrypted in the Swarmer DB (ACM-37263).
     gemini_provider_configured = False
+    gemini_provider_check_failed = False
     try:
         gemini_provider_configured = await openshell_client.provider_exists(
             f"swarmer-ws-{ws_id}-google-ai-studio"
         )
     except Exception:
+        gemini_provider_check_failed = True
         pass  # gateway may be unreachable in local dev without OpenShell
 
     # Check gateway for the OpenAI provider — same gateway-only pattern as
     # Gemini/Vertex: key is pushed at save time and never stored in Swarmer DB.
     openai_provider_configured = False
+    openai_provider_check_failed = False
     try:
         openai_provider_configured = await openshell_client.provider_exists(
             f"swarmer-ws-{ws_id}-openai"
         )
     except Exception:
+        openai_provider_check_failed = True
         pass  # gateway may be unreachable in local dev without OpenShell
+
+    vertex_intent = bool(secret and (secret.get("has_adc") or (
+        secret.get("google_cloud_project") and secret.get("vertex_location")
+    )))
+    gemini_intent = bool(secret and secret.get("has_gemini"))
+    openai_intent = bool(secret and secret.get("has_openai"))
 
     return {
         "secret": secret,
@@ -98,6 +110,9 @@ async def _secrets_context(api, ws_id: int) -> dict:
         "vertex_provider_configured": vertex_provider_configured,
         "gemini_provider_configured": gemini_provider_configured,
         "openai_provider_configured": openai_provider_configured,
+        "vertex_provider_missing": vertex_intent and not vertex_provider_configured and not vertex_provider_check_failed,
+        "gemini_provider_missing": gemini_intent and not gemini_provider_configured and not gemini_provider_check_failed,
+        "openai_provider_missing": openai_intent and not openai_provider_configured and not openai_provider_check_failed,
     }
 
 
@@ -281,12 +296,30 @@ async def opencode_secret_save(
                 google_api_key="",  # intentionally empty — gateway is the store
                 openai_api_key="",  # intentionally empty — gateway is the store
                 application_default_credentials="",  # intentionally empty — gateway is the store
+                gemini_configured=True if gemini_key else None,
+                openai_configured=True if openai_key else None,
                 shared=bool(shared),
             )
         except APIError as exc:
             flash(request, f"Failed to save credentials: {exc.detail}", "danger")
             return RedirectResponse(url=f"/workspaces/{ws_id}/secrets?tab=credentials", status_code=302)
 
+    return RedirectResponse(url=f"/workspaces/{ws_id}/secrets?tab=credentials", status_code=302)
+
+
+@router.post(
+    "/workspaces/{ws_id}/secrets/opencode/{provider}/delete",
+    dependencies=[Depends(require_auth)],
+)
+async def opencode_credential_delete(
+    ws_id: int, provider: str, request: Request,
+):
+    try:
+        async with get_api_client(request) as api:
+            await api.delete_credential(ws_id, provider)
+        flash(request, "Credential deleted.", "success")
+    except APIError as exc:
+        flash(request, f"Failed to delete credential: {exc.detail}", "danger")
     return RedirectResponse(url=f"/workspaces/{ws_id}/secrets?tab=credentials", status_code=302)
 
 

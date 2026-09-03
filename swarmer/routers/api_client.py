@@ -438,6 +438,8 @@ class APIClient:
         openai_api_key: str = "",
         application_default_credentials: str = "",
         shared: bool = False,
+        gemini_configured: bool | None = None,
+        openai_configured: bool | None = None,
     ) -> dict:
         return await self._post(
             f"/api/v1/workspaces/{ws_id}/secrets/credentials",
@@ -448,7 +450,14 @@ class APIClient:
                 "openai_api_key": openai_api_key,
                 "application_default_credentials": application_default_credentials,
                 "shared": shared,
+                "gemini_configured": gemini_configured,
+                "openai_configured": openai_configured,
             },
+        )
+
+    async def delete_credential(self, ws_id: int, provider: str) -> dict:
+        return await self._delete(
+            f"/api/v1/workspaces/{ws_id}/secrets/credentials/{provider}"
         )
 
     async def get_github_app(self, ws_id: int) -> dict | None:

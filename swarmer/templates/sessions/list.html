@@ -20,10 +20,10 @@
   <h1 class="pf-v6-c-title pf-m-2xl" style="margin:0;">Sessions</h1>
   <div style="display:flex; gap:var(--pf-t--global--spacer--sm); align-items:center; flex-wrap:wrap;">
     <details class="ws-settings-menu">
-      <summary class="pf-v6-c-button pf-m-secondary pf-m-small">Settings</summary>
+      <summary class="pf-v6-c-button pf-m-secondary pf-m-small">Settings{% if missing_ai_providers %} ⚠️{% endif %}</summary>
       <div class="ws-settings-menu__panel" role="menu">
         <a href="/workspaces/{{ ws.id }}/members" role="menuitem">Members</a>
-        <a href="/workspaces/{{ ws.id }}/secrets" role="menuitem">AI Tokens</a>
+        <a href="/workspaces/{{ ws.id }}/secrets" role="menuitem">AI Tokens{% if missing_ai_providers %} ⚠️{% endif %}</a>
         <a href="/workspaces/{{ ws.id }}/mcp-servers" role="menuitem">MCP Servers</a>
         <a href="/workspaces/{{ ws.id }}/env-vars" role="menuitem">Environment Variables</a>
         <a href="/workspaces/{{ ws.id }}/prompts" role="menuitem">Prompts</a>
@@ -32,6 +32,11 @@
     <a href="/workspaces/{{ ws.id }}/sessions/new" class="pf-v6-c-button pf-m-primary pf-m-small">+ New Session</a>
   </div>
 </div>
+{% if missing_ai_providers %}
+<div class="pf-v6-c-alert pf-m-warning pf-m-inline" style="margin-bottom:var(--pf-t--global--spacer--md);" role="alert">
+  <p class="pf-v6-c-alert__title">⚠️ Missing OpenShell AI provider{% if missing_ai_providers | length > 1 %}s{% endif %}: {{ missing_ai_providers | join(', ') }}. <a href="/workspaces/{{ ws.id }}/secrets?tab=credentials">Review AI Tokens</a>.</p>
+</div>
+{% endif %}
 
 {% if sessions %}
 <div id="session-table-wrapper"

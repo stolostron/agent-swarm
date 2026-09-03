@@ -31,6 +31,8 @@ class WorkspaceOut(BaseModel):
     owner_id: str = ""
     created_at: datetime
     updated_at: datetime
+    ai_provider_warning: bool = False
+    missing_ai_providers: list[str] = Field(default_factory=list)
 
     model_config = {"from_attributes": True}
 
@@ -273,6 +275,10 @@ class CredentialsSave(BaseModel):
     openai_api_key: str = ""
     application_default_credentials: str = ""
     shared: bool = False
+    # Non-secret markers used by the console when credentials are stored only
+    # on OpenShell. None means leave the existing marker unchanged.
+    gemini_configured: bool | None = None
+    openai_configured: bool | None = None
 
 
 class CredentialsOut(BaseModel):
@@ -284,6 +290,10 @@ class CredentialsOut(BaseModel):
     vertex_location: str
     masked_api_key: str
     shared: bool
+    gemini_configured: bool
+    openai_configured: bool
+    has_gemini: bool
+    has_openai: bool
     created_at: datetime
     updated_at: datetime
 

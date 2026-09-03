@@ -1032,6 +1032,37 @@ class TestSecrets:
         assert sentinel not in caplog.text
 
     @pytest.mark.asyncio
+    async def test_delete_gateway_credentials_clears_provider_state(self, client, monkeypatch):
+        ws = await _create_workspace(client)
+
+        async def _fake_ensure_provider(_name, _provider_type, _config, credentials):
+            return None
+
+        monkeypatch.setattr("swarmer.openshell_client.ensure_provider", _fake_ensure_provider)
+        resp = await client.post(
+            f"/api/v1/workspaces/{ws['id']}/secrets/credentials",
+            json={
+                "google_cloud_project": "project",
+                "vertex_location": "region",
+                "google_api_key": "<test-gemini-key>",
+                "openai_api_key": "<test-openai-key>",
+            },
+        )
+        assert resp.status_code == 200
+        assert resp.json()["has_gemini"] is True
+        assert resp.json()["has_openai"] is True
+
+        for provider in ("google-cloud", "google-ai-studio", "openai"):
+            resp = await client.delete(
+                f"/api/v1/workspaces/{ws['id']}/secrets/credentials/{provider}"
+            )
+            assert resp.status_code == 200, resp.text
+
+        resp = await client.get(f"/api/v1/workspaces/{ws['id']}/secrets/credentials")
+        assert resp.status_code == 200
+        assert resp.json() is None
+
+    @pytest.mark.asyncio
     async def test_pat_crud(self, client):
         ws = await _create_workspace(client)
 

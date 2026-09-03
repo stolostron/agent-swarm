@@ -443,6 +443,8 @@ async def session_list(
 
     sessions = await _list_sessions_data(ws_id, db)
     await _sync_session_phases(sessions, ws, db)
+    from swarmer.provider_status import get_missing_provider_names
+    missing_ai_providers = await get_missing_provider_names(ws_id, db)
 
     _tools = all_tools()
     _avail = await asyncio.gather(
@@ -457,6 +459,7 @@ async def session_list(
             "mode_label": _session_mode_label,
             "mode_badge": _session_mode_badge_class,
             "tool_image_available": dict(zip([t.name for t in _tools], _avail, strict=False)),
+            "missing_ai_providers": missing_ai_providers,
         },
     )
 
@@ -475,6 +478,8 @@ async def session_list_rows(
 
     sessions = await _list_sessions_data(ws_id, db)
     await _sync_session_phases(sessions, ws, db)
+    from swarmer.provider_status import get_missing_provider_names
+    missing_ai_providers = await get_missing_provider_names(ws_id, db)
 
     _tools = all_tools()
     _avail = await asyncio.gather(
@@ -499,6 +504,7 @@ async def session_list_rows(
             "tool_image_available": dict(zip([t.name for t in _tools], _avail, strict=False)),
             "queue_positions": queue_positions,
             "capacity": capacity,
+            "missing_ai_providers": missing_ai_providers,
         },
     )
 

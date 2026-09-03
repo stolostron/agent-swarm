@@ -66,6 +66,8 @@ async def migrate_db() -> None:
         "ALTER TABLE sessions ADD COLUMN agent_tool VARCHAR(32) NOT NULL DEFAULT 'opencode'",
         "ALTER TABLE opencode_secrets ADD COLUMN anthropic_api_key_enc TEXT NOT NULL DEFAULT ''",
         "ALTER TABLE opencode_secrets ADD COLUMN openai_api_key_enc TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE opencode_secrets ADD COLUMN gemini_configured BOOLEAN NOT NULL DEFAULT 0",
+        "ALTER TABLE opencode_secrets ADD COLUMN openai_configured BOOLEAN NOT NULL DEFAULT 0",
         "ALTER TABLE sessions ADD COLUMN status_detail VARCHAR(255) NOT NULL DEFAULT ''",
         "ALTER TABLE sessions ADD COLUMN run_started_at DATETIME",
         "ALTER TABLE sessions ADD COLUMN run_completed_at DATETIME",

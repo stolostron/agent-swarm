@@ -29,7 +29,7 @@
     <tr class="pf-v6-c-table__tr" role="row">
       <td class="pf-v6-c-table__td" role="cell" data-label="Name">
         <a href="/workspaces/{{ ws.id }}" style="font-weight:var(--pf-t--global--font--weight--heading--bold); text-decoration:none;">
-          {{ ws.display_name }}
+          {{ ws.display_name }}{% if ws.ai_provider_warning %} <span title="Missing OpenShell AI provider: {{ ws.missing_ai_providers | join(', ') }}" aria-label="Missing OpenShell AI provider">⚠️</span>{% endif %}
         </a>
       </td>
       <td class="pf-v6-c-table__td" role="cell" data-label="Namespace">
