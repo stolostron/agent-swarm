@@ -1408,6 +1408,82 @@ class TestSecrets:
         assert cred["has_vertex"] is False
         assert cred["has_adc"] is False
 
+    @pytest.mark.asyncio
+    async def test_opencode_secret_save_vertex_intent_detected_when_provider_missing(self, client, monkeypatch):
+        import io
+        from starlette.datastructures import UploadFile
+        from starlette.requests import Request
+        from swarmer.provider_status import get_missing_provider_names_bulk
+        from swarmer.routers.secrets import opencode_secret_save
+
+        ws = await _create_workspace(client)
+
+        created = {}
+        async def _mock_create_gc(name, project, location):
+            created["name"] = name
+            created["project"] = project
+            created["location"] = location
+
+        configured = {}
+        async def _mock_conf_gc(name, adc_json):
+            configured["name"] = name
+            configured["adc"] = adc_json
+
+        monkeypatch.setattr("swarmer.openshell_client.create_google_cloud_provider", _mock_create_gc)
+        monkeypatch.setattr("swarmer.openshell_client.configure_google_cloud_provider", _mock_conf_gc)
+        monkeypatch.setattr("swarmer.routers.api_client.get_user_token", lambda req: "test-token")
+
+        adc_data = json.dumps({"type": "authorized_user", "client_id": "cid", "client_secret": "csec"}).encode("utf-8")
+        adc_file = UploadFile(filename="adc.json", file=io.BytesIO(adc_data))
+
+        req = Request({
+            "type": "http",
+            "method": "POST",
+            "path": f"/workspaces/{ws['id']}/secrets/opencode",
+            "headers": [],
+            "session": {"authenticated": True, "username": "test-user", "_messages": []},
+        })
+
+        resp = await opencode_secret_save(
+            ws_id=ws["id"],
+            request=req,
+            google_cloud_project="my-vertex-proj",
+            vertex_location="us-central1",
+            google_api_key="",
+            openai_api_key="",
+            shared="1",
+            adc_file=adc_file,
+        )
+        assert resp.status_code == 302
+        assert created["name"] == f"swarmer-ws-{ws['id']}-google-cloud"
+        assert configured["name"] == f"swarmer-ws-{ws['id']}-google-cloud"
+
+        # Check credentials via API: has_vertex and vertex_configured must be True, has_adc is False
+        cred_resp = await client.get(f"/api/v1/workspaces/{ws['id']}/secrets/credentials")
+        assert cred_resp.status_code == 200
+        cred = cred_resp.json()
+        assert cred["has_vertex"] is True
+        assert cred["vertex_configured"] is True
+        assert cred["has_adc"] is False
+
+        # When OpenShell provider is missing, it must be reported in missing providers
+        async def _mock_not_exists(name):
+            return False
+
+        monkeypatch.setattr("swarmer.openshell_client.provider_exists", _mock_not_exists)
+
+        async with _TestSession() as db:
+            missing = await get_missing_provider_names_bulk([ws["id"]], db)
+            assert missing.get(ws["id"]) == ["Vertex AI"]
+
+        # If deleted, vertex_configured is cleared and missing warning disappears
+        del_resp = await client.delete(f"/api/v1/workspaces/{ws['id']}/secrets/credentials/vertex")
+        assert del_resp.status_code == 200
+
+        async with _TestSession() as db:
+            missing = await get_missing_provider_names_bulk([ws["id"]], db)
+            assert missing.get(ws["id"]) == []
+
     def test_pat_delete_confirmation_attribute_escaping(self):
         from starlette.requests import Request
         from swarmer.routers.secrets import templates

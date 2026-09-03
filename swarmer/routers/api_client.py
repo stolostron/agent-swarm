@@ -440,6 +440,7 @@ class APIClient:
         shared: bool = False,
         gemini_configured: bool | None = None,
         openai_configured: bool | None = None,
+        vertex_configured: bool | None = None,
     ) -> dict:
         return await self._post(
             f"/api/v1/workspaces/{ws_id}/secrets/credentials",
@@ -452,6 +453,7 @@ class APIClient:
                 "shared": shared,
                 "gemini_configured": gemini_configured,
                 "openai_configured": openai_configured,
+                "vertex_configured": vertex_configured,
             },
         )
 

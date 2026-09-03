@@ -41,6 +41,9 @@ class OpencodeSecret(Base):
     openai_configured: Mapped[bool] = mapped_column(
         nullable=False, default=False, server_default="0"
     )
+    vertex_configured: Mapped[bool] = mapped_column(
+        nullable=False, default=False, server_default="0"
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, server_default=func.now()
     )
@@ -92,7 +95,7 @@ class OpencodeSecret(Base):
 
     @property
     def has_vertex(self) -> bool:
-        return bool(
+        return self.vertex_configured or bool(
             self.application_default_credentials_enc
             and self.google_cloud_project
             and self.vertex_location

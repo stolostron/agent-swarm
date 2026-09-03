@@ -146,6 +146,13 @@ async def save_credentials(
                 detail="Only workspace managers can configure workspace AI providers.",
             )
         secret.openai_configured = body.openai_configured
+    if body.vertex_configured is not None:
+        if not is_manager:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Only workspace managers can configure workspace AI providers.",
+            )
+        secret.vertex_configured = body.vertex_configured
 
     if body.google_api_key.strip():
         if not is_manager:
@@ -243,6 +250,7 @@ async def save_credentials(
             await openshell_client.configure_google_cloud_provider(
                 provider_name, secret.application_default_credentials
             )
+            secret.vertex_configured = True
         except Exception as exc:
             log.warning(
                 "save_credentials: failed to configure Vertex AI provider for workspace %d (error_type=%s)",
@@ -333,6 +341,7 @@ async def delete_credential(
         secret.google_cloud_project = ""
         secret.vertex_location = ""
         secret.application_default_credentials = ""
+        secret.vertex_configured = False
     elif provider_suffix == "google-ai-studio":
         secret.google_api_key = ""
         secret.gemini_configured = False
@@ -340,7 +349,16 @@ async def delete_credential(
         secret.openai_api_key_enc = ""
         secret.openai_configured = False
 
-    if not secret.google_cloud_project and not secret.vertex_location and not secret.application_default_credentials_enc and not secret.google_api_key_enc and not secret.openai_api_key_enc and not secret.gemini_configured and not secret.openai_configured:
+    if (
+        not secret.google_cloud_project
+        and not secret.vertex_location
+        and not secret.application_default_credentials_enc
+        and not secret.google_api_key_enc
+        and not secret.openai_api_key_enc
+        and not secret.gemini_configured
+        and not secret.openai_configured
+        and not secret.vertex_configured
+    ):
         await db.delete(secret)
     await db.commit()
     return MessageOut(detail=f"{provider_suffix} credentials deleted.")

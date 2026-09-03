@@ -279,6 +279,7 @@ class CredentialsSave(BaseModel):
     # on OpenShell. None means leave the existing marker unchanged.
     gemini_configured: bool | None = None
     openai_configured: bool | None = None
+    vertex_configured: bool | None = None
 
 
 class CredentialsOut(BaseModel):
@@ -292,6 +293,7 @@ class CredentialsOut(BaseModel):
     shared: bool
     gemini_configured: bool
     openai_configured: bool
+    vertex_configured: bool
     has_gemini: bool
     has_openai: bool
     created_at: datetime

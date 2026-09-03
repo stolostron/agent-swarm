@@ -96,7 +96,7 @@ async def _secrets_context(api, ws_id: int) -> dict:
         openai_provider_check_failed = True
         pass  # gateway may be unreachable in local dev without OpenShell
 
-    vertex_intent = bool(secret and secret.get("has_vertex") and secret.get("has_adc"))
+    vertex_intent = bool(secret and secret.get("has_vertex"))
     gemini_intent = bool(secret and secret.get("has_gemini"))
     openai_intent = bool(secret and secret.get("has_openai"))
 
@@ -222,6 +222,7 @@ async def opencode_secret_save(
 
     # Push Vertex AI credentials to OpenShell gateway if ADC was provided.
     # The gateway stores and auto-refreshes the credential; Swarmer never persists it.
+    vertex_configured = False
     if adc_content and google_cloud_project and vertex_location:
         provider_name = f"swarmer-ws-{ws_id}-google-cloud"
         try:
@@ -229,6 +230,7 @@ async def opencode_secret_save(
                 provider_name, google_cloud_project, vertex_location
             )
             await openshell_client.configure_google_cloud_provider(provider_name, adc_content)
+            vertex_configured = True
         except Exception as exc:
             flash(request, f"Failed to configure Vertex AI on OpenShell: {exc}", "danger")
     elif adc_content and not (google_cloud_project and vertex_location):
@@ -296,6 +298,7 @@ async def opencode_secret_save(
                 application_default_credentials="",  # intentionally empty — gateway is the store
                 gemini_configured=True if gemini_key else None,
                 openai_configured=True if openai_key else None,
+                vertex_configured=True if vertex_configured else None,
                 shared=bool(shared),
             )
         except APIError as exc:
