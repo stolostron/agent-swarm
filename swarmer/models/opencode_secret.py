@@ -92,7 +92,11 @@ class OpencodeSecret(Base):
 
     @property
     def has_vertex(self) -> bool:
-        return bool(self.google_cloud_project and self.vertex_location)
+        return bool(
+            self.application_default_credentials_enc
+            and self.google_cloud_project
+            and self.vertex_location
+        )
 
     @property
     def masked_api_key(self) -> str:

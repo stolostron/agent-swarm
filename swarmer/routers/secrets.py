@@ -96,7 +96,7 @@ async def _secrets_context(api, ws_id: int) -> dict:
         openai_provider_check_failed = True
         pass  # gateway may be unreachable in local dev without OpenShell
 
-    vertex_intent = bool(secret and secret.get("has_vertex"))
+    vertex_intent = bool(secret and secret.get("has_vertex") and secret.get("has_adc"))
     gemini_intent = bool(secret and secret.get("has_gemini"))
     openai_intent = bool(secret and secret.get("has_openai"))
 
@@ -364,7 +364,7 @@ async def github_pat_create(
     description: str = Form(""),
     shared: str = Form(""),
     csrf_token: str = Form(""),
-):
+) -> Response:
     try:
         validate_csrf_token(request, csrf_token)
     except CSRFError:
@@ -457,7 +457,7 @@ async def github_pat_update(
     description: str = Form(""),
     shared: str = Form(""),
     csrf_token: str = Form(""),
-):
+) -> RedirectResponse:
     try:
         validate_csrf_token(request, csrf_token)
     except CSRFError:

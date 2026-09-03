@@ -1371,6 +1371,43 @@ class TestSecrets:
             # Fully configured but missing on gateway -> reports Vertex AI as missing
             assert missing.get(ws["id"]) == ["Vertex AI"]
 
+    @pytest.mark.asyncio
+    async def test_provider_status_project_and_location_only_not_missing(self, client, monkeypatch):
+        from swarmer.models.opencode_secret import OpencodeSecret
+        from swarmer.provider_status import get_missing_provider_names_bulk
+
+        ws = await _create_workspace(client)
+
+        # Setup an incomplete Vertex config (project/location only, ADC empty)
+        async with _TestSession() as db:
+            secret = OpencodeSecret(
+                workspace_id=ws["id"],
+                user_id="",
+                shared=True,
+                google_cloud_project="my-proj",
+                vertex_location="us-central1",
+            )
+            db.add(secret)
+            await db.commit()
+
+        # provider_exists returns False (provider not on gateway)
+        async def _mock_not_exists(name):
+            return False
+
+        monkeypatch.setattr("swarmer.openshell_client.provider_exists", _mock_not_exists)
+
+        async with _TestSession() as db:
+            missing = await get_missing_provider_names_bulk([ws["id"]], db)
+            # Project and location without ADC must NOT trigger a missing-provider warning
+            assert missing.get(ws["id"]) == []
+
+        # Verify via credentials API that has_vertex is False
+        resp = await client.get(f"/api/v1/workspaces/{ws['id']}/secrets/credentials")
+        assert resp.status_code == 200
+        cred = resp.json()
+        assert cred["has_vertex"] is False
+        assert cred["has_adc"] is False
+
     def test_pat_delete_confirmation_attribute_escaping(self):
         from starlette.requests import Request
         from swarmer.routers.secrets import templates
