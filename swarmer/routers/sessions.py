@@ -443,6 +443,8 @@ async def session_list(
 
     sessions = await _list_sessions_data(ws_id, db)
     await _sync_session_phases(sessions, ws, db)
+    from swarmer.provider_status import get_missing_provider_names
+    missing_ai_providers = await get_missing_provider_names(ws_id, db)
 
     _tools = all_tools()
     _avail = await asyncio.gather(
@@ -457,6 +459,7 @@ async def session_list(
             "mode_label": _session_mode_label,
             "mode_badge": _session_mode_badge_class,
             "tool_image_available": dict(zip([t.name for t in _tools], _avail, strict=False)),
+            "missing_ai_providers": missing_ai_providers,
         },
     )
 
@@ -475,6 +478,8 @@ async def session_list_rows(
 
     sessions = await _list_sessions_data(ws_id, db)
     await _sync_session_phases(sessions, ws, db)
+    from swarmer.provider_status import get_missing_provider_names
+    missing_ai_providers = await get_missing_provider_names(ws_id, db)
 
     _tools = all_tools()
     _avail = await asyncio.gather(
@@ -499,6 +504,7 @@ async def session_list_rows(
             "tool_image_available": dict(zip([t.name for t in _tools], _avail, strict=False)),
             "queue_positions": queue_positions,
             "capacity": capacity,
+            "missing_ai_providers": missing_ai_providers,
         },
     )
 
@@ -1063,6 +1069,15 @@ async def _resolve_schedule_prompt(schedule_id: int, session: Session, db: Async
     return resolved_prompt
 
 
+async def _resolve_schedule_provider(schedule_id: int, session: Session, db: AsyncSession) -> str:
+    """Return a schedule provider override, or the session provider."""
+    from swarmer.models.session_schedule import SessionSchedule
+    sched = await db.get(SessionSchedule, schedule_id)
+    if sched and sched.provider.strip():
+        return sched.provider.strip()
+    return (session.provider or "").strip()
+
+
 async def _do_launch(session: Session, ws: Workspace, db: AsyncSession, user_id: str = "") -> None:
     """Core launch logic shared by the HTTP endpoint and the background scheduler."""
     if user_id == "unknown":
@@ -1145,6 +1160,11 @@ async def _do_launch(session: Session, ws: Workspace, db: AsyncSession, user_id:
     else:
         resolved_prompt = await _resolve_session_prompt(session, db)
 
+    if session.active_schedule_id:
+        session_provider = await _resolve_schedule_provider(session.active_schedule_id, session, db)
+    else:
+        session_provider = (session.provider or "").strip()
+
     # Fetch workspace prompt sources for network policy scoping.
     # Agents inside the sandbox may curl raw.githubusercontent.com to fetch
     # prompt documents or files referenced by the prompt.  The policy is
@@ -1162,6 +1182,7 @@ async def _do_launch(session: Session, ws: Workspace, db: AsyncSession, user_id:
         resolved_prompt=resolved_prompt,
         prompt_sources=prompt_sources,
         user_id=user_id,
+        requested_provider=session_provider,
     )
 
 
@@ -1176,6 +1197,7 @@ async def _do_launch_openshell(
     resolved_prompt: str,
     prompt_sources: list | None = None,
     user_id: str = "",
+    requested_provider: str = "",
 ) -> None:
     """Launch a session via the OpenShell sandbox API."""
     from swarmer import openshell_client
@@ -1190,18 +1212,54 @@ async def _do_launch_openshell(
     # ID, so it uses `model` — the provider resolved to its BUILD-role model —
     # instead. Raw provider/model@version strings from pre-ACM-37232 sessions are
     # also still accepted for backward compatibility.
-    if session.provider and tool.is_valid_model(session.provider):
-        raw_model = session.provider
+    # The schedule/session value is only a preference. Credentials can be removed
+    # after it was saved, so resolve it against live gateway providers below.
+    _provider_names = {
+        "claude": f"swarmer-ws-{session.workspace_id}-google-cloud",
+        "gemini": f"swarmer-ws-{session.workspace_id}-google-ai-studio",
+        "openai": f"swarmer-ws-{session.workspace_id}-openai",
+    }
+    _available_providers: dict[str, bool] = {}
+    if tool.requires_ai_model():
+        for _name, _gateway_name in _provider_names.items():
+            try:
+                _available_providers[_name] = await openshell_client.provider_exists(_gateway_name)
+            except Exception:
+                _available_providers[_name] = False
+    _preferred_provider = requested_provider if requested_provider in _provider_names else ""
+    _preferred_raw_model = ""
+    if not _preferred_provider and requested_provider and "/" in requested_provider:
+        _raw_provider = requested_provider.split("/", 1)[0]
+        _raw_provider_family = {
+            "google-vertex-anthropic": "claude",
+            "google": "gemini",
+            "openai": "openai",
+        }.get(_raw_provider, "")
+        if _raw_provider_family and tool.is_valid_model(requested_provider):
+            _preferred_provider = _raw_provider_family
+            _preferred_raw_model = requested_provider
+    if _preferred_provider and _available_providers.get(_preferred_provider):
+        raw_model = _preferred_raw_model or _preferred_provider
         log.info(
-            "_do_launch_openshell: session %d using stored provider %r (tool=%s)",
+            "_do_launch_openshell: session %d using provider %r (tool=%s)",
             session.id, raw_model, tool.name,
         )
-    else:
-        raw_model = tool.get_default_model(has_adc)
+    elif requested_provider in _provider_names:
+        # Keep an explicit preset so provider-specific validation below can
+        # return an actionable error instead of silently changing models.
+        raw_model = requested_provider
         log.info(
-            "_do_launch_openshell: session %d stored provider %r invalid/empty — "
-            "falling back to default %r (tool=%s, has_adc=%s)",
-            session.id, session.provider, raw_model, tool.name, has_adc,
+            "_do_launch_openshell: session %d requested provider %r is unavailable",
+            session.id, requested_provider,
+        )
+    else:
+        _fallback = next((p for p in ("claude", "gemini", "openai") if _available_providers.get(p)), "")
+        if tool.requires_ai_model() and not _fallback:
+            raise ValueError("No AI provider is configured for this workspace")
+        raw_model = _fallback or tool.get_default_model(has_adc)
+        log.info(
+            "_do_launch_openshell: session %d provider %r unavailable — falling back to %r",
+            session.id, requested_provider, raw_model,
         )
     raw_model = raw_model.strip("\r\n")  # strip any stray line endings before embedding in shell commands
     model = tool.resolve_build_model(raw_model)
@@ -2393,6 +2451,7 @@ async def schedule_create(
     cron_expr: str = Form(""),
     label: str = Form(""),
     prompt_id: str = Form(""),
+    provider: str = Form(""),
     instruction_prompt: str = Form(""),
     include_event_context: bool = Form(False),
     enabled: str = Form("on"),
@@ -2439,6 +2498,7 @@ async def schedule_create(
         cron_next_run=cron_next_run,
         label=label.strip(),
         prompt_id=pid,
+        provider=provider.strip() if provider.strip() in ("", "claude", "gemini", "openai") else "",
         instruction_prompt=instruction_prompt,
         include_event_context=include_event_context,
         enabled=(enabled == "on"),
@@ -2464,6 +2524,7 @@ async def schedule_edit(
     cron_expr: str = Form(""),
     label: str = Form(""),
     prompt_id: str = Form(""),
+    provider: str = Form(""),
     instruction_prompt: str = Form(""),
     include_event_context: bool = Form(False),
     db: AsyncSession = Depends(get_db),
@@ -2511,6 +2572,7 @@ async def schedule_edit(
 
     sched.label = label.strip()
     sched.prompt_id = pid
+    sched.provider = provider.strip() if provider.strip() in ("", "claude", "gemini", "openai") else ""
     sched.instruction_prompt = instruction_prompt
     if trigger_type == "event":
         sched.include_event_context = include_event_context

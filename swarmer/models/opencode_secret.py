@@ -32,6 +32,18 @@ class OpencodeSecret(Base):
     # mirroring the ADC pattern. This column is retained only so previously
     # saved keys keep working (via the accessors below) until rotated.
     google_api_key_enc: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    openai_api_key_enc: Mapped[str] = mapped_column(
+        Text, nullable=False, default="", server_default=""
+    )
+    gemini_configured: Mapped[bool] = mapped_column(
+        nullable=False, default=False, server_default="0"
+    )
+    openai_configured: Mapped[bool] = mapped_column(
+        nullable=False, default=False, server_default="0"
+    )
+    vertex_configured: Mapped[bool] = mapped_column(
+        nullable=False, default=False, server_default="0"
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, server_default=func.now()
     )
@@ -67,6 +79,14 @@ class OpencodeSecret(Base):
     def google_api_key(self, value: str) -> None:
         self.google_api_key_enc = crypto.encrypt(value) if value else ""
 
+    @property
+    def has_gemini(self) -> bool:
+        return self.gemini_configured or bool(self.google_api_key_enc)
+
+    @property
+    def has_openai(self) -> bool:
+        return self.openai_configured or bool(self.openai_api_key_enc)
+
     # ---------- display helpers (safe to send to browser) ----------
 
     @property
@@ -75,7 +95,11 @@ class OpencodeSecret(Base):
 
     @property
     def has_vertex(self) -> bool:
-        return bool(self.google_cloud_project and self.vertex_location)
+        return self.vertex_configured or bool(
+            self.application_default_credentials_enc
+            and self.google_cloud_project
+            and self.vertex_location
+        )
 
     @property
     def masked_api_key(self) -> str:

@@ -59,6 +59,13 @@ class TestResolvePreset:
             "small": settings.openai_preset_small_model,
         }
 
+    def test_openai_preset_defaults(self):
+        assert _opencode.resolve_preset("openai") == {
+            "plan": "openai/gpt-5.6-terra-pro",
+            "build": "openai/gpt-5.6-luna-pro",
+            "small": "openai/gpt-5.6-luna-fast",
+        }
+
     def test_resolve_unknown_preset_returns_none(self):
         assert _opencode.resolve_preset("google/gemini-3.5-flash") is None
         assert _opencode.resolve_preset("") is None
@@ -111,6 +118,12 @@ class TestGetDefaultModel:
 
     def test_has_adc_false_returns_gemini_preset(self):
         assert _opencode.get_default_model(False) == "gemini"
+
+    def test_openai_is_selected_when_gemini_is_unavailable(self):
+        assert _opencode.get_default_model(False, has_gemini=False, has_openai=True) == "openai"
+
+    def test_no_provider_returns_empty_selection(self):
+        assert _opencode.get_default_model(False, has_gemini=False, has_openai=False) == ""
 
 
 # ---------------------------------------------------------------------------

@@ -50,6 +50,13 @@ async def _setup_db(monkeypatch):
     monkeypatch.setattr("swarmer.k8s.ensure_namespace", lambda namespace: None)
     monkeypatch.setattr("swarmer.k8s.delete_namespace", lambda namespace: None)
 
+    async def _noop(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr("swarmer.openshell_client.ensure_provider", _noop)
+    monkeypatch.setattr("swarmer.openshell_client.create_google_cloud_provider", _noop)
+    monkeypatch.setattr("swarmer.openshell_client.configure_google_cloud_provider", _noop)
+
     import swarmer.models  # noqa: F401
 
     async with _engine.begin() as conn:

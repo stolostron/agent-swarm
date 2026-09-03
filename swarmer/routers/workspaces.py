@@ -29,6 +29,9 @@ async def workspace_list(request: Request):
 
     can_create = bool(not settings.k8s_namespace and me.get("can_create_workspace"))
 
+    for workspace in workspaces:
+        workspace["ai_provider_warning"] = bool(workspace.get("missing_ai_providers"))
+
     return templates.TemplateResponse(
         request,
         "workspaces/list.html",
