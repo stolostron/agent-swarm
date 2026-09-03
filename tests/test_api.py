@@ -1143,6 +1143,143 @@ class TestSecrets:
         assert owner_resp.status_code == 200
 
     @pytest.mark.asyncio
+    async def test_save_vertex_credentials_two_requests_configures_provider(self, client, monkeypatch):
+        ws = await _create_workspace(client)
+
+        calls = {}
+
+        async def _mock_create_gc(name, project, location):
+            calls["create_gc"] = (name, project, location)
+
+        async def _mock_conf_gc(name, adc_json):
+            calls["conf_gc"] = (name, adc_json)
+
+        monkeypatch.setattr("swarmer.openshell_client.create_google_cloud_provider", _mock_create_gc)
+        monkeypatch.setattr("swarmer.openshell_client.configure_google_cloud_provider", _mock_conf_gc)
+
+        adc = json.dumps({"type": "authorized_user", "client_id": "x", "client_secret": "y"})
+
+        # Request 1: Save ADC credentials only (project and location empty)
+        resp1 = await client.post(
+            f"/api/v1/workspaces/{ws['id']}/secrets/credentials",
+            json={
+                "google_cloud_project": "",
+                "vertex_location": "",
+                "application_default_credentials": adc,
+            },
+        )
+        assert resp1.status_code == 200
+        assert "create_gc" not in calls
+        assert "conf_gc" not in calls
+
+        # Request 2: Provide project and location without re-sending ADC
+        resp2 = await client.post(
+            f"/api/v1/workspaces/{ws['id']}/secrets/credentials",
+            json={
+                "google_cloud_project": "deferred-proj",
+                "vertex_location": "us-central1",
+                "application_default_credentials": "",
+            },
+        )
+        assert resp2.status_code == 200
+        assert calls["create_gc"] == (f"swarmer-ws-{ws['id']}-google-cloud", "deferred-proj", "us-central1")
+        assert calls["conf_gc"] == (f"swarmer-ws-{ws['id']}-google-cloud", adc)
+
+    @pytest.mark.asyncio
+    async def test_delete_personal_credentials_does_not_delete_workspace_provider(self, client, monkeypatch):
+        from swarmer.models.opencode_secret import OpencodeSecret
+        from swarmer.models.workspace_member import WorkspaceMember
+        from swarmer.k8s_auth import TokenIdentity
+        from swarmer.api.deps import require_api_auth
+        from swarmer.main import app
+
+        ws = await _create_workspace(client)
+        async with _TestSession() as db:
+            db.add(WorkspaceMember(workspace_id=ws["id"], user_id="alice", role="member"))
+            secret = OpencodeSecret(
+                workspace_id=ws["id"],
+                user_id="alice",
+                shared=False,
+                google_cloud_project="alice-proj",
+                vertex_location="us-east1",
+            )
+            db.add(secret)
+            await db.commit()
+
+        deleted_providers = []
+
+        async def _mock_list_sandboxes():
+            return []
+
+        async def _mock_delete_provider(name):
+            deleted_providers.append(name)
+
+        monkeypatch.setattr("swarmer.config.settings.openshell_gateway_url", "http://fake-gateway:8080")
+        monkeypatch.setattr("swarmer.openshell_client.list_sandboxes", _mock_list_sandboxes)
+        monkeypatch.setattr("swarmer.openshell_client.delete_provider", _mock_delete_provider)
+
+        # Alice (regular member) deletes her personal credential
+        app.dependency_overrides[require_api_auth] = lambda: TokenIdentity(username="alice", uid="uid-alice")
+        resp = await client.delete(
+            f"/api/v1/workspaces/{ws['id']}/secrets/credentials/google-cloud"
+        )
+        assert resp.status_code == 200
+        # Workspace-scoped provider must NOT be deleted by non-manager
+        assert deleted_providers == []
+
+        # Secret in DB should be cleared/removed
+        from sqlalchemy import select
+        async with _TestSession() as db:
+            result = await db.execute(
+                select(OpencodeSecret).where(
+                    OpencodeSecret.workspace_id == ws["id"],
+                    OpencodeSecret.user_id == "alice",
+                )
+            )
+            assert result.scalar_one_or_none() is None
+
+        # Manager deleting provider should call delete_provider
+        app.dependency_overrides[require_api_auth] = _override_require_api_auth
+        async with _TestSession() as db:
+            db.add(
+                OpencodeSecret(
+                    workspace_id=ws["id"],
+                    user_id="",
+                    shared=True,
+                    google_cloud_project="ws-proj",
+                    vertex_location="us-central1",
+                )
+            )
+            await db.commit()
+
+        mgr_resp = await client.delete(
+            f"/api/v1/workspaces/{ws['id']}/secrets/credentials/google-cloud"
+        )
+        assert mgr_resp.status_code == 200
+        assert f"swarmer-ws-{ws['id']}-google-cloud" in deleted_providers
+
+    def test_pat_delete_confirmation_attribute_escaping(self):
+        from starlette.requests import Request
+        from swarmer.routers.secrets import templates
+
+        req = Request({"type": "http", "method": "GET", "path": "/workspaces/1/secrets/pats/42/edit", "headers": [], "session": {}})
+        pat_with_quotes = {
+            "id": 42,
+            "name": 'malicious" onfocus="alert(1)',
+        }
+        rendered = templates.get_template("secrets/github_pat_form.html").render(
+            {
+                "request": req,
+                "ws": {"id": 1, "name": "Test WS", "namespace": "test-ns"},
+                "pat": pat_with_quotes,
+                "csrf_token": "token-xyz",
+            }
+        )
+        # Verify the double quotes in pat.name are escaped as &#34; so the attribute cannot break out
+        assert 'onsubmit="return confirm(&#34;Delete PAT malicious\\&#34; onfocus=\\&#34;alert(1)?&#34;)"' in rendered
+        assert 'malicious" onfocus=' not in rendered
+
+    @pytest.mark.asyncio
     async def test_pat_crud(self, client):
         ws = await _create_workspace(client)
 

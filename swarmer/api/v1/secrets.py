@@ -172,25 +172,32 @@ async def save_credentials(
                 detail="application_default_credentials must be valid JSON",
             ) from exc
         secret.application_default_credentials = adc
-        if secret.google_cloud_project and secret.vertex_location:
-            try:
-                from swarmer import openshell_client
 
-                provider_name = f"swarmer-ws-{ws_id}-google-cloud"
-                await openshell_client.create_google_cloud_provider(
-                    provider_name, secret.google_cloud_project, secret.vertex_location
-                )
-                await openshell_client.configure_google_cloud_provider(provider_name, adc)
-            except Exception as exc:
-                log.warning(
-                    "save_credentials: failed to configure Vertex AI provider for workspace %d (error_type=%s)",
-                    ws_id,
-                    type(exc).__name__,
-                )
-                raise HTTPException(
-                    status_code=status.HTTP_502_BAD_GATEWAY,
-                    detail="failed to configure Vertex AI provider on OpenShell",
-                ) from exc
+    if (
+        secret.application_default_credentials_enc
+        and secret.google_cloud_project
+        and secret.vertex_location
+    ):
+        try:
+            from swarmer import openshell_client
+
+            provider_name = f"swarmer-ws-{ws_id}-google-cloud"
+            await openshell_client.create_google_cloud_provider(
+                provider_name, secret.google_cloud_project, secret.vertex_location
+            )
+            await openshell_client.configure_google_cloud_provider(
+                provider_name, secret.application_default_credentials
+            )
+        except Exception as exc:
+            log.warning(
+                "save_credentials: failed to configure Vertex AI provider for workspace %d (error_type=%s)",
+                ws_id,
+                type(exc).__name__,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="failed to configure Vertex AI provider on OpenShell",
+            ) from exc
 
     await db.commit()
     await db.refresh(secret)
@@ -218,6 +225,12 @@ async def delete_credential(
     if provider_suffix is None:
         raise HTTPException(status_code=400, detail="Unsupported credential provider")
 
+    from swarmer import workspace_acl
+
+    is_manager = await workspace_acl.can_manage_members(
+        db, ws, identity.username, identity.groups
+    )
+
     result = await db.execute(
         select(OpencodeSecret).where(
             OpencodeSecret.workspace_id == ws_id,
@@ -228,11 +241,7 @@ async def delete_credential(
     secret = next((item for item in secrets if item.user_id == user), None)
     if secret is None and secrets:
         candidate = secrets[0]
-        from swarmer import workspace_acl
-
-        if not await workspace_acl.can_manage_members(
-            db, ws, identity.username, identity.groups
-        ):
+        if not is_manager:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Only the credential owner, workspace owner, or an admin can delete shared credentials.",
@@ -241,19 +250,29 @@ async def delete_credential(
     if secret is None:
         raise HTTPException(status_code=404, detail="Credentials not configured")
 
-    provider_name = f"swarmer-ws-{ws_id}-{provider_suffix}"
-    try:
-        from swarmer import openshell_client
-        from swarmer.config import settings
+    if secret.shared and not is_manager:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only the credential owner, workspace owner, or an admin can delete shared credentials.",
+        )
 
-        if settings.openshell_gateway_url:
-            sandboxes = await openshell_client.list_sandboxes()
-            for sandbox_name in sandboxes:
-                await openshell_client.detach_sandbox_provider(sandbox_name, provider_name)
-            await openshell_client.delete_provider(provider_name)
-    except Exception as exc:
-        log.warning("delete_credential: failed to remove provider %s", provider_name, exc_info=True)
-        raise HTTPException(status_code=502, detail="failed to delete provider from OpenShell") from exc
+    # OpenShell providers are workspace-scoped (swarmer-ws-{ws_id}-{provider_suffix})
+    # and shared by all sessions in the workspace. Only workspace managers (owner or
+    # global admin) can detach and delete the workspace-scoped provider on OpenShell.
+    if is_manager:
+        provider_name = f"swarmer-ws-{ws_id}-{provider_suffix}"
+        try:
+            from swarmer import openshell_client
+            from swarmer.config import settings
+
+            if settings.openshell_gateway_url:
+                sandboxes = await openshell_client.list_sandboxes()
+                for sandbox_name in sandboxes:
+                    await openshell_client.detach_sandbox_provider(sandbox_name, provider_name)
+                await openshell_client.delete_provider(provider_name)
+        except Exception as exc:
+            log.warning("delete_credential: failed to remove provider %s", provider_name, exc_info=True)
+            raise HTTPException(status_code=502, detail="failed to delete provider from OpenShell") from exc
 
     if provider_suffix == "google-cloud":
         secret.google_cloud_project = ""
