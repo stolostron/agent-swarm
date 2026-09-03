@@ -325,12 +325,12 @@ class TestDoLaunchOpenshell:
                 "swarmer.routers.sessions._wait_vertex_provider_ready",
                 new=AsyncMock(),
             ),
-            # provider_exists is called in _do_launch_openshell to check for the
-            # google-cloud (Vertex ADC) provider. Without this patch it tries to
-            # use the real gRPC client (not available in CI) and raises AttributeError.
+            # provider_exists is called in _do_launch_openshell to check gateway
+            # providers. Model the normal case as configured; individual tests
+            # override this for provider-absent scenarios.
             "provider_exists": patch(
                 "swarmer.openshell_client.provider_exists",
-                new=AsyncMock(return_value=False),
+                new=AsyncMock(return_value=True),
             ),
             # get_image() raises ValueError when AGENT_IMAGE_OPENCODE is unset (CI).
             # Patch at the agent-tool level so all launch paths get a valid image.
@@ -651,11 +651,15 @@ class TestDoLaunchOpenshell:
              patches["start_agent"], patches["delete_sandbox"], \
              patches["build_policy"], patches["run_agent"], \
              patches["setup_sandbox"] as mock_setup, \
-             patches["provider_exists"], patches["get_image"]:
-            await client.post(
-                f"/api/v1/workspaces/{ws['id']}/sessions/{s['id']}/launch"
-            )
-            await asyncio.sleep(0)
+              patches["get_image"]:
+            with patch(
+                "swarmer.openshell_client.provider_exists",
+                new=AsyncMock(side_effect=lambda name, **kw: name != gemini_pname),
+            ):
+                await client.post(
+                    f"/api/v1/workspaces/{ws['id']}/sessions/{s['id']}/launch"
+                )
+                await asyncio.sleep(0)
 
         call_kwargs = mock_setup.call_args.kwargs if mock_setup.call_args else {}
         assert gemini_pname not in call_kwargs.get("provider_names", [])
@@ -702,6 +706,42 @@ class TestDoLaunchOpenshell:
         assert openai_ensure_calls == []
 
     @pytest.mark.asyncio
+    async def test_legacy_raw_model_selection_is_preserved(self, client):
+        """Existing sessions using raw model IDs must not be changed to a preset."""
+        ws = await _create_workspace(client)
+        raw_model = "google-vertex-anthropic/claude-sonnet-5@default"
+        s_resp = await client.post(
+            f"/api/v1/workspaces/{ws['id']}/sessions",
+            json={
+                "name": "s-legacy-model",
+                "mode": "prompt",
+                "agent_tool": "opencode",
+                "provider": raw_model,
+            },
+        )
+        assert s_resp.status_code == 201, s_resp.text
+        s = s_resp.json()
+
+        patches = self._patch_openshell()
+        with patches["create_provider"], patches["ensure_provider"], \
+             patches["configure_provider_credential"], patches["attach_sandbox_provider"], \
+             patches["create_sandbox"], patches["write_agent_config"], \
+             patches["write_agents_md"], patches["exec_command"], \
+             patches["start_agent"], patches["delete_sandbox"], \
+             patches["build_policy"], patches["run_agent"], \
+             patches["setup_sandbox"] as mock_setup, patches["get_image"]:
+            with patch(
+                "swarmer.openshell_client.provider_exists",
+                new=AsyncMock(return_value=True),
+            ):
+                await client.post(
+                    f"/api/v1/workspaces/{ws['id']}/sessions/{s['id']}/launch"
+                )
+                await asyncio.sleep(0)
+
+        assert mock_setup.call_args.kwargs["config_model"] == raw_model
+
+    @pytest.mark.asyncio
     async def test_openai_provider_not_attached_when_absent_from_gateway(self, client):
         """OpenAI model launches must fail early when the gateway provider is absent."""
         ws = await _create_workspace(client)
@@ -720,11 +760,15 @@ class TestDoLaunchOpenshell:
               patches["start_agent"], patches["delete_sandbox"], \
               patches["build_policy"], patches["run_agent"], \
               patches["setup_sandbox"] as mock_setup, \
-              patches["provider_exists"], patches["get_image"]:
-            resp = await client.post(
-                f"/api/v1/workspaces/{ws['id']}/sessions/{s['id']}/launch"
-            )
-            await asyncio.sleep(0)
+              patches["get_image"]:
+            with patch(
+                "swarmer.openshell_client.provider_exists",
+                new=AsyncMock(side_effect=lambda name, **kw: not name.endswith("-openai")),
+            ):
+                resp = await client.post(
+                    f"/api/v1/workspaces/{ws['id']}/sessions/{s['id']}/launch"
+                )
+                await asyncio.sleep(0)
 
         assert resp.status_code == 500
         assert "OpenAI API key is not configured for this workspace" in resp.text

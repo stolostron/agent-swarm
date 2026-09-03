@@ -1227,11 +1227,30 @@ async def _do_launch_openshell(
             except Exception:
                 _available_providers[_name] = False
     _preferred_provider = requested_provider if requested_provider in _provider_names else ""
+    _preferred_raw_model = ""
+    if not _preferred_provider and requested_provider and "/" in requested_provider:
+        _raw_provider = requested_provider.split("/", 1)[0]
+        _raw_provider_family = {
+            "google-vertex-anthropic": "claude",
+            "google": "gemini",
+            "openai": "openai",
+        }.get(_raw_provider, "")
+        if _raw_provider_family and tool.is_valid_model(requested_provider):
+            _preferred_provider = _raw_provider_family
+            _preferred_raw_model = requested_provider
     if _preferred_provider and _available_providers.get(_preferred_provider):
-        raw_model = _preferred_provider
+        raw_model = _preferred_raw_model or _preferred_provider
         log.info(
             "_do_launch_openshell: session %d using provider %r (tool=%s)",
             session.id, raw_model, tool.name,
+        )
+    elif requested_provider in _provider_names:
+        # Keep an explicit preset so provider-specific validation below can
+        # return an actionable error instead of silently changing models.
+        raw_model = requested_provider
+        log.info(
+            "_do_launch_openshell: session %d requested provider %r is unavailable",
+            session.id, requested_provider,
         )
     else:
         _fallback = next((p for p in ("claude", "gemini", "openai") if _available_providers.get(p)), "")
