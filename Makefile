@@ -35,12 +35,8 @@ TOKEN_DURATION ?= 8h
 AC_DEFAULTS ?= .push-defaults
 
 # OpenShell gateway
-OPENSHELL_VERSION        ?= 0.0.82
-# agent-sandbox v0.4.6 is required — v0.5.0+ graduates the CRD to v1beta1 and
-# sets ownerReference apiVersion=agents.x-k8s.io/v1beta1 on sandbox pods, but
-# the OpenShell gateway (through at least 0.0.82) checks for v1alpha1 in
-# IssueSandboxToken, causing "Policy fetch failed" on every sandbox launch.
-AGENT_SANDBOX_VERSION    ?= v0.4.6
+OPENSHELL_VERSION        ?= 0.0.116
+AGENT_SANDBOX_VERSION    ?= v1.0.1
 OPENSHELL_NAMESPACE      ?= openshell
 OPENSHELL_TLS_DIR        ?= auth/openshell
 # Default size of the workspace PVC (backing each sandbox's /sandbox mount) at the
@@ -55,8 +51,8 @@ OPENSHELL_WORKSPACE_STORAGE ?= 10Gi
 # ──────────────────────────────────────────────────────────────
 #  Phony targets
 # ──────────────────────────────────────────────────────────────
-.PHONY: setup-secret user-token api-info mcp-setup grant-workspace grant-workspace-access grant-workspace-create \
-        dev lint test smoke-test-jira \
+.PHONY: setup-secret user-token api-info mcp-setup update-deps grant-workspace grant-workspace-access grant-workspace-create \
+        dev lint helm-lint test smoke-test-jira \
         sync-images image-build image-push \
         deploy delete connect mcp-setup mcp-api mcp-url api-url openshell-register connect-openshell status \
         kind-deploy kind-delete \
@@ -65,6 +61,17 @@ OPENSHELL_WORKSPACE_STORAGE ?= 10Gi
 # ──────────────────────────────────────────────────────────────
 #  Developer tooling
 # ──────────────────────────────────────────────────────────────
+
+update-deps:  ## Fetch the latest stable OpenShell dependencies and update pins
+	$(eval LATEST_OPENSHELL := $(shell curl -fsSL https://pypi.org/pypi/openshell/json | jq -r '.info.version // empty'))
+	$(eval LATEST_AGENT_SANDBOX := $(shell curl -fsSL 'https://api.github.com/repos/kubernetes-sigs/agent-sandbox/releases?per_page=20' | jq -r '[.[] | select(.prerelease == false and .draft == false)][0].tag_name // empty'))
+	$(if $(strip $(LATEST_OPENSHELL)),,$(error Failed to fetch latest OpenShell version - aborting without modifying files))
+	$(if $(strip $(LATEST_AGENT_SANDBOX)),,$(error Failed to fetch latest Agent Sandbox version - aborting without modifying files))
+	@echo "OpenShell: $(OPENSHELL_VERSION) -> $(LATEST_OPENSHELL)"
+	@echo "Agent Sandbox: $(AGENT_SANDBOX_VERSION) -> $(LATEST_AGENT_SANDBOX)"
+	@sed -i 's/^OPENSHELL_VERSION\s*?= .*/OPENSHELL_VERSION        ?= $(LATEST_OPENSHELL)/' Makefile
+	@sed -i 's/^AGENT_SANDBOX_VERSION\s*?= .*/AGENT_SANDBOX_VERSION    ?= $(LATEST_AGENT_SANDBOX)/' Makefile
+	@sed -i 's/^openshell[=><].*$$/openshell==$(LATEST_OPENSHELL)     # OpenShell sandbox SDK; update with make update-deps/' requirements.txt
 
 sync-images:  ## Sync AGENT_IMAGE_OPENCODE in .env from ../agent-containers .push-defaults
 	@test -f $(AC_DEFAULTS) || (echo "$(AC_DEFAULTS) not found — create/update .push-defaults first" && exit 1)
@@ -240,8 +247,24 @@ dev:  ## Install deps and run development server with auto-reload (uses local ku
 	@echo ""
 	K8S_IN_CLUSTER=false uvicorn swarmer.main:app --host 0.0.0.0 --port 8090 --reload
 
-lint:  ## Run ruff linter
+lint: helm-lint  ## Run application and Helm linters
 	ruff check swarmer/
+
+helm-lint:  ## Validate the pinned OpenShell Helm chart
+	@set -e; \
+	CHART_DIR=$$(mktemp -d); \
+	trap 'rm -rf "$$CHART_DIR"' EXIT; \
+	helm pull oci://ghcr.io/nvidia/openshell/helm-chart \
+		--version $(OPENSHELL_VERSION) --untar --untardir "$$CHART_DIR"; \
+	helm lint "$$CHART_DIR/helm-chart" \
+		--set agentSandbox.preflight.enabled=false \
+		--set server.auth.allowUnauthenticatedUsers=true \
+		--set server.drivers.kubernetes.workspaceMode=shared \
+		--set server.credentialDrivers.kubernetesSecrets.enabled=false \
+		--set server.credentialDrivers.vault.enabled=false \
+		--set-string certManager.serverIssuerRef.name= \
+		--set server.policyValidationFailureMode=fail_closed \
+		--set server.workspaceDefaultStorageSize=$(OPENSHELL_WORKSPACE_STORAGE)
 
 test:  ## Run unit tests (excludes Playwright browser tests)
 	python3 -m pytest tests/ -q --ignore=tests/test_ui_patternfly.py
@@ -334,18 +357,28 @@ deploy:  ## Deploy swarmer to the current kubectl context  (SILENT=1 for non-int
 	    --version $(OPENSHELL_VERSION) \
 	    --namespace $(OPENSHELL_NAMESPACE) \
 	    --set server.auth.allowUnauthenticatedUsers=true \
+	    --set server.drivers.kubernetes.workspaceMode=shared \
+	    --set server.credentialDrivers.kubernetesSecrets.enabled=false \
+	    --set server.credentialDrivers.vault.enabled=false \
+	    --set-string certManager.serverIssuerRef.name= \
+	    --set server.policyValidationFailureMode=fail_closed \
 	    --set server.workspaceDefaultStorageSize=$(OPENSHELL_WORKSPACE_STORAGE) \
 	    --wait --timeout 5m; \
 	  echo "✓ OpenShell $(OPENSHELL_VERSION) installed (workspaceDefaultStorageSize=$(OPENSHELL_WORKSPACE_STORAGE))."; \
 	else \
 	  echo "OpenShell already installed — applying workspaceDefaultStorageSize=$(OPENSHELL_WORKSPACE_STORAGE) \
-and pinned version $(OPENSHELL_VERSION) (reusing other existing values)..."; \
+and pinned version $(OPENSHELL_VERSION) with chart defaults..."; \
 	  DOCKER_CONFIG=$$(mktemp -d) helm upgrade openshell \
 	    oci://ghcr.io/nvidia/openshell/helm-chart \
 	    --version $(OPENSHELL_VERSION) \
 	    --namespace $(OPENSHELL_NAMESPACE) \
-	    --reuse-values \
+	    --reset-values \
 	    --set server.auth.allowUnauthenticatedUsers=true \
+	    --set server.drivers.kubernetes.workspaceMode=shared \
+	    --set server.credentialDrivers.kubernetesSecrets.enabled=false \
+	    --set server.credentialDrivers.vault.enabled=false \
+	    --set-string certManager.serverIssuerRef.name= \
+	    --set server.policyValidationFailureMode=fail_closed \
 	    --set server.workspaceDefaultStorageSize=$(OPENSHELL_WORKSPACE_STORAGE) \
 	    --wait --timeout 5m; \
 	  echo "✓ OpenShell upgraded (version=$(OPENSHELL_VERSION), workspaceDefaultStorageSize=$(OPENSHELL_WORKSPACE_STORAGE))."; \

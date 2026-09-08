@@ -169,3 +169,34 @@ def test_workspace_gateway_encryption():
     assert gw.tls_key_enc is not None
     assert gw.tls_key_enc != fake_tls_key
     assert gw.tls_key == fake_tls_key
+
+    gw.client_secret = "my-secret-client-secret"
+    assert gw.client_secret_enc is not None
+    assert gw.client_secret_enc != "my-secret-client-secret"
+    assert gw.client_secret == "my-secret-client-secret"
+
+
+def test_parse_command_with_client_secret():
+    cmd = (
+        "openshell gateway add https://gw.example.com:443 "
+        "--oidc-issuer https://idp.example.com "
+        "--oidc-client-id sa-client "
+        "--client-secret sa-secret-xyz"
+    )
+    res = parse_gateway_command_or_json(cmd)
+    assert res.gateway_url == "https://gw.example.com:443"
+    assert res.oidc_issuer == "https://idp.example.com"
+    assert res.oidc_client_id == "sa-client"
+    assert res.client_secret == "sa-secret-xyz"
+
+
+def test_parse_json_with_client_secret():
+    payload = json.dumps({
+        "gateway_endpoint": "https://gw.example.com:443",
+        "oidc_issuer": "https://idp.example.com",
+        "oidc_client_id": "sa-client",
+        "client_secret": "json-secret-123",
+    })
+    res = parse_gateway_command_or_json(payload)
+    assert res.gateway_url == "https://gw.example.com:443"
+    assert res.client_secret == "json-secret-123"

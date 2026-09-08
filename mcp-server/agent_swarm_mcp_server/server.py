@@ -180,6 +180,8 @@ class AgentSwarmMCPServer:
         oidc_client_id: str | None = None,
         oidc_audience: str | None = None,
         refresh_token: str | None = None,
+        client_secret: str | None = None,
+        service_account_subject: str | None = None,
         bearer_token: str | None = None,
         tls_ca: str | None = None,
         tls_verify: bool = True,
@@ -191,6 +193,8 @@ class AgentSwarmMCPServer:
             "oidc_client_id": oidc_client_id,
             "oidc_audience": oidc_audience,
             "refresh_token": refresh_token,
+            "client_secret": client_secret,
+            "service_account_subject": service_account_subject,
             "bearer_token": bearer_token,
             "tls_ca": tls_ca,
             "tls_verify": tls_verify,
@@ -209,6 +213,8 @@ class AgentSwarmMCPServer:
         oidc_client_id: str | None = None,
         oidc_audience: str | None = None,
         refresh_token: str | None = None,
+        client_secret: str | None = None,
+        service_account_subject: str | None = None,
         bearer_token: str | None = None,
         tls_ca: str | None = None,
         tls_verify: bool = True,
@@ -221,6 +227,8 @@ class AgentSwarmMCPServer:
             "oidc_client_id": oidc_client_id,
             "oidc_audience": oidc_audience,
             "refresh_token": refresh_token,
+            "client_secret": client_secret,
+            "service_account_subject": service_account_subject,
             "bearer_token": bearer_token,
             "tls_ca": tls_ca,
             "tls_verify": tls_verify,
@@ -665,6 +673,8 @@ class AgentSwarmMCPServer:
             oidc_client_id: str | None = None,
             oidc_audience: str | None = None,
             refresh_token: str | None = None,
+            client_secret: str | None = None,
+            service_account_subject: str | None = None,
             bearer_token: str | None = None,
             tls_ca: str | None = None,
             tls_verify: bool = True,
@@ -684,6 +694,8 @@ class AgentSwarmMCPServer:
                 oidc_client_id: OIDC client ID (when auth_mode is 'oidc').
                 oidc_audience: Optional OIDC audience.
                 refresh_token: Optional OIDC refresh token.
+                client_secret: Optional OIDC client secret for Service Account authentication.
+                service_account_subject: Optional Service Account subject identity.
                 bearer_token: Optional static bearer token.
                 tls_ca: Optional CA cert content/path.
                 tls_verify: Whether to verify TLS certificate (default True).
@@ -696,6 +708,8 @@ class AgentSwarmMCPServer:
                 oidc_client_id=oidc_client_id,
                 oidc_audience=oidc_audience,
                 refresh_token=refresh_token,
+                client_secret=client_secret,
+                service_account_subject=service_account_subject,
                 bearer_token=bearer_token,
                 tls_ca=tls_ca,
                 tls_verify=tls_verify,
@@ -719,6 +733,8 @@ class AgentSwarmMCPServer:
             oidc_client_id: str | None = None,
             oidc_audience: str | None = None,
             refresh_token: str | None = None,
+            client_secret: str | None = None,
+            service_account_subject: str | None = None,
             bearer_token: str | None = None,
             tls_ca: str | None = None,
             tls_verify: bool = True,
@@ -733,6 +749,8 @@ class AgentSwarmMCPServer:
                 oidc_client_id: Optional OIDC client ID.
                 oidc_audience: Optional OIDC audience.
                 refresh_token: Optional OIDC refresh token.
+                client_secret: Optional OIDC client secret for Service Account authentication.
+                service_account_subject: Optional Service Account subject identity.
                 bearer_token: Optional bearer token.
                 tls_ca: Optional CA cert.
                 tls_verify: Whether to verify TLS.
@@ -745,6 +763,8 @@ class AgentSwarmMCPServer:
                 oidc_client_id=oidc_client_id,
                 oidc_audience=oidc_audience,
                 refresh_token=refresh_token,
+                client_secret=client_secret,
+                service_account_subject=service_account_subject,
                 bearer_token=bearer_token,
                 tls_ca=tls_ca,
                 tls_verify=tls_verify,

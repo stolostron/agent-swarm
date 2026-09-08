@@ -161,11 +161,11 @@ async def save_credentials(
                 detail="Only workspace managers can configure workspace AI providers.",
             )
         gemini_key = body.google_api_key.strip()
-        secret.google_api_key = gemini_key
-        secret.gemini_configured = True
         try:
             from swarmer import openshell_client
+            oc_client = await openshell_client.get_client_for_workspace(ws_id, db)
 
+            ensure_kwargs = {"client": oc_client} if oc_client is not None else {}
             await openshell_client.ensure_provider(
                 f"swarmer-ws-{ws_id}-google-ai-studio",
                 "google-ai-studio",
@@ -174,6 +174,7 @@ async def save_credentials(
                     "GOOGLE_API_KEY": gemini_key,
                     "GOOGLE_GENERATIVE_AI_API_KEY": gemini_key,
                 },
+                **ensure_kwargs,
             )
         except Exception as exc:
             log.warning(
@@ -185,6 +186,8 @@ async def save_credentials(
                 status_code=status.HTTP_502_BAD_GATEWAY,
                 detail="failed to configure Gemini provider on OpenShell",
             ) from exc
+        secret.google_api_key = gemini_key
+        secret.gemini_configured = True
     openai_key = body.openai_api_key.strip()
     if openai_key:
         if not is_manager:
@@ -192,17 +195,19 @@ async def save_credentials(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Only workspace managers can configure workspace AI providers.",
             )
-        secret.openai_configured = True
         # OpenAI key is gateway-only: store/update the workspace-scoped provider
         # on OpenShell, never in Swarmer's DB.
         try:
             from swarmer import openshell_client
+            oc_client = await openshell_client.get_client_for_workspace(ws_id, db)
 
+            ensure_kwargs = {"client": oc_client} if oc_client is not None else {}
             await openshell_client.ensure_provider(
                 f"swarmer-ws-{ws_id}-openai",
                 "openai",
                 {},
                 credentials={"OPENAI_API_KEY": openai_key},
+                **ensure_kwargs,
             )
         except Exception as exc:
             log.warning(
@@ -214,6 +219,7 @@ async def save_credentials(
                 status_code=status.HTTP_502_BAD_GATEWAY,
                 detail="failed to configure OpenAI provider on OpenShell",
             ) from exc
+        secret.openai_configured = True
     adc = body.application_default_credentials.strip()
     if adc:
         if not is_manager:
@@ -242,13 +248,15 @@ async def save_credentials(
             )
         try:
             from swarmer import openshell_client
+            oc_client = await openshell_client.get_client_for_workspace(ws_id, db)
 
             provider_name = f"swarmer-ws-{ws_id}-google-cloud"
+            provider_kwargs = {"client": oc_client} if oc_client is not None else {}
             await openshell_client.create_google_cloud_provider(
-                provider_name, secret.google_cloud_project, secret.vertex_location
+                provider_name, secret.google_cloud_project, secret.vertex_location, **provider_kwargs
             )
             await openshell_client.configure_google_cloud_provider(
-                provider_name, secret.application_default_credentials
+                provider_name, secret.application_default_credentials, **provider_kwargs
             )
             secret.vertex_configured = True
         except Exception as exc:
@@ -326,13 +334,14 @@ async def delete_credential(
         provider_name = f"swarmer-ws-{ws_id}-{provider_suffix}"
         try:
             from swarmer import openshell_client
-            from swarmer.config import settings
-
-            if settings.openshell_gateway_url:
-                sandboxes = await openshell_client.list_sandboxes()
-                for sandbox_name in sandboxes:
-                    await openshell_client.detach_sandbox_provider(sandbox_name, provider_name)
-                await openshell_client.delete_provider(provider_name)
+            oc_client = await openshell_client.get_client_for_workspace(ws_id, db)
+            client_kwargs = {"client": oc_client} if oc_client is not None else {}
+            sandboxes = await openshell_client.list_sandboxes(**client_kwargs)
+            for sandbox_name in sandboxes:
+                await openshell_client.detach_sandbox_provider(
+                    sandbox_name, provider_name, **client_kwargs
+                )
+            await openshell_client.delete_provider(provider_name, **client_kwargs)
         except Exception as exc:
             log.warning("delete_credential: failed to remove provider %s", provider_name, exc_info=True)
             raise HTTPException(status_code=502, detail="failed to delete provider from OpenShell") from exc

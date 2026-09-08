@@ -1972,6 +1972,22 @@ class TestExecCommandTimeout:
 
         mock_client.exec.assert_called_once_with("test-id", ["ls"], stdin=None, timeout_seconds=None, env={})
 
+    @pytest.mark.asyncio
+    async def test_exec_command_default_client_is_none(self):
+        """exec_command allows omitting client; defaults to None and resolves _get_client()."""
+        from swarmer.openshell_client import exec_command
+        from unittest.mock import patch, MagicMock
+
+        mock_client = MagicMock()
+        mock_client.get.return_value = MagicMock(id="test-id-default")
+        mock_client.exec.return_value = MagicMock(exit_code=0, stdout="", stderr="")
+
+        with patch("swarmer.openshell_client._get_client", return_value=mock_client):
+            # Positional call omitting client completely — must not raise TypeError
+            await exec_command("sb-name", ["echo", "test"])
+
+        mock_client.exec.assert_called_once_with("test-id-default", ["echo", "test"], stdin=None, timeout_seconds=None, env={})
+
 
 
 

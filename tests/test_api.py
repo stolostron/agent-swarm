@@ -523,6 +523,40 @@ class TestWorkspaceGatewayAPI:
         assert gw_data["has_refresh_token"] is True
 
     @pytest.mark.asyncio
+    async def test_create_workspace_with_service_account_gateway(self, client):
+        payload = {
+            "display_name": "Service Account Gateway WS",
+            "description": "WS with Service Account client_credentials gateway",
+            "gateway": {
+                "gateway_url": "https://gw-sa.example.com:443",
+                "auth_mode": "oidc",
+                "oidc_issuer": "https://idp.example.com/realm",
+                "oidc_client_id": "sa-client-id",
+                "client_secret": "my-client-secret-123",
+                "service_account_subject": "service-account-sa-client",
+            },
+        }
+        resp = await client.post("/api/v1/workspaces", json=payload)
+        assert resp.status_code == 201
+        data = resp.json()
+        assert data["gateway"] is not None
+        assert data["gateway"]["gateway_url"] == "https://gw-sa.example.com:443"
+        assert data["gateway"]["auth_mode"] == "oidc"
+        assert data["gateway"]["has_client_secret"] is True
+        assert data["gateway"]["service_account_subject"] == "service-account-sa-client"
+        # Secret must NOT be exposed in plaintext in response
+        assert "client_secret" not in data["gateway"]
+
+        # Fetch via GET
+        get_resp = await client.get(f"/api/v1/workspaces/{data['id']}/gateway")
+        assert get_resp.status_code == 200
+        gw_data = get_resp.json()
+        assert gw_data["gateway_url"] == "https://gw-sa.example.com:443"
+        assert gw_data["has_client_secret"] is True
+        assert gw_data["service_account_subject"] == "service-account-sa-client"
+        assert "client_secret" not in gw_data
+
+    @pytest.mark.asyncio
     async def test_update_and_delete_workspace_gateway(self, client):
         ws = await _create_workspace(client, "Gateway WS")
 
@@ -1355,6 +1389,29 @@ class TestSecrets:
         assert calls["ensure"][3]["GOOGLE_API_KEY"] == "gemini-key-123"
         assert calls["create_gc"] == (f"swarmer-ws-{ws['id']}-google-cloud", "gcp-proj", "us-central1")
         assert calls["conf_gc"] == (f"swarmer-ws-{ws['id']}-google-cloud", adc)
+
+    @pytest.mark.asyncio
+    async def test_failed_gemini_provider_save_does_not_persist_configured_state(
+        self, client, monkeypatch
+    ):
+        ws = await _create_workspace(client)
+
+        async def _fail_ensure_provider(*args, **kwargs):
+            raise RuntimeError("remote gateway rejected the request")
+
+        monkeypatch.setattr("swarmer.openshell_client.ensure_provider", _fail_ensure_provider)
+
+        resp = await client.post(
+            f"/api/v1/workspaces/{ws['id']}/secrets/credentials",
+            json={"google_api_key": "gemini-key"},
+        )
+
+        assert resp.status_code == 502
+        assert resp.json()["detail"] == "failed to configure Gemini provider on OpenShell"
+
+        credentials = await client.get(f"/api/v1/workspaces/{ws['id']}/secrets/credentials")
+        assert credentials.status_code == 200
+        assert credentials.json() is None
 
     @pytest.mark.asyncio
     async def test_delete_shared_credentials_requires_manager(self, client):

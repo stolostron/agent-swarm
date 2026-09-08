@@ -22,6 +22,8 @@ class WorkspaceGatewayCreate(BaseModel):
     oidc_audience: str | None = None
     refresh_token: str | None = None
     access_token: str | None = None
+    client_secret: str | None = None
+    service_account_subject: str | None = None
     bearer_token: str | None = None
     tls_ca: str | None = None
     tls_cert: str | None = None
@@ -32,6 +34,7 @@ class WorkspaceGatewayCreate(BaseModel):
 class WorkspaceGatewayOut(BaseModel):
     workspace_id: int
     gateway_url: str
+    gateway_version: str = ""
     auth_mode: str
     oidc_issuer: str | None = None
     oidc_client_id: str | None = None
@@ -39,6 +42,8 @@ class WorkspaceGatewayOut(BaseModel):
     has_refresh_token: bool = False
     has_access_token: bool = False
     access_token_expires_at: datetime | None = None
+    has_client_secret: bool = False
+    service_account_subject: str | None = None
     has_bearer_token: bool = False
     has_tls_cert: bool = False
     has_tls_key: bool = False
@@ -60,6 +65,7 @@ class ParseGatewayCommandOut(BaseModel):
     oidc_issuer: str | None = None
     oidc_client_id: str | None = None
     oidc_audience: str | None = None
+    client_secret: str | None = None
     bearer_token: str | None = None
     tls_verify: bool = True
     suggested_name: str | None = None
@@ -90,6 +96,8 @@ class TestGatewayConnectionIn(BaseModel):
     oidc_client_id: str | None = None
     oidc_audience: str | None = None
     refresh_token: str | None = None
+    client_secret: str | None = None
+    service_account_subject: str | None = None
     bearer_token: str | None = None
     tls_ca: str | None = None
     tls_cert: str | None = None
@@ -111,6 +119,7 @@ class TestGatewayConnectionOut(BaseModel):
     gateway_url: str = ""
     auth_mode: str = ""
     sandboxes_count: int = 0
+    gateway_version: str = ""
     detail: str = ""
 
 

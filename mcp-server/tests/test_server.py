@@ -504,3 +504,44 @@ async def test_parse_gateway_token_delegates_to_client():
     )
     assert result["status"] == "valid"
     assert result["format_detected"] == "json_bundle"
+
+
+@pytest.mark.asyncio
+async def test_set_workspace_gateway_with_client_secret_delegates_to_client():
+    server = make_server()
+    server.client.set_workspace_gateway = AsyncMock(return_value={
+        "workspace_id": 1,
+        "gateway_url": "https://gw.example.com:443",
+        "auth_mode": "oidc",
+        "has_client_secret": True,
+        "service_account_subject": "sa-sub",
+    })
+
+    result = await server._set_workspace_gateway(
+        workspace_id=1,
+        gateway_url="https://gw.example.com:443",
+        auth_mode="oidc",
+        oidc_issuer="https://idp.example.com/realm",
+        oidc_client_id="sa-client",
+        client_secret="sa-secret",
+        service_account_subject="sa-sub",
+    )
+
+    server.client.set_workspace_gateway.assert_awaited_once_with(
+        1,
+        {
+            "gateway_url": "https://gw.example.com:443",
+            "auth_mode": "oidc",
+            "oidc_issuer": "https://idp.example.com/realm",
+            "oidc_client_id": "sa-client",
+            "oidc_audience": None,
+            "refresh_token": None,
+            "client_secret": "sa-secret",
+            "service_account_subject": "sa-sub",
+            "bearer_token": None,
+            "tls_ca": None,
+            "tls_verify": True,
+        },
+    )
+    assert result["has_client_secret"] is True
+    assert result["service_account_subject"] == "sa-sub"

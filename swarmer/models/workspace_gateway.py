@@ -16,6 +16,7 @@ class WorkspaceGateway(Base):
         Integer, ForeignKey("workspaces.id", ondelete="CASCADE"), primary_key=True
     )
     gateway_url: Mapped[str] = mapped_column(String(1024), nullable=False)
+    gateway_version: Mapped[str] = mapped_column(String(64), nullable=False, default="", server_default="")
     auth_mode: Mapped[str] = mapped_column(String(32), nullable=False, default="oidc")
     # auth_mode values: "oidc", "bearer", "mtls", "none"
 
@@ -26,6 +27,8 @@ class WorkspaceGateway(Base):
     refresh_token_enc: Mapped[str | None] = mapped_column(Text, nullable=True)
     access_token_enc: Mapped[str | None] = mapped_column(Text, nullable=True)
     access_token_expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    client_secret_enc: Mapped[str | None] = mapped_column(Text, nullable=True)
+    service_account_subject: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
     # Bearer token (static / API key)
     bearer_token_enc: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -70,6 +73,14 @@ class WorkspaceGateway(Base):
     @bearer_token.setter
     def bearer_token(self, value: str | None) -> None:
         self.bearer_token_enc = encrypt(value) if value else None
+
+    @property
+    def client_secret(self) -> str:
+        return decrypt(self.client_secret_enc) if self.client_secret_enc else ""
+
+    @client_secret.setter
+    def client_secret(self, value: str | None) -> None:
+        self.client_secret_enc = encrypt(value) if value else None
 
     @property
     def tls_key(self) -> str:

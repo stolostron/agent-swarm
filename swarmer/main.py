@@ -2,7 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from contextlib import asynccontextmanager
+
+# Avoid gRPC c-ares resolver failures on Kubernetes pods with ndots:5
+os.environ.setdefault("GRPC_DNS_RESOLVER", "native")
 from typing import TYPE_CHECKING
 
 from fastapi import FastAPI, Request
@@ -97,6 +101,7 @@ async def lifespan(app: FastAPI):
     await _sync_k8s_workspace_members()
     if settings.openshell_gateway_url:
         await _ensure_openshell_provider_profiles()
+        await _track_default_gateway_version()
     await _restart_prompt_pollers()
     if settings.openshell_gateway_url:
         await _restart_server_sessions()
@@ -137,6 +142,27 @@ async def _ensure_openshell_provider_profiles() -> None:
         log.info("OpenShell provider profiles registered: %s", [p["id"] for p in _OPENSHELL_CUSTOM_PROFILES])
     except Exception:
         log.warning("Failed to import OpenShell provider profiles — sessions may lack Google AI Studio support", exc_info=True)
+
+
+async def _track_default_gateway_version() -> None:
+    """Observe the shared gateway and invalidate stale AI provider flags."""
+    from swarmer import openshell_client
+    from swarmer.database import get_db
+    from swarmer.gateway_version import observe_gateway_version
+
+    try:
+        config = openshell_client.default_gateway_config()
+        client = openshell_client.get_client_for_config(config)
+        try:
+            async for db in get_db():
+                await observe_gateway_version(config, client, db)
+                break
+        finally:
+            close = getattr(client, "close", None)
+            if callable(close):
+                close()
+    except Exception:
+        log.warning("OpenShell gateway version tracking skipped (non-fatal)", exc_info=True)
 
 
 async def _restart_prompt_pollers() -> None:

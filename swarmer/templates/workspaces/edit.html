@@ -181,26 +181,26 @@
                   </div>
                 </div>
               </div>
-            </div>
 
-            {# OIDC Token / Credential Helper #}
-            <div class="pf-v6-c-form__group" style="margin-top:var(--pf-t--global--spacer--md);">
-              <label class="pf-v6-c-form__label" for="gateway_refresh_token">
-                <span class="pf-v6-c-form__label-text">OIDC Refresh Token / Credential Payload</span>
-              </label>
-              <div class="pf-v6-c-form__group-control">
-                <textarea class="pf-v6-c-form-control" id="gateway_refresh_token" name="gateway_refresh_token" rows="3"
-                          placeholder="{% if ws.gateway and ws.gateway.has_refresh_token %}[Saved — leave blank to keep current token]{% else %}Paste raw token string, oidc_token.json bundle, or REFRESH_TOKEN=...{% endif %}"
-                          oninput="formatTokenInput(this.value)"></textarea>
-                <div class="pf-v6-c-form__helper-text">
-                  <div class="pf-v6-c-helper-text__item">
-                    <span class="pf-v6-c-helper-text__item-text" id="token-helper-text">
-                      {% if ws.gateway and ws.gateway.has_refresh_token %}
-                      ✓ Active refresh token stored encrypted in database. Paste new token to update.
-                      {% else %}
-                      Paste your refresh token from <code>openshell gateway login</code> or your hosting dashboard. Encrypted at rest.
-                      {% endif %}
-                    </span>
+              <div class="pf-v6-l-grid__item pf-m-6-col">
+                <div class="pf-v6-c-form__group">
+                  <label class="pf-v6-c-form__label" for="gateway_client_secret">
+                    <span class="pf-v6-c-form__label-text">Client Secret</span>
+                  </label>
+                  <div class="pf-v6-c-form__group-control">
+                    <input type="password" class="pf-v6-c-form-control" id="gateway_client_secret" name="gateway_client_secret"
+                           placeholder="{% if ws.gateway and ws.gateway.has_client_secret %}[Saved — leave blank to keep current secret]{% else %}Confidential client secret for Service Account{% endif %}">
+                    <div class="pf-v6-c-form__helper-text">
+                      <div class="pf-v6-c-helper-text__item">
+                        <span class="pf-v6-c-helper-text__item-text" style="color:var(--pf-t--global--text--color--subtle);">
+                          {% if ws.gateway and ws.gateway.has_client_secret %}
+                          ✓ Service Account client secret stored encrypted in database.
+                          {% else %}
+                          Enables autonomous Service Account (<code>client_credentials</code>) authentication.
+                          {% endif %}
+                        </span>
+                      </div>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -314,6 +314,7 @@ async function parseCommandBox() {
     if (data.oidc_issuer) document.getElementById('gateway_oidc_issuer').value = data.oidc_issuer;
     if (data.oidc_client_id) document.getElementById('gateway_oidc_client_id').value = data.oidc_client_id;
     if (data.oidc_audience) document.getElementById('gateway_oidc_audience').value = data.oidc_audience;
+    if (data.client_secret) document.getElementById('gateway_client_secret').value = data.client_secret;
     if (data.bearer_token) document.getElementById('gateway_bearer_token').value = data.bearer_token;
     statusEl.textContent = '✓ Parsed & applied successfully';
     statusEl.style.color = 'var(--pf-t--global--color--status--success--default)';
@@ -321,41 +322,6 @@ async function parseCommandBox() {
     statusEl.textContent = 'Failed to parse input: ' + err.message;
     statusEl.style.color = 'var(--pf-t--global--color--status--danger--default)';
   }
-}
-
-async function formatTokenInput(val) {
-  val = val.trim();
-  const helper = document.getElementById('token-helper-text');
-  if (!val) {
-    helper.textContent = 'Paste your refresh token from openshell gateway login or your hosting dashboard.';
-    helper.style.color = 'var(--pf-t--global--text--color--subtle)';
-    return;
-  }
-  try {
-    const res = await fetch('/workspaces/gateway/parse-token', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({token_input: val})
-    });
-    if (!res.ok) return;
-    const data = await res.json();
-    if (data.status === 'valid') {
-      if (data.format_detected === 'json_bundle' && data.refresh_token) {
-        document.getElementById('gateway_refresh_token').value = data.refresh_token;
-        if (data.issuer && !document.getElementById('gateway_oidc_issuer').value) {
-          document.getElementById('gateway_oidc_issuer').value = data.issuer;
-        }
-        if (data.client_id && !document.getElementById('gateway_oidc_client_id').value) {
-          document.getElementById('gateway_oidc_client_id').value = data.client_id;
-        }
-      }
-      helper.textContent = `✓ ${data.message}`;
-      helper.style.color = 'var(--pf-t--global--color--status--success--default)';
-    } else {
-      helper.textContent = `⚠ ${data.message}`;
-      helper.style.color = 'var(--pf-t--global--color--status--warning--default)';
-    }
-  } catch (e) {}
 }
 </script>
 {% endblock %}

@@ -53,6 +53,8 @@ class OidcGatewayAuth:
         client_id: str,
         audience: str = "",
         workspace_id: int | None = None,
+        client_secret: str = "",
+        service_account_subject: str = "",
         tls_ca: str | None = None,
         tls_verify: bool = True,
     ):
@@ -60,6 +62,8 @@ class OidcGatewayAuth:
         self._client_id = client_id
         self._audience = audience
         self._workspace_id = workspace_id
+        self._client_secret = client_secret
+        self._service_account_subject = service_account_subject
         self._tls_ca = tls_ca
         self._tls_verify = tls_verify
         self._lock = threading.Lock()
@@ -80,12 +84,18 @@ class OidcGatewayAuth:
 
     def seed(
         self,
-        refresh_token: str,
+        refresh_token: str = "",
         access_token: str = "",
         expires_at: int | None = None,
+        client_secret: str = "",
+        service_account_subject: str = "",
     ) -> None:
         """Populate the in-memory token bundle."""
         with self._lock:
+            if client_secret:
+                self._client_secret = client_secret
+            if service_account_subject:
+                self._service_account_subject = service_account_subject
             self._bundle = {
                 "refresh_token": refresh_token,
                 "access_token": access_token,
@@ -99,12 +109,25 @@ class OidcGatewayAuth:
         Must return quickly; only refreshes against the IdP when stale.
         """
         with self._lock:
+            if self._client_secret:
+                if self._bundle and self._is_fresh(self._bundle):
+                    return self._bundle["access_token"]
+                self._bundle = self._fetch_client_credentials()
+                self._write_back(self._bundle)
+                return self._bundle["access_token"]
+
             if self._bundle is None or not self._bundle.get("refresh_token"):
                 if not self._reload_from_db():
                     ws_info = f" for workspace {self._workspace_id}" if self._workspace_id else ""
                     raise OidcAuthError(
-                        f"OpenShell OIDC credential not configured{ws_info} — provide a refresh token in gateway settings."
+                        f"OpenShell OIDC credential not configured{ws_info} — provide a refresh token or client secret in gateway settings."
                     )
+                if self._client_secret:
+                    if self._bundle and self._is_fresh(self._bundle):
+                        return self._bundle["access_token"]
+                    self._bundle = self._fetch_client_credentials()
+                    self._write_back(self._bundle)
+                    return self._bundle["access_token"]
             if self._is_fresh(self._bundle):
                 return self._bundle["access_token"]
             try:
@@ -156,6 +179,10 @@ class OidcGatewayAuth:
             return False
         if bundle is None:
             return False
+        if bundle.get("client_secret"):
+            self._client_secret = bundle["client_secret"]
+        if bundle.get("service_account_subject"):
+            self._service_account_subject = bundle["service_account_subject"]
         self._bundle = bundle
         return True
 
@@ -192,6 +219,38 @@ class OidcGatewayAuth:
             raise OidcAuthError("OIDC discovery response missing token_endpoint")
         self._token_endpoint = endpoint
         return endpoint
+
+    def _fetch_client_credentials(self) -> dict:
+        token_endpoint = self._discover_token_endpoint()
+        data = {
+            "grant_type": "client_credentials",
+            "client_id": self._client_id,
+            "client_secret": self._client_secret,
+        }
+        if self._audience:
+            data["audience"] = self._audience
+        try:
+            resp = self._http.post(token_endpoint, data=data)
+        except httpx.HTTPError as e:
+            raise OidcAuthError(f"OIDC client_credentials failed: {type(e).__name__}: {e}") from e
+        if resp.status_code != 200:
+            raise OidcAuthError(
+                f"OIDC client_credentials failed: HTTP {resp.status_code}: {resp.text[:200]}"
+            )
+        token = resp.json()
+        access_token = token.get("access_token")
+        if not access_token:
+            raise OidcAuthError("OIDC client_credentials response missing access_token")
+        expires_at = token.get("expires_at")
+        if expires_at is None:
+            expires_in = token.get("expires_in")
+            if isinstance(expires_in, (int, float)):
+                expires_at = int(time.time()) + int(expires_in)
+        return {
+            "access_token": access_token,
+            "refresh_token": "",
+            "expires_at": int(expires_at) if expires_at is not None else None,
+        }
 
     def _refresh(self, bundle: dict) -> dict:
         token_endpoint = self._discover_token_endpoint()
@@ -273,6 +332,8 @@ class WorkspaceOidcAuthManager:
         refresh_token: str = "",
         access_token: str = "",
         expires_at: int | None = None,
+        client_secret: str = "",
+        service_account_subject: str = "",
         tls_ca: str | None = None,
         tls_verify: bool = True,
     ) -> OidcGatewayAuth:
@@ -285,8 +346,14 @@ class WorkspaceOidcAuthManager:
                 and existing._audience == audience
                 and existing._tls_verify == tls_verify
             ):
-                if refresh_token:
-                    existing.seed(refresh_token, access_token, expires_at)
+                if refresh_token or client_secret:
+                    existing.seed(
+                        refresh_token=refresh_token,
+                        access_token=access_token,
+                        expires_at=expires_at,
+                        client_secret=client_secret,
+                        service_account_subject=service_account_subject,
+                    )
                 return existing
 
             if existing is not None:
@@ -297,13 +364,21 @@ class WorkspaceOidcAuthManager:
                 client_id=client_id,
                 audience=audience,
                 workspace_id=workspace_id,
+                client_secret=client_secret,
+                service_account_subject=service_account_subject,
                 tls_ca=tls_ca,
                 tls_verify=tls_verify,
             )
             with contextlib.suppress(RuntimeError):
                 auth.set_event_loop(asyncio.get_running_loop())
-            if refresh_token:
-                auth.seed(refresh_token, access_token, expires_at)
+            if refresh_token or client_secret:
+                auth.seed(
+                    refresh_token=refresh_token,
+                    access_token=access_token,
+                    expires_at=expires_at,
+                    client_secret=client_secret,
+                    service_account_subject=service_account_subject,
+                )
             self._instances[workspace_id] = auth
             return auth
 
@@ -362,7 +437,7 @@ async def _load_workspace_bundle(workspace_id: int | None) -> dict | None:
                 select(WorkspaceGateway).where(WorkspaceGateway.workspace_id == workspace_id)
             )
         ).scalar_one_or_none()
-        if gw is None or not gw.refresh_token:
+        if gw is None or (not gw.refresh_token and not gw.client_secret):
             return None
         expires_at = (
             int(gw.access_token_expires_at.replace(tzinfo=timezone.utc).timestamp())
@@ -373,6 +448,8 @@ async def _load_workspace_bundle(workspace_id: int | None) -> dict | None:
             "refresh_token": gw.refresh_token,
             "access_token": gw.access_token,
             "expires_at": expires_at,
+            "client_secret": gw.client_secret,
+            "service_account_subject": gw.service_account_subject,
         }
     return None
 
@@ -392,7 +469,8 @@ async def _persist_workspace_bundle(workspace_id: int | None, bundle: dict) -> N
             )
         ).scalar_one_or_none()
         if gw is not None:
-            gw.refresh_token = bundle["refresh_token"]
+            if bundle.get("refresh_token"):
+                gw.refresh_token = bundle["refresh_token"]
             gw.access_token = bundle.get("access_token", "")
             expires_at = bundle.get("expires_at")
             gw.access_token_expires_at = (

@@ -64,6 +64,7 @@ def _serialize_gateway(gw: WorkspaceGateway) -> WorkspaceGatewayOut:
     return WorkspaceGatewayOut(
         workspace_id=gw.workspace_id,
         gateway_url=gw.gateway_url,
+        gateway_version=gw.gateway_version,
         auth_mode=gw.auth_mode,
         oidc_issuer=gw.oidc_issuer,
         oidc_client_id=gw.oidc_client_id,
@@ -71,6 +72,8 @@ def _serialize_gateway(gw: WorkspaceGateway) -> WorkspaceGatewayOut:
         has_refresh_token=bool(gw.refresh_token_enc),
         has_access_token=bool(gw.access_token_enc),
         access_token_expires_at=gw.access_token_expires_at,
+        has_client_secret=bool(gw.client_secret_enc),
+        service_account_subject=gw.service_account_subject,
         has_bearer_token=bool(gw.bearer_token_enc),
         has_tls_cert=bool(gw.tls_cert),
         has_tls_key=bool(gw.tls_key_enc),
@@ -120,6 +123,7 @@ async def parse_gateway_command_endpoint(body: ParseGatewayCommandIn):
         oidc_issuer=res.oidc_issuer,
         oidc_client_id=res.oidc_client_id,
         oidc_audience=res.oidc_audience,
+        client_secret=res.client_secret,
         bearer_token=res.bearer_token,
         tls_verify=res.tls_verify,
         suggested_name=res.suggested_name,
@@ -149,7 +153,12 @@ async def test_gateway_connection_endpoint(
     db: AsyncSession = Depends(get_db),
     identity: TokenIdentity = Depends(require_api_auth),
 ):
-    from swarmer.openshell_client import GatewayConfig, probe_gateway_connectivity
+    from swarmer.openshell_client import (
+        GatewayConfig,
+        get_client_for_config,
+        probe_gateway_connectivity,
+    )
+    from swarmer.gateway_version import observe_gateway_version
     from swarmer.openshell_oidc import OidcGatewayAuth
 
     if body.workspace_id is None and not await workspace_acl.can_create_workspace(
@@ -195,12 +204,23 @@ async def test_gateway_connection_endpoint(
     refresh_token = body.refresh_token
     if not refresh_token and stored_gw is not None and stored_gw.auth_mode == "oidc":
         refresh_token = stored_gw.refresh_token or None
+    client_secret = body.client_secret
+    if not client_secret and stored_gw is not None and stored_gw.auth_mode == "oidc":
+        client_secret = stored_gw.client_secret or None
+    service_account_subject = body.service_account_subject or (
+        stored_gw.service_account_subject if stored_gw else None
+    )
     bearer_token = body.bearer_token
     if not bearer_token and stored_gw is not None and stored_gw.auth_mode == "bearer":
         bearer_token = stored_gw.bearer_token or None
 
     uses_stored_credential = (
-        (body.auth_mode == "oidc" and not body.refresh_token and bool(refresh_token))
+        (
+            body.auth_mode == "oidc"
+            and not body.refresh_token
+            and not body.client_secret
+            and (bool(refresh_token) or bool(client_secret))
+        )
         or (body.auth_mode == "bearer" and not body.bearer_token and bool(bearer_token))
     )
     if uses_stored_credential and stored_gw is not None:
@@ -217,14 +237,20 @@ async def test_gateway_connection_endpoint(
 
     temp_auth = None
     bearer_callable = None
-    if body.auth_mode == "oidc" and oidc_issuer and oidc_client_id and refresh_token:
+    if body.auth_mode == "oidc" and oidc_issuer and oidc_client_id and (refresh_token or client_secret):
         temp_auth = OidcGatewayAuth(
             issuer=oidc_issuer,
             client_id=oidc_client_id,
             audience=oidc_audience or "",
+            client_secret=client_secret or "",
+            service_account_subject=service_account_subject or "",
             tls_ca=body.tls_ca,
         )
-        temp_auth.seed(refresh_token)
+        temp_auth.seed(
+            refresh_token=refresh_token or "",
+            client_secret=client_secret or "",
+            service_account_subject=service_account_subject or "",
+        )
         bearer_callable = temp_auth.current_access_token
 
     config = GatewayConfig(
@@ -239,11 +265,21 @@ async def test_gateway_connection_endpoint(
     )
     try:
         result = await probe_gateway_connectivity(config)
+        gateway_version = result.get("gateway_version", "")
+        if gateway_version:
+            tracking_client = get_client_for_config(config)
+            try:
+                gateway_version = await observe_gateway_version(config, tracking_client, db)
+            finally:
+                close = getattr(tracking_client, "close", None)
+                if callable(close):
+                    close()
         return TestGatewayConnectionOut(
             status="ok",
             gateway_url=config.gateway_url,
             auth_mode=config.auth_mode,
             sandboxes_count=result.get("sandboxes_count", 0),
+            gateway_version=gateway_version or result.get("gateway_version", ""),
         )
     except Exception:
         log.warning("Gateway connection test failed for %s", config.gateway_url, exc_info=True)
@@ -329,6 +365,10 @@ async def create_workspace(
             gw.refresh_token = body.gateway.refresh_token
         if body.gateway.access_token:
             gw.access_token = body.gateway.access_token
+        if body.gateway.client_secret:
+            gw.client_secret = body.gateway.client_secret
+        if body.gateway.service_account_subject:
+            gw.service_account_subject = body.gateway.service_account_subject
         if body.gateway.bearer_token:
             gw.bearer_token = body.gateway.bearer_token
         if body.gateway.tls_key:
@@ -474,6 +514,10 @@ async def set_workspace_gateway(
         gw.refresh_token = body.refresh_token
     if body.access_token is not None:
         gw.access_token = body.access_token
+    if body.client_secret is not None:
+        gw.client_secret = body.client_secret
+    if body.service_account_subject is not None:
+        gw.service_account_subject = body.service_account_subject
     if body.bearer_token is not None:
         gw.bearer_token = body.bearer_token
     if body.tls_key is not None:

@@ -11,17 +11,23 @@ Step-by-step guide to running Swarmer with a live OpenShell sandbox backend, eit
 | `helm` | 3.8+ | Required for OCI chart support |
 | `oc` | any | OpenShift only — grants SCC policies |
 | Python | 3.12 | `python3 --version` |
-| `openshell` CLI | 0.0.82+ | `openshell --version` — must match or be compatible with gateway version |
+| `openshell` CLI | 0.0.116+ | `openshell --version` — must match or be compatible with gateway version |
 
-> **CLI version matters.** The `openshell` CLI version must be compatible with the deployed gateway. Run `openshell --version` and compare with `OPENSHELL_VERSION` in the Makefile. Install the matching release from [NVIDIA/OpenShell releases](https://github.com/NVIDIA/OpenShell/releases).
+> **CLI version matters.** The `openshell` CLI version must be compatible with the deployed gateway. Run `openshell --version` and compare with `OPENSHELL_VERSION` in the Makefile. Use `make update-deps` to discover the latest pinned release, then install the matching release from [NVIDIA/OpenShell releases](https://github.com/NVIDIA/OpenShell/releases).
 
 ## Deployment: `make deploy`
 
 `make deploy` handles the full OpenShell lifecycle — install, SCC grants, cert extraction, and gateway registration — in a single idempotent command. You do not need to run any OpenShell steps manually.
 
+Use `make update-deps` to discover the latest stable OpenShell and Agent Sandbox
+releases and update the repository pins before deploying. Swarmer records the
+last observed version of each gateway. If a gateway version changes, its
+OpenShell-backed AI provider state is treated as invalid and the corresponding
+configured flags are cleared; raw AI credentials are never stored by Swarmer.
+
 What `make deploy` does:
 
-1. **Installs Agent Sandbox CRDs** from `AGENT_SANDBOX_VERSION` (do not upgrade to v0.5.0+ until the gateway supports v1beta1 ownerReferences)
+1. **Installs Agent Sandbox CRDs** from `AGENT_SANDBOX_VERSION`.
 2. **Installs or upgrades OpenShell on every run**: `helm upgrade --install oci://ghcr.io/nvidia/openshell/helm-chart --version $(OPENSHELL_VERSION) --set server.workspaceDefaultStorageSize=$(OPENSHELL_WORKSPACE_STORAGE)` on first install; on subsequent runs (OpenShell already installed) it runs `helm upgrade --reuse-values` with the same `--version`/`--set` flags, so bumping `OPENSHELL_VERSION` or `OPENSHELL_WORKSPACE_STORAGE` in the Makefile **is** applied automatically on the next `make deploy` — no manual `helm upgrade` needed. `server.workspaceDefaultStorageSize` (Makefile default `10Gi`) controls the size of the per-sandbox `workspace-{name}` PVC mounted at `/sandbox` (OpenShell's own built-in default `2Gi`) — this is the actual fix for large-repo Go CVE scans exhausting disk (ACM-38172). It is a gateway-wide ceiling, distinct from the sandbox pod's ephemeral-storage compute resource (container writable layer / unsized emptyDirs), which is hardcoded to `10Gi` in `openshell_client.create_sandbox()` (ACM-39804; a per-session dropdown for this existed under ACM-38184 but was removed — it never affected `/sandbox`, and there is no OpenShell API, verified through gateway/SDK 0.0.97, to size `/sandbox` per sandbox). Note: only newly created sandbox PVCs pick up a changed size — existing sandboxes are unaffected until relaunched.
 3. **Grants OpenShift SCCs** (if `oc` is on PATH — no-op on plain Kubernetes):
    - `anyuid` and `privileged` for both `openshell` and `openshell-sandbox` service accounts

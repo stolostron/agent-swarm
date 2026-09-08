@@ -59,21 +59,11 @@ async def _secrets_context(api, ws_id: int) -> dict:
     except APIError:
         github_app = None
 
-    # Check gateway for Vertex AI (google-cloud) provider — ADC is stored on OpenShell,
-    # not in the Swarmer DB, so the gateway is the source of truth for this status.
+    # ADC and API keys are stored on OpenShell, not in the Swarmer DB, so the
+    # workspace gateway is the source of truth for provider status.
+    oc_client = None
     vertex_provider_configured = False
     vertex_provider_check_failed = False
-    try:
-        vertex_provider_configured = await openshell_client.provider_exists(
-            f"swarmer-ws-{ws_id}-google-cloud"
-        )
-    except Exception:
-        vertex_provider_check_failed = True
-        pass  # gateway may be unreachable in local dev without OpenShell
-
-    # Check gateway for the Google AI Studio (Gemini) provider — same pattern as
-    # Vertex ADC: the key is pushed to the gateway at save time and never stored
-    # encrypted in the Swarmer DB (ACM-37263).
     gemini_provider_configured = False
     gemini_provider_check_failed = False
     try:
@@ -93,9 +83,16 @@ async def _secrets_context(api, ws_id: int) -> dict:
     openai_provider_configured = False
     openai_provider_check_failed = False
     try:
-        openai_provider_configured = await openshell_client.provider_exists(
-            f"swarmer-ws-{ws_id}-openai"
-        )
+        if oc_client is not None:
+            openai_provider_configured = await openshell_client.provider_exists(
+                f"swarmer-ws-{ws_id}-openai", client=oc_client
+            )
+        elif gemini_provider_check_failed:
+            openai_provider_check_failed = True
+        else:
+            openai_provider_configured = await openshell_client.provider_exists(
+                f"swarmer-ws-{ws_id}-openai"
+            )
     except Exception:
         openai_provider_check_failed = True
         pass  # gateway may be unreachable in local dev without OpenShell
@@ -227,6 +224,8 @@ async def opencode_secret_save(
     # Push Vertex AI credentials to OpenShell gateway if ADC was provided.
     # The gateway stores and auto-refreshes the credential; Swarmer never persists it.
     vertex_configured = False
+    gemini_configured = False
+    openai_configured = False
     try:
         oc_client = await openshell_client.get_client_for_workspace(ws_id)
     except Exception:
@@ -267,13 +266,14 @@ async def opencode_secret_save(
                 },
                 client=oc_client,
             )
-        except Exception:
+            gemini_configured = True
+        except Exception as exc:
             log.warning(
                 "credential_save: failed to configure Gemini provider for workspace %d",
                 ws_id,
                 exc_info=True,
             )
-            flash(request, "Failed to configure Gemini on OpenShell.", "danger")
+            flash(request, f"Failed to configure Gemini on OpenShell: {exc}", "danger")
 
     # Push the OpenAI API key to the OpenShell gateway if submitted. Blank is
     # a no-op, keeping any existing provider credential unchanged.
@@ -288,13 +288,14 @@ async def opencode_secret_save(
                 credentials={"OPENAI_API_KEY": openai_key},
                 client=oc_client,
             )
-        except Exception:
+            openai_configured = True
+        except Exception as exc:
             log.warning(
                 "credential_save: failed to configure OpenAI provider for workspace %d",
                 ws_id,
                 exc_info=True,
             )
-            flash(request, "Failed to configure OpenAI on OpenShell.", "danger")
+            flash(request, f"Failed to configure OpenAI on OpenShell: {exc}", "danger")
 
     async with get_api_client(request) as api:
         try:
@@ -314,8 +315,8 @@ async def opencode_secret_save(
                 google_api_key="",  # intentionally empty — gateway is the store
                 openai_api_key="",  # intentionally empty — gateway is the store
                 application_default_credentials="",  # intentionally empty — gateway is the store
-                gemini_configured=True if gemini_key else None,
-                openai_configured=True if openai_key else None,
+                gemini_configured=True if gemini_configured else None,
+                openai_configured=True if openai_configured else None,
                 vertex_configured=True if vertex_configured else None,
                 shared=bool(shared),
             )

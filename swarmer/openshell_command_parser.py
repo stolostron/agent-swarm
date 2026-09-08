@@ -26,6 +26,7 @@ class ParsedGatewayCommand:
     oidc_issuer: str | None = None
     oidc_client_id: str | None = None
     oidc_audience: str | None = None
+    client_secret: str | None = None
     bearer_token: str | None = None
     tls_verify: bool = True
     suggested_name: str | None = None
@@ -39,6 +40,7 @@ class ParsedGatewayCommand:
             "oidc_issuer": self.oidc_issuer,
             "oidc_client_id": self.oidc_client_id,
             "oidc_audience": self.oidc_audience,
+            "client_secret": self.client_secret,
             "bearer_token": self.bearer_token,
             "tls_verify": self.tls_verify,
             "suggested_name": self.suggested_name,
@@ -94,6 +96,7 @@ def _parse_json_metadata(json_str: str) -> ParsedGatewayCommand:
         oidc_issuer=_opt_str(data.get("oidc_issuer")),
         oidc_client_id=_opt_str(data.get("oidc_client_id")),
         oidc_audience=_opt_str(data.get("oidc_audience")),
+        client_secret=_opt_str(data.get("client_secret") or data.get("oidc_client_secret")),
         bearer_token=_opt_str(data.get("bearer_token") or data.get("token")),
         tls_verify=not bool(data.get("insecure") or data.get("gateway_insecure")),
         suggested_name=_opt_str(data.get("name")),
@@ -139,6 +142,7 @@ def _parse_cli_command(cmd_str: str) -> ParsedGatewayCommand:
     oidc_issuer = None
     oidc_client_id = None
     oidc_audience = None
+    client_secret = None
     bearer_token = None
     tls_verify = True
     auth_mode = "oidc"
@@ -172,6 +176,12 @@ def _parse_cli_command(cmd_str: str) -> ParsedGatewayCommand:
             i += 2
         elif token.startswith("--oidc-audience="):
             oidc_audience = token.split("=", 1)[1]
+            i += 1
+        elif token in ("--client-secret", "--oidc-client-secret") and i + 1 < len(remaining):
+            client_secret = remaining[i + 1]
+            i += 2
+        elif token.startswith("--client-secret=") or token.startswith("--oidc-client-secret="):
+            client_secret = token.split("=", 1)[1]
             i += 1
         elif token in ("--bearer-token", "--token") and i + 1 < len(remaining):
             bearer_token = remaining[i + 1]
@@ -225,6 +235,7 @@ def _parse_cli_command(cmd_str: str) -> ParsedGatewayCommand:
         oidc_issuer=oidc_issuer,
         oidc_client_id=oidc_client_id,
         oidc_audience=oidc_audience,
+        client_secret=client_secret,
         bearer_token=bearer_token,
         tls_verify=tls_verify,
         suggested_name=name,

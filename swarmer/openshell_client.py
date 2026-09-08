@@ -23,9 +23,13 @@ Credential injection:
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
 import os
 import pathlib
+
+# Avoid gRPC c-ares resolver failures on Kubernetes pods with ndots:5
+os.environ.setdefault("GRPC_DNS_RESOLVER", "native")
 import queue
 import shlex
 import tempfile
@@ -47,6 +51,26 @@ log = logging.getLogger(__name__)
 
 _PROVIDER_CACHE_TTL: float = 30.0
 _provider_cache: dict[str, tuple[bool, float]] = {}  # name → (exists, expires_at)
+_OPENSHELL_WORKSPACE = "default"
+
+
+def _set_workspace(request) -> None:
+    """Set the 0.0.88+ workspace field when the installed proto supports it."""
+    try:
+        request.workspace = _OPENSHELL_WORKSPACE
+    except (AttributeError, ValueError):
+        # Keep unit-test stubs and older clients importable while the deployment
+        # is upgraded. The pinned dependency is current OpenShell.
+        pass
+
+
+def _sdk_call(client, method_name: str, *args, **kwargs):
+    """Call an SDK method with workspace only when its signature supports it."""
+    method = getattr(client, method_name)
+    if "workspace" in inspect.signature(method).parameters:
+        return method(*args, **kwargs)
+    kwargs.pop("workspace", None)
+    return method(*args, **kwargs)
 
 # Sandbox pod ephemeral-storage compute resource (container writable layer /
 # unsized emptyDirs) applied to every sandbox (ACM-39804). Previously a
@@ -72,6 +96,8 @@ class GatewayConfig:
     bearer_token: str | None = None
     bearer_callable: Callable[[], str] | None = None
     workspace_id: int | None = None
+    client_secret: str | None = None
+    service_account_subject: str | None = None
 
 
 def default_gateway_config() -> GatewayConfig:
@@ -238,6 +264,8 @@ async def resolve_gateway_config(
                 if gw.access_token_expires_at
                 else None
             ),
+            client_secret=gw.client_secret,
+            service_account_subject=gw.service_account_subject,
             tls_ca=gw.tls_ca,
             tls_verify=gw.tls_verify,
         )
@@ -253,6 +281,8 @@ async def resolve_gateway_config(
         bearer_token=gw.bearer_token if gw.auth_mode == "bearer" else None,
         bearer_callable=bearer_callable,
         workspace_id=gw.workspace_id,
+        client_secret=gw.client_secret,
+        service_account_subject=gw.service_account_subject,
     )
 
 
@@ -264,7 +294,17 @@ async def get_client_for_workspace(
     config = await resolve_gateway_config(ws_or_id, db)
     if config.workspace_id is None:
         return None
-    return get_client_for_config(config)
+    client = get_client_for_config(config)
+    if db is not None:
+        try:
+            from swarmer.gateway_version import observe_gateway_version
+
+            await observe_gateway_version(config, client, db)
+        except Exception:
+            # Version tracking must never make an otherwise healthy gateway
+            # unusable, especially while upgrading mixed SDK/gateway versions.
+            log.warning("OpenShell gateway version observation failed", exc_info=True)
+    return client
 
 
 def _get_client(gateway: GatewayConfig | None = None):
@@ -279,12 +319,23 @@ async def probe_gateway_connectivity(config: GatewayConfig) -> dict:
     def _do_test() -> dict:
         client = get_client_for_config(config)
         try:
-            sandboxes = client.list()
+            list_all = getattr(client, "list_for_all_workspaces", None)
+            sandboxes = list_all() if callable(list_all) else client.list()
+            gateway_version = ""
+            get_gateway_info = getattr(getattr(client, "_stub", None), "GetGatewayInfo", None)
+            if callable(get_gateway_info):
+                from openshell._proto import openshell_pb2
+
+                info = get_gateway_info(
+                    openshell_pb2.GetGatewayInfoRequest(), timeout=10
+                )
+                gateway_version = info.gateway_version
             return {
                 "status": "ok",
                 "gateway_url": config.gateway_url,
                 "auth_mode": config.auth_mode,
                 "sandboxes_count": len(sandboxes),
+                "gateway_version": gateway_version,
             }
         finally:
             close = getattr(client, "close", None)
@@ -386,6 +437,30 @@ async def ensure_provider(
     if client is None:
         client = _get_client()
 
+    # google-ai-studio is a Swarmer-owned profile rather than a gateway built-in.
+    # Import it on the resolved client so dedicated remote gateways behave like
+    # the cluster-default gateway.
+    if profile_type == "google-ai-studio":
+        await import_provider_profiles(
+            [
+                {
+                    "id": "google-ai-studio",
+                    "display_name": "Google AI Studio",
+                    "inference_capable": True,
+                    "credentials": [
+                        {
+                            "name": "GOOGLE_API_KEY",
+                            "env_vars": ["GOOGLE_API_KEY"],
+                            "required": True,
+                            "auth_style": "header",
+                            "header_name": "x-goog-api-key",
+                        }
+                    ],
+                }
+            ],
+            client=client,
+        )
+
     def _build_provider(req_provider):
         req_provider.metadata.name = name
         req_provider.type = profile_type
@@ -396,12 +471,14 @@ async def ensure_provider(
 
     def _do_ensure():
         create_req = openshell_pb2.CreateProviderRequest()
+        _set_workspace(create_req)
         _build_provider(create_req.provider)
         try:
             client._stub.CreateProvider(create_req, timeout=client._timeout)
         except grpc.RpcError as exc:
             if isinstance(exc, grpc.Call) and exc.code() == grpc.StatusCode.ALREADY_EXISTS:
                 update_req = openshell_pb2.UpdateProviderRequest()
+                _set_workspace(update_req)
                 _build_provider(update_req.provider)
                 client._stub.UpdateProvider(update_req, timeout=client._timeout)
             else:
@@ -428,6 +505,7 @@ async def delete_provider(name: str, client=None) -> None:
     def _do_delete():
         req = openshell_pb2.DeleteProviderRequest()
         req.name = name
+        _set_workspace(req)
         try:
             client._stub.DeleteProvider(req, timeout=client._timeout)
         except grpc.RpcError as exc:
@@ -462,6 +540,7 @@ async def provider_exists(name: str, client=None) -> bool:
     def _do_check() -> bool:
         req = openshell_pb2.GetProviderRequest()
         req.name = name
+        _set_workspace(req)
         try:
             client._stub.GetProvider(req, timeout=client._timeout)
             return True
@@ -714,6 +793,7 @@ async def attach_sandbox_provider(sandbox_name: str, provider_name: str, client=
         req = openshell_pb2.AttachSandboxProviderRequest()
         req.sandbox_name = sandbox_name
         req.provider_name = provider_name
+        _set_workspace(req)
         client._stub.AttachSandboxProvider(req, timeout=client._timeout)
 
     await asyncio.to_thread(_do_attach)
@@ -731,6 +811,7 @@ async def detach_sandbox_provider(sandbox_name: str, provider_name: str, client=
         req = openshell_pb2.DetachSandboxProviderRequest()
         req.sandbox_name = sandbox_name
         req.provider_name = provider_name
+        _set_workspace(req)
         try:
             client._stub.DetachSandboxProvider(req, timeout=client._timeout)
         except grpc.RpcError as exc:
@@ -776,7 +857,9 @@ async def approve_draft_policy_chunks(
     def _do_approve():
         try:
             dp = client._stub.GetDraftPolicy(
-                openshell_pb2.GetDraftPolicyRequest(name=sandbox_name), timeout=10
+                (lambda req: (_set_workspace(req), req)[1])(
+                    openshell_pb2.GetDraftPolicyRequest(name=sandbox_name)
+                ), timeout=10
             )
             pending = [c for c in dp.chunks if c.status == "pending"]
             if not pending:
@@ -812,8 +895,10 @@ async def approve_draft_policy_chunks(
             for chunk in to_approve:
                 try:
                     client._stub.ApproveDraftChunk(
-                        openshell_pb2.ApproveDraftChunkRequest(
-                            name=sandbox_name, chunk_id=chunk.id
+                        (lambda req: (_set_workspace(req), req)[1])(
+                            openshell_pb2.ApproveDraftChunkRequest(
+                                name=sandbox_name, chunk_id=chunk.id
+                            )
                         ), timeout=10
                     )
                     approved_count += 1
@@ -855,7 +940,9 @@ async def get_draft_chunks(sandbox_name: str, client=None) -> list[dict]:
     def _do_fetch() -> list[dict]:
         try:
             dp = client._stub.GetDraftPolicy(
-                openshell_pb2.GetDraftPolicyRequest(name=sandbox_name), timeout=10
+                (lambda req: (_set_workspace(req), req)[1])(
+                    openshell_pb2.GetDraftPolicyRequest(name=sandbox_name)
+                ), timeout=10
             )
             result = []
             for chunk in dp.chunks:
@@ -921,8 +1008,10 @@ async def approve_chunks_by_id(
         for chunk_id in chunk_ids:
             try:
                 client._stub.ApproveDraftChunk(
-                    openshell_pb2.ApproveDraftChunkRequest(
-                        name=sandbox_name, chunk_id=chunk_id
+                    (lambda req: (_set_workspace(req), req)[1])(
+                        openshell_pb2.ApproveDraftChunkRequest(
+                            name=sandbox_name, chunk_id=chunk_id
+                        )
                     ),
                     timeout=10,
                 )
@@ -984,7 +1073,9 @@ async def undo_chunks_by_rule_name(
             rule_name_set = set(rule_names)
             try:
                 history = client._stub.GetDraftHistory(
-                    openshell_pb2.GetDraftHistoryRequest(name=sandbox_name),
+                    (lambda req: (_set_workspace(req), req)[1])(
+                        openshell_pb2.GetDraftHistoryRequest(name=sandbox_name)
+                    ),
                     timeout=10,
                 )
                 for entry in history.chunks:
@@ -1010,8 +1101,10 @@ async def undo_chunks_by_rule_name(
         for chunk_id in ids_to_undo:
             try:
                 client._stub.UndoDraftChunk(
-                    openshell_pb2.UndoDraftChunkRequest(
-                        name=sandbox_name, chunk_id=chunk_id
+                    (lambda req: (_set_workspace(req), req)[1])(
+                        openshell_pb2.UndoDraftChunkRequest(
+                            name=sandbox_name, chunk_id=chunk_id
+                        )
                     ),
                     timeout=10,
                 )
@@ -1042,6 +1135,7 @@ async def import_provider_profiles(profiles: list[dict], client=None) -> None:
 
     def _do_import():
         req = openshell_pb2.ImportProviderProfilesRequest()
+        _set_workspace(req)
         for p in profiles:
             profile = openshell_pb2.ProviderProfile(
                 id=p["id"],
@@ -1135,7 +1229,7 @@ async def create_sandbox(
     spec.template.resources.CopyFrom(resources)
 
     def _do_create():
-        return client.create(spec=spec)
+        return _sdk_call(client, "create", workspace=_OPENSHELL_WORKSPACE, spec=spec)
 
     ref = await asyncio.to_thread(_do_create)
     await _wait_sandbox_ready(ref.name, client=client)
@@ -1215,7 +1309,9 @@ async def _wait_sandbox_ready(
     def _poll():
         while time.time() < deadline:
             resp = client._stub.GetSandbox(
-                openshell_pb2.GetSandboxRequest(name=sandbox_name), timeout=10
+                (lambda req: (_set_workspace(req), req)[1])(
+                    openshell_pb2.GetSandboxRequest(name=sandbox_name)
+                ), timeout=10
             )
             status = resp.sandbox.status
             if status.phase == openshell_pb2.SANDBOX_PHASE_ERROR:
@@ -1238,7 +1334,7 @@ async def delete_sandbox(sandbox_name: str, client=None) -> None:
         client = _get_client()
 
     def _do_delete():
-        client.delete(sandbox_name)
+        _sdk_call(client, "delete", sandbox_name, workspace=_OPENSHELL_WORKSPACE)
 
     await asyncio.to_thread(_do_delete)
 
@@ -1249,15 +1345,19 @@ async def list_sandboxes(client=None) -> list[str]:
         client = _get_client()
 
     def _do_list():
-        return client.list()
+        return _sdk_call(client, "list", workspace=_OPENSHELL_WORKSPACE)
 
     refs = await asyncio.to_thread(_do_list)
     return [ref.name for ref in refs]
 
 
-async def _sandbox_id(sandbox_name: str, client) -> str:
+async def _sandbox_id(sandbox_name: str, client=None) -> str:
     """Resolve sandbox name → id (needed by the exec RPC)."""
-    ref = await asyncio.to_thread(client.get, sandbox_name)
+    if client is None:
+        client = _get_client()
+    ref = await asyncio.to_thread(
+        _sdk_call, client, "get", sandbox_name, workspace=_OPENSHELL_WORKSPACE
+    )
     return ref.id
 
 
@@ -1379,7 +1479,9 @@ except Exception as exc:
 
     def _do_read():
         try:
-            sid = client.get(sandbox_name).id
+            sid = _sdk_call(
+                client, "get", sandbox_name, workspace=_OPENSHELL_WORKSPACE
+            ).id
             client.exec(sid, ["sh", "-c", "cat > /tmp/_oc_read.py"], stdin=reader, timeout_seconds=10)
             result = client.exec(sid, ["python3", "/tmp/_oc_read.py"], timeout_seconds=15)
             if result.stderr and "DB_ERR:" in result.stderr:
@@ -1395,7 +1497,7 @@ except Exception as exc:
 async def exec_command(
     sandbox_name: str,
     cmd: list[str],
-    client,
+    client=None,
     stdin: bytes | None = None,
     timeout_seconds: int | None = None,
     env: dict[str, str] | None = None,
@@ -1600,6 +1702,7 @@ async def expose_service(
             target_port=target_port,
             domain=True,
         )
+        _set_workspace(req)
         resp = client._stub.ExposeService(req, timeout=client._timeout)
         url = resp.url
         log.info("expose_service %s/%s → %s", sandbox_name, service_name, url)
@@ -1637,6 +1740,7 @@ async def delete_service(
             sandbox=sandbox_name,
             service=service_name,
         )
+        _set_workspace(req)
         client._stub.DeleteService(req, timeout=client._timeout)
 
     await asyncio.to_thread(_do)

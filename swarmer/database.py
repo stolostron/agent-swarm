@@ -266,6 +266,8 @@ async def migrate_db() -> None:
             refresh_token_enc TEXT,
             access_token_enc TEXT,
             access_token_expires_at DATETIME,
+            client_secret_enc TEXT,
+            service_account_subject VARCHAR(255),
             bearer_token_enc TEXT,
             tls_ca TEXT,
             tls_cert TEXT,
@@ -313,6 +315,15 @@ async def migrate_db() -> None:
             repo VARCHAR(255) NOT NULL UNIQUE,
             etag VARCHAR(255) NOT NULL DEFAULT '',
             last_checked_at DATETIME NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%S', 'now'))
+        )""",
+        # ACM-44757: Support OIDC client_credentials / Service Account for dedicated OpenShell gateways
+        "ALTER TABLE workspace_gateways ADD COLUMN client_secret_enc TEXT DEFAULT NULL",
+        "ALTER TABLE workspace_gateways ADD COLUMN service_account_subject VARCHAR(255) DEFAULT NULL",
+        "ALTER TABLE workspace_gateways ADD COLUMN gateway_version VARCHAR(64) NOT NULL DEFAULT ''",
+        """CREATE TABLE IF NOT EXISTS openshell_gateway_versions (
+            gateway_url VARCHAR(1024) PRIMARY KEY,
+            gateway_version VARCHAR(64) NOT NULL,
+            updated_at DATETIME NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%S', 'now'))
         )""",
     ]
     async with _engine.begin() as conn:
