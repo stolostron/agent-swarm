@@ -603,6 +603,20 @@ def test_custom_policies_merged_into_network_policies():
     assert rule["endpoints"][0]["host"] == "vuln.go.dev"
 
 
+def test_npm_registry_allows_encoded_slashes():
+    custom = [{
+        "name": "allow_registry_npmjs_org_443",
+        "endpoints": [{"host": "registry.npmjs.org", "port": 443, "protocol": "rest", "access": "full"}],
+        "binaries": [],
+    }]
+    net = build_session_network_policies(
+        _make_session(language="golang"), repos=[], mcp_servers=[],
+        agent_tool="opencode", model=_MODEL, custom_policies=custom,
+    )
+    rule = net["custom_allow_registry_npmjs_org_443"]
+    assert rule["endpoints"][0]["allow_encoded_slash"] is True
+
+
 def test_custom_policies_none_does_not_error():
     """Passing custom_policies=None (the default) does not raise."""
     net = build_session_network_policies(

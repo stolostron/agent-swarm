@@ -124,6 +124,8 @@ class WorkspaceOut(BaseModel):
     gateway: WorkspaceGatewayOut | None = None
     created_at: datetime
     updated_at: datetime
+    ai_provider_warning: bool = False
+    missing_ai_providers: list[str] = Field(default_factory=list)
 
     model_config = {"from_attributes": True}
 
@@ -190,6 +192,7 @@ class ScheduleEntryCreate(BaseModel):
     fix_authors: str = Field("", max_length=512)
     label: str = ""
     prompt_id: int
+    provider: str = Field("", max_length=128, pattern=r"^(|claude|gemini|openai)$")
     instruction_prompt: str = ""
     include_event_context: bool = True
     enabled: bool = True
@@ -203,6 +206,7 @@ class ScheduleEntryUpdate(BaseModel):
     fix_authors: str | None = Field(None, max_length=512)
     label: str | None = None
     prompt_id: int | None = None
+    provider: str | None = Field(None, max_length=128, pattern=r"^(|claude|gemini|openai)$")
     instruction_prompt: str | None = None
     include_event_context: bool | None = None
     enabled: bool | None = None
@@ -219,6 +223,7 @@ class ScheduleEntryOut(BaseModel):
     cron_next_run: datetime | None
     label: str
     prompt_id: int | None
+    provider: str = ""
     instruction_prompt: str
     include_event_context: bool = True
     enabled: bool
@@ -366,6 +371,11 @@ class CredentialsSave(BaseModel):
     openai_api_key: str = ""
     application_default_credentials: str = ""
     shared: bool = False
+    # Non-secret markers used by the console when credentials are stored only
+    # on OpenShell. None means leave the existing marker unchanged.
+    gemini_configured: bool | None = None
+    openai_configured: bool | None = None
+    vertex_configured: bool | None = None
 
 
 class CredentialsOut(BaseModel):
@@ -377,6 +387,11 @@ class CredentialsOut(BaseModel):
     vertex_location: str
     masked_api_key: str
     shared: bool
+    gemini_configured: bool
+    openai_configured: bool
+    vertex_configured: bool
+    has_gemini: bool
+    has_openai: bool
     created_at: datetime
     updated_at: datetime
 

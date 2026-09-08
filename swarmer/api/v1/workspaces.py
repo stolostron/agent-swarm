@@ -42,6 +42,7 @@ from swarmer.models.workspace_member import WorkspaceMember
 from swarmer.openshell_command_parser import parse_gateway_command_or_json
 from swarmer.openshell_oidc import oidc_manager
 from swarmer.openshell_token_parser import parse_token_input
+from swarmer.provider_status import get_missing_provider_names_bulk
 
 log = logging.getLogger(__name__)
 
@@ -261,7 +262,15 @@ async def list_workspaces(
     )
     workspaces = result.scalars().all()
     accessible = await filter_accessible_workspaces(db, workspaces, identity)
-    return [_to_workspace_out(ws) for ws in accessible]
+    missing_map = await get_missing_provider_names_bulk([w.id for w in accessible], db)
+    output = []
+    for workspace in accessible:
+        missing = missing_map.get(workspace.id, [])
+        item = _to_workspace_out(workspace)
+        item.ai_provider_warning = bool(missing)
+        item.missing_ai_providers = missing
+        output.append(item)
+    return output
 
 
 @router.post("", response_model=WorkspaceOut, status_code=status.HTTP_201_CREATED)

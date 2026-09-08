@@ -540,6 +540,8 @@ def build_session_network_policies(
             ep = dict(ep)
             if ep.get("protocol") and not ep.get("access") and not ep.get("rules"):
                 ep["access"] = "full"
+            if ep.get("host") == "registry.npmjs.org":
+                ep["allow_encoded_slash"] = True
             endpoints.append(ep)
         network_policies_dict[key] = {**rule, "endpoints": endpoints}
 

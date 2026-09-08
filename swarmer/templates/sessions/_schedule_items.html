@@ -55,7 +55,12 @@
         {% else %}
           {% if sched.label %}
           <span class="pf-v6-c-label pf-m-purple" style="margin-right:var(--pf-t--global--spacer--xs);"><span class="pf-v6-c-label__content">{{ sched.label }}</span></span>
-          {% endif %}
+         {% endif %}
+         {% if sched.provider %}
+         <span class="pf-v6-c-label pf-m-blue" style="margin-left:var(--pf-t--global--spacer--xs);"><span class="pf-v6-c-label__content">{{ {'claude': 'Claude', 'gemini': 'Gemini', 'openai': 'OpenAI'}.get(sched.provider, sched.provider) }}</span></span>
+         {% else %}
+         <span style="margin-left:var(--pf-t--global--spacer--xs); font-size:var(--pf-t--global--font--size--xs); color:var(--pf-t--global--text--color--subtle);">· session provider</span>
+         {% endif %}
           <code style="font-size:var(--pf-t--global--font--size--xs);">{{ sched.cron_schedule }}</code>
         {% endif %}
         {% if sched.prompt %}
@@ -174,13 +179,22 @@
         </div>
 
         <div>
+           <label style="font-size:var(--pf-t--global--text--color--subtle);">AI Provider</label>
+           <select name="provider" class="pf-v6-c-form-control" style="font-size:var(--pf-t--global--font--size--sm);">
+             <option value="" {% if not sched.provider %}selected{% endif %}>Use session provider</option>
+             <option value="claude" {% if sched.provider == 'claude' %}selected{% endif %}>Claude / Vertex AI</option>
+             <option value="gemini" {% if sched.provider == 'gemini' %}selected{% endif %}>Gemini</option>
+             <option value="openai" {% if sched.provider == 'openai' %}selected{% endif %}>OpenAI</option>
+           </select>
+         </div>
+         <div>
           <label style="font-size:var(--pf-t--global--font--size--sm); color:var(--pf-t--global--text--color--subtle);">Label (optional)</label>
           <input type="text" name="label" class="pf-v6-c-form-control"
                  value="{{ sched.label }}" placeholder="e.g. PR Fix / Nightly Sweep"
                  style="width:100%; font-size:var(--pf-t--global--font--size--sm);">
         </div>
 
-        <div>
+     <div>
            <label style="font-size:var(--pf-t--global--font--size--sm); color:var(--pf-t--global--text--color--subtle);">Prompt <span style="color:var(--pf-t--global--danger--color--100);">(required)</span></label>
            <select name="prompt_id" class="pf-v6-c-form-control" required style="font-size:var(--pf-t--global--font--size--sm);">
              {% if not sched.prompt_id %}<option value="" disabled selected>Select a prompt</option>{% endif %}
@@ -302,7 +316,16 @@
              style="width:100%; font-size:var(--pf-t--global--font--size--sm);">
     </div>
 
-    <div>
+     <div>
+       <label style="font-size:var(--pf-t--global--font--size--sm); color:var(--pf-t--global--text--color--subtle);">AI Provider</label>
+       <select name="provider" class="pf-v6-c-form-control" style="font-size:var(--pf-t--global--font--size--sm);">
+         <option value="" selected>Use session provider</option>
+         <option value="claude">Claude / Vertex AI</option>
+         <option value="gemini">Gemini</option>
+         <option value="openai">OpenAI</option>
+       </select>
+     </div>
+     <div>
        <label style="font-size:var(--pf-t--global--font--size--sm); color:var(--pf-t--global--text--color--subtle);">Prompt <span style="color:var(--pf-t--global--danger--color--100);">(required)</span></label>
        <select name="prompt_id" class="pf-v6-c-form-control" required style="font-size:var(--pf-t--global--font--size--sm);">
          <option value="" disabled selected>Select a prompt</option>
