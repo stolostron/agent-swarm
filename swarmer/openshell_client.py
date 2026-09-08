@@ -53,6 +53,74 @@ _PROVIDER_CACHE_TTL: float = 30.0
 _provider_cache: dict[str, tuple[bool, float]] = {}  # name → (exists, expires_at)
 _OPENSHELL_WORKSPACE = "default"
 
+# Custom provider profiles swarmer registers in OpenShell gateways.
+# Ensures static credentials (e.g. OPENAI_API_KEY, GOOGLE_API_KEY) are bound to
+# their endpoints so OpenShell 0.0.116+ does not withhold them as unbound credentials.
+CUSTOM_PROVIDER_PROFILES: list[dict] = [
+    {
+        "id": "openai",
+        "display_name": "OpenAI",
+        "inference_capable": True,
+        "credentials": [
+            {
+                "name": "OPENAI_API_KEY",
+                "env_vars": ["OPENAI_API_KEY"],
+                "required": True,
+                "auth_style": "bearer",
+                "header_name": "authorization",
+            }
+        ],
+        "endpoints": [
+            {
+                "host": "api.openai.com",
+                "port": 443,
+                "protocol": "rest",
+                "access": "read-write",
+                "enforcement": "enforce",
+            }
+        ],
+    },
+    {
+        "id": "google-ai-studio",
+        "display_name": "Google AI Studio",
+        "inference_capable": True,
+        "credentials": [
+            {
+                # Credential name IS the env var injected into the sandbox.
+                # env_vars is used by the gateway proxy for HTTP request rewriting.
+                "name": "GOOGLE_API_KEY",
+                "env_vars": ["GOOGLE_API_KEY"],
+                "required": True,
+                "auth_style": "header",
+                "header_name": "x-goog-api-key",
+            }
+        ],
+        "endpoints": [
+            {
+                "host": "generativelanguage.googleapis.com",
+                "port": 443,
+                "protocol": "rest",
+                "access": "read-write",
+                "enforcement": "enforce",
+            }
+        ],
+    },
+    {
+        "id": "jira",
+        "display_name": "Jira",
+        "inference_capable": False,
+        "credentials": [
+            # JIRA_ACCESS_TOKEN is a secret credential — the gateway stores it securely
+            # and injects it as an opaque reference token (openshell:resolve:...) into
+            # the sandbox via GetSandboxProviderEnvironment.
+            # JIRA_SERVER_URL and JIRA_EMAIL are non-secret; they go into provider config
+            # (not credentials) and the gateway injects them as plain env vars alongside
+            # the credential reference tokens.
+            {"name": "JIRA_ACCESS_TOKEN", "env_vars": ["JIRA_ACCESS_TOKEN"], "required": True},
+        ],
+    },
+]
+
 
 def _set_workspace(request) -> None:
     """Set the 0.0.88+ workspace field when the installed proto supports it."""
@@ -437,29 +505,11 @@ async def ensure_provider(
     if client is None:
         client = _get_client()
 
-    # google-ai-studio is a Swarmer-owned profile rather than a gateway built-in.
-    # Import it on the resolved client so dedicated remote gateways behave like
-    # the cluster-default gateway.
-    if profile_type == "google-ai-studio":
-        await import_provider_profiles(
-            [
-                {
-                    "id": "google-ai-studio",
-                    "display_name": "Google AI Studio",
-                    "inference_capable": True,
-                    "credentials": [
-                        {
-                            "name": "GOOGLE_API_KEY",
-                            "env_vars": ["GOOGLE_API_KEY"],
-                            "required": True,
-                            "auth_style": "header",
-                            "header_name": "x-goog-api-key",
-                        }
-                    ],
-                }
-            ],
-            client=client,
-        )
+    # Custom Swarmer-owned profiles (openai, google-ai-studio, jira) are imported
+    # on the resolved client so dedicated remote gateways and fresh setups behave consistently.
+    custom_profile = next((p for p in CUSTOM_PROVIDER_PROFILES if p["id"] == profile_type), None)
+    if custom_profile is not None:
+        await import_provider_profiles([custom_profile], client=client)
 
     def _build_provider(req_provider):
         req_provider.metadata.name = name
@@ -1164,6 +1214,11 @@ async def import_provider_profiles(profiles: list[dict], client=None) -> None:
                         m.required = mat.get("required", True)
                         m.secret = mat.get("secret", False)
                 profile.credentials.append(c)
+            from google.protobuf.json_format import ParseDict
+            for ep in p.get("endpoints", []):
+                ParseDict(ep, profile.endpoints.add())
+            for bn in p.get("binaries", []):
+                ParseDict(bn, profile.binaries.add())
             req.profiles.append(openshell_pb2.ProviderProfileImportItem(profile=profile, source="swarmer"))
         client._stub.ImportProviderProfiles(req, timeout=client._timeout)
 

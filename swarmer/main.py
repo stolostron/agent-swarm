@@ -20,6 +20,7 @@ from swarmer.config import settings
 from swarmer.crypto import derive_session_secret, init_crypto
 from swarmer.database import checkpoint_db, create_tables, migrate_db, init_db
 from swarmer.deps import NotAuthenticated
+from swarmer.openshell_client import CUSTOM_PROVIDER_PROFILES as _OPENSHELL_CUSTOM_PROFILES
 from swarmer.api.v1 import router as api_v1_router
 from swarmer.routers import admins as admins_router
 from swarmer.routers import auth as auth_router
@@ -46,41 +47,6 @@ log = logging.getLogger(__name__)
 # task object could be garbage-collected mid-refresh with no warning. Each task
 # removes itself via add_done_callback once it completes (or is cancelled).
 _iat_refresh_restart_tasks: set[asyncio.Task] = set()
-
-# Custom provider profiles swarmer registers in the OpenShell gateway at startup.
-# google-vertex-ai is built-in since OpenShell 0.0.55 — no need to import it.
-_OPENSHELL_CUSTOM_PROFILES = [
-    {
-        "id": "google-ai-studio",
-        "display_name": "Google AI Studio",
-        "inference_capable": True,
-        "credentials": [
-            {
-                # Credential name IS the env var injected into the sandbox.
-                # env_vars is used by the gateway proxy for HTTP request rewriting.
-                "name": "GOOGLE_API_KEY",
-                "env_vars": ["GOOGLE_API_KEY"],
-                "required": True,
-                "auth_style": "header",
-                "header_name": "x-goog-api-key",
-            }
-        ],
-    },
-    {
-        "id": "jira",
-        "display_name": "Jira",
-        "inference_capable": False,
-        "credentials": [
-            # JIRA_ACCESS_TOKEN is a secret credential — the gateway stores it securely
-            # and injects it as an opaque reference token (openshell:resolve:...) into
-            # the sandbox via GetSandboxProviderEnvironment.
-            # JIRA_SERVER_URL and JIRA_EMAIL are non-secret; they go into provider config
-            # (not credentials) and the gateway injects them as plain env vars alongside
-            # the credential reference tokens.
-            {"name": "JIRA_ACCESS_TOKEN", "env_vars": ["JIRA_ACCESS_TOKEN"], "required": True},
-        ],
-    },
-]
 
 
 @asynccontextmanager

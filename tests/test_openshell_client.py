@@ -867,3 +867,52 @@ def test_get_client_builds_mtls_config_without_custom_ca(sdk_client):
     assert tls_kwargs["ca_path"] is None
     assert str(tls_kwargs["cert_path"]) == "client.crt"
     assert str(tls_kwargs["key_path"]) == "client.key"
+
+
+@pytest.mark.asyncio
+async def test_ensure_provider_auto_imports_openai_profile(sdk_client):
+    """ensure_provider('...-openai', 'openai', ...) auto-imports the OpenAI profile with endpoints."""
+    with patch.object(oc, "_get_client", return_value=sdk_client):
+        await oc.ensure_provider("swarmer-ws-1-openai", "openai", {}, credentials={"OPENAI_API_KEY": "sk-test"})
+
+    sdk_client._stub.ImportProviderProfiles.assert_called_once()
+    import_req = sdk_client._stub.ImportProviderProfiles.call_args.args[0]
+    assert len(import_req.profiles) == 1
+    imported_profile = import_req.profiles[0].profile
+    assert imported_profile.id == "openai"
+    assert len(imported_profile.endpoints) == 1
+    assert imported_profile.endpoints[0].host == "api.openai.com"
+    assert imported_profile.endpoints[0].port == 443
+
+
+@pytest.mark.asyncio
+async def test_import_provider_profiles_maps_endpoints_and_binaries(sdk_client):
+    """import_provider_profiles correctly translates endpoints and binaries to protobuf."""
+    profiles = [
+        {
+            "id": "test-prof",
+            "display_name": "Test Profile",
+            "credentials": [{"name": "KEY", "env_vars": ["KEY"]}],
+            "endpoints": [
+                {
+                    "host": "api.example.com",
+                    "port": 443,
+                    "protocol": "rest",
+                    "access": "read-write",
+                    "enforcement": "enforce",
+                }
+            ],
+            "binaries": [{"path": "/usr/bin/curl"}],
+        }
+    ]
+    with patch.object(oc, "_get_client", return_value=sdk_client):
+        await oc.import_provider_profiles(profiles)
+
+    sdk_client._stub.ImportProviderProfiles.assert_called_once()
+    req = sdk_client._stub.ImportProviderProfiles.call_args.args[0]
+    p = req.profiles[0].profile
+    assert p.id == "test-prof"
+    assert len(p.endpoints) == 1
+    assert p.endpoints[0].host == "api.example.com"
+    assert len(p.binaries) == 1
+    assert p.binaries[0].path == "/usr/bin/curl"
