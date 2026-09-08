@@ -198,8 +198,8 @@ async def test_gateway_connection_endpoint(
         bearer_token = stored_gw.bearer_token or None
 
     uses_stored_credential = (
-        (body.auth_mode == "oidc" and body.refresh_token is None and bool(refresh_token))
-        or (body.auth_mode == "bearer" and body.bearer_token is None and bool(bearer_token))
+        (body.auth_mode == "oidc" and not body.refresh_token and bool(refresh_token))
+        or (body.auth_mode == "bearer" and not body.bearer_token and bool(bearer_token))
     )
     if uses_stored_credential and stored_gw is not None:
         requested_url = body.gateway_url.strip()

@@ -203,6 +203,7 @@ class AgentSwarmMCPServer:
     async def _test_workspace_gateway(
         self,
         gateway_url: str,
+        workspace_id: int | None = None,
         auth_mode: str = "oidc",
         oidc_issuer: str | None = None,
         oidc_client_id: str | None = None,
@@ -213,6 +214,7 @@ class AgentSwarmMCPServer:
         tls_verify: bool = True,
     ) -> dict:
         payload = {
+            "workspace_id": workspace_id,
             "gateway_url": gateway_url,
             "auth_mode": auth_mode,
             "oidc_issuer": oidc_issuer,
@@ -711,6 +713,7 @@ class AgentSwarmMCPServer:
         @mcp.tool()
         async def test_workspace_gateway(
             gateway_url: str,
+            workspace_id: int | None = None,
             auth_mode: str = "oidc",
             oidc_issuer: str | None = None,
             oidc_client_id: str | None = None,
@@ -724,6 +727,7 @@ class AgentSwarmMCPServer:
 
             Args:
                 gateway_url: The gateway endpoint URL.
+                workspace_id: Optional workspace whose saved credentials may be tested.
                 auth_mode: Authentication mode ('oidc', 'bearer', 'none').
                 oidc_issuer: Optional OIDC issuer URL.
                 oidc_client_id: Optional OIDC client ID.
@@ -735,6 +739,7 @@ class AgentSwarmMCPServer:
             """
             return await self._test_workspace_gateway(
                 gateway_url=gateway_url,
+                workspace_id=workspace_id,
                 auth_mode=auth_mode,
                 oidc_issuer=oidc_issuer,
                 oidc_client_id=oidc_client_id,

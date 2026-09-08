@@ -130,7 +130,7 @@
               </label>
               <div class="pf-v6-c-form__group-control">
                 <input type="text" class="pf-v6-c-form-control" id="gateway_url" name="gateway_url"
-                       value="{{ gateway_url or '' }}" placeholder="https://gw-xyz.openshell.stage.devshift.net:443">
+                       value="{{ gateway_url or '' }}" placeholder="https://gateway.example.com:443">
               </div>
             </div>
 
@@ -157,7 +157,7 @@
                     </label>
                     <div class="pf-v6-c-form__group-control">
                       <input type="text" class="pf-v6-c-form-control" id="gateway_oidc_issuer" name="gateway_oidc_issuer"
-                             value="{{ gateway_oidc_issuer or '' }}" placeholder="https://keycloak.../realms/ambient-code">
+                             value="{{ gateway_oidc_issuer or '' }}" placeholder="https://identity.example.com/realms/example">
                     </div>
                   </div>
                 </div>
