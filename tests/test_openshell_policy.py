@@ -617,6 +617,21 @@ def test_npm_registry_allows_encoded_slashes():
     assert rule["endpoints"][0]["allow_encoded_slash"] is True
 
 
+def test_custom_policies_backfills_enforcement_enforce():
+    """Custom policies missing 'enforcement' have 'enforce' backfilled to avoid ambiguity conflicts."""
+    custom = [{
+        "name": "allow_api_github_com_443",
+        "endpoints": [{"host": "api.github.com", "port": 443, "protocol": "rest", "access": "full"}],
+        "binaries": [],
+    }]
+    net = build_session_network_policies(
+        _make_session(language="golang"), repos=[], mcp_servers=[],
+        agent_tool="opencode", model=_MODEL, custom_policies=custom,
+    )
+    rule = net["custom_allow_api_github_com_443"]
+    assert rule["endpoints"][0]["enforcement"] == "enforce"
+
+
 def test_custom_policies_none_does_not_error():
     """Passing custom_policies=None (the default) does not raise."""
     net = build_session_network_policies(

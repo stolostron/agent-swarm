@@ -532,12 +532,16 @@ def build_session_network_policies(
     # both "access" and "rules" — guards against rules stored before the
     # promotion-time fix was applied (the gateway rejects such endpoints with
     # "protocol requires rules or access to define allowed traffic").
+    # Backfill enforcement="enforce" so OpenShell 0.0.116+ endpoint ambiguity
+    # validation doesn't reject overlapping endpoints (enforce vs audit).
     for i, rule in enumerate(custom_policies or []):
         rule_name = rule.get("name", "")
         key = f"custom_{rule_name.replace('-', '_').replace(' ', '_') or i}"
         endpoints = []
         for ep in rule.get("endpoints", []):
             ep = dict(ep)
+            if not ep.get("enforcement"):
+                ep["enforcement"] = "enforce"
             if ep.get("protocol") and not ep.get("access") and not ep.get("rules"):
                 ep["access"] = "full"
             if ep.get("host") == "registry.npmjs.org":

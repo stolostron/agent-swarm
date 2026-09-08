@@ -2997,6 +2997,8 @@ async def session_policy_rules_add(
         result = []
         for ep in raw_eps:
             ep = dict(ep)
+            if not ep.get("enforcement"):
+                ep["enforcement"] = "enforce"
             if ep.get("protocol") and not ep.get("access") and not ep.get("rules"):
                 ep["access"] = "full"
             result.append(ep)
