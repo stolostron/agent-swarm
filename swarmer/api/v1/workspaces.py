@@ -152,7 +152,9 @@ async def test_gateway_connection_endpoint(
     from swarmer.openshell_client import GatewayConfig, probe_gateway_connectivity
     from swarmer.openshell_oidc import OidcGatewayAuth
 
-    if not await workspace_acl.can_create_workspace(db, identity.username, identity.groups):
+    if body.workspace_id is None and not await workspace_acl.can_create_workspace(
+        db, identity.username, identity.groups
+    ):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="You do not have permission to test gateway connections.",

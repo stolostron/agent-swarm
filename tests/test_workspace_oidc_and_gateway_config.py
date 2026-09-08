@@ -57,8 +57,12 @@ def test_oidc_auth_refresh_flow():
 
 @pytest.mark.asyncio
 async def test_resolve_gateway_config_default():
+    from swarmer.config import settings
+
     cfg = await resolve_gateway_config(None)
-    assert cfg.auth_mode in ("default", "mtls", "bearer")
+    assert cfg.gateway_url == settings.openshell_gateway_url
+    assert cfg.workspace_id is None
+    assert cfg.bearer_callable is None
 
 
 @pytest.mark.asyncio

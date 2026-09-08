@@ -61,6 +61,7 @@ class OidcGatewayAuth:
         self._audience = audience
         self._workspace_id = workspace_id
         self._tls_ca = tls_ca
+        self._tls_verify = tls_verify
         self._lock = threading.Lock()
         self._bundle: dict[str, Any] | None = None
         self._token_endpoint: str | None = None
@@ -273,6 +274,7 @@ class WorkspaceOidcAuthManager:
         access_token: str = "",
         expires_at: int | None = None,
         tls_ca: str | None = None,
+        tls_verify: bool = True,
     ) -> OidcGatewayAuth:
         with self._lock:
             existing = self._instances.get(workspace_id)
@@ -281,6 +283,7 @@ class WorkspaceOidcAuthManager:
                 and existing._issuer == issuer.rstrip("/")
                 and existing._client_id == client_id
                 and existing._audience == audience
+                and existing._tls_verify == tls_verify
             ):
                 if refresh_token:
                     existing.seed(refresh_token, access_token, expires_at)
@@ -295,6 +298,7 @@ class WorkspaceOidcAuthManager:
                 audience=audience,
                 workspace_id=workspace_id,
                 tls_ca=tls_ca,
+                tls_verify=tls_verify,
             )
             with contextlib.suppress(RuntimeError):
                 auth.set_event_loop(asyncio.get_running_loop())

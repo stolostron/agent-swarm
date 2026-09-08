@@ -1256,10 +1256,13 @@ async def _do_launch_openshell(
         "openai": f"swarmer-ws-{session.workspace_id}-openai",
     }
     _available_providers: dict[str, bool] = {}
+    oc_client = await openshell_client.get_client_for_workspace(ws, db)
     if tool.requires_ai_model():
         for _name, _gateway_name in _provider_names.items():
             try:
-                _available_providers[_name] = await openshell_client.provider_exists(_gateway_name)
+                _available_providers[_name] = await openshell_client.provider_exists(
+                    _gateway_name, client=oc_client
+                )
             except Exception:
                 _available_providers[_name] = False
     _preferred_provider = requested_provider if requested_provider in _provider_names else ""
@@ -1353,8 +1356,6 @@ async def _do_launch_openshell(
     # session attributes remain valid because expire_on_commit=False.
     await db.commit()
 
-    oc_client = await openshell_client.get_client_for_workspace(ws, db)
-
     # 1. Collect sandbox extra env vars (non-credential; AI creds go through provider API)
     env_vars = await openshell_client.create_provider(
         session=session,
@@ -1400,7 +1401,9 @@ async def _do_launch_openshell(
     _openai_pname = f"swarmer-ws-{ws_id}-openai"
     if tool.requires_ai_model() and model.split("/", 1)[0] == "openai":
         try:
-            has_openai_provider = await openshell_client.provider_exists(_openai_pname)
+            has_openai_provider = await openshell_client.provider_exists(
+                _openai_pname, client=oc_client
+            )
         except Exception:
             log.warning(
                 "_do_launch_openshell: could not check openai provider for session %d",

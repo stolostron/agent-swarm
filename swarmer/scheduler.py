@@ -135,21 +135,21 @@ async def _collect_orphaned_sandboxes(db) -> None:
             configs.append(resolved)
             config_by_ws[gw.workspace_id] = resolved
 
-    unique_configs: dict[tuple[str, str, str, str | None], openshell_client.GatewayConfig] = {}
+    unique_configs: dict[tuple[str, str, str, str | None, int | None], openshell_client.GatewayConfig] = {}
     for c in configs:
-        key = (c.gateway_url or "", c.auth_mode, c.bearer_token or "", c.tls_ca)
+        key = (c.gateway_url or "", c.auth_mode, c.bearer_token or "", c.tls_ca, c.workspace_id)
         if key not in unique_configs:
             unique_configs[key] = c
 
     # Map each session_id to its gateway configuration key
     gw_by_ws = {gw.workspace_id: gw for gw in gw_rows if gw.gateway_url}
-    session_gw_key: dict[int, tuple[str, str, str, str | None]] = {}
+    session_gw_key: dict[int, tuple[str, str, str, str | None, int | None]] = {}
     for sid, ws_id in session_ws.items():
         if ws_id in gw_by_ws:
             cfg = config_by_ws[ws_id]
-            session_gw_key[sid] = (cfg.gateway_url or "", cfg.auth_mode, cfg.bearer_token or "", cfg.tls_ca)
+            session_gw_key[sid] = (cfg.gateway_url or "", cfg.auth_mode, cfg.bearer_token or "", cfg.tls_ca, cfg.workspace_id)
         else:
-            session_gw_key[sid] = (default_cfg.gateway_url or "", default_cfg.auth_mode, default_cfg.bearer_token or "", default_cfg.tls_ca)
+            session_gw_key[sid] = (default_cfg.gateway_url or "", default_cfg.auth_mode, default_cfg.bearer_token or "", default_cfg.tls_ca, default_cfg.workspace_id)
 
     zombie_keys = {
         (session_gw_key[sid], name): sid
@@ -162,8 +162,8 @@ async def _collect_orphaned_sandboxes(db) -> None:
         if sid in session_gw_key
     }
 
-    all_live_names: set[tuple[tuple[str, str, str, str | None], str]] = set()
-    successful_gw_keys: set[tuple[str, str, str, str | None]] = set()
+    all_live_names: set[tuple[tuple[str, str, str, str | None, int | None], str]] = set()
+    successful_gw_keys: set[tuple[str, str, str, str | None, int | None]] = set()
 
     def _get_client_local():
         from swarmer import openshell_client as _oc
