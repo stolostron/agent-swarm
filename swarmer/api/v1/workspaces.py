@@ -152,6 +152,12 @@ async def test_gateway_connection_endpoint(
     from swarmer.openshell_client import GatewayConfig, probe_gateway_connectivity
     from swarmer.openshell_oidc import OidcGatewayAuth
 
+    if not await workspace_acl.can_create_workspace(db, identity.username, identity.groups):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have permission to test gateway connections.",
+        )
+
     stored_gw: WorkspaceGateway | None = None
     if body.workspace_id is not None:
         ws = (
@@ -237,10 +243,11 @@ async def test_gateway_connection_endpoint(
             auth_mode=config.auth_mode,
             sandboxes_count=result.get("sandboxes_count", 0),
         )
-    except Exception as exc:
+    except Exception:
+        log.warning("Gateway connection test failed for %s", config.gateway_url, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Connection test failed: {exc}",
+            detail="Connection test failed. Check the gateway URL and credentials.",
         )
     finally:
         if temp_auth is not None:

@@ -2115,6 +2115,15 @@ class TestSessionDeleteOpenshell:
 
 
 class TestSandboxGC:
+    @pytest.fixture(autouse=True)
+    def gateway_for_age_checks(self, monkeypatch):
+        """Make age checks deterministic while exercising the real safety path."""
+        client = MagicMock()
+        response = MagicMock()
+        response.sandbox.metadata.created_at_ms = 0
+        client._stub.GetSandbox.return_value = response
+        monkeypatch.setattr("swarmer.openshell_client._get_client", lambda: client)
+
     @pytest.mark.asyncio
     async def test_deletes_sandbox_not_in_db(self):
         async with _TestSession() as db:

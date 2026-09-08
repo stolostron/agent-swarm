@@ -5,7 +5,8 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+from urllib.parse import urlparse
 
 
 # ============================================================
@@ -94,6 +95,15 @@ class TestGatewayConnectionIn(BaseModel):
     tls_cert: str | None = None
     tls_key: str | None = None
     tls_verify: bool = True
+
+    @field_validator("gateway_url")
+    @classmethod
+    def validate_gateway_url(cls, value: str) -> str:
+        value = value.strip()
+        parsed = urlparse(value)
+        if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+            raise ValueError("gateway_url must be an http(s) URL with a host")
+        return value
 
 
 class TestGatewayConnectionOut(BaseModel):

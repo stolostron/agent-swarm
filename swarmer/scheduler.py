@@ -118,43 +118,52 @@ async def _collect_orphaned_sandboxes(db) -> None:
         )
     )
     rows = result.all()
-    active: dict[str, int] = {}   # sandbox_name → session_id (session is running)
-    zombies: dict[str, int] = {}  # sandbox_name → session_id (session is terminal)
+    session_records: list[tuple[int, str, int, bool]] = []
     session_ws: dict[int, int] = {}  # session_id → workspace_id
     for sid, sname, sphase, ws_id in rows:
         session_ws[sid] = ws_id
-        if sphase in _TERMINAL_PHASES:
-            zombies[sname] = sid
-        else:
-            active[sname] = sid
-    known = {**active, **zombies}  # all sandbox_names tracked in DB
+        session_records.append((sid, sname, ws_id, sphase in _TERMINAL_PHASES))
 
     # Collect all distinct GatewayConfigs (default + any workspace-specific gateways)
     default_cfg = openshell_client.default_gateway_config()
     configs = [default_cfg]
+    config_by_ws: dict[int, openshell_client.GatewayConfig] = {}
     gw_rows = (await db.execute(select(WorkspaceGateway))).scalars().all()
     for gw in gw_rows:
         if gw.gateway_url:
-            configs.append(await openshell_client.resolve_gateway_config(gw.workspace_id, db))
+            resolved = await openshell_client.resolve_gateway_config(gw.workspace_id, db)
+            configs.append(resolved)
+            config_by_ws[gw.workspace_id] = resolved
 
-    unique_configs: dict[tuple[str, str], openshell_client.GatewayConfig] = {}
+    unique_configs: dict[tuple[str, str, str, str | None], openshell_client.GatewayConfig] = {}
     for c in configs:
-        key = (c.gateway_url or "", c.auth_mode)
+        key = (c.gateway_url or "", c.auth_mode, c.bearer_token or "", c.tls_ca)
         if key not in unique_configs:
             unique_configs[key] = c
 
     # Map each session_id to its gateway configuration key
     gw_by_ws = {gw.workspace_id: gw for gw in gw_rows if gw.gateway_url}
-    session_gw_key: dict[int, tuple[str, str]] = {}
+    session_gw_key: dict[int, tuple[str, str, str, str | None]] = {}
     for sid, ws_id in session_ws.items():
         if ws_id in gw_by_ws:
-            ws_gw = gw_by_ws[ws_id]
-            session_gw_key[sid] = (ws_gw.gateway_url or "", ws_gw.auth_mode or "oidc")
+            cfg = config_by_ws[ws_id]
+            session_gw_key[sid] = (cfg.gateway_url or "", cfg.auth_mode, cfg.bearer_token or "", cfg.tls_ca)
         else:
-            session_gw_key[sid] = (default_cfg.gateway_url or "", default_cfg.auth_mode)
+            session_gw_key[sid] = (default_cfg.gateway_url or "", default_cfg.auth_mode, default_cfg.bearer_token or "", default_cfg.tls_ca)
 
-    all_live_names: set[str] = set()
-    successful_gw_keys: set[tuple[str, str]] = set()
+    zombie_keys = {
+        (session_gw_key[sid], name): sid
+        for sid, name, _ws_id, is_zombie in session_records
+        if is_zombie and sid in session_gw_key
+    }
+    known = {
+        (session_gw_key[sid], name): sid
+        for sid, name, _ws_id, _is_zombie in session_records
+        if sid in session_gw_key
+    }
+
+    all_live_names: set[tuple[tuple[str, str, str, str | None], str]] = set()
+    successful_gw_keys: set[tuple[str, str, str, str | None]] = set()
 
     def _get_client_local():
         from swarmer import openshell_client as _oc
@@ -173,7 +182,7 @@ async def _collect_orphaned_sandboxes(db) -> None:
             continue
 
         successful_gw_keys.add(key)
-        all_live_names.update(live_names or [])
+        all_live_names.update((key, name) for name in (live_names or []))
 
         if not live_names:
             continue
@@ -195,10 +204,11 @@ async def _collect_orphaned_sandboxes(db) -> None:
                 age_ms = now_ms - created_ms
                 return age_ms >= _grace_ms
             except Exception:
-                return True  # if we can't check, assume old enough
+                log.warning("sandbox-gc: failed to inspect sandbox age for %s", name, exc_info=True)
+                return False
 
         # --- Orphans: live sandboxes with no matching session at all ---
-        orphaned = [name for name in live_names if name not in known]
+        orphaned = [name for name in live_names if (key, name) not in known]
         if orphaned:
             stale_orphans = [name for name in orphaned if await asyncio.to_thread(_sandbox_age_ok, name)]
             young_orphans = [name for name in orphaned if name not in stale_orphans]
@@ -217,7 +227,7 @@ async def _collect_orphaned_sandboxes(db) -> None:
                         log.warning("sandbox-gc: failed to delete orphan %s", name, exc_info=True)
 
         # --- Zombies: live sandboxes whose session is in a terminal phase ---
-        live_zombies = [name for name in live_names if name in zombies]
+        live_zombies = [name for name in live_names if (key, name) in zombie_keys]
         if live_zombies:
             stale_zombies = [name for name in live_zombies if await asyncio.to_thread(_sandbox_age_ok, name)]
             young_zombies = [name for name in live_zombies if name not in stale_zombies]
@@ -227,7 +237,7 @@ async def _collect_orphaned_sandboxes(db) -> None:
                 log.warning("sandbox-gc: found %d zombie sandbox(es) from terminal sessions: %s", len(stale_zombies), stale_zombies)
                 db_dirty = False
                 for name in stale_zombies:
-                    session_id = zombies[name]
+                    session_id = zombie_keys[(key, name)]
                     try:
                         if client is not None:
                             await openshell_client.delete_sandbox(name, client=client)
@@ -256,13 +266,14 @@ async def _collect_orphaned_sandboxes(db) -> None:
     # Only reconcile sessions whose gateway was successfully queried (avoids falsely stopping
     # active sessions if an external gateway had a temporary network or auth outage).
     deleted_externally = [
-        name for name, sid in known.items()
-        if session_gw_key.get(sid) in successful_gw_keys and name not in all_live_names
+        (gateway_key, name) for (gateway_key, name), sid in known.items()
+        if gateway_key in successful_gw_keys and (gateway_key, name) not in all_live_names
     ]
     if deleted_externally:
         db_dirty = False
         for sandbox_name in deleted_externally:
-            session_id = known[sandbox_name]
+            gateway_key, sandbox_name = sandbox_name
+            session_id = known[(gateway_key, sandbox_name)]
             session = await db.get(Session, session_id)
             if session and session.phase in ("pending", "running"):
                 log.warning(

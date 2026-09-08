@@ -54,6 +54,7 @@ class OidcGatewayAuth:
         audience: str = "",
         workspace_id: int | None = None,
         tls_ca: str | None = None,
+        tls_verify: bool = True,
     ):
         self._issuer = issuer.rstrip("/")
         self._client_id = client_id
@@ -66,7 +67,7 @@ class OidcGatewayAuth:
         self._http = httpx.Client(
             follow_redirects=False,
             timeout=15.0,
-            verify=_httpx_verify_arg(tls_ca),
+            verify=_httpx_verify_arg(tls_ca) if tls_verify else False,
         )
         self._loop: asyncio.AbstractEventLoop | None = None
 
@@ -125,6 +126,10 @@ class OidcGatewayAuth:
                     raise
             self._write_back(self._bundle)
             return self._bundle["access_token"]
+
+    async def current_access_token_async(self) -> str:
+        """Refresh tokens off the event-loop thread for HTTP proxy callers."""
+        return await asyncio.to_thread(self.current_access_token)
 
     def _reload_from_db(self) -> bool:
         """Best-effort reload of the credential bundle from the DB."""

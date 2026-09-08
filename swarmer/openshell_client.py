@@ -239,6 +239,7 @@ async def resolve_gateway_config(
                 else None
             ),
             tls_ca=gw.tls_ca,
+            tls_verify=gw.tls_verify,
         )
         bearer_callable = auth.current_access_token
 

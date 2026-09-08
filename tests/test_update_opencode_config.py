@@ -21,7 +21,7 @@ def test_update_opencode_json_creates_new_file(tmp_path):
     as_mcp = data["mcp"]["agent-swarm"]
     assert as_mcp["enabled"] is True
     assert as_mcp["environment"]["AGENT_SWARM_API_URL"] == url
-    assert as_mcp["environment"]["AGENT_SWARM_VERIFY_SSL"] == "false"
+    assert as_mcp["environment"]["AGENT_SWARM_VERIFY_SSL"] == "true"
 
 
 def test_update_opencode_json_updates_existing_file(tmp_path):
@@ -51,7 +51,7 @@ def test_update_opencode_json_updates_existing_file(tmp_path):
     assert data["mcp"]["jira"]["enabled"] is True
     assert data["mcp"]["agent-swarm"]["enabled"] is True
     assert data["mcp"]["agent-swarm"]["environment"]["AGENT_SWARM_API_URL"] == new_url
-    assert data["mcp"]["agent-swarm"]["environment"]["AGENT_SWARM_VERIFY_SSL"] == "false"
+    assert data["mcp"]["agent-swarm"]["environment"]["AGENT_SWARM_VERIFY_SSL"] == "true"
 
 
 def test_update_opencode_json_creates_parent_directory(tmp_path):

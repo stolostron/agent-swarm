@@ -53,11 +53,18 @@ def _openshell_ssl_context(gateway_config=None) -> ssl.SSLContext | None:
     from swarmer.config import settings
     cert = (gateway_config.tls_cert if gateway_config else settings.openshell_tls_cert) or ""
     key = (gateway_config.tls_key if gateway_config else settings.openshell_tls_key) or ""
+    ca = (gateway_config.tls_ca if gateway_config else settings.openshell_tls_ca) or None
+    verify = gateway_config.tls_verify if gateway_config else True
     if not cert or not key:
         return None
     ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-    ctx.check_hostname = False
-    ctx.verify_mode = ssl.CERT_NONE  # gateway uses self-signed cert
+    ctx.check_hostname = verify
+    ctx.verify_mode = ssl.CERT_REQUIRED if verify else ssl.CERT_NONE
+    if ca and verify:
+        if "BEGIN " in ca:
+            ctx.load_verify_locations(cadata=ca)
+        else:
+            ctx.load_verify_locations(cafile=ca)
     ctx.load_cert_chain(certfile=cert, keyfile=key)
     return ctx
 
@@ -67,9 +74,11 @@ def _openshell_httpx_kwargs(gateway_config=None) -> dict:
     from swarmer.config import settings
     cert = (gateway_config.tls_cert if gateway_config else settings.openshell_tls_cert) or ""
     key = (gateway_config.tls_key if gateway_config else settings.openshell_tls_key) or ""
+    ca = (gateway_config.tls_ca if gateway_config else settings.openshell_tls_ca) or None
+    verify = gateway_config.tls_verify if gateway_config else True
     if cert and key:
-        return {"verify": False, "cert": (cert, key)}
-    return {"verify": False}
+        return {"verify": ca if ca else verify, "cert": (cert, key)}
+    return {"verify": ca if ca else verify}
 
 
 def _resolve_upstream(service_url: str, gateway_config=None) -> tuple[str, str]:

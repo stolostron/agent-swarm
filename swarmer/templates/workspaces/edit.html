@@ -24,6 +24,7 @@
 
 <div style="max-width:800px;">
   <form method="post" action="/workspaces/{{ ws.id }}/edit" class="pf-v6-c-form">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     {# ── Section 1: Basics ── #}
     <div class="pf-v6-c-card" style="margin-bottom:var(--pf-t--global--spacer--lg);">
       <div class="pf-v6-c-card__header">

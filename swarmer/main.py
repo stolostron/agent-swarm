@@ -253,7 +253,7 @@ async def _restart_server_sessions() -> None:
         default_live_sandboxes = set(await openshell_client.list_sandboxes())
     except Exception:
         log.warning("_restart_server_sessions: could not list sandboxes — skipping", exc_info=True)
-        return
+        default_live_sandboxes = None
 
     async for db in get_db():
         result = await db.execute(
@@ -279,6 +279,9 @@ async def _restart_server_sessions() -> None:
                     log.warning("_restart_server_sessions: could not list sandboxes for workspace %d — skipping", s.workspace_id, exc_info=True)
                     continue
             else:
+                if default_live_sandboxes is None:
+                    log.warning("restart: default gateway unavailable — skipping session %d", s.id)
+                    continue
                 live_sandboxes = default_live_sandboxes
 
             if sandbox_name not in live_sandboxes:

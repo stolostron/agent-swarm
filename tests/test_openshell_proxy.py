@@ -843,7 +843,7 @@ class TestChatHttpProxyErrors:
             settings.openshell_tls_cert = "/tmp/fake.crt"
             settings.openshell_tls_key = "/tmp/fake.key"
             kwargs = _openshell_httpx_kwargs()
-            assert kwargs.get("verify") is False
+            assert kwargs.get("verify") is True
             assert kwargs.get("cert") == ("/tmp/fake.crt", "/tmp/fake.key")
         finally:
             settings.openshell_tls_cert = orig_cert
@@ -860,7 +860,7 @@ class TestChatHttpProxyErrors:
             settings.openshell_tls_cert = ""
             settings.openshell_tls_key = ""
             kwargs = _openshell_httpx_kwargs()
-            assert kwargs.get("verify") is False
+            assert kwargs.get("verify") is True
             assert "cert" not in kwargs
         finally:
             settings.openshell_tls_cert = orig_cert

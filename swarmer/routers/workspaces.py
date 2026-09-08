@@ -10,6 +10,7 @@ from markupsafe import escape
 
 from swarmer.deps import require_auth
 from swarmer.config import settings
+from swarmer.csrf import CSRFError, ensure_csrf_token, validate_csrf_token
 from swarmer.flash import flash
 from swarmer.openshell_command_parser import parse_gateway_command_or_json
 from swarmer.openshell_token_parser import parse_token_input
@@ -83,6 +84,7 @@ async def workspace_new(request: Request):
     return templates.TemplateResponse(
         request,
         "workspaces/new.html",
+        {"csrf_token": ensure_csrf_token(request)},
     )
 
 
@@ -101,7 +103,16 @@ async def workspace_create(
     gateway_bearer_token: str = Form(""),
     gateway_tls_ca: str = Form(""),
     gateway_tls_verify: str = Form("1"),
+    csrf_token: str = Form(""),
 ):
+    try:
+        validate_csrf_token(request, csrf_token)
+    except CSRFError:
+        flash(request, "Invalid form token. Please try again.", "error")
+        return RedirectResponse("/workspaces/new", status_code=302)
+    if gateway_mode == "custom" and not gateway_url.strip():
+        flash(request, "A gateway URL is required for a custom gateway.", "error")
+        return RedirectResponse("/workspaces/new", status_code=302)
     gateway_payload = None
     if gateway_mode == "custom" and gateway_url.strip():
         gateway_payload = {
@@ -272,7 +283,7 @@ async def workspace_edit_form(ws_id: int, request: Request):
     return templates.TemplateResponse(
         request,
         "workspaces/edit.html",
-        {"ws": ws},
+        {"ws": ws, "csrf_token": ensure_csrf_token(request)},
     )
 
 
@@ -292,7 +303,16 @@ async def workspace_update(
     gateway_bearer_token: str = Form(""),
     gateway_tls_ca: str = Form(""),
     gateway_tls_verify: str = Form("1"),
+    csrf_token: str = Form(""),
 ):
+    try:
+        validate_csrf_token(request, csrf_token)
+    except CSRFError:
+        flash(request, "Invalid form token. Please try again.", "error")
+        return RedirectResponse(f"/workspaces/{ws_id}/edit", status_code=302)
+    if gateway_mode == "custom" and not gateway_url.strip():
+        flash(request, "A gateway URL is required for a custom gateway.", "error")
+        return RedirectResponse(f"/workspaces/{ws_id}/edit", status_code=302)
     async with get_api_client(request) as api:
         try:
             await api.update_workspace(ws_id, display_name, description)

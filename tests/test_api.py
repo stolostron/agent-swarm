@@ -1330,10 +1330,10 @@ class TestSecrets:
         async def _mock_ensure(name, provider_type, config, credentials):
             calls["ensure"] = (name, provider_type, config, credentials)
 
-        async def _mock_create_gc(name, project, location):
+        async def _mock_create_gc(name, project, location, **kwargs):
             calls["create_gc"] = (name, project, location)
 
-        async def _mock_conf_gc(name, adc_json):
+        async def _mock_conf_gc(name, adc_json, **kwargs):
             calls["conf_gc"] = (name, adc_json)
 
         monkeypatch.setattr("swarmer.openshell_client.ensure_provider", _mock_ensure)
@@ -1398,10 +1398,10 @@ class TestSecrets:
 
         calls = {}
 
-        async def _mock_create_gc(name, project, location):
+        async def _mock_create_gc(name, project, location, **kwargs):
             calls["create_gc"] = (name, project, location)
 
-        async def _mock_conf_gc(name, adc_json):
+        async def _mock_conf_gc(name, adc_json, **kwargs):
             calls["conf_gc"] = (name, adc_json)
 
         monkeypatch.setattr("swarmer.openshell_client.create_google_cloud_provider", _mock_create_gc)
@@ -1663,13 +1663,13 @@ class TestSecrets:
         ws = await _create_workspace(client)
 
         created = {}
-        async def _mock_create_gc(name, project, location):
+        async def _mock_create_gc(name, project, location, **kwargs):
             created["name"] = name
             created["project"] = project
             created["location"] = location
 
         configured = {}
-        async def _mock_conf_gc(name, adc_json):
+        async def _mock_conf_gc(name, adc_json, **kwargs):
             configured["name"] = name
             configured["adc"] = adc_json
 
