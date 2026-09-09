@@ -146,13 +146,29 @@ async def _run_openshell_tui(
                     if mcp.jira_email:
                         tui_env["JIRA_EMAIL"] = mcp.jira_email
                     break
+            from sqlalchemy import or_ as _sa_or
             from swarmer.models.opencode_secret import OpencodeSecret as _OpencodeSecret
-            _sec_result = await db.execute(
-                _sa_select(_OpencodeSecret).where(
-                    _OpencodeSecret.workspace_id == session.workspace_id
+            _user_filter = [_OpencodeSecret.workspace_id == session.workspace_id]
+            if getattr(session, "user_id", None):
+                _user_filter.append(
+                    _sa_or(
+                        _OpencodeSecret.user_id == session.user_id,
+                        _OpencodeSecret.shared == True,  # noqa: E712
+                        _OpencodeSecret.user_id == "",
+                    )
                 )
+            _sec_result = await db.execute(
+                _sa_select(_OpencodeSecret).where(*_user_filter)
             )
-            _oc_secret = _sec_result.scalars().first()
+            _oc_all = _sec_result.scalars().all()
+            _oc_secret = None
+            if getattr(session, "user_id", None):
+                for s in _oc_all:
+                    if s.user_id == session.user_id:
+                        _oc_secret = s
+                        break
+            if _oc_secret is None and _oc_all:
+                _oc_secret = _oc_all[0]
             if _oc_secret:
                 if _oc_secret.vertex_location:
                     tui_env["GOOGLE_CLOUD_LOCATION"] = _oc_secret.vertex_location

@@ -54,8 +54,14 @@ def test_makefile_openshift_scc_includes_agent_sandbox_and_openshell():
 
 def test_agent_sandbox_manifest_resolution():
     """Verify curl-based resolution chooses sandbox.yaml for v1.0.1 and manifest.yaml for v0.4.6."""
-    # Test resolution logic directly using sh
+    # Test resolution logic directly using sh with mocked curl
     sh_script = """
+    curl() {
+        case "$*" in
+            *v1.0.1/sandbox.yaml*) return 0 ;;
+            *) return 1 ;;
+        esac
+    }
     check_version() {
         VERSION="$1"
         MANIFEST_URL="https://github.com/kubernetes-sigs/agent-sandbox/releases/download/${VERSION}/sandbox.yaml"
@@ -67,8 +73,8 @@ def test_agent_sandbox_manifest_resolution():
     check_version "$1"
     """
 
-    res_101 = subprocess.run(["sh", "-c", sh_script, "sh", "v1.0.1"], capture_output=True, text=True, check=True)
+    res_101 = subprocess.run(["sh", "-c", sh_script, "sh", "v1.0.1"], capture_output=True, text=True, check=True, timeout=10)
     assert res_101.stdout.strip().endswith("/v1.0.1/sandbox.yaml")
 
-    res_046 = subprocess.run(["sh", "-c", sh_script, "sh", "v0.4.6"], capture_output=True, text=True, check=True)
+    res_046 = subprocess.run(["sh", "-c", sh_script, "sh", "v0.4.6"], capture_output=True, text=True, check=True, timeout=10)
     assert res_046.stdout.strip().endswith("/v0.4.6/manifest.yaml")

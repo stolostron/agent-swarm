@@ -984,6 +984,65 @@ async def test_import_provider_profiles_updates_existing_profile_on_already_exis
     assert up_req.profile.profile.endpoints[0].host == "redhat.atlassian.net"
 
 
+@pytest.mark.asyncio
+async def test_import_provider_profiles_handles_mixed_existing_and_missing_profiles():
+    """When batch import hits ALREADY_EXISTS, existing profiles are updated and missing profiles are imported."""
+    import grpc
+
+    mock_client = MagicMock()
+
+    class MockAlreadyExists(grpc.RpcError, grpc.Call):
+        def code(self):
+            return grpc.StatusCode.ALREADY_EXISTS
+
+    class MockNotFound(grpc.RpcError, grpc.Call):
+        def code(self):
+            return grpc.StatusCode.NOT_FOUND
+
+    import_calls = []
+
+    def mock_import(req, timeout=None):
+        import_calls.append(req)
+        if len(import_calls) == 1:
+            raise MockAlreadyExists()
+        return MagicMock()
+
+    mock_client._stub.ImportProviderProfiles.side_effect = mock_import
+    mock_client._timeout = 10
+
+    existing_resp = MagicMock()
+    existing_resp.profile.resource_version = 7
+
+    def mock_get(req, timeout=None):
+        if req.id == "existing-p":
+            return existing_resp
+        raise MockNotFound()
+
+    mock_client._stub.GetProviderProfile.side_effect = mock_get
+
+    profiles = [
+        {"id": "existing-p", "display_name": "Existing"},
+        {"id": "missing-p", "display_name": "Missing"},
+    ]
+
+    await oc.import_provider_profiles(profiles, client=mock_client)
+
+    # Verify GetProviderProfile called for both profiles
+    assert mock_client._stub.GetProviderProfile.call_count >= 2
+
+    # Verify UpdateProviderProfiles called for existing-p
+    mock_client._stub.UpdateProviderProfiles.assert_called_once()
+    up_req = mock_client._stub.UpdateProviderProfiles.call_args.args[0]
+    assert up_req.id == "existing-p"
+    assert up_req.expected_resource_version == 7
+
+    # Verify ImportProviderProfiles called a second time to import missing-p individually
+    assert len(import_calls) == 2
+    single_req = import_calls[1]
+    assert len(single_req.profiles) == 1
+    assert single_req.profiles[0].profile.id == "missing-p"
+
+
 def test_gemini_provider_profile_binds_all_gemini_credentials_and_endpoints():
     """The Google AI Studio credential profile defines all Gemini credentials and binds its endpoint."""
     from swarmer.openshell_client import CUSTOM_PROVIDER_PROFILES

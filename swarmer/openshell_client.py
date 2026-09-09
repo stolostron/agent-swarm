@@ -387,6 +387,9 @@ async def resolve_gateway_config(
     )
 
 
+_client_version_observed: dict[str, float] = {}
+
+
 async def get_client_for_workspace(
     ws_or_id: Any | None,
     db: AsyncSession | None = None,
@@ -397,14 +400,17 @@ async def get_client_for_workspace(
         return None
     client = get_client_for_config(config)
     if db is not None:
-        try:
-            from swarmer.gateway_version import observe_gateway_version
+        now = time.monotonic()
+        if now - _client_version_observed.get(config.gateway_url, 0) >= 60:
+            try:
+                from swarmer.gateway_version import observe_gateway_version
 
-            await observe_gateway_version(config, client, db)
-        except Exception:
-            # Version tracking must never make an otherwise healthy gateway
-            # unusable, especially while upgrading mixed SDK/gateway versions.
-            log.warning("OpenShell gateway version observation failed", exc_info=True)
+                await observe_gateway_version(config, client, db)
+                _client_version_observed[config.gateway_url] = now
+            except Exception:
+                # Version tracking must never make an otherwise healthy gateway
+                # unusable, especially while upgrading mixed SDK/gateway versions.
+                log.warning("OpenShell gateway version observation failed", exc_info=True)
     return client
 
 
@@ -1309,6 +1315,16 @@ async def import_provider_profiles(profiles: list[dict], client=None) -> None:
                         except Exception:
                             pass
                     if existing is None:
+                        if isinstance(g_exc, grpc.Call) and g_exc.code() == grpc.StatusCode.NOT_FOUND:
+                            single_req = openshell_pb2.ImportProviderProfilesRequest()
+                            if hasattr(single_req, "workspace"):
+                                single_req.workspace = getattr(get_req, "workspace", "") or ""
+                            single_profile = _build_provider_profile(p)
+                            single_req.profiles.append(
+                                openshell_pb2.ProviderProfileImportItem(profile=single_profile, source="swarmer")
+                            )
+                            client._stub.ImportProviderProfiles(single_req, timeout=client._timeout)
+                            continue
                         raise g_exc
 
                 rv = getattr(getattr(existing, "profile", None), "resource_version", 0) or 0
@@ -1323,10 +1339,21 @@ async def import_provider_profiles(profiles: list[dict], client=None) -> None:
                     up_req.workspace = getattr(get_req, "workspace", "") or ""
                 update_method(up_req, timeout=client._timeout)
             except grpc.RpcError as u_exc:
-                if isinstance(u_exc, grpc.Call) and u_exc.code() in (
-                    grpc.StatusCode.UNIMPLEMENTED,
-                    grpc.StatusCode.NOT_FOUND,
-                ):
+                if isinstance(u_exc, grpc.Call) and u_exc.code() == grpc.StatusCode.NOT_FOUND:
+                    try:
+                        single_req = openshell_pb2.ImportProviderProfilesRequest()
+                        if hasattr(single_req, "workspace"):
+                            single_req.workspace = getattr(get_req, "workspace", "") or ""
+                        single_profile = _build_provider_profile(p)
+                        single_req.profiles.append(
+                            openshell_pb2.ProviderProfileImportItem(profile=single_profile, source="swarmer")
+                        )
+                        client._stub.ImportProviderProfiles(single_req, timeout=client._timeout)
+                        continue
+                    except Exception as s_exc:
+                        log.warning("import_provider_profiles: failed to re-import missing profile %s: %s", pid, s_exc)
+                        continue
+                if isinstance(u_exc, grpc.Call) and u_exc.code() == grpc.StatusCode.UNIMPLEMENTED:
                     continue
                 log.warning("import_provider_profiles: failed to update existing profile %s: %s", pid, u_exc)
             except Exception as u_exc:

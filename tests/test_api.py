@@ -521,6 +521,32 @@ class TestWorkspaceGatewayAPI:
         assert resp.status_code == 400
 
     @pytest.mark.asyncio
+    async def test_test_connection_passes_workspace_id_to_gateway_config(self, client):
+        ws = await _create_workspace(client, "Gateway Config WS ID")
+        from unittest.mock import patch
+
+        captured_config = None
+
+        async def _fake_probe(cfg):
+            nonlocal captured_config
+            captured_config = cfg
+            return {"status": "ok", "sandboxes_count": 0, "gateway_version": "0.0.116"}
+
+        with patch("swarmer.openshell_client.probe_gateway_connectivity", side_effect=_fake_probe), \
+             patch("swarmer.gateway_version.observe_gateway_version", return_value="0.0.116"):
+            resp = await client.post(
+                "/api/v1/workspaces/gateway/test-connection",
+                json={
+                    "workspace_id": ws["id"],
+                    "gateway_url": "https://gw-test.example.com:443",
+                    "auth_mode": "none",
+                },
+            )
+            assert resp.status_code == 200, resp.text
+            assert captured_config is not None
+            assert captured_config.workspace_id == ws["id"]
+
+    @pytest.mark.asyncio
     async def test_create_workspace_with_custom_gateway(self, client):
         payload = {
             "display_name": "Dedicated Gateway WS",
@@ -2092,3 +2118,29 @@ class TestGitHubURLValidation:
             params={"repo_url": "https://github.com/org/repo"},
         )
         assert resp.status_code != 400
+
+
+@pytest.mark.asyncio
+async def test_secrets_context_handles_gateway_unreachable():
+    from unittest.mock import AsyncMock, patch
+    from swarmer.routers.secrets import _secrets_context
+
+    mock_api = AsyncMock()
+    mock_api.get_credentials.return_value = {
+        "has_vertex": True,
+        "has_gemini": True,
+        "has_openai": True,
+    }
+    mock_api.list_pats.return_value = []
+    mock_api.get_pull_secret.return_value = {}
+    mock_api.get_github_app.return_value = None
+
+    with patch(
+        "swarmer.openshell_client.get_client_for_workspace",
+        side_effect=RuntimeError("Gateway down"),
+    ):
+        ctx = await _secrets_context(mock_api, 1)
+
+    assert ctx["vertex_provider_missing"] is False
+    assert ctx["gemini_provider_missing"] is False
+    assert ctx["openai_provider_missing"] is False

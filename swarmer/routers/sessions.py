@@ -1259,6 +1259,7 @@ async def _do_launch_openshell(
         "openai": f"swarmer-ws-{session.workspace_id}-openai",
     }
     _available_providers: dict[str, bool] = {}
+    _probe_failed: set[str] = set()
     oc_client = await openshell_client.get_client_for_workspace(ws, db)
     if tool.requires_ai_model():
         for _name, _gateway_name in _provider_names.items():
@@ -1268,6 +1269,7 @@ async def _do_launch_openshell(
                 )
             except Exception:
                 _available_providers[_name] = False
+                _probe_failed.add(_name)
     _preferred_provider = requested_provider if requested_provider in _provider_names else ""
     _preferred_raw_model = ""
     if not _preferred_provider and requested_provider and "/" in requested_provider:
@@ -1289,6 +1291,10 @@ async def _do_launch_openshell(
             session.id, raw_model, tool.name,
         )
     else:
+        if _preferred_provider and _preferred_provider in _probe_failed:
+            raise ValueError(
+                f"Could not verify the {_preferred_provider!r} provider for this workspace"
+            )
         _fallback = next((p for p in ("claude", "gemini", "openai") if _available_providers.get(p)), "")
         if not _fallback:
             raise ValueError("No AI provider is configured for this workspace")

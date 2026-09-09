@@ -49,7 +49,14 @@ async def observe_gateway_version(config, client, db: AsyncSession) -> str:
 
     if changed:
         if config.workspace_id is not None:
-            workspace_ids = [config.workspace_id]
+            gw_result = await db.execute(
+                select(WorkspaceGateway.workspace_id).where(
+                    WorkspaceGateway.gateway_url == gateway_url
+                )
+            )
+            workspace_ids = list(gw_result.scalars())
+            if config.workspace_id not in workspace_ids:
+                workspace_ids.append(config.workspace_id)
         else:
             result = await db.execute(
                 select(Workspace.id)
@@ -76,9 +83,11 @@ async def observe_gateway_version(config, client, db: AsyncSession) -> str:
         )
 
     if config.workspace_id is not None:
-        dedicated = await db.get(WorkspaceGateway, config.workspace_id)
-        if dedicated is not None:
-            dedicated.gateway_version = version
+        await db.execute(
+            update(WorkspaceGateway)
+            .where(WorkspaceGateway.gateway_url == gateway_url)
+            .values(gateway_version=version)
+        )
 
     await db.flush()
     return version

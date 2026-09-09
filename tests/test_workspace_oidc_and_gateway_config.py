@@ -155,6 +155,17 @@ def test_oidc_rejects_insecure_http_token_endpoint():
     auth.close()
 
 
+def test_oidc_rejects_insecure_http_issuer():
+    from swarmer.openshell_oidc import OidcAuthError
+
+    issuer = "http://insecure-idp.example.com/realms/test"
+    auth = OidcGatewayAuth(issuer=issuer, client_id="test-client", workspace_id=99)
+    auth.seed(refresh_token="some-token")
+    with pytest.raises(OidcAuthError, match="Insecure OIDC issuer.*HTTPS is required"):
+        auth.current_access_token()
+    auth.close()
+
+
 @pytest.mark.asyncio
 async def test_scheduler_gc_isolates_gateway_outage():
     """Verify an unreachable gateway does not cause active sessions on it to be marked stopped."""

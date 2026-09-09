@@ -62,40 +62,49 @@ async def _secrets_context(api, ws_id: int) -> dict:
     # ADC and API keys are stored on OpenShell, not in the Swarmer DB, so the
     # workspace gateway is the source of truth for provider status.
     oc_client = None
+    gateway_unreachable = False
     vertex_provider_configured = False
     vertex_provider_check_failed = False
     gemini_provider_configured = False
     gemini_provider_check_failed = False
     try:
-        oc_client = await openshell_client.get_client_for_workspace(ws_id)
-        vertex_provider_configured = await openshell_client.provider_exists(
-            f"swarmer-ws-{ws_id}-google-cloud", client=oc_client
-        )
-        gemini_provider_configured = await openshell_client.provider_exists(
-            f"swarmer-ws-{ws_id}-google-ai-studio", client=oc_client
-        )
-    except Exception:
-        gemini_provider_check_failed = True
-        pass  # gateway may be unreachable in local dev without OpenShell
+        try:
+            oc_client = await openshell_client.get_client_for_workspace(ws_id)
+            vertex_provider_configured = await openshell_client.provider_exists(
+                f"swarmer-ws-{ws_id}-google-cloud", client=oc_client
+            )
+            gemini_provider_configured = await openshell_client.provider_exists(
+                f"swarmer-ws-{ws_id}-google-ai-studio", client=oc_client
+            )
+        except Exception:
+            gateway_unreachable = True
+            vertex_provider_check_failed = True
+            gemini_provider_check_failed = True
+            pass  # gateway may be unreachable in local dev without OpenShell
 
-    # Check gateway for the OpenAI provider — same gateway-only pattern as
-    # Gemini/Vertex: key is pushed at save time and never stored in Swarmer DB.
-    openai_provider_configured = False
-    openai_provider_check_failed = False
-    try:
-        if oc_client is not None:
-            openai_provider_configured = await openshell_client.provider_exists(
-                f"swarmer-ws-{ws_id}-openai", client=oc_client
-            )
-        elif gemini_provider_check_failed:
+        # Check gateway for the OpenAI provider — same gateway-only pattern as
+        # Gemini/Vertex: key is pushed at save time and never stored in Swarmer DB.
+        openai_provider_configured = False
+        openai_provider_check_failed = False
+        try:
+            if oc_client is not None:
+                openai_provider_configured = await openshell_client.provider_exists(
+                    f"swarmer-ws-{ws_id}-openai", client=oc_client
+                )
+            elif gateway_unreachable:
+                openai_provider_check_failed = True
+            else:
+                openai_provider_configured = await openshell_client.provider_exists(
+                    f"swarmer-ws-{ws_id}-openai"
+                )
+        except Exception:
             openai_provider_check_failed = True
-        else:
-            openai_provider_configured = await openshell_client.provider_exists(
-                f"swarmer-ws-{ws_id}-openai"
-            )
-    except Exception:
-        openai_provider_check_failed = True
-        pass  # gateway may be unreachable in local dev without OpenShell
+            pass  # gateway may be unreachable in local dev without OpenShell
+    finally:
+        if oc_client is not None:
+            close = getattr(oc_client, "close", None)
+            if callable(close):
+                close()
 
     vertex_intent = bool(secret and secret.get("has_vertex"))
     gemini_intent = bool(secret and secret.get("has_gemini"))
@@ -226,82 +235,89 @@ async def opencode_secret_save(
     vertex_configured = False
     gemini_configured = False
     openai_configured = False
+    oc_client = None
     try:
-        oc_client = await openshell_client.get_client_for_workspace(ws_id)
-    except Exception:
-        log.warning("credential_save: failed to resolve gateway for workspace %d", ws_id, exc_info=True)
-        flash(
-            request,
-            "Failed to resolve workspace OpenShell gateway client.",
-            "danger",
-        )
-        return RedirectResponse(url=f"/workspaces/{ws_id}/secrets?tab=credentials", status_code=302)
-    if adc_content and google_cloud_project and vertex_location:
-        provider_name = f"swarmer-ws-{ws_id}-google-cloud"
         try:
-            await openshell_client.create_google_cloud_provider(
-                provider_name, google_cloud_project, vertex_location, client=oc_client
-            )
-            await openshell_client.configure_google_cloud_provider(
-                provider_name, adc_content, client=oc_client
-            )
-            vertex_configured = True
+            oc_client = await openshell_client.get_client_for_workspace(ws_id)
         except Exception:
-            log.warning(
-                "credential_save: failed to configure Vertex AI provider for workspace %d",
-                ws_id,
-                exc_info=True,
+            log.warning("credential_save: failed to resolve gateway for workspace %d", ws_id, exc_info=True)
+            flash(
+                request,
+                "Failed to resolve workspace OpenShell gateway client.",
+                "danger",
             )
-            flash(request, "Failed to configure Vertex AI on OpenShell. Check gateway connectivity.", "danger")
-    elif adc_content and not (google_cloud_project and vertex_location):
-        flash(request, "ADC file provided but GCP Project ID and Vertex AI Region are required to configure the provider.", "warning")
+            return RedirectResponse(url=f"/workspaces/{ws_id}/secrets?tab=credentials", status_code=302)
+        if adc_content and google_cloud_project and vertex_location:
+            provider_name = f"swarmer-ws-{ws_id}-google-cloud"
+            try:
+                await openshell_client.create_google_cloud_provider(
+                    provider_name, google_cloud_project, vertex_location, client=oc_client
+                )
+                await openshell_client.configure_google_cloud_provider(
+                    provider_name, adc_content, client=oc_client
+                )
+                vertex_configured = True
+            except Exception:
+                log.warning(
+                    "credential_save: failed to configure Vertex AI provider for workspace %d",
+                    ws_id,
+                    exc_info=True,
+                )
+                flash(request, "Failed to configure Vertex AI on OpenShell. Check gateway connectivity.", "danger")
+        elif adc_content and not (google_cloud_project and vertex_location):
+            flash(request, "ADC file provided but GCP Project ID and Vertex AI Region are required to configure the provider.", "warning")
 
-    # Push the Gemini (Google AI Studio) API key to the OpenShell gateway if a new
-    # key was submitted. A blank submission is a no-op — leaves the existing gateway
-    # provider (if any) untouched, mirroring the ADC "leave blank to keep" behavior.
-    gemini_key = google_api_key.strip()
-    if gemini_key:
-        pname = f"swarmer-ws-{ws_id}-google-ai-studio"
-        try:
-            await openshell_client.ensure_provider(
-                pname, "google-ai-studio", {},
-                credentials={
-                    "GOOGLE_API_KEY": gemini_key,
-                    "GOOGLE_GENERATIVE_AI_API_KEY": gemini_key,
-                    "GEMINI_API_KEY": gemini_key,
-                },
-                client=oc_client,
-            )
-            gemini_configured = True
-        except Exception:
-            log.warning(
-                "credential_save: failed to configure Gemini provider for workspace %d",
-                ws_id,
-                exc_info=True,
-            )
-            flash(request, "Failed to configure Gemini on OpenShell. Check gateway connectivity.", "danger")
+        # Push the Gemini (Google AI Studio) API key to the OpenShell gateway if a new
+        # key was submitted. A blank submission is a no-op — leaves the existing gateway
+        # provider (if any) untouched, mirroring the ADC "leave blank to keep" behavior.
+        gemini_key = google_api_key.strip()
+        if gemini_key:
+            pname = f"swarmer-ws-{ws_id}-google-ai-studio"
+            try:
+                await openshell_client.ensure_provider(
+                    pname, "google-ai-studio", {},
+                    credentials={
+                        "GOOGLE_API_KEY": gemini_key,
+                        "GOOGLE_GENERATIVE_AI_API_KEY": gemini_key,
+                        "GEMINI_API_KEY": gemini_key,
+                    },
+                    client=oc_client,
+                )
+                gemini_configured = True
+            except Exception:
+                log.warning(
+                    "credential_save: failed to configure Gemini provider for workspace %d",
+                    ws_id,
+                    exc_info=True,
+                )
+                flash(request, "Failed to configure Gemini on OpenShell. Check gateway connectivity.", "danger")
 
-    # Push the OpenAI API key to the OpenShell gateway if submitted. Blank is
-    # a no-op, keeping any existing provider credential unchanged.
-    openai_key = openai_api_key.strip()
-    if openai_key:
-        pname = f"swarmer-ws-{ws_id}-openai"
-        try:
-            await openshell_client.ensure_provider(
-                pname,
-                "openai",
-                {},
-                credentials={"OPENAI_API_KEY": openai_key},
-                client=oc_client,
-            )
-            openai_configured = True
-        except Exception:
-            log.warning(
-                "credential_save: failed to configure OpenAI provider for workspace %d",
-                ws_id,
-                exc_info=True,
-            )
-            flash(request, "Failed to configure OpenAI on OpenShell. Check gateway connectivity.", "danger")
+        # Push the OpenAI API key to the OpenShell gateway if submitted. Blank is
+        # a no-op, keeping any existing provider credential unchanged.
+        openai_key = openai_api_key.strip()
+        if openai_key:
+            pname = f"swarmer-ws-{ws_id}-openai"
+            try:
+                await openshell_client.ensure_provider(
+                    pname,
+                    "openai",
+                    {},
+                    credentials={"OPENAI_API_KEY": openai_key},
+                    client=oc_client,
+                )
+                openai_configured = True
+            except Exception:
+                log.warning(
+                    "credential_save: failed to configure OpenAI provider for workspace %d",
+                    ws_id,
+                    exc_info=True,
+                )
+                flash(request, "Failed to configure OpenAI on OpenShell. Check gateway connectivity.", "danger")
+    finally:
+        if oc_client is not None:
+            close = getattr(oc_client, "close", None)
+            if callable(close):
+                close()
 
     async with get_api_client(request) as api:
         try:

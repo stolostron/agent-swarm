@@ -200,6 +200,13 @@ class OidcGatewayAuth:
     def _discover_token_endpoint(self) -> str:
         if self._token_endpoint is not None:
             return self._token_endpoint
+        issuer_parsed = urlparse(self._issuer)
+        if issuer_parsed.scheme != "https" and issuer_parsed.hostname not in (
+            "localhost", "127.0.0.1", "::1",
+        ):
+            raise OidcAuthError(
+                f"Insecure OIDC issuer '{self._issuer}': HTTPS is required for non-loopback issuers"
+            )
         discovery_url = f"{self._issuer}/.well-known/openid-configuration"
         try:
             resp = self._http.get(discovery_url)

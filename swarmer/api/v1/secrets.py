@@ -154,122 +154,132 @@ async def save_credentials(
             )
         secret.vertex_configured = body.vertex_configured
 
-    if body.google_api_key.strip():
-        if not is_manager:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Only workspace managers can configure workspace AI providers.",
-            )
-        gemini_key = body.google_api_key.strip()
-        try:
-            from swarmer import openshell_client
-            oc_client = await openshell_client.get_client_for_workspace(ws_id, db)
+    oc_client = None
+    try:
+        if body.google_api_key.strip():
+            if not is_manager:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Only workspace managers can configure workspace AI providers.",
+                )
+            gemini_key = body.google_api_key.strip()
+            try:
+                from swarmer import openshell_client
+                if oc_client is None:
+                    oc_client = await openshell_client.get_client_for_workspace(ws_id, db)
 
-            ensure_kwargs = {"client": oc_client} if oc_client is not None else {}
-            await openshell_client.ensure_provider(
-                f"swarmer-ws-{ws_id}-google-ai-studio",
-                "google-ai-studio",
-                {},
-                credentials={
-                    "GOOGLE_API_KEY": gemini_key,
-                    "GOOGLE_GENERATIVE_AI_API_KEY": gemini_key,
-                    "GEMINI_API_KEY": gemini_key,
-                },
-                **ensure_kwargs,
-            )
-        except Exception as exc:
-            log.warning(
-                "save_credentials: failed to configure Gemini provider for workspace %d (error_type=%s)",
-                ws_id,
-                type(exc).__name__,
-            )
-            raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail="failed to configure Gemini provider on OpenShell",
-            ) from exc
-        secret.google_api_key = gemini_key
-        secret.gemini_configured = True
-    openai_key = body.openai_api_key.strip()
-    if openai_key:
-        if not is_manager:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Only workspace managers can configure workspace AI providers.",
-            )
-        # OpenAI key is gateway-only: store/update the workspace-scoped provider
-        # on OpenShell, never in Swarmer's DB.
-        try:
-            from swarmer import openshell_client
-            oc_client = await openshell_client.get_client_for_workspace(ws_id, db)
+                ensure_kwargs = {"client": oc_client} if oc_client is not None else {}
+                await openshell_client.ensure_provider(
+                    f"swarmer-ws-{ws_id}-google-ai-studio",
+                    "google-ai-studio",
+                    {},
+                    credentials={
+                        "GOOGLE_API_KEY": gemini_key,
+                        "GOOGLE_GENERATIVE_AI_API_KEY": gemini_key,
+                        "GEMINI_API_KEY": gemini_key,
+                    },
+                    **ensure_kwargs,
+                )
+            except Exception as exc:
+                log.warning(
+                    "save_credentials: failed to configure Gemini provider for workspace %d (error_type=%s)",
+                    ws_id,
+                    type(exc).__name__,
+                )
+                raise HTTPException(
+                    status_code=status.HTTP_502_BAD_GATEWAY,
+                    detail="failed to configure Gemini provider on OpenShell",
+                ) from exc
+            secret.google_api_key = gemini_key
+            secret.gemini_configured = True
+        openai_key = body.openai_api_key.strip()
+        if openai_key:
+            if not is_manager:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Only workspace managers can configure workspace AI providers.",
+                )
+            # OpenAI key is gateway-only: store/update the workspace-scoped provider
+            # on OpenShell, never in Swarmer's DB.
+            try:
+                from swarmer import openshell_client
+                if oc_client is None:
+                    oc_client = await openshell_client.get_client_for_workspace(ws_id, db)
 
-            ensure_kwargs = {"client": oc_client} if oc_client is not None else {}
-            await openshell_client.ensure_provider(
-                f"swarmer-ws-{ws_id}-openai",
-                "openai",
-                {},
-                credentials={"OPENAI_API_KEY": openai_key},
-                **ensure_kwargs,
-            )
-        except Exception as exc:
-            log.warning(
-                "save_credentials: failed to configure OpenAI provider for workspace %d (error_type=%s)",
-                ws_id,
-                type(exc).__name__,
-            )
-            raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail="failed to configure OpenAI provider on OpenShell",
-            ) from exc
-        secret.openai_configured = True
-    adc = body.application_default_credentials.strip()
-    if adc:
-        if not is_manager:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Only workspace managers can configure workspace AI providers.",
-            )
-        try:
-            json.loads(adc)
-        except json.JSONDecodeError as exc:
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail="application_default_credentials must be valid JSON",
-            ) from exc
-        secret.application_default_credentials = adc
+                ensure_kwargs = {"client": oc_client} if oc_client is not None else {}
+                await openshell_client.ensure_provider(
+                    f"swarmer-ws-{ws_id}-openai",
+                    "openai",
+                    {},
+                    credentials={"OPENAI_API_KEY": openai_key},
+                    **ensure_kwargs,
+                )
+            except Exception as exc:
+                log.warning(
+                    "save_credentials: failed to configure OpenAI provider for workspace %d (error_type=%s)",
+                    ws_id,
+                    type(exc).__name__,
+                )
+                raise HTTPException(
+                    status_code=status.HTTP_502_BAD_GATEWAY,
+                    detail="failed to configure OpenAI provider on OpenShell",
+                ) from exc
+            secret.openai_configured = True
+        adc = body.application_default_credentials.strip()
+        if adc:
+            if not is_manager:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Only workspace managers can configure workspace AI providers.",
+                )
+            try:
+                json.loads(adc)
+            except json.JSONDecodeError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail="application_default_credentials must be valid JSON",
+                ) from exc
+            secret.application_default_credentials = adc
 
-    if (
-        secret.application_default_credentials_enc
-        and secret.google_cloud_project
-        and secret.vertex_location
-    ):
-        if not is_manager:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Only workspace managers can configure workspace AI providers.",
-            )
-        try:
-            from swarmer import openshell_client
-            oc_client = await openshell_client.get_client_for_workspace(ws_id, db)
+        if (
+            secret.application_default_credentials_enc
+            and secret.google_cloud_project
+            and secret.vertex_location
+        ):
+            if not is_manager:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Only workspace managers can configure workspace AI providers.",
+                )
+            try:
+                from swarmer import openshell_client
+                if oc_client is None:
+                    oc_client = await openshell_client.get_client_for_workspace(ws_id, db)
 
-            provider_name = f"swarmer-ws-{ws_id}-google-cloud"
-            provider_kwargs = {"client": oc_client} if oc_client is not None else {}
-            await openshell_client.create_google_cloud_provider(
-                provider_name, secret.google_cloud_project, secret.vertex_location, **provider_kwargs
-            )
-            await openshell_client.configure_google_cloud_provider(
-                provider_name, secret.application_default_credentials, **provider_kwargs
-            )
-            secret.vertex_configured = True
-        except Exception as exc:
-            log.warning(
-                "save_credentials: failed to configure Vertex AI provider for workspace %d (error_type=%s)",
-                ws_id,
-                type(exc).__name__,
-            )
-            raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail="failed to configure Vertex AI provider on OpenShell",
-            ) from exc
+                provider_name = f"swarmer-ws-{ws_id}-google-cloud"
+                provider_kwargs = {"client": oc_client} if oc_client is not None else {}
+                await openshell_client.create_google_cloud_provider(
+                    provider_name, secret.google_cloud_project, secret.vertex_location, **provider_kwargs
+                )
+                await openshell_client.configure_google_cloud_provider(
+                    provider_name, secret.application_default_credentials, **provider_kwargs
+                )
+                secret.vertex_configured = True
+            except Exception as exc:
+                log.warning(
+                    "save_credentials: failed to configure Vertex AI provider for workspace %d (error_type=%s)",
+                    ws_id,
+                    type(exc).__name__,
+                )
+                raise HTTPException(
+                    status_code=status.HTTP_502_BAD_GATEWAY,
+                    detail="failed to configure Vertex AI provider on OpenShell",
+                ) from exc
+    finally:
+        if oc_client is not None:
+            close = getattr(oc_client, "close", None)
+            if callable(close):
+                close()
 
     await db.commit()
     await db.refresh(secret)

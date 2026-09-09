@@ -260,6 +260,7 @@ async def test_gateway_connection_endpoint(
         tls_verify=body.tls_verify,
         bearer_token=bearer_token if body.auth_mode == "bearer" else None,
         bearer_callable=bearer_callable,
+        workspace_id=body.workspace_id,
     )
     try:
         result = await probe_gateway_connectivity(config)

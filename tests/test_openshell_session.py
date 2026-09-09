@@ -915,6 +915,45 @@ class TestDoLaunchOpenshell:
         assert openai_pname in call_kwargs.get("provider_names", [])
 
     @pytest.mark.asyncio
+    async def test_launch_rejects_when_requested_provider_probe_fails(self, client):
+        """When requested provider probe fails with an exception, launch must fail fast rather than falling back."""
+        ws = await _create_workspace(client)
+        s_resp = await client.post(
+            f"/api/v1/workspaces/{ws['id']}/sessions",
+            json={"name": "s-probe-fail", "mode": "prompt", "agent_tool": "opencode", "provider": "gemini"},
+        )
+        assert s_resp.status_code == 201, s_resp.text
+        s = s_resp.json()
+        gemini_pname = f"swarmer-ws-{ws['id']}-google-ai-studio"
+
+        def _mock_exists(name, **kw):
+            if name == gemini_pname:
+                raise RuntimeError("Gateway connection dropped")
+            return True
+
+        patches = self._patch_openshell()
+        with patches["create_provider"], patches["ensure_provider"], \
+             patches["configure_provider_credential"], patches["attach_sandbox_provider"], \
+              patches["create_sandbox"], patches["write_agent_config"], \
+              patches["write_agents_md"], patches["exec_command"], \
+              patches["start_agent"], patches["delete_sandbox"], \
+              patches["build_policy"], patches["run_agent"], \
+              patches["setup_sandbox"] as mock_setup, \
+              patches["get_image"]:
+            with patch(
+                "swarmer.openshell_client.provider_exists",
+                new=AsyncMock(side_effect=_mock_exists),
+            ):
+                resp = await client.post(
+                    f"/api/v1/workspaces/{ws['id']}/sessions/{s['id']}/launch"
+                )
+                await asyncio.sleep(0)
+
+        assert resp.status_code == 500
+        assert "Could not verify the 'gemini' provider for this workspace" in resp.text
+        mock_setup.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_launch_blocked_when_github_repo_without_pat(self, client):
         """Launch must be rejected with a clear message when github.com repos have no PAT.
 
