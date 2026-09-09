@@ -1301,24 +1301,29 @@ async def import_provider_profiles(profiles: list[dict], client=None) -> None:
             if not pid:
                 continue
             try:
+                orig_workspace = ""
                 get_req = openshell_pb2.GetProviderProfileRequest(id=pid)
                 if hasattr(get_req, "workspace"):
-                    get_req.workspace = ""
+                    get_req.workspace = orig_workspace
                 existing = None
+                matched_workspace = orig_workspace
                 try:
                     existing = get_method(get_req, timeout=client._timeout)
                 except grpc.RpcError as g_exc:
                     if hasattr(get_req, "workspace"):
-                        get_req.workspace = _OPENSHELL_WORKSPACE
+                        fallback_req = openshell_pb2.GetProviderProfileRequest(id=pid)
+                        fallback_req.workspace = _OPENSHELL_WORKSPACE
                         try:
-                            existing = get_method(get_req, timeout=client._timeout)
+                            existing = get_method(fallback_req, timeout=client._timeout)
+                            if existing is not None:
+                                matched_workspace = _OPENSHELL_WORKSPACE
                         except Exception:
                             pass
                     if existing is None:
                         if isinstance(g_exc, grpc.Call) and g_exc.code() == grpc.StatusCode.NOT_FOUND:
                             single_req = openshell_pb2.ImportProviderProfilesRequest()
                             if hasattr(single_req, "workspace"):
-                                single_req.workspace = getattr(get_req, "workspace", "") or ""
+                                single_req.workspace = orig_workspace
                             single_profile = _build_provider_profile(p)
                             single_req.profiles.append(
                                 openshell_pb2.ProviderProfileImportItem(profile=single_profile, source="swarmer")
@@ -1336,14 +1341,14 @@ async def import_provider_profiles(profiles: list[dict], client=None) -> None:
                     expected_resource_version=rv,
                 )
                 if hasattr(up_req, "workspace"):
-                    up_req.workspace = getattr(get_req, "workspace", "") or ""
+                    up_req.workspace = matched_workspace
                 update_method(up_req, timeout=client._timeout)
             except grpc.RpcError as u_exc:
                 if isinstance(u_exc, grpc.Call) and u_exc.code() == grpc.StatusCode.NOT_FOUND:
                     try:
                         single_req = openshell_pb2.ImportProviderProfilesRequest()
                         if hasattr(single_req, "workspace"):
-                            single_req.workspace = getattr(get_req, "workspace", "") or ""
+                            single_req.workspace = orig_workspace
                         single_profile = _build_provider_profile(p)
                         single_req.profiles.append(
                             openshell_pb2.ProviderProfileImportItem(profile=single_profile, source="swarmer")

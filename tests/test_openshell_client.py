@@ -1041,6 +1041,66 @@ async def test_import_provider_profiles_handles_mixed_existing_and_missing_profi
     single_req = import_calls[1]
     assert len(single_req.profiles) == 1
     assert single_req.profiles[0].profile.id == "missing-p"
+    assert getattr(single_req, "workspace", "") == ""
+
+
+@pytest.mark.asyncio
+async def test_import_provider_profiles_preserves_global_workspace_on_reimport_after_fallback_check():
+    """When global GetProviderProfile fails and fallback lookup also fails, re-import retains empty workspace."""
+    import grpc
+
+    mock_client = MagicMock()
+
+    class MockAlreadyExists(grpc.RpcError, grpc.Call):
+        def code(self):
+            return grpc.StatusCode.ALREADY_EXISTS
+
+    class MockNotFound(grpc.RpcError, grpc.Call):
+        def code(self):
+            return grpc.StatusCode.NOT_FOUND
+
+    import_calls = []
+
+    def mock_import(req, timeout=None):
+        import_calls.append(req)
+        if len(import_calls) == 1:
+            raise MockAlreadyExists()
+        return MagicMock()
+
+    mock_client._stub.ImportProviderProfiles.side_effect = mock_import
+    mock_client._timeout = 10
+
+    class FakeGetReq:
+        def __init__(self, id=""):
+            self.id = id
+            self.workspace = ""
+
+    class FakeImportReq:
+        def __init__(self):
+            self.workspace = ""
+            self.profiles = []
+
+    get_workspaces = []
+
+    def mock_get(req, timeout=None):
+        get_workspaces.append(getattr(req, "workspace", ""))
+        raise MockNotFound()
+
+    mock_client._stub.GetProviderProfile.side_effect = mock_get
+
+    from openshell._proto import openshell_pb2
+    profiles = [{"id": "global-missing", "display_name": "Global Missing"}]
+    with patch.object(openshell_pb2, "GetProviderProfileRequest", FakeGetReq), \
+         patch.object(openshell_pb2, "ImportProviderProfilesRequest", FakeImportReq):
+        await oc.import_provider_profiles(profiles, client=mock_client)
+
+    # First lookup was global (""), second lookup was default ("default")
+    assert get_workspaces == ["", "default"]
+
+    # Re-import must use global workspace (""), NOT the fallback "default"
+    assert len(import_calls) == 2
+    single_req = import_calls[1]
+    assert getattr(single_req, "workspace", "") == ""
 
 
 def test_gemini_provider_profile_binds_all_gemini_credentials_and_endpoints():
