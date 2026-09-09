@@ -214,14 +214,12 @@ async def test_gateway_connection_endpoint(
     if not bearer_token and stored_gw is not None and stored_gw.auth_mode == "bearer":
         bearer_token = stored_gw.bearer_token or None
 
+    used_stored_client_secret = not body.client_secret and bool(client_secret)
+    used_stored_refresh_token = not body.refresh_token and bool(refresh_token)
+    used_stored_bearer_token = not body.bearer_token and bool(bearer_token)
     uses_stored_credential = (
-        (
-            body.auth_mode == "oidc"
-            and not body.refresh_token
-            and not body.client_secret
-            and (bool(refresh_token) or bool(client_secret))
-        )
-        or (body.auth_mode == "bearer" and not body.bearer_token and bool(bearer_token))
+        (body.auth_mode == "oidc" and (used_stored_refresh_token or used_stored_client_secret))
+        or (body.auth_mode == "bearer" and used_stored_bearer_token)
     )
     if uses_stored_credential and stored_gw is not None:
         requested_url = body.gateway_url.strip()
@@ -270,6 +268,7 @@ async def test_gateway_connection_endpoint(
             tracking_client = get_client_for_config(config)
             try:
                 gateway_version = await observe_gateway_version(config, tracking_client, db)
+                await db.commit()
             finally:
                 close = getattr(tracking_client, "close", None)
                 if callable(close):

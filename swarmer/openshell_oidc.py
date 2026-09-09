@@ -25,6 +25,7 @@ import threading
 import time
 from datetime import datetime, timezone
 from typing import Any
+from urllib.parse import urlparse
 
 import httpx
 
@@ -214,9 +215,14 @@ class OidcGatewayAuth:
             raise OidcAuthError(
                 f"OIDC discovery issuer mismatch: expected '{self._issuer}', got '{discovered_issuer}'"
             )
-        endpoint = disco.get("token_endpoint")
+        endpoint = str(disco.get("token_endpoint", "")).strip()
         if not endpoint:
             raise OidcAuthError("OIDC discovery response missing token_endpoint")
+        parsed = urlparse(endpoint)
+        if parsed.scheme != "https" and parsed.hostname not in ("localhost", "127.0.0.1", "::1"):
+            raise OidcAuthError(
+                f"Insecure OIDC token_endpoint '{endpoint}': HTTPS is required for non-loopback endpoints"
+            )
         self._token_endpoint = endpoint
         return endpoint
 

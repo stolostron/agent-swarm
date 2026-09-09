@@ -397,7 +397,7 @@ async def _check_and_launch(db=None) -> None:
         claim_result = await db.execute(
             update(Session)
             .where(Session.id.in_(list(session_to_sched.keys())))
-            .values(phase="pending")
+            .values(phase="pending", run_started_at=datetime.now(timezone.utc))
             .returning(Session.id)
         )
         claimed_ids = [row[0] for row in claim_result.fetchall()]

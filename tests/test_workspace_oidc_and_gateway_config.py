@@ -96,6 +96,21 @@ async def test_probe_gateway_connectivity_mock():
         mock_client.list.assert_called_once_with()
 
 
+@pytest.mark.asyncio
+async def test_probe_gateway_connectivity_get_gateway_info_failure_is_non_fatal():
+    cfg = GatewayConfig(gateway_url="https://gw.example.com", auth_mode="none")
+    mock_client = MagicMock()
+    mock_client.list.return_value = ["sb-1"]
+    mock_client.list_for_all_workspaces.return_value = ["sb-1"]
+    mock_client._stub.GetGatewayInfo.side_effect = RuntimeError("RPC failed")
+
+    with patch("swarmer.openshell_client.get_client_for_config", return_value=mock_client):
+        res = await probe_gateway_connectivity(cfg)
+        assert res["status"] == "ok"
+        assert res["sandboxes_count"] == 1
+        assert res["gateway_version"] == ""
+
+
 @respx.mock
 @pytest.mark.asyncio
 async def test_oidc_auth_refresh_inside_event_loop():
@@ -121,6 +136,22 @@ async def test_oidc_auth_refresh_inside_event_loop():
 
     token = auth.current_access_token()
     assert token == "loop-access-token"
+    auth.close()
+
+
+@respx.mock
+def test_oidc_rejects_insecure_http_token_endpoint():
+    from swarmer.openshell_oidc import OidcAuthError
+
+    issuer = "https://keycloak.example.com/realms/test"
+    respx.get(f"{issuer}/.well-known/openid-configuration").respond(
+        200,
+        json={"issuer": issuer, "token_endpoint": "http://evil.example.com/token"},
+    )
+    auth = OidcGatewayAuth(issuer=issuer, client_id="test-client", workspace_id=99)
+    auth.seed(refresh_token="some-token")
+    with pytest.raises(OidcAuthError, match="HTTPS is required"):
+        auth.current_access_token()
     auth.close()
 
 
@@ -268,3 +299,22 @@ async def test_resolve_gateway_config_with_client_secret():
     assert cfg.client_secret == "sa-secret-value"
     assert cfg.service_account_subject == "sa-subject"
     assert callable(cfg.bearer_callable)
+
+
+@pytest.mark.asyncio
+async def test_import_provider_profiles_idempotent_on_already_exists():
+    """Verify import_provider_profiles ignores ALREADY_EXISTS and UNIMPLEMENTED errors."""
+    import grpc
+    from swarmer.openshell_client import import_provider_profiles
+
+    mock_client = MagicMock()
+
+    class MockRpcError(grpc.RpcError, grpc.Call):
+        def code(self):
+            return grpc.StatusCode.ALREADY_EXISTS
+
+    mock_client._stub.ImportProviderProfiles.side_effect = MockRpcError()
+    mock_client._timeout = 10
+
+    # Should succeed idempotently without raising
+    await import_provider_profiles([{"id": "openai"}], client=mock_client)

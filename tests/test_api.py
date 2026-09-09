@@ -493,6 +493,34 @@ class TestWorkspaceGatewayAPI:
         assert resp.status_code == 400
 
     @pytest.mark.asyncio
+    async def test_test_connection_rejects_stored_client_secret_with_supplied_refresh_token_for_different_url(self, client):
+        ws = await _create_workspace(client, "Gateway Reuse Secret Match")
+        set_resp = await client.post(
+            f"/api/v1/workspaces/{ws['id']}/gateway",
+            json={
+                "gateway_url": "https://gw-saved.example.com:443",
+                "auth_mode": "oidc",
+                "oidc_issuer": "https://idp.example.com/realms/test",
+                "oidc_client_id": "client-123",
+                "client_secret": "sample-saved-client-secret",
+            },
+        )
+        assert set_resp.status_code == 200, set_resp.text
+
+        resp = await client.post(
+            "/api/v1/workspaces/gateway/test-connection",
+            json={
+                "workspace_id": ws["id"],
+                "gateway_url": "https://gw-other.example.com:443",
+                "auth_mode": "oidc",
+                "oidc_issuer": "https://idp.example.com/realms/test",
+                "oidc_client_id": "client-123",
+                "refresh_token": "caller-supplied-refresh-token",
+            },
+        )
+        assert resp.status_code == 400
+
+    @pytest.mark.asyncio
     async def test_create_workspace_with_custom_gateway(self, client):
         payload = {
             "display_name": "Dedicated Gateway WS",

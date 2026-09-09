@@ -246,8 +246,13 @@ async def opencode_secret_save(
                 provider_name, adc_content, client=oc_client
             )
             vertex_configured = True
-        except Exception as exc:
-            flash(request, f"Failed to configure Vertex AI on OpenShell: {exc}", "danger")
+        except Exception:
+            log.warning(
+                "credential_save: failed to configure Vertex AI provider for workspace %d",
+                ws_id,
+                exc_info=True,
+            )
+            flash(request, "Failed to configure Vertex AI on OpenShell. Check gateway connectivity.", "danger")
     elif adc_content and not (google_cloud_project and vertex_location):
         flash(request, "ADC file provided but GCP Project ID and Vertex AI Region are required to configure the provider.", "warning")
 
@@ -267,13 +272,13 @@ async def opencode_secret_save(
                 client=oc_client,
             )
             gemini_configured = True
-        except Exception as exc:
+        except Exception:
             log.warning(
                 "credential_save: failed to configure Gemini provider for workspace %d",
                 ws_id,
                 exc_info=True,
             )
-            flash(request, f"Failed to configure Gemini on OpenShell: {exc}", "danger")
+            flash(request, "Failed to configure Gemini on OpenShell. Check gateway connectivity.", "danger")
 
     # Push the OpenAI API key to the OpenShell gateway if submitted. Blank is
     # a no-op, keeping any existing provider credential unchanged.
@@ -289,13 +294,13 @@ async def opencode_secret_save(
                 client=oc_client,
             )
             openai_configured = True
-        except Exception as exc:
+        except Exception:
             log.warning(
                 "credential_save: failed to configure OpenAI provider for workspace %d",
                 ws_id,
                 exc_info=True,
             )
-            flash(request, f"Failed to configure OpenAI on OpenShell: {exc}", "danger")
+            flash(request, "Failed to configure OpenAI on OpenShell. Check gateway connectivity.", "danger")
 
     async with get_api_client(request) as api:
         try:

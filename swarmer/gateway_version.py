@@ -80,5 +80,5 @@ async def observe_gateway_version(config, client, db: AsyncSession) -> str:
         if dedicated is not None:
             dedicated.gateway_version = version
 
-    await db.commit()
+    await db.flush()
     return version

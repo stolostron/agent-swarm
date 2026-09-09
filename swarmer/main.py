@@ -122,6 +122,7 @@ async def _track_default_gateway_version() -> None:
         try:
             async for db in get_db():
                 await observe_gateway_version(config, client, db)
+                await db.commit()
                 break
         finally:
             close = getattr(client, "close", None)

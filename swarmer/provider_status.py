@@ -39,42 +39,50 @@ async def get_missing_provider_names_bulk(
     sem = asyncio.Semaphore(concurrency)
     clients_by_ws: dict[int, object | None] = {}
     gateway_failed: set[int] = set()
-    for wid in ws_ids:
-        try:
-            clients_by_ws[wid] = await openshell_client.get_client_for_workspace(wid, db)
-        except Exception:
-            clients_by_ws[wid] = None
-            gateway_failed.add(wid)
-
-    async def _check_provider(wid: int, label: str, suffix: str) -> tuple[int, str, bool]:
-        async with sem:
+    active_ws_ids = [wid for wid in ws_ids if expected_by_ws.get(wid)]
+    try:
+        for wid in active_ws_ids:
             try:
-                if wid in gateway_failed:
-                    present = True
-                elif clients_by_ws[wid] is None:
-                    present = await openshell_client.provider_exists(f"swarmer-ws-{wid}-{suffix}")
-                else:
-                    present = await openshell_client.provider_exists(
-                        f"swarmer-ws-{wid}-{suffix}", client=clients_by_ws[wid]
-                    )
+                clients_by_ws[wid] = await openshell_client.get_client_for_workspace(wid, db)
             except Exception:
-                present = True  # Gateway outage is not proof that provider is missing
-            return wid, label, present
+                clients_by_ws[wid] = None
+                gateway_failed.add(wid)
 
-    tasks = [
-        _check_provider(wid, label, _PROVIDERS[label])
-        for wid, expected in expected_by_ws.items()
-        for label in expected
-    ]
+        async def _check_provider(wid: int, label: str, suffix: str) -> tuple[int, str, bool]:
+            async with sem:
+                try:
+                    if wid in gateway_failed:
+                        present = True
+                    elif clients_by_ws.get(wid) is None:
+                        present = await openshell_client.provider_exists(f"swarmer-ws-{wid}-{suffix}")
+                    else:
+                        present = await openshell_client.provider_exists(
+                            f"swarmer-ws-{wid}-{suffix}", client=clients_by_ws[wid]
+                        )
+                except Exception:
+                    present = True  # Gateway outage is not proof that provider is missing
+                return wid, label, present
 
-    missing_by_ws: dict[int, list[str]] = {wid: [] for wid in ws_ids}
-    if tasks:
-        results = await asyncio.gather(*tasks)
-        for wid, label, present in results:
-            if not present:
-                missing_by_ws[wid].append(label)
+        tasks = [
+            _check_provider(wid, label, _PROVIDERS[label])
+            for wid, expected in expected_by_ws.items()
+            for label in expected
+        ]
 
-    return missing_by_ws
+        missing_by_ws: dict[int, list[str]] = {wid: [] for wid in ws_ids}
+        if tasks:
+            results = await asyncio.gather(*tasks)
+            for wid, label, present in results:
+                if not present:
+                    missing_by_ws[wid].append(label)
+
+        return missing_by_ws
+    finally:
+        for client in clients_by_ws.values():
+            if client is not None:
+                close = getattr(client, "close", None)
+                if callable(close):
+                    close()
 
 
 async def get_missing_provider_names(ws_id: int, db: AsyncSession) -> list[str]:

@@ -334,14 +334,17 @@ async def delete_credential(
         provider_name = f"swarmer-ws-{ws_id}-{provider_suffix}"
         try:
             from swarmer import openshell_client
+            from swarmer.config import settings
+
             oc_client = await openshell_client.get_client_for_workspace(ws_id, db)
-            client_kwargs = {"client": oc_client} if oc_client is not None else {}
-            sandboxes = await openshell_client.list_sandboxes(**client_kwargs)
-            for sandbox_name in sandboxes:
-                await openshell_client.detach_sandbox_provider(
-                    sandbox_name, provider_name, **client_kwargs
-                )
-            await openshell_client.delete_provider(provider_name, **client_kwargs)
+            if oc_client is not None or settings.openshell_gateway_url.strip():
+                client_kwargs = {"client": oc_client} if oc_client is not None else {}
+                sandboxes = await openshell_client.list_sandboxes(**client_kwargs)
+                for sandbox_name in sandboxes:
+                    await openshell_client.detach_sandbox_provider(
+                        sandbox_name, provider_name, **client_kwargs
+                    )
+                await openshell_client.delete_provider(provider_name, **client_kwargs)
         except Exception as exc:
             log.warning("delete_credential: failed to remove provider %s", provider_name, exc_info=True)
             raise HTTPException(status_code=502, detail="failed to delete provider from OpenShell") from exc

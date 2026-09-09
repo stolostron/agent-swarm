@@ -67,6 +67,10 @@ update-deps:  ## Fetch the latest stable OpenShell dependencies and update pins
 	$(eval LATEST_AGENT_SANDBOX := $(shell curl -fsSL 'https://api.github.com/repos/kubernetes-sigs/agent-sandbox/releases?per_page=20' | jq -r '[.[] | select(.prerelease == false and .draft == false)][0].tag_name // empty'))
 	$(if $(strip $(LATEST_OPENSHELL)),,$(error Failed to fetch latest OpenShell version - aborting without modifying files))
 	$(if $(strip $(LATEST_AGENT_SANDBOX)),,$(error Failed to fetch latest Agent Sandbox version - aborting without modifying files))
+	@echo "$(LATEST_OPENSHELL)" | grep -Eq '^[0-9]+(\.[0-9]+)+([a-zA-Z0-9_.-]+)?$$' || \
+	  (echo "Error: invalid OpenShell version format: $(LATEST_OPENSHELL)" >&2 && exit 1)
+	@echo "$(LATEST_AGENT_SANDBOX)" | grep -Eq '^v?[0-9]+(\.[0-9]+)+([a-zA-Z0-9_.-]+)?$$' || \
+	  (echo "Error: invalid Agent Sandbox version format: $(LATEST_AGENT_SANDBOX)" >&2 && exit 1)
 	@echo "OpenShell: $(OPENSHELL_VERSION) -> $(LATEST_OPENSHELL)"
 	@echo "Agent Sandbox: $(AGENT_SANDBOX_VERSION) -> $(LATEST_AGENT_SANDBOX)"
 	@sed -i 's/^OPENSHELL_VERSION\s*?= .*/OPENSHELL_VERSION        ?= $(LATEST_OPENSHELL)/' Makefile

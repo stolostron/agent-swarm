@@ -394,10 +394,16 @@ async def probe_gateway_connectivity(config: GatewayConfig) -> dict:
             if callable(get_gateway_info):
                 from openshell._proto import openshell_pb2
 
-                info = get_gateway_info(
-                    openshell_pb2.GetGatewayInfoRequest(), timeout=10
-                )
-                gateway_version = info.gateway_version
+                try:
+                    info = get_gateway_info(
+                        openshell_pb2.GetGatewayInfoRequest(), timeout=10
+                    )
+                    gateway_version = info.gateway_version
+                except Exception:
+                    log.debug(
+                        "GetGatewayInfo unavailable for %s", config.gateway_url,
+                        exc_info=True,
+                    )
             return {
                 "status": "ok",
                 "gateway_url": config.gateway_url,
@@ -1178,6 +1184,7 @@ async def undo_chunks_by_rule_name(
 
 async def import_provider_profiles(profiles: list[dict], client=None) -> None:
     """Import custom provider type profiles into the gateway (idempotent)."""
+    import grpc
     from openshell._proto import openshell_pb2
 
     if client is None:
@@ -1220,7 +1227,15 @@ async def import_provider_profiles(profiles: list[dict], client=None) -> None:
             for bn in p.get("binaries", []):
                 ParseDict(bn, profile.binaries.add())
             req.profiles.append(openshell_pb2.ProviderProfileImportItem(profile=profile, source="swarmer"))
-        client._stub.ImportProviderProfiles(req, timeout=client._timeout)
+        try:
+            client._stub.ImportProviderProfiles(req, timeout=client._timeout)
+        except grpc.RpcError as exc:
+            if isinstance(exc, grpc.Call) and exc.code() in (
+                grpc.StatusCode.ALREADY_EXISTS,
+                grpc.StatusCode.UNIMPLEMENTED,
+            ):
+                return
+            raise
 
     await asyncio.to_thread(_do_import)
 
