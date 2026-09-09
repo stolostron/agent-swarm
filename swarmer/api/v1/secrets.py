@@ -332,6 +332,7 @@ async def delete_credential(
     # global admin) can detach and delete the workspace-scoped provider on OpenShell.
     if is_manager:
         provider_name = f"swarmer-ws-{ws_id}-{provider_suffix}"
+        oc_client = None
         try:
             from swarmer import openshell_client
             from swarmer.config import settings
@@ -348,6 +349,9 @@ async def delete_credential(
         except Exception as exc:
             log.warning("delete_credential: failed to remove provider %s", provider_name, exc_info=True)
             raise HTTPException(status_code=502, detail="failed to delete provider from OpenShell") from exc
+        finally:
+            if oc_client is not None:
+                oc_client.close()
 
     if provider_suffix == "google-cloud":
         secret.google_cloud_project = ""

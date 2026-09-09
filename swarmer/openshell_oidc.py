@@ -235,6 +235,8 @@ class OidcGatewayAuth:
         }
         if self._audience:
             data["audience"] = self._audience
+        if self._service_account_subject:
+            data["subject"] = self._service_account_subject
         try:
             resp = self._http.post(token_endpoint, data=data)
         except httpx.HTTPError as e:

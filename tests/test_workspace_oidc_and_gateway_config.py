@@ -234,7 +234,7 @@ def test_oidc_auth_client_credentials_flow():
     """Verify Service Account authentication using client_credentials grant."""
     issuer = "https://keycloak.example.com/realms/test"
     client_id = "test-service-account"
-    client_secret = "secret-token-xyz"
+    client_secret = "test-client-secret"
 
     # Mock discovery
     respx.get(f"{issuer}/.well-known/openid-configuration").respond(
@@ -270,6 +270,7 @@ def test_oidc_auth_client_credentials_flow():
     assert "grant_type=client_credentials" in req_body
     assert f"client_id={client_id}" in req_body
     assert f"client_secret={client_secret}" in req_body
+    assert "subject=service-account-test" in req_body
 
     # Second call should return cached fresh token without hitting token endpoint again
     token2 = auth.current_access_token()

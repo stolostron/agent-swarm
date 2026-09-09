@@ -916,3 +916,16 @@ async def test_import_provider_profiles_maps_endpoints_and_binaries(sdk_client):
     assert p.endpoints[0].host == "api.example.com"
     assert len(p.binaries) == 1
     assert p.binaries[0].path == "/usr/bin/curl"
+
+
+def test_jira_provider_profile_binds_atlassian_endpoints():
+    """The Jira credential profile authorizes its Atlassian destinations."""
+    from swarmer.openshell_client import CUSTOM_PROVIDER_PROFILES
+
+    jira = next(profile for profile in CUSTOM_PROVIDER_PROFILES if profile["id"] == "jira")
+    endpoints = {(endpoint["host"], endpoint["port"]) for endpoint in jira["endpoints"]}
+
+    assert endpoints == {
+        ("*.atlassian.net", 443),
+        ("redhat.atlassian.net", 443),
+    }

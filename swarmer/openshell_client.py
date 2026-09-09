@@ -118,6 +118,22 @@ CUSTOM_PROVIDER_PROFILES: list[dict] = [
             # the credential reference tokens.
             {"name": "JIRA_ACCESS_TOKEN", "env_vars": ["JIRA_ACCESS_TOKEN"], "required": True},
         ],
+        "endpoints": [
+            {
+                "host": "*.atlassian.net",
+                "port": 443,
+                "protocol": "rest",
+                "access": "read-write",
+                "enforcement": "enforce",
+            },
+            {
+                "host": "redhat.atlassian.net",
+                "port": 443,
+                "protocol": "rest",
+                "access": "read-write",
+                "enforcement": "enforce",
+            },
+        ],
     },
 ]
 
