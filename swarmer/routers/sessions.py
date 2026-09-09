@@ -1277,29 +1277,29 @@ async def _do_launch_openshell(
         if _raw_provider_family and tool.is_valid_model(requested_provider):
             _preferred_provider = _raw_provider_family
             _preferred_raw_model = requested_provider
-    if _preferred_provider and _available_providers.get(_preferred_provider):
+    if not tool.requires_ai_model():
+        raw_model = requested_provider or ""
+    elif _preferred_provider and _available_providers.get(_preferred_provider):
         raw_model = _preferred_raw_model or _preferred_provider
         log.info(
             "_do_launch_openshell: session %d using provider %r (tool=%s)",
             session.id, raw_model, tool.name,
         )
-    elif requested_provider in _provider_names:
-        # Keep an explicit preset so provider-specific validation below can
-        # return an actionable error instead of silently changing models.
-        raw_model = requested_provider
-        log.info(
-            "_do_launch_openshell: session %d requested provider %r is unavailable",
-            session.id, requested_provider,
-        )
     else:
         _fallback = next((p for p in ("claude", "gemini", "openai") if _available_providers.get(p)), "")
-        if tool.requires_ai_model() and not _fallback:
+        if not _fallback:
             raise ValueError("No AI provider is configured for this workspace")
         raw_model = _fallback or tool.get_default_model(has_adc)
-        log.info(
-            "_do_launch_openshell: session %d provider %r unavailable — falling back to %r",
-            session.id, requested_provider, raw_model,
-        )
+        if requested_provider:
+            log.info(
+                "_do_launch_openshell: session %d provider %r unavailable — falling back to %r",
+                session.id, requested_provider, raw_model,
+            )
+        else:
+            log.info(
+                "_do_launch_openshell: session %d using provider %r (tool=%s)",
+                session.id, raw_model, tool.name,
+            )
     raw_model = raw_model.strip("\r\n")  # strip any stray line endings before embedding in shell commands
     model = tool.resolve_build_model(raw_model)
 

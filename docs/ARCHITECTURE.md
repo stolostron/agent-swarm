@@ -287,10 +287,21 @@ Deployment; `make delete` removes it.
 | `gemini_preset_plan_model` | `GEMINI_PRESET_PLAN_MODEL` | `google/gemini-3.7-flash` | Gemini preset's PLAN-role model |
 | `gemini_preset_build_model` | `GEMINI_PRESET_BUILD_MODEL` | `google/gemini-3.7-flash` | Gemini preset's BUILD-role model |
 | `gemini_preset_small_model` | `GEMINI_PRESET_SMALL_MODEL` | `google/gemini-3.5-flash-lite` | Gemini preset's small/housekeeping model |
+| `openai_preset_plan_model` | `OPENAI_PRESET_PLAN_MODEL` | `openai/gpt-5.6-terra-pro` | OpenAI preset's PLAN-role model |
+| `openai_preset_build_model` | `OPENAI_PRESET_BUILD_MODEL` | `openai/gpt-5.6-luna-pro` | OpenAI preset's BUILD-role model |
+| `openai_preset_small_model` | `OPENAI_PRESET_SMALL_MODEL` | `openai/gpt-5.6-luna-fast` | OpenAI preset's small/housekeeping model |
 | `opencode_experimental_plan_mode` | `OPENCODE_EXPERIMENTAL_PLAN_MODE` | `true` | Enables the opencode plan agent so the PLAN-role model above is actually used |
 
 For local dev (`make dev`), the same env vars are set via `.env` (see `.env.example`) — no
 ConfigMap involved outside a real cluster deployment.
+
+### AI Provider Selection and Dynamic Fallback
+
+Sessions and schedules store an AI provider preference (`claude`, `gemini`, `openai`, or `""` for session/workspace default):
+
+- **Live Gateway Resolution** — At launch time (`_do_launch_openshell()`), Swarmer probes the live OpenShell gateway for configured workspace providers (`swarmer-ws-{id}-google-cloud`, `swarmer-ws-{id}-google-ai-studio`, `swarmer-ws-{id}-openai`).
+- **Dynamic Fallback on Credential Removal** — If a session or schedule requests a provider that is no longer configured on the gateway (for example, when a credential has been removed from Secrets), Swarmer gracefully falls back to the workspace's first available configured provider (checking in order: `claude`, `gemini`, `openai`). This ensures that schedules configured with *"Use session provider"* and existing sessions continue executing without failure when workspace AI providers change.
+- **Fail-Fast when Unconfigured** — If no AI provider is configured in the workspace at all for an agent tool requiring AI models, launch halts early with an actionable `ValueError("No AI provider is configured for this workspace")`.
 
 ## Agent Container Data Interface
 

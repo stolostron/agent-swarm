@@ -765,7 +765,7 @@ class TestDoLaunchOpenshell:
 
     @pytest.mark.asyncio
     async def test_openai_provider_not_attached_when_absent_from_gateway(self, client):
-        """OpenAI model launches must fail early when the gateway provider is absent."""
+        """OpenAI model launches must fall back when the gateway provider is absent."""
         ws = await _create_workspace(client)
         s_resp = await client.post(
             f"/api/v1/workspaces/{ws['id']}/sessions",
@@ -773,6 +773,7 @@ class TestDoLaunchOpenshell:
         )
         assert s_resp.status_code == 201, s_resp.text
         s = s_resp.json()
+        openai_pname = f"swarmer-ws-{ws['id']}-openai"
 
         patches = self._patch_openshell()
         with patches["create_provider"], patches["ensure_provider"], \
@@ -792,9 +793,79 @@ class TestDoLaunchOpenshell:
                 )
                 await asyncio.sleep(0)
 
+        assert resp.status_code == 200
+        call_kwargs = mock_setup.call_args.kwargs if mock_setup.call_args else {}
+        assert openai_pname not in call_kwargs.get("provider_names", [])
+
+    @pytest.mark.asyncio
+    async def test_launch_fails_when_all_ai_providers_absent_from_gateway(self, client):
+        """Launch must fail early when no AI provider exists on the gateway."""
+        ws = await _create_workspace(client)
+        s_resp = await client.post(
+            f"/api/v1/workspaces/{ws['id']}/sessions",
+            json={"name": "s-no-providers", "mode": "prompt", "agent_tool": "opencode", "provider": "openai"},
+        )
+        assert s_resp.status_code == 201, s_resp.text
+        s = s_resp.json()
+
+        patches = self._patch_openshell()
+        with patches["create_provider"], patches["ensure_provider"], \
+             patches["configure_provider_credential"], patches["attach_sandbox_provider"], \
+              patches["create_sandbox"], patches["write_agent_config"], \
+              patches["write_agents_md"], patches["exec_command"], \
+              patches["start_agent"], patches["delete_sandbox"], \
+              patches["build_policy"], patches["run_agent"], \
+              patches["setup_sandbox"] as mock_setup, \
+              patches["get_image"]:
+            with patch(
+                "swarmer.openshell_client.provider_exists",
+                new=AsyncMock(return_value=False),
+            ):
+                resp = await client.post(
+                    f"/api/v1/workspaces/{ws['id']}/sessions/{s['id']}/launch"
+                )
+                await asyncio.sleep(0)
+
         assert resp.status_code == 500
-        assert "OpenAI API key is not configured for this workspace" in resp.text
+        assert "No AI provider is configured for this workspace" in resp.text
         mock_setup.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_gemini_falls_back_to_openai_when_gemini_removed_from_gateway(self, client):
+        """When gemini was saved on a session but removed from workspace, launch must fall back to openai."""
+        ws = await _create_workspace(client)
+        s_resp = await client.post(
+            f"/api/v1/workspaces/{ws['id']}/sessions",
+            json={"name": "s-gemini-fallback", "mode": "prompt", "agent_tool": "opencode", "provider": "gemini"},
+        )
+        assert s_resp.status_code == 201, s_resp.text
+        s = s_resp.json()
+        openai_pname = f"swarmer-ws-{ws['id']}-openai"
+        gemini_pname = f"swarmer-ws-{ws['id']}-google-ai-studio"
+
+        patches = self._patch_openshell()
+        with patches["create_provider"], patches["ensure_provider"], \
+             patches["configure_provider_credential"], patches["attach_sandbox_provider"], \
+              patches["create_sandbox"], patches["write_agent_config"], \
+              patches["write_agents_md"], patches["exec_command"], \
+              patches["start_agent"], patches["delete_sandbox"], \
+              patches["build_policy"], patches["run_agent"], \
+              patches["setup_sandbox"] as mock_setup, \
+              patches["get_image"]:
+            # Only openai provider is present on the gateway
+            with patch(
+                "swarmer.openshell_client.provider_exists",
+                new=AsyncMock(side_effect=lambda name, **kw: name == openai_pname),
+            ):
+                resp = await client.post(
+                    f"/api/v1/workspaces/{ws['id']}/sessions/{s['id']}/launch"
+                )
+                await asyncio.sleep(0)
+
+        assert resp.status_code == 200
+        call_kwargs = mock_setup.call_args.kwargs if mock_setup.call_args else {}
+        assert gemini_pname not in call_kwargs.get("provider_names", [])
+        assert openai_pname in call_kwargs.get("provider_names", [])
 
     @pytest.mark.asyncio
     async def test_launch_blocked_when_github_repo_without_pat(self, client):
