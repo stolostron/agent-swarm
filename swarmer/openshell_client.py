@@ -1198,8 +1198,53 @@ async def undo_chunks_by_rule_name(
     return undone
 
 
+def _build_provider_profile(p: dict, resource_version: int = 0):
+    """Translate a provider profile dict to an openshell_pb2.ProviderProfile protobuf."""
+    from google.protobuf.json_format import ParseDict
+    from openshell._proto import openshell_pb2
+
+    profile = openshell_pb2.ProviderProfile(
+        id=p["id"],
+        display_name=p.get("display_name", p["id"]),
+        category=p.get("category", openshell_pb2.PROVIDER_PROFILE_CATEGORY_INFERENCE),
+        inference_capable=p.get("inference_capable", True),
+    )
+    if resource_version > 0:
+        profile.resource_version = resource_version
+    for cred in p.get("credentials", []):
+        c = openshell_pb2.ProviderProfileCredential(
+            name=cred["name"],
+            required=cred.get("required", True),
+            auth_style=cred.get("auth_style", ""),
+            header_name=cred.get("header_name", ""),
+            query_param=cred.get("query_param", ""),
+        )
+        for ev in cred.get("env_vars", []):
+            c.env_vars.append(ev)
+        refresh = cred.get("refresh")
+        if refresh:
+            c.refresh.token_url = refresh.get("token_url", "")
+            for sc in refresh.get("scopes", []):
+                c.refresh.scopes.append(sc)
+            for mat in refresh.get("material", []):
+                m = c.refresh.material.add()
+                m.name = mat["name"]
+                m.required = mat.get("required", True)
+                m.secret = mat.get("secret", False)
+        profile.credentials.append(c)
+    for ep in p.get("endpoints", []):
+        ParseDict(ep, profile.endpoints.add())
+    for bn in p.get("binaries", []):
+        ParseDict(bn, profile.binaries.add())
+    return profile
+
+
 async def import_provider_profiles(profiles: list[dict], client=None) -> None:
-    """Import custom provider type profiles into the gateway (idempotent)."""
+    """Import custom provider type profiles into the gateway (idempotent).
+
+    If profiles already exist, updates each profile via UpdateProviderProfiles
+    so new or modified endpoints/credentials take effect on running gateways.
+    """
     import grpc
     from openshell._proto import openshell_pb2
 
@@ -1210,48 +1255,48 @@ async def import_provider_profiles(profiles: list[dict], client=None) -> None:
         req = openshell_pb2.ImportProviderProfilesRequest()
         _set_workspace(req)
         for p in profiles:
-            profile = openshell_pb2.ProviderProfile(
-                id=p["id"],
-                display_name=p.get("display_name", p["id"]),
-                category=p.get("category", openshell_pb2.PROVIDER_PROFILE_CATEGORY_INFERENCE),
-                inference_capable=p.get("inference_capable", True),
-            )
-            for cred in p.get("credentials", []):
-                c = openshell_pb2.ProviderProfileCredential(
-                    name=cred["name"],
-                    required=cred.get("required", True),
-                    auth_style=cred.get("auth_style", ""),
-                    header_name=cred.get("header_name", ""),
-                    query_param=cred.get("query_param", ""),
-                )
-                for ev in cred.get("env_vars", []):
-                    c.env_vars.append(ev)
-                refresh = cred.get("refresh")
-                if refresh:
-                    c.refresh.token_url = refresh.get("token_url", "")
-                    for sc in refresh.get("scopes", []):
-                        c.refresh.scopes.append(sc)
-                    for mat in refresh.get("material", []):
-                        m = c.refresh.material.add()
-                        m.name = mat["name"]
-                        m.required = mat.get("required", True)
-                        m.secret = mat.get("secret", False)
-                profile.credentials.append(c)
-            from google.protobuf.json_format import ParseDict
-            for ep in p.get("endpoints", []):
-                ParseDict(ep, profile.endpoints.add())
-            for bn in p.get("binaries", []):
-                ParseDict(bn, profile.binaries.add())
+            profile = _build_provider_profile(p)
             req.profiles.append(openshell_pb2.ProviderProfileImportItem(profile=profile, source="swarmer"))
         try:
             client._stub.ImportProviderProfiles(req, timeout=client._timeout)
+            return
         except grpc.RpcError as exc:
-            if isinstance(exc, grpc.Call) and exc.code() in (
-                grpc.StatusCode.ALREADY_EXISTS,
-                grpc.StatusCode.UNIMPLEMENTED,
-            ):
-                return
-            raise
+            if not (isinstance(exc, grpc.Call) and exc.code() == grpc.StatusCode.ALREADY_EXISTS):
+                if isinstance(exc, grpc.Call) and exc.code() == grpc.StatusCode.UNIMPLEMENTED:
+                    return
+                raise
+
+        # Profiles already exist — update them individually so new endpoints/credentials take effect.
+        update_method = getattr(getattr(client, "_stub", None), "UpdateProviderProfiles", None)
+        get_method = getattr(getattr(client, "_stub", None), "GetProviderProfile", None)
+        if not callable(update_method) or not callable(get_method):
+            return
+
+        for p in profiles:
+            pid = p.get("id")
+            if not pid:
+                continue
+            try:
+                get_req = openshell_pb2.GetProviderProfileRequest(id=pid)
+                existing = get_method(get_req, timeout=client._timeout)
+                rv = getattr(getattr(existing, "profile", None), "resource_version", 0) or 0
+                updated_profile = _build_provider_profile(p, resource_version=rv)
+                item = openshell_pb2.ProviderProfileImportItem(profile=updated_profile, source="swarmer")
+                up_req = openshell_pb2.UpdateProviderProfilesRequest(
+                    id=pid,
+                    profile=item,
+                    expected_resource_version=rv,
+                )
+                update_method(up_req, timeout=client._timeout)
+            except grpc.RpcError as u_exc:
+                if isinstance(u_exc, grpc.Call) and u_exc.code() in (
+                    grpc.StatusCode.UNIMPLEMENTED,
+                    grpc.StatusCode.NOT_FOUND,
+                ):
+                    continue
+                log.warning("import_provider_profiles: failed to update existing profile %s: %s", pid, u_exc)
+            except Exception as u_exc:
+                log.warning("import_provider_profiles: failed to update existing profile %s: %s", pid, u_exc)
 
     await asyncio.to_thread(_do_import)
 

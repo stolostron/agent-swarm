@@ -929,3 +929,57 @@ def test_jira_provider_profile_binds_atlassian_endpoints():
         ("*.atlassian.net", 443),
         ("redhat.atlassian.net", 443),
     }
+
+
+@pytest.mark.asyncio
+async def test_import_provider_profiles_updates_existing_profile_on_already_exists():
+    """When ImportProviderProfiles encounters ALREADY_EXISTS, it calls UpdateProviderProfiles."""
+    import grpc
+    from openshell._proto import openshell_pb2
+
+    mock_client = MagicMock()
+
+    class MockRpcError(grpc.RpcError, grpc.Call):
+        def code(self):
+            return grpc.StatusCode.ALREADY_EXISTS
+
+    mock_client._stub.ImportProviderProfiles.side_effect = MockRpcError()
+    mock_client._timeout = 10
+
+    # Mock GetProviderProfile to return an existing profile with resource_version=5
+    existing_resp = MagicMock()
+    existing_resp.profile.resource_version = 5
+    mock_client._stub.GetProviderProfile.return_value = existing_resp
+
+    profile_dict = {
+        "id": "jira",
+        "display_name": "Jira",
+        "credentials": [{"name": "JIRA_ACCESS_TOKEN", "env_vars": ["JIRA_ACCESS_TOKEN"]}],
+        "endpoints": [
+            {
+                "host": "redhat.atlassian.net",
+                "port": 443,
+                "protocol": "rest",
+                "access": "read-write",
+                "enforcement": "enforce",
+            }
+        ],
+    }
+
+    await oc.import_provider_profiles([profile_dict], client=mock_client)
+
+    # Verify GetProviderProfile was called for "jira"
+    mock_client._stub.GetProviderProfile.assert_called_once()
+    get_req = mock_client._stub.GetProviderProfile.call_args.args[0]
+    assert get_req.id == "jira"
+
+    # Verify UpdateProviderProfiles was called with expected_resource_version=5
+    mock_client._stub.UpdateProviderProfiles.assert_called_once()
+    up_req = mock_client._stub.UpdateProviderProfiles.call_args.args[0]
+    assert up_req.id == "jira"
+    assert up_req.expected_resource_version == 5
+    assert up_req.profile.profile.id == "jira"
+    assert up_req.profile.profile.resource_version == 5
+    assert len(up_req.profile.profile.endpoints) == 1
+    assert up_req.profile.profile.endpoints[0].host == "redhat.atlassian.net"
+
