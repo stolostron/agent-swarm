@@ -71,6 +71,9 @@ update-deps:  ## Fetch the latest stable OpenShell dependencies and update pins
 	  (echo "Error: invalid OpenShell version format: $(LATEST_OPENSHELL)" >&2 && exit 1)
 	@echo "$(LATEST_AGENT_SANDBOX)" | grep -Eq '^v?[0-9]+(\.[0-9]+)+([a-zA-Z0-9_.-]+)?$$' || \
 	  (echo "Error: invalid Agent Sandbox version format: $(LATEST_AGENT_SANDBOX)" >&2 && exit 1)
+	@curl -fsI "https://github.com/kubernetes-sigs/agent-sandbox/releases/download/$(LATEST_AGENT_SANDBOX)/sandbox.yaml" >/dev/null 2>&1 || \
+	 curl -fsI "https://github.com/kubernetes-sigs/agent-sandbox/releases/download/$(LATEST_AGENT_SANDBOX)/manifest.yaml" >/dev/null 2>&1 || \
+	 (echo "Error: neither sandbox.yaml nor manifest.yaml found for Agent Sandbox $(LATEST_AGENT_SANDBOX)" >&2 && exit 1)
 	@echo "OpenShell: $(OPENSHELL_VERSION) -> $(LATEST_OPENSHELL)"
 	@echo "Agent Sandbox: $(AGENT_SANDBOX_VERSION) -> $(LATEST_AGENT_SANDBOX)"
 	@sed -i 's/^OPENSHELL_VERSION\s*?= .*/OPENSHELL_VERSION        ?= $(LATEST_OPENSHELL)/' Makefile
@@ -354,8 +357,19 @@ deploy:  ## Deploy swarmer to the current kubectl context  (SILENT=1 for non-int
 	fi; \
 	if ! helm status openshell -n $(OPENSHELL_NAMESPACE) > /dev/null 2>&1; then \
 	  echo "OpenShell not found — installing $(OPENSHELL_VERSION)..."; \
-	  kubectl apply -f https://github.com/kubernetes-sigs/agent-sandbox/releases/download/$(AGENT_SANDBOX_VERSION)/manifest.yaml; \
+	  MANIFEST_URL="https://github.com/kubernetes-sigs/agent-sandbox/releases/download/$(AGENT_SANDBOX_VERSION)/sandbox.yaml"; \
+	  if ! curl -fsI "$$MANIFEST_URL" > /dev/null 2>&1; then \
+	    MANIFEST_URL="https://github.com/kubernetes-sigs/agent-sandbox/releases/download/$(AGENT_SANDBOX_VERSION)/manifest.yaml"; \
+	  fi; \
+	  kubectl apply -f "$$MANIFEST_URL"; \
 	  kubectl create namespace $(OPENSHELL_NAMESPACE) --dry-run=client -o yaml | kubectl apply -f -; \
+	  if command -v oc > /dev/null 2>&1; then \
+	    oc adm policy add-scc-to-user anyuid    -z agent-sandbox-controller -n agent-sandbox-system 2>/dev/null || true; \
+	    oc adm policy add-scc-to-user anyuid    -z openshell                -n $(OPENSHELL_NAMESPACE) 2>/dev/null || true; \
+	    oc adm policy add-scc-to-user anyuid    -z openshell-sandbox        -n $(OPENSHELL_NAMESPACE) 2>/dev/null || true; \
+	    oc adm policy add-scc-to-user privileged -z openshell                -n $(OPENSHELL_NAMESPACE) 2>/dev/null || true; \
+	    oc adm policy add-scc-to-user privileged -z openshell-sandbox        -n $(OPENSHELL_NAMESPACE) 2>/dev/null || true; \
+	  fi; \
 	  DOCKER_CONFIG=$$(mktemp -d) helm upgrade --install openshell \
 	    oci://ghcr.io/nvidia/openshell/helm-chart \
 	    --version $(OPENSHELL_VERSION) \
@@ -390,6 +404,7 @@ and pinned version $(OPENSHELL_VERSION) with chart defaults..."; \
 	fi; \
 	# Grant OpenShift SCCs required for sandbox pods (no-op on plain k8s / if oc is absent) \
 	if command -v oc > /dev/null 2>&1; then \
+	  oc adm policy add-scc-to-user anyuid    -z agent-sandbox-controller -n agent-sandbox-system 2>/dev/null || true; \
 	  oc adm policy add-scc-to-user anyuid    -z openshell         -n $(OPENSHELL_NAMESPACE) 2>/dev/null || true; \
 	  oc adm policy add-scc-to-user anyuid    -z openshell-sandbox -n $(OPENSHELL_NAMESPACE) 2>/dev/null || true; \
 	  oc adm policy add-scc-to-user privileged -z openshell         -n $(OPENSHELL_NAMESPACE) 2>/dev/null || true; \

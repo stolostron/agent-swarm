@@ -173,6 +173,7 @@ async def save_credentials(
                 credentials={
                     "GOOGLE_API_KEY": gemini_key,
                     "GOOGLE_GENERATIVE_AI_API_KEY": gemini_key,
+                    "GEMINI_API_KEY": gemini_key,
                 },
                 **ensure_kwargs,
             )

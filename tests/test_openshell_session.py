@@ -687,6 +687,53 @@ class TestDoLaunchOpenshell:
         assert gemini_pname not in call_kwargs.get("provider_names", [])
 
     @pytest.mark.asyncio
+    async def test_vertex_provider_injects_project_and_location_env_vars(self, client):
+        """When a google-cloud provider exists on the gateway, project and location env vars are injected into sandbox env_vars."""
+        ws = await _create_workspace(client)
+        # Configure OpencodeSecret with project and location
+        await client.post(
+            f"/api/v1/workspaces/{ws['id']}/secrets/credentials",
+            json={
+                "google_cloud_project": "test-gcp-proj",
+                "vertex_location": "us-central1",
+            },
+        )
+        s_resp = await client.post(
+            f"/api/v1/workspaces/{ws['id']}/sessions",
+            json={"name": "s-vertex", "mode": "prompt", "agent_tool": "opencode", "provider": "claude"},
+        )
+        assert s_resp.status_code == 201, s_resp.text
+        s = s_resp.json()
+        expected_pname = f"swarmer-ws-{ws['id']}-google-cloud"
+
+        patches = self._patch_openshell()
+        with patches["create_provider"], \
+             patches["ensure_provider"], \
+             patches["configure_provider_credential"], patches["attach_sandbox_provider"], \
+             patches["create_sandbox"], patches["write_agent_config"], \
+             patches["write_agents_md"], patches["exec_command"], \
+             patches["start_agent"], patches["delete_sandbox"], \
+             patches["build_policy"], patches["run_agent"], \
+             patches["setup_sandbox"] as mock_setup, \
+             patches["get_image"]:
+            with patch(
+                "swarmer.openshell_client.provider_exists",
+                new=AsyncMock(side_effect=lambda name, **kw: name == expected_pname),
+            ):
+                await client.post(
+                    f"/api/v1/workspaces/{ws['id']}/sessions/{s['id']}/launch"
+                )
+                await asyncio.sleep(0)
+
+        call_kwargs = mock_setup.call_args.kwargs if mock_setup.call_args else {}
+        assert expected_pname in call_kwargs.get("provider_names", [])
+        env_vars = call_kwargs.get("env_vars", {})
+        assert env_vars.get("GOOGLE_CLOUD_PROJECT") == "test-gcp-proj"
+        assert env_vars.get("VERTEX_PROJECT") == "test-gcp-proj"
+        assert env_vars.get("GOOGLE_CLOUD_LOCATION") == "us-central1"
+        assert env_vars.get("VERTEX_LOCATION") == "us-central1"
+
+    @pytest.mark.asyncio
     async def test_openai_provider_attached_when_configured_on_gateway(self, client):
         """When an OpenAI provider exists on the gateway, attach it to the sandbox."""
         ws = await _create_workspace(client)

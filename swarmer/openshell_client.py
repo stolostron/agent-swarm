@@ -88,12 +88,29 @@ CUSTOM_PROVIDER_PROFILES: list[dict] = [
             {
                 # Credential name IS the env var injected into the sandbox.
                 # env_vars is used by the gateway proxy for HTTP request rewriting.
+                # OpenCode and various Google AI SDKs look for GOOGLE_API_KEY,
+                # GOOGLE_GENERATIVE_AI_API_KEY, or GEMINI_API_KEY. All three are
+                # registered with endpoint bindings to avoid being withheld by OpenShell.
                 "name": "GOOGLE_API_KEY",
                 "env_vars": ["GOOGLE_API_KEY"],
-                "required": True,
+                "required": False,
                 "auth_style": "header",
                 "header_name": "x-goog-api-key",
-            }
+            },
+            {
+                "name": "GOOGLE_GENERATIVE_AI_API_KEY",
+                "env_vars": ["GOOGLE_GENERATIVE_AI_API_KEY"],
+                "required": False,
+                "auth_style": "header",
+                "header_name": "x-goog-api-key",
+            },
+            {
+                "name": "GEMINI_API_KEY",
+                "env_vars": ["GEMINI_API_KEY"],
+                "required": False,
+                "auth_style": "header",
+                "header_name": "x-goog-api-key",
+            },
         ],
         "endpoints": [
             {
@@ -1253,7 +1270,8 @@ async def import_provider_profiles(profiles: list[dict], client=None) -> None:
 
     def _do_import():
         req = openshell_pb2.ImportProviderProfilesRequest()
-        _set_workspace(req)
+        if hasattr(req, "workspace"):
+            req.workspace = ""  # Register globally so custom profiles are visible across all workspaces and supervisors
         for p in profiles:
             profile = _build_provider_profile(p)
             req.profiles.append(openshell_pb2.ProviderProfileImportItem(profile=profile, source="swarmer"))
@@ -1278,7 +1296,21 @@ async def import_provider_profiles(profiles: list[dict], client=None) -> None:
                 continue
             try:
                 get_req = openshell_pb2.GetProviderProfileRequest(id=pid)
-                existing = get_method(get_req, timeout=client._timeout)
+                if hasattr(get_req, "workspace"):
+                    get_req.workspace = ""
+                existing = None
+                try:
+                    existing = get_method(get_req, timeout=client._timeout)
+                except grpc.RpcError as g_exc:
+                    if hasattr(get_req, "workspace"):
+                        get_req.workspace = _OPENSHELL_WORKSPACE
+                        try:
+                            existing = get_method(get_req, timeout=client._timeout)
+                        except Exception:
+                            pass
+                    if existing is None:
+                        raise g_exc
+
                 rv = getattr(getattr(existing, "profile", None), "resource_version", 0) or 0
                 updated_profile = _build_provider_profile(p, resource_version=rv)
                 item = openshell_pb2.ProviderProfileImportItem(profile=updated_profile, source="swarmer")
@@ -1287,6 +1319,8 @@ async def import_provider_profiles(profiles: list[dict], client=None) -> None:
                     profile=item,
                     expected_resource_version=rv,
                 )
+                if hasattr(up_req, "workspace"):
+                    up_req.workspace = getattr(get_req, "workspace", "") or ""
                 update_method(up_req, timeout=client._timeout)
             except grpc.RpcError as u_exc:
                 if isinstance(u_exc, grpc.Call) and u_exc.code() in (

@@ -1032,6 +1032,9 @@ def _build_expected_hosts(model: str, repos_data: list[dict], tool_name: str, mo
     if provider in ("google", "vertexai", "google-vertex-anthropic"):
         hosts.add("generativelanguage.googleapis.com")
         hosts.add("aiplatform.googleapis.com")
+        hosts.add("*-aiplatform.googleapis.com")
+        hosts.add("*.aiplatform.googleapis.com")
+        hosts.add("aiplatform.*.rep.googleapis.com")
         hosts.add("oauth2.googleapis.com")
     if provider == "gemini":
         hosts.add("generativelanguage.googleapis.com")
@@ -1428,6 +1431,13 @@ async def _do_launch_openshell(
                 "_do_launch_openshell: could not check google-cloud provider for session %d",
                 session.id, exc_info=True,
             )
+    if _has_google_cloud_provider and oc_secret:
+        if oc_secret.vertex_location:
+            env_vars["GOOGLE_CLOUD_LOCATION"] = oc_secret.vertex_location
+            env_vars["VERTEX_LOCATION"] = oc_secret.vertex_location
+        if oc_secret.google_cloud_project:
+            env_vars["GOOGLE_CLOUD_PROJECT"] = oc_secret.google_cloud_project
+            env_vars["VERTEX_PROJECT"] = oc_secret.google_cloud_project
     # 1b cont. GitHub App IAT — minted above before commit; now register the provider.
     _app_pname: str | None = None
 

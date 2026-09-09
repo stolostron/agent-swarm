@@ -1415,6 +1415,8 @@ class TestSecrets:
         assert resp.status_code == 200
         assert calls["ensure"][0] == f"swarmer-ws-{ws['id']}-google-ai-studio"
         assert calls["ensure"][3]["GOOGLE_API_KEY"] == "gemini-key-123"
+        assert calls["ensure"][3]["GOOGLE_GENERATIVE_AI_API_KEY"] == "gemini-key-123"
+        assert calls["ensure"][3]["GEMINI_API_KEY"] == "gemini-key-123"
         assert calls["create_gc"] == (f"swarmer-ws-{ws['id']}-google-cloud", "gcp-proj", "us-central1")
         assert calls["conf_gc"] == (f"swarmer-ws-{ws['id']}-google-cloud", adc)
 

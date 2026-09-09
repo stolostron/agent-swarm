@@ -983,3 +983,55 @@ async def test_import_provider_profiles_updates_existing_profile_on_already_exis
     assert len(up_req.profile.profile.endpoints) == 1
     assert up_req.profile.profile.endpoints[0].host == "redhat.atlassian.net"
 
+
+def test_gemini_provider_profile_binds_all_gemini_credentials_and_endpoints():
+    """The Google AI Studio credential profile defines all Gemini credentials and binds its endpoint."""
+    from swarmer.openshell_client import CUSTOM_PROVIDER_PROFILES
+
+    gemini = next(profile for profile in CUSTOM_PROVIDER_PROFILES if profile["id"] == "google-ai-studio")
+    cred_names = [c["name"] for c in gemini["credentials"]]
+    assert "GOOGLE_API_KEY" in cred_names
+    assert "GOOGLE_GENERATIVE_AI_API_KEY" in cred_names
+    assert "GEMINI_API_KEY" in cred_names
+    endpoints = {(endpoint["host"], endpoint["port"]) for endpoint in gemini["endpoints"]}
+    assert ("generativelanguage.googleapis.com", 443) in endpoints
+
+
+@pytest.mark.asyncio
+async def test_ensure_provider_auto_imports_gemini_profile(sdk_client):
+    """ensure_provider('...-google-ai-studio', 'google-ai-studio', ...) auto-imports the Gemini profile."""
+    with patch.object(oc, "_get_client", return_value=sdk_client):
+        await oc.ensure_provider(
+            "swarmer-ws-1-google-ai-studio",
+            "google-ai-studio",
+            {},
+            credentials={
+                "GOOGLE_API_KEY": "test-key",
+                "GOOGLE_GENERATIVE_AI_API_KEY": "test-key",
+                "GEMINI_API_KEY": "test-key",
+            },
+        )
+
+    sdk_client._stub.ImportProviderProfiles.assert_called_once()
+    import_req = sdk_client._stub.ImportProviderProfiles.call_args.args[0]
+    assert len(import_req.profiles) == 1
+    imported_profile = import_req.profiles[0].profile
+    assert imported_profile.id == "google-ai-studio"
+    cred_names = [c.name for c in imported_profile.credentials]
+    assert "GOOGLE_API_KEY" in cred_names
+    assert "GOOGLE_GENERATIVE_AI_API_KEY" in cred_names
+    assert "GEMINI_API_KEY" in cred_names
+    assert len(imported_profile.endpoints) == 1
+    assert imported_profile.endpoints[0].host == "generativelanguage.googleapis.com"
+
+
+@pytest.mark.asyncio
+async def test_import_provider_profiles_registers_globally_with_empty_workspace(sdk_client):
+    """Custom provider profiles must be imported into global scope (workspace='') so all workspaces and supervisors find them."""
+    with patch.object(oc, "_get_client", return_value=sdk_client):
+        await oc.import_provider_profiles([{"id": "test-profile"}])
+
+    sdk_client._stub.ImportProviderProfiles.assert_called_once()
+    import_req = sdk_client._stub.ImportProviderProfiles.call_args.args[0]
+    if hasattr(import_req, "workspace"):
+        assert import_req.workspace == ""

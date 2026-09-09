@@ -27,9 +27,10 @@ configured flags are cleared; raw AI credentials are never stored by Swarmer.
 
 What `make deploy` does:
 
-1. **Installs Agent Sandbox CRDs** from `AGENT_SANDBOX_VERSION`.
+1. **Installs Agent Sandbox CRDs** from `AGENT_SANDBOX_VERSION` (applying `sandbox.yaml`, with automatic fallback to `manifest.yaml` for legacy releases).
 2. **Installs or upgrades OpenShell on every run**: `helm upgrade --install oci://ghcr.io/nvidia/openshell/helm-chart --version $(OPENSHELL_VERSION) --set server.workspaceDefaultStorageSize=$(OPENSHELL_WORKSPACE_STORAGE)` on first install; on subsequent runs (OpenShell already installed) it runs `helm upgrade --reset-values` with chart defaults and explicit `--set` flags, so bumping `OPENSHELL_VERSION` or `OPENSHELL_WORKSPACE_STORAGE` in the Makefile **is** applied automatically on the next `make deploy` — no manual `helm upgrade` needed. `server.workspaceDefaultStorageSize` (Makefile default `10Gi`) controls the size of the per-sandbox `workspace-{name}` PVC mounted at `/sandbox` (OpenShell's own built-in default `2Gi`) — this is the actual fix for large-repo Go CVE scans exhausting disk (ACM-38172). It is a gateway-wide ceiling, distinct from the sandbox pod's ephemeral-storage compute resource (container writable layer / unsized emptyDirs), which is hardcoded to `10Gi` in `openshell_client.create_sandbox()` (ACM-39804; a per-session dropdown for this existed under ACM-38184 but was removed — it never affected `/sandbox`, and there is no OpenShell API, verified through gateway/SDK 0.0.97, to size `/sandbox` per sandbox). Note: only newly created sandbox PVCs pick up a changed size — existing sandboxes are unaffected until relaunched.
 3. **Grants OpenShift SCCs** (if `oc` is on PATH — no-op on plain Kubernetes):
+   - `anyuid` for `agent-sandbox-controller` in `agent-sandbox-system`
    - `anyuid` and `privileged` for both `openshell` and `openshell-sandbox` service accounts
    - Sandbox pods require `NET_ADMIN`, `SYS_ADMIN`, `SYS_PTRACE`, and `SYSLOG` capabilities; `anyuid` alone is insufficient
    - These grants are applied on every `make deploy` run (both install and re-deploy) so they survive namespace recreation

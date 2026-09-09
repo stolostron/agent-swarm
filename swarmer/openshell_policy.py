@@ -322,6 +322,8 @@ def _build_google_cloud_provider_block(agent_tool: str) -> dict:
         "name": "google-cloud-provider",
         "endpoints": [
             _endpoint("aiplatform.googleapis.com"),
+            _endpoint("*-aiplatform.googleapis.com"),
+            _endpoint("aiplatform.*.rep.googleapis.com"),
             _endpoint("api.github.com"),
         ],
         "binaries": binaries,
@@ -353,6 +355,8 @@ def _build_agent_api_block(agent_tool: str, model: str) -> dict:
     ]
     if _is_vertex:
         endpoints.append(_endpoint("aiplatform.googleapis.com"))
+        endpoints.append(_endpoint("*-aiplatform.googleapis.com"))
+        endpoints.append(_endpoint("aiplatform.*.rep.googleapis.com"))
     if _is_openai:
         endpoints.append(_endpoint("api.openai.com"))
     block = {

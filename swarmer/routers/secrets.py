@@ -268,6 +268,7 @@ async def opencode_secret_save(
                 credentials={
                     "GOOGLE_API_KEY": gemini_key,
                     "GOOGLE_GENERATIVE_AI_API_KEY": gemini_key,
+                    "GEMINI_API_KEY": gemini_key,
                 },
                 client=oc_client,
             )

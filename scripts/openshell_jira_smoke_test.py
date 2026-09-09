@@ -136,7 +136,11 @@ async def run_jira_smoke_test(model: str) -> bool:
     try:
         await ensure_provider(
             provider_name, "google-ai-studio", {},
-            credentials={"GOOGLE_API_KEY": google_key},
+            credentials={
+                "GOOGLE_API_KEY": google_key,
+                "GOOGLE_GENERATIVE_AI_API_KEY": google_key,
+                "GEMINI_API_KEY": google_key,
+            },
         )
         step("CreateProvider/UpdateProvider", True, provider_name)
     except Exception as exc:

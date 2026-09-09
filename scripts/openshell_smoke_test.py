@@ -85,8 +85,14 @@ async def run_smoke_test(model: str) -> bool:
     print("\n[2] Gateway provider setup")
     provider_name = "swarmer-smoke-test-google"
     try:
-        await ensure_provider(provider_name, "google-ai-studio", {},
-                              credentials={"GOOGLE_API_KEY": google_key})
+        await ensure_provider(
+            provider_name, "google-ai-studio", {},
+            credentials={
+                "GOOGLE_API_KEY": google_key,
+                "GOOGLE_GENERATIVE_AI_API_KEY": google_key,
+                "GEMINI_API_KEY": google_key,
+            },
+        )
         step("CreateProvider/UpdateProvider", True, provider_name)
     except Exception as exc:
         step("CreateProvider/UpdateProvider", False, str(exc))
@@ -141,6 +147,13 @@ async def run_smoke_test(model: str) -> bool:
         ok = step("GOOGLE_API_KEY is reference token", is_ref,
                   val[:50] if is_ref else f"got: {_redact_secret(val)}")
         all_passed = all_passed and ok
+
+        r_genai = xec(["bash", "-i", "-c", "printenv GOOGLE_GENERATIVE_AI_API_KEY"])
+        val_genai = r_genai.stdout.strip()
+        is_ref_genai = val_genai.startswith("openshell:resolve:")
+        ok_genai = step("GOOGLE_GENERATIVE_AI_API_KEY is reference token", is_ref_genai,
+                        val_genai[:50] if is_ref_genai else f"got: {_redact_secret(val_genai)}")
+        all_passed = all_passed and ok_genai
     except Exception as exc:
         step("GOOGLE_API_KEY check", False, str(exc))
         all_passed = False
@@ -836,8 +849,14 @@ async def run_policy_extract(
     provider_name = "swarmer-policy-extract-google"
 
     try:
-        await ensure_provider(provider_name, "google-ai-studio", {},
-                              credentials={"GOOGLE_API_KEY": google_key})
+        await ensure_provider(
+            provider_name, "google-ai-studio", {},
+            credentials={
+                "GOOGLE_API_KEY": google_key,
+                "GOOGLE_GENERATIVE_AI_API_KEY": google_key,
+                "GEMINI_API_KEY": google_key,
+            },
+        )
         step("Provider registered", True, provider_name)
     except Exception as exc:
         step("Provider registration", False, str(exc))

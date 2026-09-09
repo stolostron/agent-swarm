@@ -424,6 +424,24 @@ def test_agent_api_block_openai_includes_openai_endpoint():
     assert "api.openai.com" in hosts
 
 
+def test_agent_api_block_vertex_includes_regional_aiplatform_endpoints():
+    hosts = _bhosts(model="google-vertex-anthropic/claude-sonnet-5@default")
+    assert "aiplatform.googleapis.com" in hosts
+    assert "*-aiplatform.googleapis.com" in hosts
+    assert "aiplatform.*.rep.googleapis.com" in hosts
+
+
+def test_google_cloud_block_includes_regional_aiplatform_endpoints():
+    from swarmer.openshell_policy import _build_google_cloud_provider_block
+
+    block = _build_google_cloud_provider_block("opencode")
+    hosts = {ep["host"] for ep in block["endpoints"]}
+    assert "aiplatform.googleapis.com" in hosts
+    assert "*-aiplatform.googleapis.com" in hosts
+    assert "aiplatform.*.rep.googleapis.com" in hosts
+    assert "api.github.com" in hosts
+
+
 # ---------------------------------------------------------------------------
 # 7. Prompt source raw.githubusercontent.com blocks
 # ---------------------------------------------------------------------------
