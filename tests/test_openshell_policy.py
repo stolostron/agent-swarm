@@ -448,8 +448,8 @@ def test_raw_github_block_absent_when_no_prompt_sources():
     assert not any(k.startswith("raw_github_") for k in net)
 
 
-def test_raw_github_block_endpoints_broadened_to_full_access():
-    """raw.githubusercontent.com and github.com must have access='full' and no restrictive path.
+def test_raw_github_block_endpoints_use_read_only_access():
+    """Raw GitHub endpoints allow all paths but only read methods.
 
     Scoping paths causes silent L7 403 blocks when prompts or skills reference
     shared tools, common scripts, or cross-repo dependencies.
@@ -466,12 +466,12 @@ def test_raw_github_block_endpoints_broadened_to_full_access():
     raw_ep = next(ep for ep in endpoints if ep.get("host") == "raw.githubusercontent.com")
     gh_ep = next(ep for ep in endpoints if ep.get("host") == "github.com")
 
-    assert raw_ep.get("access") == "full"
+    assert raw_ep.get("access") == "read-only"
     assert raw_ep.get("enforcement") == "enforce"
     assert "path" not in raw_ep
     assert "rules" not in raw_ep
 
-    assert gh_ep.get("access") == "full"
+    assert gh_ep.get("access") == "read-only"
     assert gh_ep.get("enforcement") == "enforce"
     assert "path" not in gh_ep
     assert "rules" not in gh_ep

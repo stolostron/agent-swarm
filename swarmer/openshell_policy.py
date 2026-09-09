@@ -247,21 +247,21 @@ def _build_raw_github_block(
     dependencies (e.g. swarm-helpers, agentic-sdlc).
 
     In OpenShell 0.0.116+, the L7 proxy strictly enforces path matching.
-    Granting full access to raw.githubusercontent.com and github.com for read
-    binaries (curl and python3) avoids silent L7 denials on external references.
+    Granting read-only access to raw.githubusercontent.com and github.com for
+    read binaries (curl and python3) avoids silent L7 denials on external
+    references without allowing write methods.
     """
     return {
         "name": f"raw-github-{org}-{name}",
         "endpoints": [
             {
                 # raw.githubusercontent.com — canonical CDN for raw file content.
-                # Broadened to access="full" so scripts, prompts, and skills can fetch
-                # shared helpers and cross-repo dependencies without L7 403 path blocks.
+                # Read-only access covers all paths while blocking write methods.
                 "host": "raw.githubusercontent.com",
                 "port": 443,
                 "protocol": "rest",
                 "enforcement": "enforce",
-                "access": "full",
+                "access": "read-only",
             },
             {
                 # github.com — paste-friendly URLs redirect to raw.githubusercontent.com.
@@ -269,7 +269,7 @@ def _build_raw_github_block(
                 "port": 443,
                 "protocol": "rest",
                 "enforcement": "enforce",
-                "access": "full",
+                "access": "read-only",
             },
         ],
         "binaries": [
