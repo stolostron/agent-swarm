@@ -373,6 +373,9 @@ def test_go_development_block_included_for_go_session():
     hosts = _bhosts(session=_make_session(language="golang"))
     assert "proxy.golang.org" in hosts
     assert "sum.golang.org" in hosts
+    assert "github.com" in hosts
+    assert "objects.githubusercontent.com" in hosts
+    assert "codeload.github.com" in hosts
 
 
 def test_python_development_block_included_for_python_session():
@@ -445,8 +448,12 @@ def test_raw_github_block_absent_when_no_prompt_sources():
     assert not any(k.startswith("raw_github_") for k in net)
 
 
-def test_raw_github_block_path_scoped_to_folder():
-    """When folder_path is set, the path prefix must include it."""
+def test_raw_github_block_endpoints_broadened_to_full_access():
+    """raw.githubusercontent.com and github.com must have access='full' and no restrictive path.
+
+    Scoping paths causes silent L7 403 blocks when prompts or skills reference
+    shared tools, common scripts, or cross-repo dependencies.
+    """
     ps = _make_prompt_source(
         repo_url="https://github.com/stolostron/agentic-sdlc",
         branch="main",
@@ -455,75 +462,19 @@ def test_raw_github_block_path_scoped_to_folder():
     net = _bnet(prompt_sources=[ps])
     block = net.get("raw_github_stolostron_agentic_sdlc", {})
     endpoints = block.get("endpoints", [])
-    assert endpoints, "raw_github block must have endpoints"
-    path = endpoints[0].get("path", "")
-    assert "skills" in path, f"Expected folder 'skills' in path, got: {path!r}"
-    assert path == "/stolostron/agentic-sdlc/main/skills/**"
+    assert len(endpoints) == 2
+    raw_ep = next(ep for ep in endpoints if ep.get("host") == "raw.githubusercontent.com")
+    gh_ep = next(ep for ep in endpoints if ep.get("host") == "github.com")
 
+    assert raw_ep.get("access") == "full"
+    assert raw_ep.get("enforcement") == "enforce"
+    assert "path" not in raw_ep
+    assert "rules" not in raw_ep
 
-def test_raw_github_block_path_root_when_folder_is_dot():
-    """When folder_path is '.', the path prefix must be branch-level only."""
-    ps = _make_prompt_source(
-        repo_url="https://github.com/stolostron/agentic-sdlc",
-        branch="main",
-        folder_path=".",
-    )
-    net = _bnet(prompt_sources=[ps])
-    block = net.get("raw_github_stolostron_agentic_sdlc", {})
-    endpoints = block.get("endpoints", [])
-    path = endpoints[0].get("path", "")
-    assert path == "/stolostron/agentic-sdlc/main/**", (
-        f"Root folder should produce branch-level path, got: {path!r}"
-    )
-
-
-def test_raw_github_block_path_root_when_folder_is_empty():
-    """When folder_path is empty, path prefix must be branch-level only."""
-    ps = _make_prompt_source(
-        repo_url="https://github.com/stolostron/agentic-sdlc",
-        branch="main",
-        folder_path="",
-    )
-    net = _bnet(prompt_sources=[ps])
-    block = net.get("raw_github_stolostron_agentic_sdlc", {})
-    endpoints = block.get("endpoints", [])
-    path = endpoints[0].get("path", "")
-    assert path == "/stolostron/agentic-sdlc/main/**"
-
-
-def test_raw_github_block_uses_correct_branch():
-    """The branch from the prompt source must appear in the path."""
-    ps = _make_prompt_source(
-        repo_url="https://github.com/stolostron/agentic-sdlc",
-        branch="release-2.13",
-        folder_path="prompts",
-    )
-    net = _bnet(prompt_sources=[ps])
-    block = net.get("raw_github_stolostron_agentic_sdlc", {})
-    endpoints = block.get("endpoints", [])
-    path = endpoints[0].get("path", "")
-    assert "release-2.13" in path, f"Expected branch in path, got: {path!r}"
-    assert path == "/stolostron/agentic-sdlc/release-2.13/prompts/**"
-
-
-def test_raw_github_block_github_com_endpoint_scoped_to_repo():
-    """github.com endpoint must be scoped to the prompt source org/repo (not all of github.com)."""
-    ps = _make_prompt_source(
-        repo_url="https://github.com/stolostron/agentic-sdlc",
-        branch="main", folder_path="prompts",
-    )
-    net = _bnet(prompt_sources=[ps])
-    block = net.get("raw_github_stolostron_agentic_sdlc", {})
-    gh_ep = next(
-        (ep for ep in block.get("endpoints", []) if ep.get("host") == "github.com"), None
-    )
-    assert gh_ep is not None, "github.com endpoint missing from raw_github block"
-    assert gh_ep.get("path") == "/stolostron/agentic-sdlc/**", (
-        f"github.com path must be scoped to org/repo, got: {gh_ep.get('path')!r}"
-    )
-    rules = gh_ep.get("rules", [])
-    assert rules, "github.com endpoint must have rules"
-    assert rules[0]["allow"]["method"] == "GET", "github.com must be GET-only"
+    assert gh_ep.get("access") == "full"
+    assert gh_ep.get("enforcement") == "enforce"
+    assert "path" not in gh_ep
+    assert "rules" not in gh_ep
 
 
 def test_raw_github_block_curl_binary_present():
@@ -824,3 +775,40 @@ def test_custom_policy_multiple_endpoints_backfill_only_missing():
     assert "rules" not in eps[1]
     assert "access" not in eps[2], "endpoint with rules should not get access added"
     assert eps[2]["rules"], "rules should be preserved on third endpoint"
+
+
+def test_custom_policy_filters_out_empty_host_endpoints():
+    """Endpoints with empty host (e.g. from direct IP or bad draft chunks) must be omitted.
+
+    OpenShell rejects empty host endpoints with INVALID_ARGUMENT: 'endpoint host must not be empty'.
+    """
+    custom = [
+        {
+            "name": "allow__443",
+            "endpoints": [{"host": "", "port": 443, "protocol": "rest"}],
+            "binaries": [{"path": "/usr/local/bin/python3.14", "harness": True}],
+        },
+        {
+            "name": "allow_valid_443",
+            "endpoints": [
+                {"host": "   ", "port": 443, "protocol": "rest"},
+                {"host": "example.com", "port": 443, "protocol": "rest"},
+            ],
+            "binaries": [{"path": "/usr/bin/curl", "harness": True}],
+        },
+    ]
+    net = build_session_network_policies(
+        _make_session(),
+        repos=[],
+        mcp_servers=[],
+        agent_tool="opencode",
+        model=_MODEL,
+        custom_policies=custom,
+    )
+    # The rule with only an empty host should be completely skipped
+    assert "custom_allow__443" not in net
+    # The rule with mixed hosts should only retain the valid host
+    assert "custom_allow_valid_443" in net
+    eps = net["custom_allow_valid_443"]["endpoints"]
+    assert len(eps) == 1
+    assert eps[0]["host"] == "example.com"

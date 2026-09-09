@@ -2987,20 +2987,30 @@ async def session_policy_rules_add(
     now_iso = datetime.now(timezone.utc).isoformat()
 
     def _normalize_endpoints(raw_eps: list) -> list:
-        """Ensure every L7-protocol endpoint has access or rules.
+        """Ensure every L7-protocol endpoint has access and enforcement set.
 
         Draft chunks from OPA include host/port/protocol but omit these fields,
         which causes gateway validation to fail with 'protocol requires rules or
-        access to define allowed traffic'. Default to access=full for
-        user-approved traffic.
+        access to define allowed traffic'. When promoting/adding rules, default
+        to access=full and strip restrictive path/rules so subsequent dependencies
+        or requests on the approved host do not silently fail at L7.
         """
         result = []
         for ep in raw_eps:
+            host = (ep.get("host") or "").strip()
+            if not host and not ep.get("allowed_ips"):
+                # OpenShell rejects empty endpoint hosts with INVALID_ARGUMENT
+                continue
             ep = dict(ep)
+            ep["host"] = host
             if not ep.get("enforcement"):
                 ep["enforcement"] = "enforce"
-            if ep.get("protocol") and not ep.get("access") and not ep.get("rules"):
+            if ep.get("protocol"):
                 ep["access"] = "full"
+                ep.pop("path", None)
+                ep.pop("rules", None)
+            if ep.get("host") == "registry.npmjs.org":
+                ep["allow_encoded_slash"] = True
             result.append(ep)
         return result
 

@@ -288,9 +288,9 @@ async def _collect_orphaned_sandboxes(db) -> None:
             await db.commit()
 
     # --- Stale running/pending with no sandbox_name: sessions stuck in "running" or
-    # "pending" with sandbox_name=NULL have no recoverable sandbox — move to "stopped".
-    # The pending guard above only skips GC when a pending session *has* a sandbox_name
-    # (genuinely mid-setup), so pending+NULL sessions reach this path safely.
+    # "pending" with sandbox_name=NULL that have exceeded the launch grace period (2 min).
+    # Fresh launches are pending+NULL while create_sandbox is executing and must not be stopped.
+    _now = datetime.now(timezone.utc)
     stale_result = await db.execute(
         select(Session).where(
             Session.phase.in_(("running", "pending")),
@@ -300,12 +300,17 @@ async def _collect_orphaned_sandboxes(db) -> None:
     stale_sessions = stale_result.scalars().all()
     if stale_sessions:
         for s in stale_sessions:
+            started = s.run_started_at
+            if started and started.tzinfo is None:
+                started = started.replace(tzinfo=timezone.utc)
+            if started and (_now - started).total_seconds() < 120:
+                continue  # Actively provisioning in _setup_openshell_sandbox
             log.warning(
                 "sandbox-gc: session %d is '%s' but has no sandbox_name — moving to stopped",
                 s.id, s.phase,
             )
             s.phase = "stopped"
-            s.run_completed_at = datetime.now(timezone.utc)
+            s.run_completed_at = _now
         await db.commit()
 
 

@@ -55,6 +55,28 @@ _GO_DEVELOPMENT_BLOCK = {
         {"host": "proxy.golang.org", "port": 443},
         {"host": "sum.golang.org", "port": 443},
         {"host": "storage.googleapis.com", "port": 443},
+        # Direct and VCS Go module resolution via github.com:
+        {
+            "host": "github.com",
+            "port": 443,
+            "protocol": "rest",
+            "enforcement": "enforce",
+            "access": "full",
+        },
+        {
+            "host": "objects.githubusercontent.com",
+            "port": 443,
+            "protocol": "rest",
+            "enforcement": "enforce",
+            "access": "full",
+        },
+        {
+            "host": "codeload.github.com",
+            "port": 443,
+            "protocol": "rest",
+            "enforcement": "enforce",
+            "access": "full",
+        },
     ],
     "binaries": [
         _bin("/usr/local/go/bin/go"),
@@ -219,62 +241,35 @@ def _build_raw_github_block(
 ) -> dict:
     """Build the policy block for curl/python reads from raw.githubusercontent.com.
 
-    raw.githubusercontent.com URL structure:
-      https://raw.githubusercontent.com/{org}/{repo}/{branch}/{path}
+    raw.githubusercontent.com is GitHub's read-only static file CDN. Scoping
+    paths to specific subfolders or repos causes silent HTTP 403 failures when
+    prompts or skills reference shared tools, common scripts, or cross-repo
+    dependencies (e.g. swarm-helpers, agentic-sdlc).
 
-    The block is scoped to a specific org/repo/branch/folder so only files
-    within the configured prompt source folder are accessible — not all of
-    raw.githubusercontent.com, and not even the full branch.
-
-    folder_path scoping:
-      - "." or "" (root)  → /{org}/{repo}/{branch}/**  (whole branch)
-      - "prompts/"        → /{org}/{repo}/{branch}/prompts/**
-      - "docs/prompts"    → /{org}/{repo}/{branch}/docs/prompts/**
-    Trailing slashes are stripped; a leading slash is never added twice.
-
-    Path scoping note: OPA enforces path rules at the application layer after
-    TLS termination, so the path filter is meaningful here (unlike the proxy
-    CONNECT layer where only the host is visible).
-
-    Binaries: curl (shell invocations, agent tool calls) and python3 variants
-    (agents using the requests/urllib stack — canonical path confirmed via OPA
-    draft chunks as /usr/local/bin/python3.14).
+    In OpenShell 0.0.116+, the L7 proxy strictly enforces path matching.
+    Granting full access to raw.githubusercontent.com and github.com for read
+    binaries (curl and python3) avoids silent L7 denials on external references.
     """
-    folder = (folder_path or "").strip("/")
-    if folder and folder != ".":
-        path_prefix = f"/{org}/{name}/{branch}/{folder}/**"
-    else:
-        path_prefix = f"/{org}/{name}/{branch}/**"
-
-    # github.com raw/blob paths redirect to raw.githubusercontent.com.
-    # Scoped to read (GET) on this org/repo only — broader path than the raw
-    # prefix because github.com serves /raw/ and /blob/ sub-paths.
-    github_path_prefix = f"/{org}/{name}/**"
-
     return {
         "name": f"raw-github-{org}-{name}",
         "endpoints": [
             {
                 # raw.githubusercontent.com — canonical CDN for raw file content.
-                # Path scoped to org/repo/branch[/folder].
+                # Broadened to access="full" so scripts, prompts, and skills can fetch
+                # shared helpers and cross-repo dependencies without L7 403 path blocks.
                 "host": "raw.githubusercontent.com",
                 "port": 443,
-                "path": path_prefix,
                 "protocol": "rest",
                 "enforcement": "enforce",
-                "rules": [{"allow": {"method": "GET", "path": path_prefix}}],
+                "access": "full",
             },
             {
-                # github.com — paste-friendly URLs (/org/repo/raw/branch/... and
-                # /org/repo/blob/branch/...) redirect to raw.githubusercontent.com.
-                # Allowed so users don't need to know the raw subdomain.
-                # Read-only (GET), scoped to this org/repo.
+                # github.com — paste-friendly URLs redirect to raw.githubusercontent.com.
                 "host": "github.com",
                 "port": 443,
-                "path": github_path_prefix,
                 "protocol": "rest",
                 "enforcement": "enforce",
-                "rules": [{"allow": {"method": "GET", "path": github_path_prefix}}],
+                "access": "full",
             },
         ],
         "binaries": [
@@ -282,6 +277,7 @@ def _build_raw_github_block(
             _bin("/usr/local/bin/python3.14"),
             _bin("/usr/local/bin/python3"),
             _bin("/usr/bin/python3"),
+            _bin("/sandbox/.venv/bin/python*"),
         ],
     }
 
@@ -293,10 +289,9 @@ def _build_github_api_block(org: str, name: str) -> dict:
             {
                 "host": "api.github.com",
                 "port": 443,
-                "path": f"/repos/{org}/{name}/**",
                 "protocol": "rest",
                 "enforcement": "enforce",
-                "rules": [{"allow": {"method": "*", "path": f"/repos/{org}/{name}/**"}}],
+                "access": "full",
             }
         ],
         "binaries": [
@@ -539,7 +534,12 @@ def build_session_network_policies(
         key = f"custom_{rule_name.replace('-', '_').replace(' ', '_') or i}"
         endpoints = []
         for ep in rule.get("endpoints", []):
+            host = (ep.get("host") or "").strip()
+            if not host and not ep.get("allowed_ips"):
+                # OpenShell rejects empty endpoint hosts with INVALID_ARGUMENT
+                continue
             ep = dict(ep)
+            ep["host"] = host
             if not ep.get("enforcement"):
                 ep["enforcement"] = "enforce"
             if ep.get("protocol") and not ep.get("access") and not ep.get("rules"):
@@ -547,6 +547,8 @@ def build_session_network_policies(
             if ep.get("host") == "registry.npmjs.org":
                 ep["allow_encoded_slash"] = True
             endpoints.append(ep)
+        if not endpoints:
+            continue
         network_policies_dict[key] = {**rule, "endpoints": endpoints}
 
     return network_policies_dict

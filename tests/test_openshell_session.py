@@ -2779,9 +2779,9 @@ class TestPolicyRulesEndpoints:
         )
 
     @pytest.mark.asyncio
-    async def test_add_chunk_preserves_existing_rules_on_endpoints(self, client):
-        """Promoting a chunk whose endpoints already have rules should preserve
-        them and must NOT add access=full."""
+    async def test_add_chunk_broadens_endpoints_to_access_full(self, client):
+        """Promoting a chunk broadens the endpoint to access=full and strips narrow rules/path
+        so subsequent requests or dependencies on the approved host do not silently fail at L7."""
         import json as _j
         ws = await _create_workspace(client)
         s = await _create_session(client, ws["id"])
@@ -2813,8 +2813,10 @@ class TestPolicyRulesEndpoints:
 
         rules = _j.loads(sess.custom_policies)
         ep = rules[0]["endpoints"][0]
-        assert "access" not in ep, f"access must not be added when rules are present, got: {ep}"
-        assert ep["rules"], "rules should be preserved"
+        assert ep.get("access") == "full", f"expected access=full on promoted endpoint, got: {ep}"
+        assert "rules" not in ep, f"narrow rules should be stripped on promotion, got: {ep}"
+        assert "path" not in ep, f"narrow path should be stripped on promotion, got: {ep}"
+        assert ep.get("enforcement") == "enforce"
 
     @pytest.mark.asyncio
     async def test_add_chunk_preserves_existing_access_on_endpoints(self, client):
