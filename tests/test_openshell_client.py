@@ -1103,6 +1103,78 @@ async def test_import_provider_profiles_preserves_global_workspace_on_reimport_a
     assert getattr(single_req, "workspace", "") == ""
 
 
+@pytest.mark.asyncio
+async def test_import_provider_profiles_uses_matched_workspace_on_update_not_found():
+    """When a profile matched in default workspace raises NOT_FOUND on update, recovery import uses matched workspace."""
+    import grpc
+
+    mock_client = MagicMock()
+
+    class MockAlreadyExists(grpc.RpcError, grpc.Call):
+        def code(self):
+            return grpc.StatusCode.ALREADY_EXISTS
+
+    class MockNotFound(grpc.RpcError, grpc.Call):
+        def code(self):
+            return grpc.StatusCode.NOT_FOUND
+
+    import_calls = []
+
+    def mock_import(req, timeout=None):
+        import_calls.append(req)
+        if len(import_calls) == 1:
+            raise MockAlreadyExists()
+        return MagicMock()
+
+    mock_client._stub.ImportProviderProfiles.side_effect = mock_import
+    mock_client._timeout = 10
+
+    class FakeGetReq:
+        def __init__(self, id=""):
+            self.id = id
+            self.workspace = ""
+
+    class FakeImportReq:
+        def __init__(self):
+            self.workspace = ""
+            self.profiles = []
+
+    class FakeUpdateReq:
+        def __init__(self, id="", profile=None, expected_resource_version=0):
+            self.id = id
+            self.profile = profile
+            self.expected_resource_version = expected_resource_version
+            self.workspace = ""
+
+    existing_resp = MagicMock()
+    existing_resp.profile.resource_version = 3
+
+    def mock_get(req, timeout=None):
+        if getattr(req, "workspace", "") == "default":
+            return existing_resp
+        raise MockNotFound()
+
+    mock_client._stub.GetProviderProfile.side_effect = mock_get
+    mock_client._stub.UpdateProviderProfiles.side_effect = MockNotFound()
+
+    from openshell._proto import openshell_pb2
+    profiles = [{"id": "default-scoped", "display_name": "Default Scoped"}]
+    with patch.object(openshell_pb2, "GetProviderProfileRequest", FakeGetReq), \
+         patch.object(openshell_pb2, "ImportProviderProfilesRequest", FakeImportReq), \
+         patch.object(openshell_pb2, "UpdateProviderProfilesRequest", FakeUpdateReq):
+        await oc.import_provider_profiles(profiles, client=mock_client)
+
+    # UpdateProviderProfiles was called with matched_workspace ("default")
+    mock_client._stub.UpdateProviderProfiles.assert_called_once()
+    up_req = mock_client._stub.UpdateProviderProfiles.call_args.args[0]
+    assert getattr(up_req, "workspace", "") == "default"
+
+    # Recovery ImportProviderProfiles was called with matched_workspace ("default")
+    assert len(import_calls) == 2
+    recovery_req = import_calls[1]
+    assert getattr(recovery_req, "workspace", "") == "default"
+
+
 def test_gemini_provider_profile_binds_all_gemini_credentials_and_endpoints():
     """The Google AI Studio credential profile defines all Gemini credentials and binds its endpoint."""
     from swarmer.openshell_client import CUSTOM_PROVIDER_PROFILES

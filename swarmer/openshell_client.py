@@ -1348,7 +1348,7 @@ async def import_provider_profiles(profiles: list[dict], client=None) -> None:
                     try:
                         single_req = openshell_pb2.ImportProviderProfilesRequest()
                         if hasattr(single_req, "workspace"):
-                            single_req.workspace = orig_workspace
+                            single_req.workspace = matched_workspace
                         single_profile = _build_provider_profile(p)
                         single_req.profiles.append(
                             openshell_pb2.ProviderProfileImportItem(profile=single_profile, source="swarmer")
