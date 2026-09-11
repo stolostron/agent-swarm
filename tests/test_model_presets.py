@@ -248,7 +248,9 @@ class TestBuildConfigDataPresets:
         config = json.loads(data["opencode.json"])
         assert config["enabled_providers"] == ["google"]
 
-    def test_openai_preset_resolves_and_sets_plan_default_variant(self, monkeypatch):
+    def test_openai_preset_resolves_and_sets_plan_default_variant(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         monkeypatch.setattr(settings, "opencode_experimental_plan_mode", True)
         data = _opencode.build_config_data(model="openai")
         config = json.loads(data["opencode.json"])

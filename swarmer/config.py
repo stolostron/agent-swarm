@@ -41,6 +41,7 @@ class Settings(BaseSettings):
     openshell_tls_cert: str = ""        # path to client TLS cert
     openshell_tls_key: str = ""         # path to client TLS key
     openshell_tls_ca: str = ""          # path to CA bundle
+    openshell_tls_verify: bool = True   # verify gateway server certificates
     openshell_bearer_token: str = ""    # bearer token for gateway/supervisor auth
     sandbox_gc_interval: int = 300      # seconds between sandbox GC sweeps
     log_level: str = "INFO"             # Python logging level: DEBUG, INFO, WARNING, ERROR

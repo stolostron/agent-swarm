@@ -244,6 +244,7 @@ All settings live in `swarmer/config.py` (`Settings` class) and are read from en
 | `openshell_tls_cert` | `OPENSHELL_TLS_CERT` | `str` | `""` | Path to client TLS certificate (mTLS) |
 | `openshell_tls_key` | `OPENSHELL_TLS_KEY` | `str` | `""` | Path to client TLS private key (mTLS) |
 | `openshell_tls_ca` | `OPENSHELL_TLS_CA` | `str` | `""` | Path to CA bundle for server cert verification |
+| `openshell_tls_verify` | `OPENSHELL_TLS_VERIFY` | `bool` | `true` | Verify OpenShell server certificates; set false only for self-signed development gateways |
 | `openshell_bearer_token` | `OPENSHELL_BEARER_TOKEN` | `str` | `""` | Bearer token for Gateway/Supervisor authentication |
 | `sandbox_gc_interval` | `SANDBOX_GC_INTERVAL` | `int` | `300` | Seconds between sandbox garbage-collection sweeps |
 

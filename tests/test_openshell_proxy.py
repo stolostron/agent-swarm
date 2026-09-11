@@ -756,6 +756,8 @@ class TestChatHttpProxyErrors:
         assert prefix in rewritten
         # The shim must not blindly rewrite third-party absolute URLs.
         assert "parsed.origin !== location.origin" in rewritten
+        assert "parsedWs.host === location.host" in rewritten
+        assert "parsedWs.protocol === 'wss:'" in rewritten
 
     def test_rewrite_js_preserves_prefixed_absolute_post_requests(self):
         """Already-proxied prompt URLs are returned unchanged for POST bodies."""
@@ -982,8 +984,8 @@ class TestChatHttpProxyErrors:
             ) = orig
 
     @pytest.mark.asyncio
-    async def test_openshell_ssl_context_without_ca_disables_verification_for_self_signed(self, tmp_path):
-        """In kind / local dev without a CA bundle, self-signed gateway certs are accepted."""
+    async def test_openshell_ssl_context_without_ca_verifies_by_default(self, tmp_path):
+        """Missing CA does not silently disable verification."""
         from swarmer.config import settings
         from swarmer.routers.chat_proxy import _openshell_ssl_context
         import ssl
@@ -997,11 +999,48 @@ class TestChatHttpProxyErrors:
             settings.openshell_tls_ca,
             settings.openshell_tls_cert,
             settings.openshell_tls_key,
+            settings.openshell_tls_verify,
         )
         try:
             settings.openshell_tls_ca = ""
             settings.openshell_tls_cert = str(cert)
             settings.openshell_tls_key = str(key)
+            settings.openshell_tls_verify = True
+            with patch.object(ssl.SSLContext, "load_cert_chain"):
+                ctx = _openshell_ssl_context()
+            assert ctx is not None
+            assert ctx.check_hostname is True
+            assert ctx.verify_mode == ssl.CERT_REQUIRED
+        finally:
+            (
+                settings.openshell_tls_ca,
+                settings.openshell_tls_cert,
+                settings.openshell_tls_key,
+                settings.openshell_tls_verify,
+            ) = orig
+
+    @pytest.mark.asyncio
+    async def test_openshell_ssl_context_explicitly_allows_self_signed(self, tmp_path):
+        """tls_verify=False opts into an unverified development context."""
+        from swarmer.config import settings
+        from swarmer.routers.chat_proxy import _openshell_ssl_context
+        import ssl
+
+        cert = tmp_path / "tls.crt"
+        key = tmp_path / "tls.key"
+        cert.touch()
+        key.touch()
+        orig = (
+            settings.openshell_tls_ca,
+            settings.openshell_tls_cert,
+            settings.openshell_tls_key,
+            settings.openshell_tls_verify,
+        )
+        try:
+            settings.openshell_tls_ca = ""
+            settings.openshell_tls_cert = str(cert)
+            settings.openshell_tls_key = str(key)
+            settings.openshell_tls_verify = False
             with patch.object(ssl.SSLContext, "load_cert_chain"):
                 ctx = _openshell_ssl_context()
             assert ctx is not None
@@ -1012,20 +1051,23 @@ class TestChatHttpProxyErrors:
                 settings.openshell_tls_ca,
                 settings.openshell_tls_cert,
                 settings.openshell_tls_key,
+                settings.openshell_tls_verify,
             ) = orig
 
     @pytest.mark.asyncio
     async def test_openshell_httpx_kwargs_no_cert_when_unconfigured(self):
-        """_openshell_httpx_kwargs returns verify=False only when no cert configured."""
+        """_openshell_httpx_kwargs still verifies when TLS material is absent."""
         from swarmer.routers.chat_proxy import _openshell_httpx_kwargs
         from swarmer.config import settings
+        import ssl
 
         orig_cert, orig_key = settings.openshell_tls_cert, settings.openshell_tls_key
         try:
             settings.openshell_tls_cert = ""
             settings.openshell_tls_key = ""
             kwargs = _openshell_httpx_kwargs()
-            assert kwargs.get("verify") is True
+            assert isinstance(kwargs.get("verify"), ssl.SSLContext)
+            assert kwargs["verify"].verify_mode == ssl.CERT_REQUIRED
             assert "cert" not in kwargs
         finally:
             settings.openshell_tls_cert = orig_cert

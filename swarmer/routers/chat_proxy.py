@@ -58,22 +58,18 @@ def _openshell_ssl_context(gateway_config=None) -> ssl.SSLContext | None:
     cert = (gateway_config.tls_cert if gateway_config else settings.openshell_tls_cert) or ""
     key = (gateway_config.tls_key if gateway_config else settings.openshell_tls_key) or ""
     ca = (gateway_config.tls_ca if gateway_config else settings.openshell_tls_ca) or None
-    verify = gateway_config.tls_verify if gateway_config else True
+    verify = gateway_config.tls_verify if gateway_config else settings.openshell_tls_verify
 
-    if not (cert and key) and not ca:
-        return None
-
-    if ca and verify:
+    if verify:
         ctx = ssl.create_default_context()
-        if "BEGIN " in ca:
-            ctx.load_verify_locations(cadata=ca)
-        else:
-            ctx.load_verify_locations(cafile=ca)
-    elif verify and not (cert and key):
-        ctx = ssl.create_default_context()
+        if ca:
+            if "BEGIN " in ca:
+                ctx.load_verify_locations(cadata=ca)
+            else:
+                ctx.load_verify_locations(cafile=ca)
     else:
-        # Gateway with self-signed certificate and no CA bundle (e.g. local dev / kind / mTLS only)
-        # or explicit verify=False
+        # Insecure TLS is opt-in for development gateways with self-signed
+        # certificates. Production/default configurations always verify.
         ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
         ctx.check_hostname = False
         ctx.verify_mode = ssl.CERT_NONE
@@ -202,7 +198,10 @@ def _proxy_intercept_script(prefix: str) -> str:
     if (/^(https?:|wss?:)/i.test(rewritten)) {{
       try {{
         var parsedWs = new URL(rewritten, location.href);
-        if (parsedWs.origin === location.origin) {{
+        var sameHost = parsedWs.host === location.host;
+        var compatibleProtocol = (location.protocol === 'https:' && parsedWs.protocol === 'wss:')
+          || (location.protocol === 'http:' && parsedWs.protocol === 'ws:');
+        if (sameHost && compatibleProtocol) {{
           rewritten = parsedWs.pathname + parsedWs.search;
           if (rewritten.indexOf(_prefix) === 0)
             rewritten = wsPrefix + rewritten;
