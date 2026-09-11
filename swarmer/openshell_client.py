@@ -216,6 +216,7 @@ def default_gateway_config() -> GatewayConfig:
         tls_ca=settings.openshell_tls_ca or None,
         tls_cert=settings.openshell_tls_cert or None,
         tls_key=settings.openshell_tls_key or None,
+        tls_verify=settings.openshell_tls_verify,
         bearer_token=settings.openshell_bearer_token or None,
     )
 
