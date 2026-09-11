@@ -810,7 +810,9 @@ def test_get_client_for_config_builds_mtls_from_inline_pem_content(sdk_client):
     assert not tls_cfg.key_path.exists()
 
 
-def test_get_client_for_config_keeps_sdk_tls_verified_when_proxy_verification_disabled(sdk_client):
+def test_get_client_for_config_keeps_sdk_tls_verified_when_proxy_verification_disabled(
+    sdk_client: MagicMock,
+) -> None:
     """The proxy-only verify setting must not weaken SDK gRPC TLS."""
     fake_module = MagicMock()
     fake_module.SandboxClient = MagicMock(return_value=sdk_client)
