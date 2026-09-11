@@ -810,6 +810,23 @@ def test_get_client_for_config_builds_mtls_from_inline_pem_content(sdk_client):
     assert not tls_cfg.key_path.exists()
 
 
+def test_get_client_for_config_keeps_sdk_tls_verified_when_proxy_verification_disabled(sdk_client):
+    """The proxy-only verify setting must not weaken SDK gRPC TLS."""
+    fake_module = MagicMock()
+    fake_module.SandboxClient = MagicMock(return_value=sdk_client)
+    fake_module.TlsConfig = MagicMock()
+    config = oc.GatewayConfig(
+        gateway_url="https://gw.example.com:443",
+        tls_verify=False,
+    )
+
+    with patch.dict(sys.modules, {"openshell": fake_module}):
+        client = oc.get_client_for_config(config)
+
+    assert client is sdk_client
+    fake_module.TlsConfig.assert_called_once_with()
+
+
 def test_get_client_for_config_normalizes_https_url_endpoint(sdk_client):
     """SandboxClient endpoint must be host:port, not https:// URL."""
     fake_module = MagicMock()
