@@ -17,7 +17,10 @@ UI is served as-is; HTML is rewritten so asset paths resolve through the
 proxy prefix.
 """
 import asyncio
+import base64
 import contextlib
+import hashlib
+import json
 import logging
 import re
 import ssl
@@ -49,35 +52,61 @@ _HOP_BY_HOP = frozenset({
 # ── OpenShell mTLS helpers ────────────────────────────────────────────────────
 
 def _openshell_ssl_context(gateway_config=None) -> ssl.SSLContext | None:
-    """Return an SSL context with the OpenShell client cert, or None for plain HTTP."""
+    """Return an SSL context for an HTTPS OpenShell gateway, when configured."""
     from swarmer.config import settings
+
     cert = (gateway_config.tls_cert if gateway_config else settings.openshell_tls_cert) or ""
     key = (gateway_config.tls_key if gateway_config else settings.openshell_tls_key) or ""
     ca = (gateway_config.tls_ca if gateway_config else settings.openshell_tls_ca) or None
     verify = gateway_config.tls_verify if gateway_config else True
-    if not cert or not key:
+
+    if not (cert and key) and not ca:
         return None
-    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-    ctx.check_hostname = verify
-    ctx.verify_mode = ssl.CERT_REQUIRED if verify else ssl.CERT_NONE
+
     if ca and verify:
+        ctx = ssl.create_default_context()
         if "BEGIN " in ca:
             ctx.load_verify_locations(cadata=ca)
         else:
             ctx.load_verify_locations(cafile=ca)
-    ctx.load_cert_chain(certfile=cert, keyfile=key)
+    elif verify and not (cert and key):
+        ctx = ssl.create_default_context()
+    else:
+        # Gateway with self-signed certificate and no CA bundle (e.g. local dev / kind / mTLS only)
+        # or explicit verify=False
+        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+
+    if cert and key:
+        # Workspace gateway credentials may be inline PEM content, while the
+        # global configuration normally contains filesystem paths.
+        from swarmer.openshell_client import _tls_material_path
+
+        cert_path, cert_temp = _tls_material_path(cert)
+        key_path, key_temp = _tls_material_path(key)
+        try:
+            ctx.load_cert_chain(certfile=cert_path, keyfile=key_path)
+        finally:
+            if cert_temp:
+                cert_path.unlink(missing_ok=True)
+            if key_temp:
+                key_path.unlink(missing_ok=True)
+
     return ctx
 
 
 def _openshell_httpx_kwargs(gateway_config=None) -> dict:
     """Return httpx kwargs for connecting to an OpenShell gateway service URL."""
     from swarmer.config import settings
-    cert = (gateway_config.tls_cert if gateway_config else settings.openshell_tls_cert) or ""
-    key = (gateway_config.tls_key if gateway_config else settings.openshell_tls_key) or ""
+
     ca = (gateway_config.tls_ca if gateway_config else settings.openshell_tls_ca) or None
     verify = gateway_config.tls_verify if gateway_config else True
-    if cert and key:
-        return {"verify": ca if ca else verify, "cert": (cert, key)}
+
+    context = _openshell_ssl_context(gateway_config)
+    if context is not None:
+        return {"verify": context}
+
     return {"verify": ca if ca else verify}
 
 
@@ -120,6 +149,127 @@ def _resolve_upstream(service_url: str, gateway_config=None) -> tuple[str, str]:
 
 # ── HTML rewriting ───────────────────────────────────────────────────────────
 
+def _proxy_intercept_script(prefix: str) -> str:
+    """Return script content that keeps same-origin OpenCode calls proxied."""
+    return f"""(function() {{
+  var _prefix = {prefix!r};
+
+  function rewrite(url) {{
+    if (!url) return url;
+    var value = String(url);
+    if (value.indexOf(_prefix) === 0) return value;
+    if (/^(https?:|wss?:)/i.test(value)) {{
+      try {{
+        var parsed = new URL(value, location.href);
+        if (parsed.origin !== location.origin) return value;
+        // Preserve already-proxied absolute URLs exactly. This is critical
+        // for POST Requests with streamed bodies: rebuilding them can throw.
+        if (parsed.pathname.indexOf(_prefix) === 0) return value;
+        parsed.pathname = _prefix + (parsed.pathname.charAt(0) === '/'
+          ? parsed.pathname
+          : '/' + parsed.pathname);
+        return parsed.href;
+      }} catch (e) {{ return value; }}
+    }}
+    if (value.charAt(0) === '/') return _prefix + value;
+    return value;
+  }}
+
+  var originalFetch = window.fetch.bind(window);
+  window.fetch = function(input, init) {{
+    if (typeof input === 'string') input = rewrite(input);
+    else if (input instanceof Request) {{
+      var rewritten = rewrite(input.url);
+      if (rewritten !== input.url) input = new Request(rewritten, input);
+    }} else if (input && typeof input === 'object' && 'href' in input) {{
+      var rewrittenUrl = rewrite(input.href);
+      if (rewrittenUrl !== input.href)
+        input = new URL(rewrittenUrl, location.href);
+    }}
+    return originalFetch(input, init);
+  }};
+
+  var OriginalEventSource = window.EventSource;
+  window.EventSource = function(url, init) {{
+    return new OriginalEventSource(rewrite(url), init);
+  }};
+  window.EventSource.prototype = OriginalEventSource.prototype;
+
+  var OriginalWebSocket = window.WebSocket;
+  window.WebSocket = function(url, protocols) {{
+    var rewritten = String(url);
+    var wsPrefix = _prefix.replace(/^https:/, 'wss:').replace(/^http:/, 'ws:');
+    if (/^(https?:|wss?:)/i.test(rewritten)) {{
+      try {{
+        var parsedWs = new URL(rewritten, location.href);
+        if (parsedWs.origin === location.origin) {{
+          rewritten = parsedWs.pathname + parsedWs.search;
+          if (rewritten.indexOf(_prefix) === 0)
+            rewritten = wsPrefix + rewritten;
+          else
+            rewritten = wsPrefix + _prefix + rewritten;
+        }}
+      }} catch (e) {{}}
+    }} else if (rewritten.charAt(0) === '/') {{
+      rewritten = wsPrefix + rewritten;
+    }}
+    return protocols === undefined
+      ? new OriginalWebSocket(rewritten)
+      : new OriginalWebSocket(rewritten, protocols);
+  }};
+  window.WebSocket.prototype = OriginalWebSocket.prototype;
+  window.WebSocket.CONNECTING = OriginalWebSocket.CONNECTING;
+  window.WebSocket.OPEN = OriginalWebSocket.OPEN;
+  window.WebSocket.CLOSING = OriginalWebSocket.CLOSING;
+  window.WebSocket.CLOSED = OriginalWebSocket.CLOSED;
+}})();"""
+
+
+def _proxy_compat_script(prefix: str) -> str:
+    """Return script content for OpenCode storage and history compatibility."""
+    return (
+        'try{'
+        f'var __swProxy="{prefix}";'
+        'localStorage.setItem("opencode.settings.dat:defaultServerUrl",location.origin+__swProxy);'
+        'var __origPush=history.pushState.bind(history);'
+        'var __origReplace=history.replaceState.bind(history);'
+        'function __swPrefixUrl(u){'
+        'if(typeof u!=="string")return u;'
+        'if(u.startsWith(__swProxy))return u;'
+        'if(u.startsWith("/"))return __swProxy+u;'
+        'return u;'
+        '}'
+        'history.pushState=function(s,t,u){return __origPush(s,t,u!=null?__swPrefixUrl(u):u);};'
+        'history.replaceState=function(s,t,u){return __origReplace(s,t,u!=null?__swPrefixUrl(u):u);};'
+        '}catch(e){}'
+    )
+
+
+def _script_tag(script: str) -> str:
+    return f"<script>{script}</script>"
+
+
+def _script_hash(script: str) -> str:
+    digest = hashlib.sha256(script.encode("utf-8")).digest()
+    return f"'sha256-{base64.b64encode(digest).decode('ascii')}'"
+
+
+def _rewrite_content_security_policy(csp: str, scripts: list[str]) -> str:
+    """Allow the exact proxy scripts without weakening the upstream CSP."""
+    hashes = " ".join(_script_hash(script) for script in scripts)
+    match = re.search(r"(^|;)\s*script-src(?P<value>[^;]*)", csp, flags=re.IGNORECASE)
+    if match:
+        value = match.group("value")
+        if hashes:
+            value = f"{value} {hashes}"
+        return csp[:match.start("value")] + value + csp[match.end("value"):]
+
+    # script-src falls back to default-src when absent. Insert it before the
+    # first directive so the injected scripts are explicitly authorized.
+    directive = f"script-src {hashes}"
+    return f"{directive}; {csp}" if csp else directive
+
+
 def _rewrite_html(content: bytes, prefix: str) -> bytes:
     """Rewrite absolute asset paths in HTML so they resolve through the proxy.
 
@@ -158,25 +308,9 @@ def _rewrite_html(content: bytes, prefix: str) -> bytes:
     #    Without this, a pushState("/Lw/...") would leave the proxy entirely and
     #    produce a Swarmer 404 on the next page interaction.
     base_tag = f'<base href="{prefix}/">'
-    proxy_compat_script = (
-        '<script>'
-        'try{'
-        f'var __swProxy="{prefix}";'
-        'localStorage.setItem("opencode.settings.dat:defaultServerUrl",location.origin+__swProxy);'
-        'var __origPush=history.pushState.bind(history);'
-        'var __origReplace=history.replaceState.bind(history);'
-        'function __swPrefixUrl(u){'
-        'if(typeof u!=="string")return u;'
-        'if(u.startsWith(__swProxy))return u;'
-        'if(u.startsWith("/"))return __swProxy+u;'
-        'return u;'
-        '}'
-        'history.pushState=function(s,t,u){return __origPush(s,t,u!=null?__swPrefixUrl(u):u);};'
-        'history.replaceState=function(s,t,u){return __origReplace(s,t,u!=null?__swPrefixUrl(u):u);};'
-        '}catch(e){}'
-        '</script>'
-    )
-    inject = base_tag + proxy_compat_script
+    compat_script = _proxy_compat_script(prefix)
+    proxy_compat_script = _script_tag(compat_script)
+    inject = _script_tag(_proxy_intercept_script(prefix)) + base_tag + proxy_compat_script
     if "<head>" in text:
         text = text.replace("<head>", f"<head>{inject}", 1)
     elif "<HEAD>" in text:
@@ -214,8 +348,34 @@ def _rewrite_js(content: bytes, prefix: str) -> bytes:
         lambda m: f'function({m.group(1)}){{return"{prefix}/"+{m.group(1)}}}',
         text,
     )
-    # Hardcoded web-worker absolute path.
-    text = text.replace('"/assets/worker-', f'"{prefix}/assets/worker-')
+
+    # OpenCode's SolidJS router reads window.location.pathname directly and
+    # does not configure a router base. Strip the Swarmer proxy prefix so its
+    # routes (/, /new-session, and /:dir/session/:id) still match.
+    clean_prefix = prefix.rstrip("/")
+    route_prefix = json.dumps(clean_prefix)
+    route_pattern = re.compile(
+        r'''const r=window\.location\.pathname\.replace\([^)]*\)\+window\.location\.search'''
+    )
+    route_replacement = (
+        f"const _swRoutePrefix={route_prefix};"
+        "const _swRawPath=window.location.pathname;"
+        "const _swRoutePath=_swRawPath.indexOf(_swRoutePrefix)===0?"
+        "_swRawPath.slice(_swRoutePrefix.length):_swRawPath;"
+        'const r=(_swRoutePath.startsWith("/")?_swRoutePath:"/"+_swRoutePath)'
+        '.replace(/^\\/+/,"/")+window.location.search'
+    )
+    text = route_pattern.sub(route_replacement, text, count=1)
+
+    # Rewrite every quoted absolute asset reference. OpenCode's bundle has
+    # multiple worker, sprite, image, and media assets; limiting this to one
+    # worker filename leaves other runtime dependencies at the Swarmer root.
+    clean_prefix = prefix.rstrip("/")
+    text = re.sub(
+        r"(?P<quote>[\"'`])/(?P<asset>assets/)",
+        lambda match: f"{match.group('quote')}{clean_prefix}/{match.group('asset')}",
+        text,
+    )
 
     # OpenCode's server URL fallback returns location.origin when not on
     # opencode.ai.  This adds the Swarmer root as the "canonical local server",
@@ -226,6 +386,27 @@ def _rewrite_js(content: bytes, prefix: str) -> bytes:
         f'location.hostname.includes("opencode.ai")?"http://localhost:4096":location.origin+"{prefix}"',
     )
 
+    return text.encode("utf-8")
+
+
+def _rewrite_css(content: bytes, prefix: str) -> bytes:
+    """Rewrite absolute CSS asset URLs so fonts and images stay proxied."""
+    try:
+        text = content.decode("utf-8", errors="replace")
+    except Exception:
+        return content
+
+    def replace_url(match: re.Match[str]) -> str:
+        whitespace, quote, path, closing_quote, trailing = match.groups()
+        if path.startswith(f"{prefix}/"):
+            return match.group(0)
+        return f"url({whitespace}{quote}{prefix}{path}{closing_quote}{trailing})"
+
+    text = re.sub(
+        r"url\((\s*)(['\"]?)(/[^)'\"]+)(['\"]?)(\s*)\)",
+        replace_url,
+        text,
+    )
     return text.encode("utf-8")
 
 
@@ -410,6 +591,8 @@ async def _chat_http_proxy(
 
     if "text/html" in content_type:
         content = _rewrite_html(content, prefix)
+    elif "text/css" in content_type:
+        content = _rewrite_css(content, prefix)
     elif "javascript" in content_type:
         content = _rewrite_js(content, prefix)
 
@@ -418,6 +601,17 @@ async def _chat_http_proxy(
     # httpx auto-decompresses the body; drop the encoding header so the browser
     # doesn't try to decompress already-decompressed bytes.
     resp_headers.pop("content-encoding", None)
+
+    if "text/html" in content_type:
+        csp_key = next(
+            (key for key in resp_headers if key.lower() == "content-security-policy"),
+            None,
+        )
+        if csp_key:
+            resp_headers[csp_key] = _rewrite_content_security_policy(
+                resp_headers[csp_key],
+                [_proxy_intercept_script(prefix), _proxy_compat_script(prefix)],
+            )
 
     # Rewrite redirect Location headers so the browser stays inside the proxy.
     # Without this, a 302 Location: /Lw/session/... from OpenCode's SPA

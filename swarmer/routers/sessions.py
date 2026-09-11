@@ -1634,6 +1634,23 @@ async def _do_launch_openshell(
     )
 
 
+def _build_iat_app_snapshot(
+    app_id: str,
+    installation_id: str,
+    private_key: str,
+    workspace_id: int,
+):
+    """Copy GitHub App credentials without retaining the ORM object."""
+    from types import SimpleNamespace
+
+    return SimpleNamespace(
+        app_id=app_id,
+        installation_id=installation_id,
+        private_key=private_key,
+        workspace_id=workspace_id,
+    )
+
+
 async def _setup_openshell_sandbox(
     session_id: int,
     workspace_id: int,
@@ -1975,15 +1992,16 @@ async def _setup_openshell_sandbox(
 
             # Build a lightweight snapshot object so the refresh loop does not
             # hold a reference to the ORM session or require DB access.
-            class _AppSnap:
-                app_id = iat_app_id
-                installation_id = iat_installation_id
-                private_key = iat_private_key
-                workspace_id = workspace_id
+            app_snapshot = _build_iat_app_snapshot(
+                app_id=iat_app_id,
+                installation_id=iat_installation_id,
+                private_key=iat_private_key,
+                workspace_id=workspace_id,
+            )
 
             asyncio.create_task(
                 start_token_refresh_loop(
-                    app=_AppSnap(),  # type: ignore[arg-type]
+                    app=app_snapshot,  # type: ignore[arg-type]
                     session_id=session_id,
                     provider_name=iat_provider_name,
                     repo_names=iat_repo_names or None,

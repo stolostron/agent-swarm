@@ -287,8 +287,8 @@ Deployment; `make delete` removes it.
 | `gemini_preset_plan_model` | `GEMINI_PRESET_PLAN_MODEL` | `google/gemini-3.7-flash` | Gemini preset's PLAN-role model |
 | `gemini_preset_build_model` | `GEMINI_PRESET_BUILD_MODEL` | `google/gemini-3.7-flash` | Gemini preset's BUILD-role model |
 | `gemini_preset_small_model` | `GEMINI_PRESET_SMALL_MODEL` | `google/gemini-3.5-flash-lite` | Gemini preset's small/housekeeping model |
-| `openai_preset_plan_model` | `OPENAI_PRESET_PLAN_MODEL` | `openai/gpt-5.6-terra-pro` | OpenAI preset's PLAN-role model |
-| `openai_preset_build_model` | `OPENAI_PRESET_BUILD_MODEL` | `openai/gpt-5.6-luna-pro` | OpenAI preset's BUILD-role model |
+| `openai_preset_plan_model` | `OPENAI_PRESET_PLAN_MODEL` | `openai/gpt-5.6-terra` | OpenAI preset's PLAN-role model |
+| `openai_preset_build_model` | `OPENAI_PRESET_BUILD_MODEL` | `openai/gpt-5.6-luna` | OpenAI preset's BUILD-role model |
 | `openai_preset_small_model` | `OPENAI_PRESET_SMALL_MODEL` | `openai/gpt-5.6-luna-fast` | OpenAI preset's small/housekeeping model |
 | `opencode_experimental_plan_mode` | `OPENCODE_EXPERIMENTAL_PLAN_MODE` | `true` | Enables the opencode plan agent so the PLAN-role model above is actually used |
 

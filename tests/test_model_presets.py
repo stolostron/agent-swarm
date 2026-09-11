@@ -61,8 +61,8 @@ class TestResolvePreset:
 
     def test_openai_preset_defaults(self):
         assert _opencode.resolve_preset("openai") == {
-            "plan": "openai/gpt-5.6-terra-pro",
-            "build": "openai/gpt-5.6-luna-pro",
+            "plan": "openai/gpt-5.6-terra",
+            "build": "openai/gpt-5.6-luna",
             "small": "openai/gpt-5.6-luna-fast",
         }
 
@@ -248,7 +248,7 @@ class TestBuildConfigDataPresets:
         config = json.loads(data["opencode.json"])
         assert config["enabled_providers"] == ["google"]
 
-    def test_openai_preset_resolves_and_sets_plan_high_variant(self, monkeypatch):
+    def test_openai_preset_resolves_and_sets_plan_default_variant(self, monkeypatch):
         monkeypatch.setattr(settings, "opencode_experimental_plan_mode", True)
         data = _opencode.build_config_data(model="openai")
         config = json.loads(data["opencode.json"])
@@ -257,7 +257,7 @@ class TestBuildConfigDataPresets:
         assert config["enabled_providers"] == ["openai"]
         assert config["agent"]["plan"]["model"] == settings.openai_preset_plan_model
         assert config["agent"]["plan"]["mode"] == "primary"
-        assert config["agent"]["plan"]["variant"] == "high"
+        assert config["agent"]["plan"]["variant"] == "default"
         assert config["agent"]["build"]["mode"] == "primary"
 
     def test_non_preset_model_unaffected(self):

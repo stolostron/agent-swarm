@@ -70,7 +70,7 @@ class OpenCodeStrategy(AgentToolStrategy):
             _plan_model = preset["plan"]
             if model == "openai":
                 _plan_mode = "primary"
-                _plan_variant = "high"
+                _plan_variant = "default"
                 _build_mode = "primary"
         else:
             # Raw provider/model string (not a preset) — derive small_model from the

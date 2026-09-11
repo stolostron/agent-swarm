@@ -739,6 +739,98 @@ class TestStopDeleteCallsDeleteService:
 class TestChatHttpProxyErrors:
     """Verify the proxy returns 503 (not ASGI crash) for all upstream errors."""
 
+    def test_rewrite_html_intercepts_same_origin_api_and_websocket_calls(self):
+        """OpenCode absolute API calls stay inside the chat proxy prefix."""
+        from swarmer.routers.chat_proxy import _rewrite_html
+
+        prefix = "/workspaces/7/sessions/32/chat"
+        rewritten = _rewrite_html(b"<html><head></head></html>", prefix).decode()
+
+        assert "window.fetch" in rewritten
+        assert "OriginalEventSource" in rewritten
+        assert "OriginalWebSocket" in rewritten
+        assert "_prefix + value" in rewritten
+        assert "'href' in input" in rewritten
+        assert "parsed.pathname.indexOf(_prefix) === 0" in rewritten
+        assert "parsed.pathname = _prefix +" in rewritten
+        assert prefix in rewritten
+        # The shim must not blindly rewrite third-party absolute URLs.
+        assert "parsed.origin !== location.origin" in rewritten
+
+    def test_rewrite_js_preserves_prefixed_absolute_post_requests(self):
+        """Already-proxied prompt URLs are returned unchanged for POST bodies."""
+        from swarmer.routers.chat_proxy import _proxy_intercept_script
+
+        script = _proxy_intercept_script("/workspaces/7/sessions/32/chat")
+
+        assert "if (parsed.pathname.indexOf(_prefix) === 0) return value;" in script
+        assert "if (rewritten !== input.url) input = new Request(rewritten, input);" in script
+
+    def test_rewrite_css_intercepts_absolute_assets(self):
+        """CSS font and image URLs stay inside the session proxy."""
+        from swarmer.routers.chat_proxy import _rewrite_css
+
+        prefix = "/workspaces/7/sessions/32/chat"
+        css = b"@font-face{src:url('/assets/Inter.ttf')} .x{background:url(/assets/bg.png)}"
+        rewritten = _rewrite_css(css, prefix).decode()
+
+        assert f"url('{prefix}/assets/Inter.ttf')" in rewritten
+        assert f"url({prefix}/assets/bg.png)" in rewritten
+
+    def test_rewrite_js_strips_chat_prefix_for_opencode_routes(self):
+        """OpenCode's root-relative routes match when served under the proxy."""
+        from swarmer.routers.chat_proxy import _rewrite_js
+
+        prefix = "/workspaces/7/sessions/32/chat"
+        bundle = br'const r=window.location.pathname.replace(/^\/+/,"/")+window.location.search;'
+        rewritten = _rewrite_js(bundle, prefix).decode()
+
+        assert 'const _swRoutePrefix="/workspaces/7/sessions/32/chat"' in rewritten
+        assert "_swRawPath.slice(_swRoutePrefix.length)" in rewritten
+        assert 'const r=(_swRoutePath.startsWith("/")?_swRoutePath:"/"+_swRoutePath)' in rewritten
+
+    def test_rewrite_js_prefixes_all_absolute_asset_quote_styles(self):
+        """All JS asset references are proxied without touching unrelated URLs."""
+        from swarmer.routers.chat_proxy import _rewrite_js
+
+        prefix = "/workspaces/7/sessions/32/chat"
+        bundle = (
+            b'const worker="/assets/markdown.worker.js";'
+            b"const sprite='/assets/sprite.svg';"
+            b"const media=`/assets/intro.mp4`;"
+            b'const existing="/workspaces/7/sessions/32/chat/assets/keep.svg";'
+            b'const external="https://cdn.example.com/assets/external.svg";'
+        )
+        rewritten = _rewrite_js(bundle, prefix).decode()
+
+        assert f'"{prefix}/assets/markdown.worker.js"' in rewritten
+        assert f"'{prefix}/assets/sprite.svg'" in rewritten
+        assert f"`{prefix}/assets/intro.mp4`" in rewritten
+        assert f'"{prefix}/assets/keep.svg"' in rewritten
+        assert '"https://cdn.example.com/assets/external.svg"' in rewritten
+        assert '"/assets/markdown.worker.js"' not in rewritten
+        assert "'/assets/sprite.svg'" not in rewritten
+        assert "`/assets/intro.mp4`" not in rewritten
+
+    def test_rewrite_csp_allows_exact_inline_proxy_scripts(self):
+        """Injected scripts are authorized without enabling unsafe inline code."""
+        from swarmer.routers.chat_proxy import (
+            _proxy_compat_script,
+            _proxy_intercept_script,
+            _rewrite_content_security_policy,
+        )
+
+        prefix = "/workspaces/7/sessions/32/chat"
+        csp = "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'"
+        rewritten = _rewrite_content_security_policy(
+            csp,
+            [_proxy_intercept_script(prefix), _proxy_compat_script(prefix)],
+        )
+
+        assert rewritten.startswith("default-src 'self'; script-src 'self' 'wasm-unsafe-eval'")
+        assert rewritten.count("'sha256-") == 2
+        assert "unsafe-inline" not in rewritten
+
     @pytest.mark.asyncio
     async def test_proxy_returns_503_on_ssl_error(self, client):
         """SSL errors from the upstream (e.g. gRPC gateway) must be caught."""
@@ -833,8 +925,8 @@ class TestChatHttpProxyErrors:
         assert "17670" in resp.text or "agent.openshell" in resp.text
 
     @pytest.mark.asyncio
-    async def test_openshell_httpx_kwargs_includes_cert_when_configured(self):
-        """_openshell_httpx_kwargs returns cert tuple when TLS cert/key are set."""
+    async def test_openshell_httpx_kwargs_uses_ssl_context_for_mtls(self):
+        """httpx receives an SSL context so it loads the mTLS client chain."""
         from swarmer.routers.chat_proxy import _openshell_httpx_kwargs
         from swarmer.config import settings
 
@@ -842,12 +934,85 @@ class TestChatHttpProxyErrors:
         try:
             settings.openshell_tls_cert = "/tmp/fake.crt"
             settings.openshell_tls_key = "/tmp/fake.key"
-            kwargs = _openshell_httpx_kwargs()
-            assert kwargs.get("verify") is True
-            assert kwargs.get("cert") == ("/tmp/fake.crt", "/tmp/fake.key")
+            context = object()
+            with patch(
+                "swarmer.routers.chat_proxy._openshell_ssl_context",
+                return_value=context,
+            ):
+                kwargs = _openshell_httpx_kwargs()
+            assert kwargs == {"verify": context}
         finally:
             settings.openshell_tls_cert = orig_cert
             settings.openshell_tls_key = orig_key
+
+    @pytest.mark.asyncio
+    async def test_openshell_ssl_context_loads_ca_and_client_chain(self, tmp_path):
+        """The proxy loads both CA and client material into one SSL context."""
+        from swarmer.config import settings
+        from swarmer.routers.chat_proxy import _openshell_ssl_context
+
+        ca = tmp_path / "ca.crt"
+        cert = tmp_path / "tls.crt"
+        key = tmp_path / "tls.key"
+        for path in (ca, cert, key):
+            path.touch()
+
+        orig = (
+            settings.openshell_tls_ca,
+            settings.openshell_tls_cert,
+            settings.openshell_tls_key,
+        )
+        context = MagicMock()
+        try:
+            settings.openshell_tls_ca = str(ca)
+            settings.openshell_tls_cert = str(cert)
+            settings.openshell_tls_key = str(key)
+            with patch(
+                "swarmer.routers.chat_proxy.ssl.create_default_context",
+                return_value=context,
+            ):
+                assert _openshell_ssl_context() is context
+            context.load_verify_locations.assert_called_once_with(cafile=str(ca))
+            context.load_cert_chain.assert_called_once_with(certfile=cert, keyfile=key)
+        finally:
+            (
+                settings.openshell_tls_ca,
+                settings.openshell_tls_cert,
+                settings.openshell_tls_key,
+            ) = orig
+
+    @pytest.mark.asyncio
+    async def test_openshell_ssl_context_without_ca_disables_verification_for_self_signed(self, tmp_path):
+        """In kind / local dev without a CA bundle, self-signed gateway certs are accepted."""
+        from swarmer.config import settings
+        from swarmer.routers.chat_proxy import _openshell_ssl_context
+        import ssl
+
+        cert = tmp_path / "tls.crt"
+        key = tmp_path / "tls.key"
+        for path in (cert, key):
+            path.touch()
+
+        orig = (
+            settings.openshell_tls_ca,
+            settings.openshell_tls_cert,
+            settings.openshell_tls_key,
+        )
+        try:
+            settings.openshell_tls_ca = ""
+            settings.openshell_tls_cert = str(cert)
+            settings.openshell_tls_key = str(key)
+            with patch.object(ssl.SSLContext, "load_cert_chain"):
+                ctx = _openshell_ssl_context()
+            assert ctx is not None
+            assert ctx.check_hostname is False
+            assert ctx.verify_mode == ssl.CERT_NONE
+        finally:
+            (
+                settings.openshell_tls_ca,
+                settings.openshell_tls_cert,
+                settings.openshell_tls_key,
+            ) = orig
 
     @pytest.mark.asyncio
     async def test_openshell_httpx_kwargs_no_cert_when_unconfigured(self):
@@ -1089,6 +1254,17 @@ class TestRestartGitHubAppIATRefresh:
     loop restarted after a Swarmer restart — otherwise the App IAT (valid ~1h)
     silently expires and git push starts failing inside an otherwise-healthy
     sandbox."""
+
+    def test_iat_app_snapshot_preserves_workspace_id(self):
+        """The refresh snapshot captures the enclosing workspace id safely."""
+        from swarmer.routers.sessions import _build_iat_app_snapshot
+
+        snapshot = _build_iat_app_snapshot("111", "222", "private-key", 7)
+
+        assert snapshot.app_id == "111"
+        assert snapshot.installation_id == "222"
+        assert snapshot.private_key == "private-key"
+        assert snapshot.workspace_id == 7
 
     @pytest.mark.asyncio
     async def test_tui_session_with_github_app_restarts_refresh_loop(self, client):
