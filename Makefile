@@ -274,8 +274,8 @@ helm-lint:  ## Validate the pinned OpenShell Helm chart
 		--set server.workspaceDefaultStorageSize=$(OPENSHELL_WORKSPACE_STORAGE)
 
 test:  ## Run unit tests (excludes Playwright browser tests)
-	python3 -m pytest tests/ -q --ignore=tests/test_ui_patternfly.py
 	python3 -m pip install -q --break-system-packages -e "mcp-server[dev]" 2>/dev/null || python3 -m pip install -q -e "mcp-server[dev]"
+	python3 -m pytest tests/ -q --ignore=tests/test_ui_patternfly.py
 	python3 -m pytest mcp-server/tests/ -q --rootdir=mcp-server
 
 smoke-test-jira:  ## Run Jira MCP OpenShell e2e smoke test (requires running OpenShell gateway)
