@@ -266,6 +266,7 @@ def get_client_for_config(config: GatewayConfig):
     from openshell import SandboxClient, TlsConfig  # noqa: F401 (optional dep)
 
     endpoint = _normalize_gateway_endpoint(config.gateway_url)
+    gateway_scheme = urlparse(config.gateway_url.strip()).scheme.lower()
     tls = None
     temp_paths: list[pathlib.Path] = []
     try:
@@ -291,6 +292,8 @@ def get_client_for_config(config: GatewayConfig):
             tls = TlsConfig()
 
         bearer = config.bearer_callable or (config.bearer_token if config.auth_mode == "bearer" else None)
+        if bearer is not None and gateway_scheme == "grpc" and tls is None:
+            raise ValueError("bearer-authenticated grpc:// gateways require TLS configuration")
         # SandboxClient reads tls.*_path files synchronously in its
         # constructor (grpc.ssl_channel_credentials(...read_bytes())), so it
         # is safe to delete any temp files in `finally` below once this

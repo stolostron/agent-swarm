@@ -180,6 +180,7 @@ async def workspace_parse_gateway_command(
             "oidc_issuer": res.oidc_issuer,
             "oidc_client_id": res.oidc_client_id,
             "oidc_audience": res.oidc_audience,
+            "client_secret": res.client_secret,
             "bearer_token": res.bearer_token,
             "tls_verify": res.tls_verify,
             "suggested_name": res.suggested_name,

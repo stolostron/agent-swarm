@@ -367,6 +367,25 @@ class TestWorkspaceGatewayAPI:
         assert cfg.bearer_callable is None
 
     @pytest.mark.asyncio
+    async def test_test_connection_accepts_grpc_endpoint_from_cli_metadata(self, client):
+        from unittest.mock import AsyncMock, patch
+
+        with patch(
+            "swarmer.openshell_client.probe_gateway_connectivity",
+            new=AsyncMock(return_value={"sandboxes_count": 0}),
+        ):
+            resp = await client.post(
+                "/api/v1/workspaces/gateway/test-connection",
+                json={
+                    "gateway_url": "grpc://gw.example.com:443",
+                    "auth_mode": "none",
+                },
+            )
+
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["gateway_url"] == "grpc://gw.example.com:443"
+
+    @pytest.mark.asyncio
     async def test_test_connection_reuses_saved_oidc_refresh_token(self, client):
         from unittest.mock import AsyncMock, patch
 
@@ -545,6 +564,52 @@ class TestWorkspaceGatewayAPI:
             assert resp.status_code == 200, resp.text
             assert captured_config is not None
             assert captured_config.workspace_id == ws["id"]
+
+    @pytest.mark.asyncio
+    async def test_test_connection_passes_service_account_credentials_to_gateway_config(self, client):
+        from unittest.mock import AsyncMock, patch
+
+        with patch(
+            "swarmer.openshell_client.probe_gateway_connectivity",
+            new=AsyncMock(return_value={"sandboxes_count": 0}),
+        ) as mock_probe:
+            resp = await client.post(
+                "/api/v1/workspaces/gateway/test-connection",
+                json={
+                    "gateway_url": "https://gw-test.example.com:443",
+                    "auth_mode": "oidc",
+                    "oidc_issuer": "https://idp.example.com/realms/test",
+                    "oidc_client_id": "service-account-client",
+                    "client_secret": "placeholder-client-secret",
+                },
+            )
+
+        assert resp.status_code == 200, resp.text
+        cfg = mock_probe.call_args.args[0]
+        assert callable(cfg.bearer_callable)
+
+    @pytest.mark.asyncio
+    async def test_test_connection_reports_oidc_auth_error(self, client):
+        from unittest.mock import AsyncMock, patch
+        from swarmer.openshell_oidc import OidcAuthError
+
+        with patch(
+            "swarmer.openshell_client.probe_gateway_connectivity",
+            new=AsyncMock(side_effect=OidcAuthError("OIDC client_credentials failed: HTTP 401")),
+        ):
+            resp = await client.post(
+                "/api/v1/workspaces/gateway/test-connection",
+                json={
+                    "gateway_url": "https://gw-test.example.com:443",
+                    "auth_mode": "oidc",
+                    "oidc_issuer": "https://idp.example.com/realms/test",
+                    "oidc_client_id": "service-account-client",
+                    "client_secret": "configured-value",
+                },
+            )
+
+        assert resp.status_code == 400
+        assert resp.json()["detail"] == "Connection test failed. Check the gateway URL and credentials."
 
     @pytest.mark.asyncio
     async def test_create_workspace_with_custom_gateway(self, client):
