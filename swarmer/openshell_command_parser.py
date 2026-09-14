@@ -126,13 +126,14 @@ def _parse_cli_command(cmd_str: str) -> ParsedGatewayCommand:
     if not tokens:
         return ParsedGatewayCommand(errors=["Command contained no tokens."])
 
-    # Strip leading 'openshell', 'gateway', 'gw', 'add' if present
+    # Strip leading command words used by the OpenShell CLI.  Older versions
+    # used `gateway add`; newer versions use `gateway create`.
     idx = 0
     if idx < len(tokens) and tokens[idx] in ("openshell", "./openshell"):
         idx += 1
     if idx < len(tokens) and tokens[idx] in ("gateway", "gw"):
         idx += 1
-    if idx < len(tokens) and tokens[idx] == "add":
+    if idx < len(tokens) and tokens[idx] in ("add", "create"):
         idx += 1
 
     remaining = tokens[idx:]
@@ -177,10 +178,14 @@ def _parse_cli_command(cmd_str: str) -> ParsedGatewayCommand:
         elif token.startswith("--oidc-audience="):
             oidc_audience = token.split("=", 1)[1]
             i += 1
-        elif token in ("--client-secret", "--oidc-client-secret") and i + 1 < len(remaining):
+        elif token in ("--client-secret", "--oidc-client-secret", "--secret") and i + 1 < len(remaining):
             client_secret = remaining[i + 1]
             i += 2
-        elif token.startswith("--client-secret=") or token.startswith("--oidc-client-secret="):
+        elif (
+            token.startswith("--client-secret=")
+            or token.startswith("--oidc-client-secret=")
+            or token.startswith("--secret=")
+        ):
             client_secret = token.split("=", 1)[1]
             i += 1
         elif token in ("--bearer-token", "--token") and i + 1 < len(remaining):
@@ -194,10 +199,14 @@ def _parse_cli_command(cmd_str: str) -> ParsedGatewayCommand:
         elif token in ("--gateway-insecure", "-k", "--insecure"):
             tls_verify = False
             i += 1
-        elif token == "--gateway-endpoint" and i + 1 < len(remaining):
+        elif token in ("--gateway-endpoint", "--endpoint", "--url") and i + 1 < len(remaining):
             gateway_url = remaining[i + 1]
             i += 2
-        elif token.startswith("--gateway-endpoint="):
+        elif (
+            token.startswith("--gateway-endpoint=")
+            or token.startswith("--endpoint=")
+            or token.startswith("--url=")
+        ):
             gateway_url = token.split("=", 1)[1]
             i += 1
         elif token in ("--local", "--remote"):

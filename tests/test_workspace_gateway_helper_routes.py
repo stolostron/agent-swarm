@@ -51,12 +51,13 @@ async def test_workspace_parse_command_requires_console_auth(client_unauthentica
 @pytest.mark.asyncio
 async def test_workspace_parse_command_with_console_auth(client_authenticated):
     cmd = (
-        "openshell gateway add "
-        "https://gw-stage.example.com:443 "
+        "openshell gateway create "
+        "--url https://gw-stage.example.com:443 "
         "--name test-gw "
         "--oidc-issuer https://idp.example.com "
         "--oidc-client-id client-123 "
-        "--oidc-audience client-123"
+        "--oidc-audience client-123 "
+        "--secret client-secret-value"
     )
     resp = await client_authenticated.post(
         "/workspaces/gateway/parse-command",
@@ -70,6 +71,7 @@ async def test_workspace_parse_command_with_console_auth(client_authenticated):
     assert data["oidc_issuer"] == "https://idp.example.com"
     assert data["oidc_client_id"] == "client-123"
     assert data["oidc_audience"] == "client-123"
+    assert data["client_secret"] == "client-secret-value"
 
 
 @pytest.mark.asyncio

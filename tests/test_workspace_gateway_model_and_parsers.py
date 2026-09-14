@@ -52,6 +52,18 @@ def test_parse_cli_command_multiline_with_bearer():
     assert res.tls_verify is False
 
 
+def test_parse_cli_create_command_with_url_and_secret():
+    cmd = (
+        "openshell gateway create --name dedicated "
+        "--url https://gateway.example.com:443 --secret client-secret-value"
+    )
+    res = parse_gateway_command_or_json(cmd)
+    assert not res.errors
+    assert res.gateway_url == "https://gateway.example.com:443"
+    assert res.suggested_name == "dedicated"
+    assert res.client_secret == "client-secret-value"
+
+
 def test_parse_cli_command_plaintext():
     cmd = "openshell gateway add http://127.0.0.1:8080 --local"
     res = parse_gateway_command_or_json(cmd)

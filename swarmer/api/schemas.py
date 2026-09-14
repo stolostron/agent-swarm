@@ -109,8 +109,8 @@ class TestGatewayConnectionIn(BaseModel):
     def validate_gateway_url(cls, value: str) -> str:
         value = value.strip()
         parsed = urlparse(value)
-        if parsed.scheme not in {"http", "https"} or not parsed.hostname:
-            raise ValueError("gateway_url must be an http(s) URL with a host")
+        if parsed.scheme not in {"http", "https", "grpc"} or not parsed.hostname:
+            raise ValueError("gateway_url must be an http(s) or grpc URL with a host")
         return value
 
 
