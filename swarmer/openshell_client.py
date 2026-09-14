@@ -291,6 +291,8 @@ def get_client_for_config(config: GatewayConfig):
             tls = TlsConfig()
 
         bearer = config.bearer_callable or (config.bearer_token if config.auth_mode == "bearer" else None)
+        if bearer is not None and config.gateway_url.startswith("grpc://") and tls is None:
+            raise ValueError("bearer-authenticated grpc:// gateways require TLS configuration")
         # SandboxClient reads tls.*_path files synchronously in its
         # constructor (grpc.ssl_channel_credentials(...read_bytes())), so it
         # is safe to delete any temp files in `finally` below once this
