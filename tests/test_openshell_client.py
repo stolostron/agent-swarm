@@ -856,13 +856,16 @@ def test_get_client_for_config_rejects_endpoint_with_path():
             oc.get_client_for_config(config)
 
 
-def test_get_client_for_config_rejects_bearer_over_plaintext_grpc():
+@pytest.mark.parametrize(
+    "gateway_url", ["grpc://gw.example.com:443", "  GRPC://gw.example.com:443  "]
+)
+def test_get_client_for_config_rejects_bearer_over_plaintext_grpc(gateway_url):
     """Bearer credentials must never be sent over an insecure gRPC channel."""
     fake_module = MagicMock()
     fake_module.SandboxClient = MagicMock()
     fake_module.TlsConfig = MagicMock()
     config = oc.GatewayConfig(
-        gateway_url="grpc://gw.example.com:443",
+        gateway_url=gateway_url,
         auth_mode="bearer",
         bearer_token="test-bearer-token",
     )
