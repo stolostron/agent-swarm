@@ -1,3 +1,4 @@
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings
 
 
@@ -8,6 +9,9 @@ class Settings(BaseSettings):
     k8s_api_url: str = "https://kubernetes.default.svc"
     database_url: str = "sqlite+aiosqlite:///data/swarmer.db"
     k8s_in_cluster: bool = False
+    # Runtime deployment flavor. Kubernetes keeps TokenReview authentication;
+    # OpenShell uses verified OIDC or the file-based bootstrap token.
+    swarmer_runtime_mode: str = "kubernetes"
     host: str = "0.0.0.0"
     port: int = 8080
     agent_image_opencode: str = ""
@@ -36,13 +40,31 @@ class Settings(BaseSettings):
     session_run_history_max_age_days: int = 7
 
     # OpenShell integration — replaces K8s pod/Secret management (ACM-34850)
-    openshell_gateway_url: str = ""
+    openshell_gateway_url: str = Field(
+        default="",
+        validation_alias=AliasChoices("OPENSHELL_GATEWAY_URL", "SWARMER_GATEWAY_URL"),
+    )
     openshell_supervisor_url: str = ""
-    openshell_tls_cert: str = ""        # path to client TLS cert
-    openshell_tls_key: str = ""         # path to client TLS key
-    openshell_tls_ca: str = ""          # path to CA bundle
+    openshell_tls_cert: str = Field(
+        default="",
+        validation_alias=AliasChoices("OPENSHELL_TLS_CERT", "SWARMER_GATEWAY_TLS_CERT"),
+    )        # path to client TLS cert
+    openshell_tls_key: str = Field(
+        default="",
+        validation_alias=AliasChoices("OPENSHELL_TLS_KEY", "SWARMER_GATEWAY_TLS_KEY"),
+    )         # path to client TLS key
+    openshell_tls_ca: str = Field(
+        default="",
+        validation_alias=AliasChoices("OPENSHELL_TLS_CA", "SWARMER_GATEWAY_TLS_CA"),
+    )          # path to CA bundle
     openshell_tls_verify: bool = True   # verify gateway server certificates
     openshell_bearer_token: str = ""    # bearer token for gateway/supervisor auth
+    openshell_auth_mode: str = "oidc"
+    openshell_oidc_issuer: str = ""
+    openshell_oidc_client_id: str = ""
+    openshell_oidc_audience: str = ""
+    swarmer_admin_token_file: str = ""
+    swarmer_admin_username: str = "admin"
     sandbox_gc_interval: int = 300      # seconds between sandbox GC sweeps
     log_level: str = "INFO"             # Python logging level: DEBUG, INFO, WARNING, ERROR
 

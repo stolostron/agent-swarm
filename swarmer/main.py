@@ -63,8 +63,11 @@ async def lifespan(app: FastAPI):
     await checkpoint_db()
     await create_tables()
     await migrate_db()
-    k8s.init_k8s(settings.k8s_in_cluster)
-    await _sync_k8s_workspace_members()
+    if settings.swarmer_runtime_mode.strip().lower() == "openshell":
+        log.info("OpenShell runtime enabled; skipping Kubernetes client initialization and migration")
+    else:
+        k8s.init_k8s(settings.k8s_in_cluster)
+        await _sync_k8s_workspace_members()
     if settings.openshell_gateway_url:
         await _ensure_openshell_provider_profiles()
         await _track_default_gateway_version()

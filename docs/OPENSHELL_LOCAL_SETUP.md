@@ -2,6 +2,67 @@
 
 Step-by-step guide to running Swarmer with a live OpenShell sandbox backend, either on a local kind cluster or an existing Kubernetes/OpenShift cluster.
 
+This document covers two distinct deployment modes. Kind and OpenShift use the
+existing Kubernetes deployment and TokenReview authentication. The
+`openshell-deploy` flow runs Swarmer inside an already authenticated OpenShell
+sandbox and does not install OpenShell or require `kubectl`/`oc`.
+
+## Existing OpenShell gateway
+
+Prerequisites are an authenticated `openshell` CLI, a selected gateway, a
+workspace where the operator may manage sandboxes, and a public Swarmer image.
+The Makefile scopes every operation to both the gateway and workspace:
+
+```sh
+make openshell-deploy SWARM_IMAGE=swarmer:<tag> OPENSHELL_WORKSPACE=<workspace>
+make openshell-status OPENSHELL_WORKSPACE=<workspace>
+make openshell-connect OPENSHELL_WORKSPACE=<workspace>
+make openshell-delete OPENSHELL_WORKSPACE=<workspace>
+```
+
+Set `OPENSHELL_GATEWAY=<gateway>` to avoid relying on the mutable CLI-selected
+gateway. If it is omitted, the selected gateway is used. Authentication errors
+are intentionally actionable and require `openshell gateway login <gateway>`;
+credentials are never printed.
+
+The sandbox stores the SQLite database and Fernet key under `/sandbox`, so
+reconciliation does not remove workspaces, memberships, schedules, credentials,
+or session history. The deployment uses `SWARMER_RUNTIME_MODE=openshell` and
+skips Kubernetes client initialization and legacy Kubernetes membership
+migration.
+
+To have deployment recreate the bootstrap token automatically when a sandbox is
+created, provide the local token file:
+
+```sh
+make openshell-deploy SWARMER_ADMIN_TOKEN_FILE=/path/to/admin.token
+```
+
+Existing retained sandboxes keep `/sandbox/auth/admin.token` across restarts and
+do not need the upload repeated.
+
+### OpenShell authentication
+
+Hosted gateways use verified OIDC bearer tokens. Configure
+`OPENSHELL_OIDC_ISSUER` and optionally `OPENSHELL_OIDC_AUDIENCE`; validation
+checks discovery issuer, JWKS signature, algorithm, issuer, expiry, issued-at,
+subject, and audience when configured. Standalone bootstrap access uses
+`SWARMER_ADMIN_TOKEN_FILE`, which must refer to a persistent secret file inside
+the sandbox. The token is compared in constant time and maps to the configured
+admin username. Do not pass it as `SWARMER_ADMIN_TOKEN` or a CLI argument.
+
+The login form accepts the OIDC access token or bootstrap admin token. REST API
+requests use the same validator with `Authorization: Bearer ...`. The existing
+database ACL remains authoritative after authentication; the bootstrap identity
+is treated as the configured initial global administrator and can manage members
+and credentials through the UI.
+
+`k8s/openshell/swarmer-policy.yaml` is default-deny and permits only GitHub
+content/API hosts and the active gateway gRPC endpoint. The deployment performs
+a gateway status check before creating the sandbox. A live gRPC policy check and
+the sibling-session smoke test should be run against the selected gateway before
+accepting a production policy change.
+
 ## Prerequisites
 
 | Tool | Version | Notes |

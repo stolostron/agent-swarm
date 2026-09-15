@@ -1,7 +1,7 @@
 """FastAPI dependencies for the REST API.
 
-API authentication uses the Authorization header with a K8s bearer token,
-validated via the same TokenReview mechanism as the Console login flow.
+API authentication uses the Authorization header, validated by the configured
+Kubernetes or OpenShell authentication backend, shared with Console login.
 Workspace-level authorization is a database-backed ACL (ACM-41659) — see
 ``swarmer.workspace_acl`` — rather than per-workspace K8s namespace RBAC.
 """

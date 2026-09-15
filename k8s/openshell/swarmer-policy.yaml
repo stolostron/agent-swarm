@@ -1,0 +1,47 @@
+version: 1
+filesystem_policy:
+  include_workdir: true
+  read_only:
+    - /app
+    - /usr
+    - /opt
+    - /lib
+    - /etc
+    - /proc
+    - /var/log
+  read_write:
+    - /sandbox
+    - /tmp
+    - /dev/null
+network_policies:
+  github:
+    endpoints:
+      - {host: api.github.com, port: 443, protocol: rest, enforcement: enforce, access: full}
+      - {host: github.com, port: 443, protocol: rest, enforcement: enforce, access: full}
+      - {host: raw.githubusercontent.com, port: 443, protocol: rest, enforcement: enforce, access: read-only}
+      - {host: objects.githubusercontent.com, port: 443, protocol: rest, enforcement: enforce, access: read-only}
+      - {host: codeload.github.com, port: 443, protocol: rest, enforcement: enforce, access: read-only}
+    binaries:
+      - {path: /bin/sh, harness: true}
+      - {path: /usr/bin/sh, harness: true}
+      - {path: /opt/app-root/bin/uvicorn, harness: true}
+      - {path: /opt/app-root/bin/python, harness: true}
+      - {path: /usr/bin/python3.12, harness: true}
+      - {path: /usr/bin/python3, harness: true}
+      - {path: /usr/local/bin/python3, harness: true}
+      - {path: /usr/bin/git, harness: true}
+      - {path: /usr/local/bin/git, harness: true}
+      - {path: /usr/bin/curl, harness: true}
+  gateway:
+    endpoints:
+      # Gateway SDK traffic is HTTP/2 over TLS. The Kubernetes combined runtime
+      # treats an endpoint without an L7 protocol as an allowed TCP destination.
+      - {host: OPENSHELL_GATEWAY_HOST, port: OPENSHELL_GATEWAY_PORT}
+    binaries:
+      - {path: /bin/sh, harness: true}
+      - {path: /usr/bin/sh, harness: true}
+      - {path: /opt/app-root/bin/uvicorn, harness: true}
+      - {path: /opt/app-root/bin/python, harness: true}
+      - {path: /usr/bin/python3.12, harness: true}
+      - {path: /usr/bin/python3, harness: true}
+      - {path: /usr/local/bin/python3, harness: true}

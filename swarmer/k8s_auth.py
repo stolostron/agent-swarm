@@ -9,6 +9,8 @@ from __future__ import annotations
 import base64
 import json
 import logging
+import hmac
+import time
 from dataclasses import dataclass, field
 
 logger = logging.getLogger(__name__)
@@ -47,6 +49,16 @@ def _make_user_config(token: str, api_url: str, in_cluster: bool):
 
 
 async def validate_token(token: str, api_url: str, in_cluster: bool) -> TokenIdentity | None:
+    """Validate a bearer token using the configured deployment authentication."""
+    from swarmer.config import settings
+
+    if settings.swarmer_runtime_mode.strip().lower() == "openshell":
+        return await validate_openshell_token(token)
+
+    return await _validate_kubernetes_token(token, api_url, in_cluster)
+
+
+async def _validate_kubernetes_token(token: str, api_url: str, in_cluster: bool) -> TokenIdentity | None:
     """Validate a bearer token via TokenReview. Falls back to direct probe on 401/403."""
     import asyncio
     from kubernetes import client as k8s_client
@@ -88,6 +100,84 @@ async def validate_token(token: str, api_url: str, in_cluster: bool) -> TokenIde
         # Fall back: try a direct namespace GET with the user token to confirm validity
         return await _probe_with_user_token(token, api_url, in_cluster)
     return result
+
+
+async def validate_openshell_token(token: str) -> TokenIdentity | None:
+    """Validate an OpenShell OIDC token or the bootstrap admin token.
+
+    Admin credentials are read from a file so deployment tooling does not put
+    the secret in process arguments or ordinary environment diagnostics.
+    OIDC JWTs are verified against the issuer's JWKS; decoding an unverified
+    payload is deliberately not accepted in this mode.
+    """
+    from swarmer.config import settings
+
+    token = token.strip()
+    token_file = settings.swarmer_admin_token_file.strip()
+    if token_file:
+        try:
+            with open(token_file, encoding="utf-8") as handle:
+                admin_token = handle.read().strip()
+        except OSError:
+            admin_token = ""
+        if admin_token and hmac.compare_digest(token, admin_token):
+            return TokenIdentity(
+                username=settings.swarmer_admin_username,
+                groups=["swarmer-admin"],
+            )
+
+    issuer = settings.openshell_oidc_issuer.strip().rstrip("/")
+    if not issuer or not token:
+        return None
+
+    try:
+        import httpx
+        import jwt
+
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            discovery = await client.get(f"{issuer}/.well-known/openid-configuration")
+            discovery.raise_for_status()
+            metadata = discovery.json()
+            if metadata.get("issuer", "").rstrip("/") != issuer:
+                return None
+            jwks_uri = metadata.get("jwks_uri")
+            if not jwks_uri:
+                return None
+            jwks_response = await client.get(jwks_uri)
+            jwks_response.raise_for_status()
+            jwks = jwks_response.json()
+
+        header = jwt.get_unverified_header(token)
+        key = next(
+            (candidate for candidate in jwks.get("keys", []) if candidate.get("kid") == header.get("kid")),
+            None,
+        )
+        if key is None:
+            return None
+        algorithm = str(header.get("alg") or "")
+        if algorithm not in {"RS256", "RS384", "RS512", "ES256", "ES384", "ES512"}:
+            return None
+        decode_options = {"require": ["exp", "iat", "sub"]}
+        if not settings.openshell_oidc_audience:
+            decode_options["verify_aud"] = False
+        claims = jwt.decode(
+            token,
+            jwt.PyJWK.from_dict(key).key,
+            algorithms=[algorithm],
+            issuer=issuer,
+            audience=settings.openshell_oidc_audience or None,
+            options=decode_options,
+        )
+        if claims.get("exp", 0) <= time.time():
+            return None
+        username = str(claims.get("preferred_username") or claims.get("email") or claims.get("sub") or "")
+        groups = claims.get("groups") or claims.get("group") or []
+        if isinstance(groups, str):
+            groups = [groups]
+        return TokenIdentity(username=username, groups=[str(group) for group in groups]) if username else None
+    except Exception:
+        logger.warning("OpenShell OIDC token validation failed", exc_info=True)
+        return None
 
 
 async def _probe_with_user_token(token: str, api_url: str, in_cluster: bool) -> TokenIdentity | None:
@@ -158,5 +248,3 @@ async def _probe_with_user_token(token: str, api_url: str, in_cluster: bool) -> 
             return None
 
     return await asyncio.to_thread(_do_probe)
-
-

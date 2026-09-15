@@ -45,12 +45,12 @@
     <form method="post" action="/login" class="pf-v6-c-form">
       <div class="pf-v6-c-form__group">
         <label class="pf-v6-c-form__label" for="token">
-          <span class="pf-v6-c-form__label-text">Bearer Token</span>
+           <span class="pf-v6-c-form__label-text">{% if openshell_auth_mode %}OpenShell / Admin Token{% else %}Bearer Token{% endif %}</span>
         </label>
         <div class="pf-v6-c-form__group-control">
           <textarea id="token" name="token" rows="5" required
                     class="pf-v6-c-form-control token-field"
-                    placeholder="Paste your K8s bearer token here"
+                     placeholder="Paste your configured token here"
                     autofocus></textarea>
         </div>
       </div>

@@ -45,7 +45,10 @@ async def login_page(request: Request):
     return templates.TemplateResponse(
         request,
         "login.html",
-        {"openshift_auth_url": openshift_auth_url},
+        {
+            "openshift_auth_url": openshift_auth_url,
+            "openshell_auth_mode": settings.swarmer_runtime_mode.strip().lower() == "openshell",
+        },
     )
 
 

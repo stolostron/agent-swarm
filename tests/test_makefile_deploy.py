@@ -3,7 +3,6 @@
 import os
 import re
 import subprocess
-import pytest
 
 REPO_ROOT = os.path.join(os.path.dirname(__file__), "..")
 MAKEFILE_PATH = os.path.join(REPO_ROOT, "Makefile")
@@ -78,3 +77,15 @@ def test_agent_sandbox_manifest_resolution():
 
     res_046 = subprocess.run(["sh", "-c", sh_script, "sh", "v0.4.6"], capture_output=True, text=True, check=True, timeout=10)
     assert res_046.stdout.strip().endswith("/v0.4.6/manifest.yaml")
+
+
+def test_openshell_deployment_flow_is_explicitly_scoped_and_secret_safe():
+    content = open(MAKEFILE_PATH, encoding="utf-8").read()
+    for target in ("openshell-deploy", "openshell-connect", "openshell-delete", "openshell-status"):
+        assert f"{target}:" in content
+    assert 'OPENSHELL_GATEWAY        ?=' in content
+    assert 'OPENSHELL_WORKSPACE      ?= default' in content
+    assert 'openshell -g "$$GW" --workspace "$(OPENSHELL_WORKSPACE)"' in content
+    assert "SWARMER_ADMIN_TOKEN_FILE=$(if $(SWARMER_ADMIN_TOKEN_FILE),$(SWARMER_ADMIN_TOKEN_FILE),/sandbox/auth/admin.token)" in content
+    assert "SWARMER_ADMIN_TOKEN=" not in content
+    assert "scripts/openshell_browser_proxy.py" in content

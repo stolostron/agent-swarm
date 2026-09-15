@@ -5,6 +5,11 @@ WORKDIR /app
 # Install dependencies first (cached layer)
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
+# OpenShell executes the sandbox supervisor as UID 1000 even when the image's
+# default user differs. Keep the installed Python runtime readable there while
+# preserving the non-root default user for Kubernetes deployments.
+USER 0
+RUN chmod -R a+rX /opt/app-root
 
 # Copy application
 COPY swarmer/ swarmer/
@@ -13,7 +18,8 @@ COPY swarmer/ swarmer/
 # Note: PVC mounts overlay /data at runtime; ensure the PVC root is group-0
 # writable (chgrp -R 0 /data on the PVC) for uid 1001 + gid 0 write access.
 USER 0
-RUN mkdir -p /data /auth
+RUN microdnf install -y iproute util-linux-core tar && microdnf clean all && \
+    mkdir -p /data /auth /sandbox/auth && chmod 0777 /sandbox /sandbox/auth
 USER 1001
 
 ENV PYTHONUNBUFFERED=1 \

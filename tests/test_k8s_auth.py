@@ -21,6 +21,7 @@ from swarmer.k8s_auth import (
     _username_from_jwt,
     validate_token,
 )
+from swarmer.config import settings
 
 
 # ---------------------------------------------------------------------------
@@ -227,6 +228,20 @@ class TestValidateTokenFallback:
             result = await validate_token(token, "https://localhost:6443", False)
 
             assert result is None
+
+    @pytest.mark.asyncio
+    async def test_openshell_admin_token_uses_constant_time_file_validation(self, tmp_path, monkeypatch):
+        token_file = tmp_path / "admin.token"
+        token_file.write_text("bootstrap-secret\n", encoding="utf-8")
+        monkeypatch.setattr(settings, "swarmer_runtime_mode", "openshell")
+        monkeypatch.setattr(settings, "swarmer_admin_token_file", str(token_file))
+        monkeypatch.setattr(settings, "swarmer_admin_username", "bootstrap-admin")
+
+        valid = await validate_token(" bootstrap-secret ", "unused", False)
+        invalid = await validate_token("wrong-secret", "unused", False)
+
+        assert valid == TokenIdentity("bootstrap-admin", groups=["swarmer-admin"])
+        assert invalid is None
 
     @pytest.mark.asyncio
     async def test_openshift_oauth_token_resolved_via_user_api(self):

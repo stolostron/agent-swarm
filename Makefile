@@ -48,6 +48,17 @@ OPENSHELL_TLS_DIR        ?= auth/openshell
 # up a changed value.
 OPENSHELL_WORKSPACE_STORAGE ?= 10Gi
 
+# Existing remote OpenShell deployment (does not install or modify the gateway)
+SWARM_SANDBOX_NAME       ?= swarmer
+SWARM_PORT               ?= 8080
+SWARM_IMAGE              ?= $(IMAGE_REF)
+OPENSHELL_GATEWAY        ?=
+OPENSHELL_WORKSPACE      ?= default
+OPENSHELL_POLICY         ?= k8s/openshell/swarmer-policy.yaml
+SWARMER_RUNTIME_MODE     ?= openshell
+SWARMER_ADMIN_TOKEN_FILE ?=
+SWARMER_SECRET_KEY_FILE  ?= /sandbox/auth/secret.key
+
 # ──────────────────────────────────────────────────────────────
 #  Phony targets
 # ──────────────────────────────────────────────────────────────
@@ -55,6 +66,7 @@ OPENSHELL_WORKSPACE_STORAGE ?= 10Gi
         dev lint helm-lint test smoke-test-jira \
         sync-images image-build image-push \
         deploy delete connect mcp-setup mcp-api mcp-url api-url openshell-register connect-openshell status \
+        openshell-deploy openshell-connect openshell-delete openshell-status \
         kind-deploy kind-delete \
         help
 
@@ -734,6 +746,143 @@ openshell-register:  ## Register (or refresh) the active cluster's OpenShell gat
 connect-openshell:  ## Refresh certs + port-forward every registered OpenShell gateway (Ctrl-C stops all)
 	$(MAKE) openshell-register
 	python3 scripts/openshell_connect.py --namespace $(OPENSHELL_NAMESPACE)
+
+# ──────────────────────────────────────────────────────────────
+#  Existing OpenShell gateway deployment (no kubectl/oc required)
+# ──────────────────────────────────────────────────────────────
+
+openshell-deploy:  ## Deploy/reconcile Swarmer in an existing OpenShell gateway
+	@command -v openshell >/dev/null 2>&1 || (echo "Error: openshell CLI is required" >&2; exit 1)
+	@set -eu; \
+	  GW="$(OPENSHELL_GATEWAY)"; \
+	  if [ -z "$$GW" ] && [ -f "$(HOME)/.config/openshell/active_gateway" ]; then \
+	    GW=$$(tr -d '[:space:]' < "$(HOME)/.config/openshell/active_gateway"); \
+	  fi; \
+	  [ -n "$$GW" ] || { echo "Error: no gateway selected; set OPENSHELL_GATEWAY or run 'openshell gateway select <gateway>'" >&2; exit 1; }; \
+	  echo "Checking OpenShell gateway '$$GW' (workspace $(OPENSHELL_WORKSPACE))..."; \
+	  POLICY=$$(mktemp); trap 'rm -f "$$POLICY"' EXIT; \
+	  META="$(HOME)/.config/openshell/gateways/$$GW/metadata.json"; \
+	  test -f "$$META" || { echo "Error: gateway metadata not found at $$META" >&2; exit 1; }; \
+	  GWHOST=$$(python3 -c 'import json,sys; from urllib.parse import urlparse; u=urlparse(json.load(open(sys.argv[1]))["gateway_endpoint"]); print(u.hostname or "")' "$$META"); \
+	  GWPORT=$$(python3 -c 'import json,sys; from urllib.parse import urlparse; d=json.load(open(sys.argv[1])); u=urlparse(d["gateway_endpoint"]); print(u.port or (443 if u.scheme == "https" else 80))' "$$META"); \
+	  IS_REMOTE=$$(python3 -c 'import json,sys; print(str(json.load(open(sys.argv[1])).get("is_remote", False)).lower())' "$$META"); \
+	  RUNTIME_GWHOST="$$GWHOST"; RUNTIME_GWPORT="$$GWPORT"; \
+	  if [ "$$IS_REMOTE" != "true" ]; then \
+	    RUNTIME_GWHOST="openshell.openshell.svc.cluster.local"; RUNTIME_GWPORT=8080; \
+	    CTX_FILE="$(HOME)/.config/openshell/gateways/$$GW/kubectl_context"; CTX=$$(cat "$$CTX_FILE" 2>/dev/null || true); \
+	    DNS_HOST="kube-dns.kube-system.svc.cluster.local"; \
+	    if ! python3 -c "import socket; s=socket.create_connection(('127.0.0.1', int('$$GWPORT')), 0.5); s.close()" 2>/dev/null; then \
+	      command -v kubectl >/dev/null 2>&1 || { echo "Error: local gateway '$$GW' is not reachable and kubectl is required to start its port-forward." >&2; exit 1; }; \
+	      CTX_FILE="$(HOME)/.config/openshell/gateways/$$GW/kubectl_context"; \
+	      CTX=$$(cat "$$CTX_FILE" 2>/dev/null || true); \
+	      if [ -n "$$CTX" ]; then \
+	        kubectl --context "$$CTX" port-forward -n "$(OPENSHELL_NAMESPACE)" svc/openshell "$$GWPORT:8080" >/tmp/openshell-gateway-"$$GW".log 2>&1 & \
+	      else \
+	        kubectl port-forward -n "$(OPENSHELL_NAMESPACE)" svc/openshell "$$GWPORT:8080" >/tmp/openshell-gateway-"$$GW".log 2>&1 & \
+	      fi; \
+	      for i in $$(seq 1 20); do \
+	        python3 -c "import socket; s=socket.create_connection(('127.0.0.1', int('$$GWPORT')), 0.5); s.close()" 2>/dev/null && break; \
+	        sleep 1; \
+	      done; \
+	    fi; \
+	  fi; \
+	  openshell -g "$$GW" --workspace "$(OPENSHELL_WORKSPACE)" status >/dev/null || { \
+	    echo "Error: gateway authentication failed. Run 'openshell gateway login $$GW'." >&2; exit 1; }; \
+	  test -n "$$GWHOST" || { echo "Error: gateway metadata did not contain an endpoint" >&2; exit 1; }; \
+	  sed "s/OPENSHELL_GATEWAY_HOST/$$RUNTIME_GWHOST/g; s/OPENSHELL_GATEWAY_PORT/$$RUNTIME_GWPORT/g; s/OPENSHELL_DNS_HOST/$${DNS_HOST:-kube-dns.kube-system.svc.cluster.local}/g" "$(OPENSHELL_POLICY)" > "$$POLICY"; \
+	  if openshell -g "$$GW" --workspace "$(OPENSHELL_WORKSPACE)" sandbox get "$(SWARM_SANDBOX_NAME)" >/dev/null 2>&1; then \
+	    EXISTING_PHASE=$$(openshell -g "$$GW" --workspace "$(OPENSHELL_WORKSPACE)" sandbox get "$(SWARM_SANDBOX_NAME)" -o json | jq -r '.phase // empty'); \
+	    case "$$EXISTING_PHASE" in Error|Finished) \
+	      echo "Removing failed sandbox state (workspace data is retained)..."; \
+	      openshell -g "$$GW" --workspace "$(OPENSHELL_WORKSPACE)" sandbox delete "$(SWARM_SANDBOX_NAME)"; \
+	      ;; \
+	    esac; \
+	  fi; \
+	  if openshell -g "$$GW" --workspace "$(OPENSHELL_WORKSPACE)" sandbox get "$(SWARM_SANDBOX_NAME)" >/dev/null 2>&1; then \
+	    echo "Reconciling sandbox '$(SWARM_SANDBOX_NAME)'..."; \
+	    openshell -g "$$GW" --workspace "$(OPENSHELL_WORKSPACE)" sandbox start "$(SWARM_SANDBOX_NAME)"; \
+	  else \
+	    echo "Creating sandbox '$(SWARM_SANDBOX_NAME)' from $(SWARM_IMAGE)..."; \
+	    openshell -g "$$GW" --workspace "$(OPENSHELL_WORKSPACE)" sandbox create \
+	      --name "$(SWARM_SANDBOX_NAME)" --from "$(SWARM_IMAGE)" --policy "$$POLICY" --detach --no-credential-warnings \
+	      $(if $(SWARMER_ADMIN_TOKEN_FILE),--upload "$(SWARMER_ADMIN_TOKEN_FILE):/sandbox/auth/admin.token",) \
+	      --env "K8S_IN_CLUSTER=false" --env "SWARMER_RUNTIME_MODE=$(SWARMER_RUNTIME_MODE)" \
+	      --env "DATABASE_URL=sqlite+aiosqlite:////sandbox/swarmer.db" \
+	      --env "SECRET_KEY_FILE=$(SWARMER_SECRET_KEY_FILE)" \
+	      --env "SWARMER_ADMIN_TOKEN_FILE=$(if $(SWARMER_ADMIN_TOKEN_FILE),$(SWARMER_ADMIN_TOKEN_FILE),/sandbox/auth/admin.token)" \
+	      --env "SWARMER_GATEWAY_URL=https://$$RUNTIME_GWHOST:$$RUNTIME_GWPORT" \
+	      --env "SWARMER_GATEWAY_TLS_CA=/etc/openshell-tls/client/ca.crt" \
+	      --env "SWARMER_GATEWAY_TLS_CERT=/etc/openshell-tls/client/tls.crt" \
+	      --env "SWARMER_GATEWAY_TLS_KEY=/etc/openshell-tls/client/tls.key" \
+	      --env "PYTHONPATH=/app:/opt/app-root/lib64/python3.12/site-packages" \
+	      -- sh -c "export OPENSHELL_TLS_CA=/etc/openshell-tls/client/ca.crt OPENSHELL_TLS_CERT=/etc/openshell-tls/client/tls.crt OPENSHELL_TLS_KEY=/etc/openshell-tls/client/tls.key NO_PROXY=openshell.openshell.svc.cluster.local,openshell.openshell.svc,openshell.svc,localhost,127.0.0.1 no_proxy=openshell.openshell.svc.cluster.local,openshell.openshell.svc,openshell.svc,localhost,127.0.0.1; cd /app && exec /usr/bin/python3.12 -m uvicorn swarmer.main:app --host 0.0.0.0 --port $(SWARM_PORT) --proxy-headers --forwarded-allow-ips='*'"; \
+	  fi; \
+	  if [ -n "$(SWARMER_ADMIN_TOKEN_FILE)" ] && [ -f "$(SWARMER_ADMIN_TOKEN_FILE)" ]; then \
+	    openshell -g "$$GW" --workspace "$(OPENSHELL_WORKSPACE)" sandbox upload "$(SWARM_SANDBOX_NAME)" "$(SWARMER_ADMIN_TOKEN_FILE)" /sandbox/auth/admin.token >/dev/null; \
+	    echo "Bootstrap admin token uploaded to retained sandbox storage."; \
+	  fi; \
+	  READY=0; \
+	  for i in $$(seq 1 30); do \
+	    PHASE=$$(openshell -g "$$GW" --workspace "$(OPENSHELL_WORKSPACE)" sandbox get "$(SWARM_SANDBOX_NAME)" -o json 2>/dev/null | jq -r '.phase // empty'); \
+	    case "$$PHASE" in \
+	      Running|Ready) READY=1; break ;; \
+	      Error|Finished) break ;; \
+	    esac; \
+	    sleep 2; \
+	  done; \
+	  [ "$$READY" -eq 1 ] || { echo "Error: Swarmer sandbox did not remain running (phase: $${PHASE:-unknown})." >&2; exit 1; }; \
+	  openshell -g "$$GW" --workspace "$(OPENSHELL_WORKSPACE)" service expose "$(SWARM_SANDBOX_NAME)" "$(SWARM_PORT)" web; \
+	  echo "Swarmer deployed in gateway '$$GW', workspace '$(OPENSHELL_WORKSPACE)', sandbox '$(SWARM_SANDBOX_NAME)'"; \
+	  if [ "$$IS_REMOTE" != "true" ]; then echo "Local browser URL: http://localhost:$(LOCAL_PORT) (run 'make openshell-connect')"; fi; \
+	  echo "Use 'make openshell-status OPENSHELL_GATEWAY=$$GW' for the service URL."; \
+	  echo "If the service hostname is not resolvable, run 'make openshell-connect OPENSHELL_GATEWAY=$$GW'."
+
+openshell-connect:  ## Forward the OpenShell Swarmer service to localhost
+	@command -v openshell >/dev/null 2>&1 || (echo "Error: openshell CLI is required" >&2; exit 1)
+	@set -eu; GW="$(OPENSHELL_GATEWAY)"; \
+	  if [ -z "$$GW" ] && [ -f "$(HOME)/.config/openshell/active_gateway" ]; then GW=$$(tr -d '[:space:]' < "$(HOME)/.config/openshell/active_gateway"); fi; \
+	  [ -n "$$GW" ] || { echo "Error: set OPENSHELL_GATEWAY or select a gateway" >&2; exit 1; }; \
+	  META="$(HOME)/.config/openshell/gateways/$$GW/metadata.json"; \
+	  IS_REMOTE=$$(python3 -c 'import json,sys; print(str(json.load(open(sys.argv[1])).get("is_remote", False)).lower())' "$$META" 2>/dev/null || echo true); \
+	  if [ "$$IS_REMOTE" != "true" ]; then \
+	    CTX_FILE="$(HOME)/.config/openshell/gateways/$$GW/kubectl_context"; CTX=$$(cat "$$CTX_FILE" 2>/dev/null || true); \
+	    META="$(HOME)/.config/openshell/gateways/$$GW/metadata.json"; \
+	    GWPORT=$$(python3 -c 'import json,sys; from urllib.parse import urlparse; u=urlparse(json.load(open(sys.argv[1]))["gateway_endpoint"]); print(u.port or 443)' "$$META"); \
+	    SERVICE_HOST="$(OPENSHELL_WORKSPACE)--$(SWARM_SANDBOX_NAME)--web.openshell.localhost"; \
+	    CERT_DIR="$(HOME)/.config/openshell/gateways/$$GW/mtls"; \
+	    if ! python3 -c "import socket; s=socket.create_connection(('127.0.0.1', int('$$GWPORT')), 0.5); s.close()" 2>/dev/null; then \
+	      CTX_FILE="$(HOME)/.config/openshell/gateways/$$GW/kubectl_context"; CTX=$$(cat "$$CTX_FILE" 2>/dev/null || true); \
+	      command -v kubectl >/dev/null 2>&1 || { echo "Error: local OpenShell gateway is not reachable and kubectl is required." >&2; exit 1; }; \
+	      if [ -n "$$CTX" ]; then kubectl --context "$$CTX" port-forward -n "$(OPENSHELL_NAMESPACE)" svc/openshell "$$GWPORT:8080" >/tmp/openshell-gateway-"$$GW".log 2>&1 & \
+	      else kubectl port-forward -n "$(OPENSHELL_NAMESPACE)" svc/openshell "$$GWPORT:8080" >/tmp/openshell-gateway-"$$GW".log 2>&1 & fi; \
+	      for i in $$(seq 1 20); do python3 -c "import socket; s=socket.create_connection(('127.0.0.1', int('$$GWPORT')), 0.5); s.close()" 2>/dev/null && break; sleep 1; done; \
+	    fi; \
+	    python3 scripts/openshell_browser_proxy.py \
+	      --listen-port "$(LOCAL_PORT)" --gateway-host 127.0.0.1 --gateway-port "$$GWPORT" \
+	      --service-host "$$SERVICE_HOST" --ca-file "$$CERT_DIR/ca.crt" \
+	      --cert-file "$$CERT_DIR/tls.crt" --key-file "$$CERT_DIR/tls.key"; \
+	  else \
+	    openshell -g "$$GW" --workspace "$(OPENSHELL_WORKSPACE)" forward start "$(LOCAL_PORT)" "$(SWARM_SANDBOX_NAME)"; \
+	  fi
+
+openshell-delete:  ## Remove only the Swarmer service and sandbox from OpenShell
+	@command -v openshell >/dev/null 2>&1 || (echo "Error: openshell CLI is required" >&2; exit 1)
+	@set -eu; GW="$(OPENSHELL_GATEWAY)"; \
+	  if [ -z "$$GW" ] && [ -f "$(HOME)/.config/openshell/active_gateway" ]; then GW=$$(tr -d '[:space:]' < "$(HOME)/.config/openshell/active_gateway"); fi; \
+	  [ -n "$$GW" ] || { echo "Error: set OPENSHELL_GATEWAY or select a gateway" >&2; exit 1; }; \
+	  openshell -g "$$GW" --workspace "$(OPENSHELL_WORKSPACE)" service delete "$(SWARM_SANDBOX_NAME)" web >/dev/null 2>&1 || true; \
+	  openshell -g "$$GW" --workspace "$(OPENSHELL_WORKSPACE)" sandbox delete "$(SWARM_SANDBOX_NAME)"; \
+	  echo "Removed Swarmer sandbox and service; gateway and other workspaces were not changed."
+
+openshell-status:  ## Show OpenShell gateway, sandbox, service, and diagnostics
+	@command -v openshell >/dev/null 2>&1 || (echo "Error: openshell CLI is required" >&2; exit 1)
+	@set -eu; GW="$(OPENSHELL_GATEWAY)"; \
+	  if [ -z "$$GW" ] && [ -f "$(HOME)/.config/openshell/active_gateway" ]; then GW=$$(tr -d '[:space:]' < "$(HOME)/.config/openshell/active_gateway"); fi; \
+	  echo "Gateway: $${GW:-<not selected>}"; echo "Workspace: $(OPENSHELL_WORKSPACE)"; echo "Sandbox: $(SWARM_SANDBOX_NAME)"; \
+	  [ -n "$$GW" ] || exit 0; \
+	  openshell -g "$$GW" --workspace "$(OPENSHELL_WORKSPACE)" sandbox get "$(SWARM_SANDBOX_NAME)" || true; \
+	  echo "Service:"; openshell -g "$$GW" --workspace "$(OPENSHELL_WORKSPACE)" service list || true; \
+	  echo "Diagnostics: openshell -g \"$$GW\" --workspace \"$(OPENSHELL_WORKSPACE)\" logs $(SWARM_SANDBOX_NAME)"
 
 status:  ## Show OpenShell and swarmer deployment status
 	@echo "=== Helm release ==="

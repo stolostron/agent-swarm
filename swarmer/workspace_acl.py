@@ -55,6 +55,13 @@ def is_admin_static(username: str, groups: list[str] | None = None) -> bool:
     admin_groups = _parse_csv(settings.workspace_admin_groups)
     if admin_groups and groups and admin_groups.intersection(groups):
         return True
+    if (
+        settings.swarmer_runtime_mode.strip().lower() == "openshell"
+        and username == settings.swarmer_admin_username
+        and groups
+        and "swarmer-admin" in groups
+    ):
+        return True
     return False
 
 
