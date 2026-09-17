@@ -586,7 +586,10 @@ async def _classify_event_triggers(
                         ))
                 continue
         elif event_type in {"IssueCommentEvent", "PullRequestReviewCommentEvent", "PullRequestReviewEvent"}:
-            if event_type == "PullRequestReviewEvent" and action == "submitted":
+            # The repository Events API reports submitted reviews as
+            # PullRequestReviewEvent/action=created (the webhook payload uses
+            # action=submitted). Accept both representations.
+            if event_type == "PullRequestReviewEvent" and action in {"created", "submitted"}:
                 review = payload.get("review") or {}
                 if (review.get("state") or "").lower() == "approved" and isinstance(number, int):
                     approved_user = (review.get("user") or {}).get("login", "") or actor

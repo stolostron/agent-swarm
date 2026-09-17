@@ -91,7 +91,7 @@ class TestReviewApprovedEventClassification(unittest.IsolatedAsyncioTestCase):
             "created_at": "2026-09-16T12:00:00Z",
             "actor": {"login": "coderabbitai[bot]"},
             "payload": {
-                "action": "submitted",
+                "action": "created",
                 "pull_request": {"number": 7},
                 "review": {
                     "state": "approved",

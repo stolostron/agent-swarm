@@ -376,12 +376,9 @@ class TestPrActionStateMigration:
                     last_error TEXT NOT NULL DEFAULT '',
                     last_dispatched_at DATETIME,
                     created_at DATETIME NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%S', 'now')),
-                    updated_at DATETIME NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%S', 'now'))
+                    updated_at DATETIME NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%S', 'now')),
+                    UNIQUE (repo, pr_number, head_sha, action)
                 )
-            """))
-            await conn.execute(text("""
-                CREATE UNIQUE INDEX uq_pr_action_state_key
-                ON pr_action_state (repo, pr_number, head_sha, action)
             """))
 
         # Verify session_id does not exist before migration
@@ -410,6 +407,10 @@ class TestPrActionStateMigration:
                 indexed_cols = [row[2] for row in result.fetchall()]
             assert indexed_cols == ["repo", "pr_number", "head_sha", "action", "session_id"]
 
+            async with _engine.begin() as conn:
+                result = await conn.execute(text("PRAGMA index_list('pr_action_state')"))
+                assert not any(str(row[1]).startswith("sqlite_autoindex_") and row[2] for row in result.fetchall())
+
             # Verify multiple sessions can now record actions for the same PR and head SHA
             async with _engine.begin() as conn:
                 await conn.execute(text("""
@@ -431,8 +432,15 @@ class TestPrActionStateMigration:
                         VALUES ('test-repository', 1, 'sha1', 'ci_fail_or_conflict', 10)
                     """))
 
+            # Distinct event IDs for one session must be allowed.
+            async with _engine.begin() as conn:
+                await conn.execute(text("""
+                    INSERT INTO pr_action_state
+                        (repo, pr_number, head_sha, action, session_id, event_id)
+                    VALUES ('test-repository', 1, 'sha1', 'ci_fail_or_conflict', 10, 'event-2')
+                """))
+
             # Running migrate_db() again must be idempotent and succeed without error
             await db_module.migrate_db()
         finally:
             db_module._engine = orig_engine
-
