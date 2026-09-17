@@ -207,11 +207,20 @@ def main() -> int:
         if status != 200:
             raise RuntimeError(f"/api/v1/workspaces returned HTTP {status}")
         log_step("authenticated workspace API", True)
+        print("  Swarmer API connection attestation:")
+        print(f"    endpoint: {args.url.rstrip('/')}")
+        print(f"    authenticated identity: {expected_user}")
+        print("    validated operations: GET /api/v1/me, GET /api/v1/workspaces")
 
         mcp_identity = asyncio.run(call_mcp_get_me(args.url, token))
         if mcp_identity.get("username") != expected_user:
             raise RuntimeError("MCP get_me returned an unexpected identity")
         log_step("MCP get_me tool", True)
+        print("  MCP connection attestation:")
+        print("    transport: FastMCP in-process client protocol")
+        print("    tool: get_me")
+        print(f"    authenticated identity: {mcp_identity['username']}")
+        print("    result: structured tool response received from Swarmer API")
 
         status, location, _ = request(
             f"{args.url.rstrip('/')}/login", form=urlencode({"token": token})
