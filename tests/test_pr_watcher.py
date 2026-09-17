@@ -28,9 +28,21 @@ from swarmer.pr_watcher import _classify_comment_event  # noqa: E402
 class TestPRCommentEventClassification(unittest.TestCase):
     def test_accepts_issue_inline_and_nonempty_review_comments(self):
         cases = [
-            {"type": "IssueCommentEvent", "id": "i1", "created_at": "2026-09-16T12:00:00Z", "payload": {"action": "created", "issue": {"number": 1, "pull_request": {}}}},
-            {"type": "PullRequestReviewCommentEvent", "id": "i2", "created_at": "2026-09-16T12:00:00Z", "payload": {"action": "created", "pull_request": {"number": 2}}},
-            {"type": "PullRequestReviewEvent", "id": "i3", "created_at": "2026-09-16T12:00:00Z", "payload": {"action": "submitted", "review": {"body": "LGTM"}, "pull_request": {"number": 3}}},
+            {
+                "type": "IssueCommentEvent", "id": "i1", "created_at": "2026-09-16T12:00:00Z",
+                "actor": {"login": "alice", "author_association": "MEMBER"},
+                "payload": {"action": "created", "issue": {"number": 1, "pull_request": {}}},
+            },
+            {
+                "type": "PullRequestReviewCommentEvent", "id": "i2", "created_at": "2026-09-16T12:00:00Z",
+                "actor": {"login": "bob"},
+                "payload": {"action": "created", "pull_request": {"number": 2}, "comment": {"author_association": "COLLABORATOR"}},
+            },
+            {
+                "type": "PullRequestReviewEvent", "id": "i3", "created_at": "2026-09-16T12:00:00Z",
+                "actor": {"login": "carol"},
+                "payload": {"action": "submitted", "review": {"body": "LGTM", "author_association": "OWNER"}, "pull_request": {"number": 3}},
+            },
         ]
         assert [_classify_comment_event(event)[0] for event in cases] == [1, 2, 3]
 
@@ -39,6 +51,19 @@ class TestPRCommentEventClassification(unittest.TestCase):
         edited = {"type": "IssueCommentEvent", "id": "i5", "payload": {"action": "edited", "issue": {"number": 5, "pull_request": {}}}}
         assert _classify_comment_event(empty) is None
         assert _classify_comment_event(edited) is None
+
+    def test_rejects_missing_actor_or_association(self):
+        no_actor = {
+            "type": "IssueCommentEvent", "id": "i6", "created_at": "2026-09-16T12:00:00Z",
+            "payload": {"action": "created", "issue": {"number": 1, "pull_request": {}}, "comment": {"author_association": "MEMBER"}},
+        }
+        no_assoc = {
+            "type": "IssueCommentEvent", "id": "i7", "created_at": "2026-09-16T12:00:00Z",
+            "actor": {"login": "alice"},
+            "payload": {"action": "created", "issue": {"number": 1, "pull_request": {}}},
+        }
+        assert _classify_comment_event(no_actor) is None
+        assert _classify_comment_event(no_assoc) is None
 
 
 class TestPRStateNormalization(unittest.TestCase):
@@ -1098,6 +1123,8 @@ class TestPRCommentDispatchFixes(unittest.IsolatedAsyncioTestCase):
                     "type": "IssueCommentEvent",
                     "at": datetime.now(timezone.utc),
                     "created_at": datetime.now(timezone.utc),
+                    "actor_login": "author-test",
+                    "author_association": "CONTRIBUTOR",
                 }
             }
 
@@ -1183,6 +1210,128 @@ class TestPRCommentDispatchFixes(unittest.IsolatedAsyncioTestCase):
             updated = await get_comment_dispatch(db, "stolostron/agent-swarm", 301, sched.id)
             self.assertEqual(updated.status, "dispatched")
             self.assertEqual(updated.head_sha, "new-sha-301")
+
+    async def test_comment_actor_author_scope_rejection(self):
+        """A team author-scope schedule must reject comments from untrusted actors."""
+        from unittest.mock import AsyncMock, patch
+        import httpx
+        from swarmer.models.workspace import Workspace
+        from swarmer.models.session import Session
+        from swarmer.models.session_schedule import SessionSchedule
+        from swarmer.models.session_repo import SessionRepo
+        from swarmer.models.workspace_prompt import WorkspacePrompt, WorkspacePromptSource
+        from swarmer.pr_watcher import _evaluate_and_dispatch_prs
+        from swarmer.pr_watcher_store import get_comment_dispatch
+
+        async with self.session_factory() as db:
+            ws = Workspace(display_name="WS Actor", namespace="ws-actor", description="")
+            db.add(ws)
+            await db.commit()
+            await db.refresh(ws)
+
+            src = WorkspacePromptSource(workspace_id=ws.id, name="src3", repo_url="https://github.com/org/p3", branch="main")
+            db.add(src)
+            await db.commit()
+            prompt = WorkspacePrompt(source_id=src.id, filename="p3.md", display_name="P3", content="hi", content_hash="h3")
+            db.add(prompt)
+            await db.commit()
+
+            sess = Session(workspace_id=ws.id, name="sess-actor", mode="prompt", agent_tool="opencode")
+            db.add(sess)
+            await db.commit()
+            await db.refresh(sess)
+
+            repo_rec = SessionRepo(
+                session_id=sess.id,
+                repo_url="https://github.com/stolostron/agent-swarm.git",
+                local_path="agent-swarm",
+            )
+            sched = SessionSchedule(
+                session_id=sess.id,
+                prompt_id=prompt.id,
+                trigger_type="event",
+                event_condition="pr_comment",
+                author_scope="team",
+                delay_minutes=3,
+                enabled=True,
+            )
+            db.add_all([repo_rec, sched])
+            await db.commit()
+            await db.refresh(sched)
+
+            pr_state = PRState(
+                repo="stolostron/agent-swarm",
+                pr_number=302,
+                title="PR 302",
+                body="",
+                author_login="team-member",
+                author_association="MEMBER",
+                is_draft=False,
+                head_sha="sha302",
+                head_ref="feat",
+                base_ref="main",
+                mergeable_state="clean",
+                is_fork=False,
+                unresolved_review_comments=0,
+                coderabbit_unresolved_comments=0,
+                check_state=CheckState(total=1, passing=1),
+                raw_payload={"number": 302},
+            )
+            # Comment from an untrusted outside user
+            untrusted_comment = {
+                302: {
+                    "id": "ev-302",
+                    "type": "IssueCommentEvent",
+                    "at": datetime.now(timezone.utc),
+                    "created_at": datetime.now(timezone.utc),
+                    "actor_login": "untrusted-user",
+                    "author_association": "NONE",
+                }
+            }
+
+            with patch("swarmer.pr_watcher._fetch_open_prs", new=AsyncMock(return_value=[{"number": 302}])), \
+                 patch("swarmer.pr_watcher._build_pr_state", new=AsyncMock(return_value=(pr_state, []))):
+                async with httpx.AsyncClient() as client:
+                    await _evaluate_and_dispatch_prs(
+                        client,
+                        "stolostron/agent-swarm",
+                        [(sched, sess)],
+                        None,
+                        db,
+                        comment_events=untrusted_comment,
+                    )
+
+            # Must NOT be queued because actor is not trusted
+            row = await get_comment_dispatch(db, "stolostron/agent-swarm", 302, sched.id)
+            self.assertIsNone(row)
+
+            # Now comment from trusted collaborator
+            trusted_comment = {
+                302: {
+                    "id": "ev-302-trusted",
+                    "type": "IssueCommentEvent",
+                    "at": datetime.now(timezone.utc),
+                    "created_at": datetime.now(timezone.utc),
+                    "actor_login": "trusted-collab",
+                    "author_association": "COLLABORATOR",
+                }
+            }
+
+            with patch("swarmer.pr_watcher._fetch_open_prs", new=AsyncMock(return_value=[{"number": 302}])), \
+                 patch("swarmer.pr_watcher._build_pr_state", new=AsyncMock(return_value=(pr_state, []))):
+                async with httpx.AsyncClient() as client:
+                    await _evaluate_and_dispatch_prs(
+                        client,
+                        "stolostron/agent-swarm",
+                        [(sched, sess)],
+                        None,
+                        db,
+                        comment_events=trusted_comment,
+                    )
+
+            row = await get_comment_dispatch(db, "stolostron/agent-swarm", 302, sched.id)
+            self.assertIsNotNone(row)
+            self.assertEqual(row.status, "queued")
 
 
 if __name__ == "__main__":

@@ -279,6 +279,7 @@ async def upsert_comment_dispatch(
     delay_minutes: int,
     event_type: str = "",
     event_created_at: datetime | None = None,
+    commit: bool = True,
 ) -> PRCommentDispatch:
     row = await get_comment_dispatch(db, repo, pr_number, schedule_id)
     not_before = event_at + timedelta(minutes=delay_minutes)
@@ -308,8 +309,9 @@ async def upsert_comment_dispatch(
                 repo=repo, event_id=event_id, event_type=event_type,
                 pr_number=pr_number, event_created_at=event_created_at or event_at,
             ))
-    await db.commit()
-    await db.refresh(row)
+    if commit:
+        await db.commit()
+        await db.refresh(row)
     return row
 
 
