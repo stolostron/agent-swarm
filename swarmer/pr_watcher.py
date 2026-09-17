@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 import json
 import logging
 import os
+from dataclasses import replace
 from typing import Any
 
 import httpx
@@ -15,8 +16,8 @@ from sqlalchemy.orm import selectinload
 from swarmer.config import settings
 from swarmer.pr_state import (
     DEFAULT_BOT_LOGINS,
+    EventTrigger,
     PRState,
-    TRUSTED_ASSOCIATIONS,
     TrustPolicy,
     TrustStrategy,
     evaluate_author_trust,
@@ -220,6 +221,28 @@ async def _fetch_check_runs(
         return []
     except Exception:
         return []
+
+
+async def _fetch_commit_author(
+    client: httpx.AsyncClient, repo: str, sha: str, token: str | None
+) -> str:
+    """Resolve the GitHub login for a commit author, when GitHub can map it."""
+    if not sha:
+        return ""
+    headers = {
+        "Accept": "application/vnd.github+json",
+        "User-Agent": "Swarmer-PR-Watcher/1.0",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    try:
+        resp = await client.get(f"https://api.github.com/repos/{repo}/commits/{sha}", headers=headers, timeout=15)
+        if resp.is_success:
+            return ((resp.json().get("author") or {}).get("login") or "").strip()
+    except Exception:
+        pass
+    return ""
 
 
 async def _fetch_review_comments(
@@ -472,7 +495,6 @@ def _classify_comment_event(event: dict[str, Any]) -> tuple[int, str, datetime, 
         return None
     if not isinstance(number, int) or not event.get("id"):
         return None
-
     actor_obj = event.get("actor") or {}
     actor_login = (
         actor_obj.get("login")
@@ -483,6 +505,7 @@ def _classify_comment_event(event: dict[str, Any]) -> tuple[int, str, datetime, 
     author_association = (
         comment_obj.get("author_association")
         or actor_obj.get("author_association")
+        or (comment_obj.get("user") or {}).get("author_association")
         or ""
     )
     if not actor_login or not author_association:
@@ -490,6 +513,75 @@ def _classify_comment_event(event: dict[str, Any]) -> tuple[int, str, datetime, 
 
     created_at = parse_iso_datetime(event.get("created_at")) or datetime.now(timezone.utc)
     return number, str(event["id"]), created_at, actor_login, author_association
+
+
+async def _classify_event_triggers(
+    client: httpx.AsyncClient, repo: str, events: list[dict[str, Any]], token: str | None
+) -> dict[int, list[EventTrigger]]:
+    """Classify event-driven conditions and retain their relevant authors."""
+    triggers: dict[int, list[EventTrigger]] = {}
+    for event in events:
+        payload = event.get("payload") or {}
+        event_type = event.get("type", "")
+        event_id = str(event.get("id") or "")
+        if not event_id:
+            continue
+        created_at = parse_iso_datetime(event.get("created_at"))
+        pr = payload.get("pull_request") or {}
+        number = pr.get("number")
+        action = payload.get("action")
+        actor = (event.get("actor") or {}).get("login", "")
+        condition = ""
+        relevant_author = actor
+        association = ""
+
+        if event_type == "PullRequestEvent" and isinstance(number, int):
+            if action in {"opened", "reopened"}:
+                condition = "new_pr_or_commit"
+                relevant_author = (pr.get("user") or {}).get("login", "")
+                association = pr.get("author_association", "")
+            elif action == "synchronize":
+                condition = "new_pr_or_commit"
+                sha = ((pr.get("head") or {}).get("sha") or "")
+                relevant_author = await _fetch_commit_author(client, repo, sha, token)
+            elif action in {"ready_for_review", "converted_to_ready_for_review", "review_requested", "labeled", "unlabeled"}:
+                condition = "any_actionable"
+        elif event_type == "CheckRunEvent":
+            check = payload.get("check_run") or {}
+            if action == "completed" and (check.get("conclusion") or "").lower() in {
+                "failure", "timed_out", "action_required", "cancelled", "startup_failure"
+            }:
+                for pr_ref in check.get("pull_requests") or []:
+                    pr_number = pr_ref.get("number")
+                    if isinstance(pr_number, int):
+                        triggers.setdefault(pr_number, []).append(EventTrigger(
+                            "ci_fail_or_conflict", event_id, "", pr_number, event_type, created_at,
+                        ))
+                continue
+        elif event_type in {"IssueCommentEvent", "PullRequestReviewCommentEvent", "PullRequestReviewEvent"}:
+            if event_type == "PullRequestReviewEvent" and action == "submitted":
+                review = payload.get("review") or {}
+                if (review.get("state") or "").lower() == "approved" and isinstance(number, int):
+                    approved_user = (review.get("user") or {}).get("login", "") or actor
+                    approved_association = review.get("author_association", "")
+                    triggers.setdefault(number, []).append(EventTrigger(
+                        "review_approved", event_id, approved_user, number,
+                        event_type, created_at, approved_association,
+                    ))
+            classified = _classify_comment_event(event)
+            if classified:
+                number, event_id, created_at, actor_login, association = classified
+                condition = "pr_comment" if event_type == "IssueCommentEvent" else "review_comments"
+                relevant_author = actor_login
+        if condition and isinstance(number, int):
+            triggers.setdefault(number, []).append(EventTrigger(
+                condition, event_id, relevant_author, number, event_type, created_at, association
+            ))
+            if condition in {"new_pr_or_commit", "any_actionable"}:
+                triggers[number].append(EventTrigger(
+                    "any_actionable", event_id, actor, number, event_type, created_at, association
+                ))
+    return triggers
 
 
 async def _fresh_comment_events(db, repo: str, events: list[dict[str, Any]]) -> dict[int, dict[str, Any]]:
@@ -518,38 +610,33 @@ def _schedule_matches_author_scope(
     pr: PRState,
     sched: SessionSchedule,
     label_events: list[dict[str, Any]] | None = None,
-    comment_actor_login: str | None = None,
-    comment_actor_association: str | None = None,
+    actor_login: str | None = None,
+    actor_association: str = "",
 ) -> bool:
     """Apply author routing after the event condition has matched."""
-    if sched.event_condition == "pr_comment":
-        if not comment_actor_login or not comment_actor_association:
-            return False
-        check_login = comment_actor_login
-    else:
-        check_login = pr.author_login
-
-    author_lower = check_login.lower()
+    author = actor_login if actor_login is not None else pr.author_login
+    author_lower = author.lower()
     fix_logins = sched.fix_author_logins
     is_self = author_lower in fix_logins if fix_logins else False
-    is_bot = is_bot_author(check_login, set(DEFAULT_BOT_LOGINS))
+    is_bot = is_bot_author(author, set(DEFAULT_BOT_LOGINS))
 
     if sched.author_scope == "self" and not is_self:
         return False
     if sched.author_scope == "team":
         if is_self or is_bot:
             return False
-        if sched.event_condition == "pr_comment":
-            if comment_actor_association not in TRUSTED_ASSOCIATIONS:
-                return False
-        else:
-            trust = evaluate_author_trust(
-                pr,
-                policy=TrustPolicy(strategy=TrustStrategy.ORG_AND_COLLABORATORS),
-                label_events=label_events,
-            )
-            if not trust.is_trusted:
-                return False
+        scoped_pr = replace(
+            pr,
+            author_login=author,
+            author_association=actor_association or (pr.author_association if actor_login is None else "NONE"),
+        )
+        trust = evaluate_author_trust(
+            scoped_pr,
+            policy=TrustPolicy(strategy=TrustStrategy.ORG_AND_COLLABORATORS),
+            label_events=label_events,
+        )
+        if not trust.is_trusted:
+            return False
     if sched.author_scope == "bots" and not is_bot:
         return False
     return True
@@ -561,8 +648,7 @@ def _match_triggers_for_pr(
     sched_sessions: list[tuple[SessionSchedule, Session]],
     label_events: list[dict[str, Any]] | None = None,
     blocked_conditions: set[str] | None = None,
-    comment_actor_login: str | None = None,
-    comment_actor_association: str | None = None,
+    event_triggers: list[EventTrigger] | None = None,
 ) -> list[tuple[SessionSchedule, Session]]:
     """Find all schedules whose conditions and author scopes match a PR."""
     if pr.is_draft:
@@ -576,12 +662,22 @@ def _match_triggers_for_pr(
             continue
         if blocked_conditions and sched.event_condition in blocked_conditions:
             continue
-        if _schedule_matches_author_scope(
-            pr,
-            sched,
-            label_events,
-            comment_actor_login=comment_actor_login,
-            comment_actor_association=comment_actor_association,
+        relevant = [e for e in (event_triggers or []) if e.condition == sched.event_condition]
+        if event_triggers is not None and sched.event_condition in {
+            "new_pr_or_commit", "review_comments", "review_approved", "pr_comment", "any_actionable", "ci_fail_or_conflict"
+        } and not relevant:
+            continue
+        if not relevant:
+            relevant = [None]
+        if any(
+            _schedule_matches_author_scope(
+                pr,
+                sched,
+                label_events,
+                actor_login=event.actor_login if event else None,
+                actor_association=event.actor_association if event else "",
+            )
+            for event in relevant
         ):
             matches.append((sched, session))
     return matches
@@ -611,6 +707,7 @@ def _build_event_context(
     repo: str,
     pr_state: PRState,
     condition: str,
+    event: EventTrigger | None = None,
 ) -> dict[str, Any]:
     return {
         "trigger_type": "event",
@@ -623,6 +720,9 @@ def _build_event_context(
         "base_ref": pr_state.base_ref,
         "title": pr_state.title,
         "author": pr_state.author_login,
+        "event_id": event.event_id if event else "",
+        "event_actor": event.actor_login if event else "",
+        "event_type": event.event_type if event else "",
         "event_condition": condition,
         "fork_no_push": bool(
             pr_state.is_fork and not pr_state.raw_payload.get("maintainer_can_modify", False)
@@ -642,6 +742,7 @@ async def _dispatch_session_run(
     pr_number: int,
     head_sha: str,
     queue_if_active: bool,
+    event_id: str = "",
 ) -> tuple[str, str]:
     """Dispatch a schedule run for a session, optionally queueing if the session is busy.
 
@@ -656,6 +757,7 @@ async def _dispatch_session_run(
                 pr_number=pr_number,
                 head_sha=head_sha,
                 action=action_key,
+                event_id=event_id,
                 session_id=session.id,
                 status="queued",
                 event_context=event_ctx_json,
@@ -692,6 +794,7 @@ async def _dispatch_session_run(
             pr_number=pr_number,
             head_sha=head_sha,
             action=action_key,
+            event_id=event_id,
             session_id=session.id,
             status="dispatched",
             event_context=event_ctx_json,
@@ -706,6 +809,7 @@ async def _dispatch_session_run(
             pr_number=pr_number,
             head_sha=head_sha,
             action=action_key,
+            event_id=event_id,
             session_id=session.id,
             status="failed",
             error=str(exc),
@@ -718,6 +822,7 @@ async def _dispatch_session_run(
                 pr_number=pr_number,
                 head_sha=head_sha,
                 action=action_key,
+                event_id=event_id,
                 session_id=session.id,
                 status="blocked",
                 error=f"Max dispatch attempts ({attempts}) reached",
@@ -779,6 +884,7 @@ async def _drain_queued_dispatches(db, client: httpx.AsyncClient | None = None) 
             db, session=session, sched=sched, event_ctx_json=row.event_context,
             action_key="pr_comment", repo=row.repo, pr_number=row.pr_number,
             head_sha=row.head_sha, queue_if_active=False,
+            event_id=row.last_comment_event_id,
         )
         if outcome == "launched":
             await update_comment_dispatch(db, row, status="dispatched")
@@ -846,6 +952,7 @@ async def _drain_queued_dispatches(db, client: httpx.AsyncClient | None = None) 
             pr_number=row.pr_number,
             head_sha=row.head_sha,
             queue_if_active=False,
+            event_id=ctx.get("event_id", ""),
         )
         if outcome == "launched":
             launched_sessions.add(session.id)
@@ -859,6 +966,7 @@ async def _evaluate_and_dispatch_prs(
     db,
     target_pr_numbers: set[int] | None = None,
     comment_events: dict[int, dict[str, Any]] | None = None,
+    event_triggers: dict[int, list[EventTrigger]] | None = None,
 ) -> None:
     """Scan open PRs in repo, evaluate against trigger conditions, and dispatch sessions."""
     open_prs = await _fetch_open_prs(client, repo, token)
@@ -896,19 +1004,51 @@ async def _evaluate_and_dispatch_prs(
             event_conditions=event_conditions,
             quiet_period_seconds=float(settings.pr_watcher_debounce_seconds),
         )
+        pr_event_triggers = list((event_triggers or {}).get(pr_state.pr_number, []))
+        pr_event_triggers = [
+            replace(trigger, actor_login=pr_state.author_login, actor_association=pr_state.author_association)
+            if trigger.condition == "ci_fail_or_conflict" and not trigger.actor_login
+            else trigger
+            for trigger in pr_event_triggers
+        ]
+        if event_triggers is not None and pr_state.mergeable_state == "dirty":
+            pr_event_triggers.extend(
+                EventTrigger(
+                    "ci_fail_or_conflict", trigger.event_id, pr_state.author_login,
+                    pr_state.pr_number, trigger.event_type, trigger.created_at,
+                    pr_state.author_association,
+                )
+                for trigger in pr_event_triggers
+                if trigger.event_type == "PullRequestEvent" and trigger.condition == "new_pr_or_commit"
+            )
+        if event_triggers is not None:
+            # Actionable state is event-driven. Never infer its actor from a
+            # periodically refreshed PR snapshot.
+            matched_conditions.difference_update({"any_actionable", "new_pr_or_commit", "review_comments", "pr_comment"})
+            matched_conditions.update(trigger.condition for trigger in pr_event_triggers)
         if comment_events and pr_state.pr_number in comment_events and "pr_comment" in event_conditions:
             matched_conditions.add("pr_comment")
         if not matched_conditions:
             continue
 
         comment = (comment_events or {}).get(pr_state.pr_number)
+        matching_event_triggers = pr_event_triggers if event_triggers is not None else None
+        if matching_event_triggers is None and comment:
+            matching_event_triggers = [EventTrigger(
+                "pr_comment",
+                comment.get("id", ""),
+                comment.get("actor_login", ""),
+                pr_state.pr_number,
+                comment.get("type", "IssueCommentEvent"),
+                comment.get("created_at"),
+                comment.get("author_association", ""),
+            )]
         matches = _match_triggers_for_pr(
             pr_state,
             matched_conditions,
             sched_sessions,
             label_events,
-            comment_actor_login=comment.get("actor_login") if comment else None,
-            comment_actor_association=comment.get("author_association") if comment else None,
+            event_triggers=matching_event_triggers,
         )
         if not matches:
             log.debug(
@@ -984,6 +1124,7 @@ async def _evaluate_and_dispatch_prs(
                 repo=repo,
                 pr_state=pr_state,
                 condition=condition,
+                event=next((e for e in pr_event_triggers if e.condition == condition), None),
             )
             event_ctx_json = json.dumps(event_ctx)
 
@@ -994,6 +1135,7 @@ async def _evaluate_and_dispatch_prs(
                 pr_state.head_sha,
                 condition,
                 session_id=session.id,
+                event_id=event_ctx.get("event_id", ""),
             ):
                 log.debug(
                     "pr-watcher: PR %s#%d [%s] session=%d schedule=%d already in-flight, completed, or blocked on head SHA %s",
@@ -1016,6 +1158,7 @@ async def _evaluate_and_dispatch_prs(
                 pr_number=pr_state.pr_number,
                 head_sha=pr_state.head_sha,
                 queue_if_active=True,
+                event_id=event_ctx.get("event_id", ""),
             )
 
     if comment_events:
@@ -1069,6 +1212,7 @@ async def _pr_watcher_loop() -> None:
                                     )
                                     if status == 200:
                                         comment_events = await _fresh_comment_events(db, repo, events)
+                                        event_triggers = await _classify_event_triggers(client, repo, events, token)
                                         if new_etag:
                                             await save_etag(db, repo, new_etag)
                                         target_prs = _extract_event_pr_numbers(events)
@@ -1084,6 +1228,7 @@ async def _pr_watcher_loop() -> None:
                                             db,
                                             target_pr_numbers=target_prs or None,
                                             comment_events=comment_events,
+                                            event_triggers=event_triggers,
                                         )
                             except Exception as repo_err:
                                 log.warning(

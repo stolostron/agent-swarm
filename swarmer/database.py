@@ -311,6 +311,12 @@ async def migrate_db() -> None:
         # ACM-42978: queued PR watcher dispatches need serialized event context
         # so same-session fan-out can run reliably after the active session ends.
         "ALTER TABLE pr_action_state ADD COLUMN event_context TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE pr_action_state ADD COLUMN event_id VARCHAR(255) NOT NULL DEFAULT ''",
+        "DROP INDEX IF EXISTS uq_pr_action_state_key",
+        """CREATE INDEX IF NOT EXISTS uq_pr_action_state_key
+           ON pr_action_state (repo, pr_number, head_sha, action, session_id)""",
+        """CREATE UNIQUE INDEX IF NOT EXISTS uq_pr_action_state_event_key
+           ON pr_action_state (repo, pr_number, head_sha, action, session_id, event_id)""",
         """CREATE TABLE IF NOT EXISTS repo_etags (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             repo VARCHAR(255) NOT NULL UNIQUE,

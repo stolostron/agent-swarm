@@ -1102,7 +1102,7 @@ class AgentSwarmMCPServer:
                 session_id: The session id.
                 cron_schedule: Cron expression (e.g. '0 9 * * 1-5'). Required for cron triggers.
                 trigger_type: 'cron' for scheduled runs, 'event' for GitHub event triggers.
-                 event_condition: Event trigger condition (e.g. 'ci_fail_or_conflict', 'new_pr_or_commit', 'review_comments', 'pr_comment', 'any_actionable').
+                 event_condition: Event trigger condition (e.g. 'ci_fail_or_conflict', 'new_pr_or_commit', 'review_comments', 'review_approved', 'pr_comment', 'any_actionable').
                 author_scope: PR author scope (e.g. 'self', 'team', 'bots', 'all').
                 fix_authors: Comma-separated GitHub logins for 'self' author scope.
                 label: Human-readable name for this trigger.
@@ -1151,7 +1151,7 @@ class AgentSwarmMCPServer:
                 schedule_id: The schedule id to update.
                 cron_schedule: New cron expression.
                 trigger_type: 'cron' or 'event'.
-                 event_condition: New event condition ('ci_fail_or_conflict', 'new_pr_or_commit', 'review_comments', 'pr_comment', 'any_actionable').
+                 event_condition: New event condition ('ci_fail_or_conflict', 'new_pr_or_commit', 'review_comments', 'review_approved', 'pr_comment', 'any_actionable').
                 author_scope: New author scope ('self', 'team', 'bots', 'all').
                 fix_authors: Comma-separated GitHub logins for 'self' author scope.
                 label: New label.

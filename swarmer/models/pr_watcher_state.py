@@ -18,7 +18,7 @@ class PRActionState(Base):
     __tablename__ = "pr_action_state"
     __table_args__ = (
         UniqueConstraint(
-            "repo", "pr_number", "head_sha", "action", "session_id",
+            "repo", "pr_number", "head_sha", "action", "session_id", "event_id",
             name="uq_pr_action_state_key",
         ),
     )
@@ -30,6 +30,7 @@ class PRActionState(Base):
     # Column name is retained for the existing SQLite schema; values are event conditions.
     action: Mapped[str] = mapped_column(String(32), nullable=False)
     session_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    event_id: Mapped[str] = mapped_column(String(255), nullable=False, default="", server_default="")
     status: Mapped[str] = mapped_column(
         String(32), nullable=False, default="dispatched", server_default="dispatched"
     )

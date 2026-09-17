@@ -89,6 +89,7 @@ async def get_dispatch_state(
     condition: str = "",
     action: str = "",
     session_id: int | None = None,
+    event_id: str = "",
 ) -> PRActionState | None:
     key = condition or action
     stmt = select(PRActionState).where(
@@ -96,6 +97,7 @@ async def get_dispatch_state(
         PRActionState.pr_number == pr_number,
         PRActionState.head_sha == head_sha,
         PRActionState.action == key,
+        PRActionState.event_id == event_id,
     )
     if session_id is not None:
         stmt = stmt.where(PRActionState.session_id == session_id)
@@ -114,6 +116,7 @@ async def is_blocked(
     condition: str = "",
     action: str = "",
     session_id: int | None = None,
+    event_id: str = "",
 ) -> bool:
     """Check if this condition is already in flight, completed, or blocked."""
     row = await get_dispatch_state(
@@ -124,6 +127,7 @@ async def is_blocked(
         condition=condition,
         action=action,
         session_id=session_id,
+        event_id=event_id,
     )
     return bool(row and row.status in _BLOCKING_STATUSES)
 
@@ -137,6 +141,7 @@ async def record_dispatch(
     condition: str = "",
     action: str = "",
     session_id: int | None = None,
+    event_id: str = "",
     status: str = "dispatched",
     error: str = "",
     event_context: str = "",
@@ -145,7 +150,7 @@ async def record_dispatch(
     now = datetime.now(timezone.utc)
     key = condition or action
     row = await get_dispatch_state(
-        db, repo, pr_number, head_sha, condition=key, session_id=session_id
+        db, repo, pr_number, head_sha, condition=key, session_id=session_id, event_id=event_id
     )
     if row is None:
         row = PRActionState(
@@ -154,6 +159,7 @@ async def record_dispatch(
             head_sha=head_sha,
             action=key,
             session_id=session_id,
+            event_id=event_id,
             status=status,
             attempts=1 if status in _ATTEMPT_STATUSES else 0,
             last_error=error,
