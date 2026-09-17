@@ -1128,6 +1128,7 @@ async def _evaluate_and_dispatch_prs(
                         db, session=session, sched=sched, event_ctx_json=event_ctx_json,
                         action_key="pr_comment", repo=repo, pr_number=pr_state.pr_number,
                         head_sha=pr_state.head_sha, queue_if_active=False,
+                        event_id=comment["id"],
                     )
                     if outcome == "launched":
                         await update_comment_dispatch(db, row, status="dispatched")
