@@ -29,6 +29,7 @@ from swarmer.models.session_schedule import SessionSchedule
 from swarmer.pr_watcher_store import (
     get_etag,
     get_comment_dispatch,
+    has_event_receipt,
     is_blocked,
     list_due_comment_dispatches,
     list_queued_dispatches,
@@ -474,14 +475,16 @@ async def _fresh_comment_events(db, repo: str, events: list[dict[str, Any]]) -> 
         if not classified:
             continue
         number, event_id, event_at = classified
-        if await record_event_receipt(
-            db, repo=repo, event_id=event_id, event_type=event.get("type", ""),
-            pr_number=number, event_created_at=event_at,
-        ):
+        if not await has_event_receipt(db, repo, event_id):
             observed_at = datetime.now(timezone.utc)
             previous = fresh.get(number)
             if previous is None or event_at >= previous["created_at"]:
-                fresh[number] = {"id": event_id, "at": observed_at, "created_at": event_at}
+                fresh[number] = {
+                    "id": event_id,
+                    "type": event.get("type", ""),
+                    "at": observed_at,
+                    "created_at": event_at,
+                }
     return fresh
 
 
@@ -592,8 +595,12 @@ async def _dispatch_session_run(
     pr_number: int,
     head_sha: str,
     queue_if_active: bool,
-) -> bool:
-    """Dispatch a schedule run for a session, optionally queueing if the session is busy."""
+) -> tuple[str, str]:
+    """Dispatch a schedule run for a session, optionally queueing if the session is busy.
+
+    Returns:
+        (outcome, error) where outcome is "launched", "deferred", or "failed".
+    """
     if session.is_active:
         if queue_if_active:
             attempts = await record_dispatch(
@@ -616,11 +623,11 @@ async def _dispatch_session_run(
                 action_key,
                 attempts,
             )
-        return False
+        return "deferred", ""
 
     ws = session.workspace
     if not ws:
-        return False
+        return "failed", f"Session {session.id} has no workspace"
 
     try:
         from swarmer.routers.sessions import _do_launch
@@ -643,7 +650,7 @@ async def _dispatch_session_run(
             event_context=event_ctx_json,
         )
         log.info("pr-watcher: session %d launched (phase=%s, attempt=%d)", session.id, session.phase, attempts)
-        return True
+        return "launched", ""
     except Exception as exc:
         log.exception("pr-watcher: failed to launch session %d for PR %s#%d: %s", session.id, repo, pr_number, exc)
         attempts = await record_dispatch(
@@ -669,7 +676,7 @@ async def _dispatch_session_run(
                 error=f"Max dispatch attempts ({attempts}) reached",
                 event_context=event_ctx_json,
             )
-        return False
+        return "failed", str(exc)
 
 
 async def _load_session_with_context(db, session_id: int) -> Session | None:
@@ -710,14 +717,27 @@ async def _drain_queued_dispatches(db, client: httpx.AsyncClient | None = None) 
             if detail.get("state") != "open" or detail.get("draft", False):
                 await update_comment_dispatch(db, row, status="completed")
                 continue
-        launched = await _dispatch_session_run(
+            curr_head_sha = (detail.get("head") or {}).get("sha") or row.head_sha
+            if curr_head_sha and curr_head_sha != row.head_sha:
+                row.head_sha = curr_head_sha
+                if row.event_context:
+                    try:
+                        ctx = json.loads(row.event_context)
+                        ctx["head_sha"] = curr_head_sha
+                        row.event_context = json.dumps(ctx)
+                    except Exception:
+                        pass
+                await db.commit()
+        outcome, err = await _dispatch_session_run(
             db, session=session, sched=sched, event_ctx_json=row.event_context,
             action_key="pr_comment", repo=row.repo, pr_number=row.pr_number,
             head_sha=row.head_sha, queue_if_active=False,
         )
-        if launched:
+        if outcome == "launched":
             await update_comment_dispatch(db, row, status="dispatched")
             launched_sessions.add(row.session_id)
+        elif outcome == "failed":
+            await update_comment_dispatch(db, row, status="failed", error=err)
     for row in queued_rows:
         if not row.session_id or row.session_id in launched_sessions:
             continue
@@ -769,7 +789,7 @@ async def _drain_queued_dispatches(db, client: httpx.AsyncClient | None = None) 
             )
             continue
 
-        launched = await _dispatch_session_run(
+        outcome, _ = await _dispatch_session_run(
             db,
             session=session,
             sched=sched,
@@ -780,7 +800,7 @@ async def _drain_queued_dispatches(db, client: httpx.AsyncClient | None = None) 
             head_sha=row.head_sha,
             queue_if_active=False,
         )
-        if launched:
+        if outcome == "launched":
             launched_sessions.add(session.id)
 
 
@@ -829,10 +849,10 @@ async def _evaluate_and_dispatch_prs(
             event_conditions=event_conditions,
             quiet_period_seconds=float(settings.pr_watcher_debounce_seconds),
         )
-        if not matched_conditions:
-            continue
         if comment_events and pr_state.pr_number in comment_events and "pr_comment" in event_conditions:
             matched_conditions.add("pr_comment")
+        if not matched_conditions:
+            continue
 
         matches = _match_triggers_for_pr(
             pr_state,
@@ -873,16 +893,20 @@ async def _evaluate_and_dispatch_prs(
                     schedule_id=sched.id, head_sha=pr_state.head_sha,
                     event_context=event_ctx_json, event_id=comment["id"], event_at=comment["at"],
                     delay_minutes=sched.delay_minutes,
+                    event_type=comment.get("type", ""),
+                    event_created_at=comment.get("created_at"),
                 )
                 if sched.delay_minutes:
                     continue
-                launched = await _dispatch_session_run(
+                outcome, err = await _dispatch_session_run(
                     db, session=session, sched=sched, event_ctx_json=event_ctx_json,
                     action_key=condition, repo=repo, pr_number=pr_state.pr_number,
                     head_sha=pr_state.head_sha, queue_if_active=False,
                 )
-                if launched:
+                if outcome == "launched":
                     await update_comment_dispatch(db, row, status="dispatched")
+                elif outcome == "failed":
+                    await update_comment_dispatch(db, row, status="failed", error=err)
                 continue
 
             if await is_blocked(
@@ -915,6 +939,15 @@ async def _evaluate_and_dispatch_prs(
                 head_sha=pr_state.head_sha,
                 queue_if_active=True,
             )
+
+    if comment_events:
+        for pr_num, comment_info in comment_events.items():
+            ev_id = comment_info.get("id")
+            if ev_id and not await has_event_receipt(db, repo, ev_id):
+                await record_event_receipt(
+                    db, repo=repo, event_id=ev_id, event_type=comment_info.get("type", ""),
+                    pr_number=pr_num, event_created_at=comment_info.get("created_at"),
+                )
 
 
 async def _pr_watcher_loop() -> None:

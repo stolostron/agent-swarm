@@ -1012,5 +1012,178 @@ class TestPRWatcherDispatchFlow(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(row2.session_id, s2.id)
 
 
+class TestPRCommentDispatchFixes(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        from swarmer.crypto import init_crypto
+        init_crypto("auth/secret.key")
+        from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+        from swarmer.database import Base
+        self.engine = create_async_engine("sqlite+aiosqlite:///:memory:", echo=False)
+        async with self.engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+        self.session_factory = async_sessionmaker(self.engine, expire_on_commit=False)
+
+    async def asyncTearDown(self):
+        await self.engine.dispose()
+
+    async def test_pr_comment_only_schedule_matches_and_queues(self):
+        """When a schedule only configures pr_comment, comments must match and queue."""
+        from unittest.mock import AsyncMock, patch
+        import httpx
+        from swarmer.models.workspace import Workspace
+        from swarmer.models.session import Session
+        from swarmer.models.session_schedule import SessionSchedule
+        from swarmer.models.session_repo import SessionRepo
+        from swarmer.models.workspace_prompt import WorkspacePrompt, WorkspacePromptSource
+        from swarmer.pr_watcher import _evaluate_and_dispatch_prs
+        from swarmer.pr_watcher_store import get_comment_dispatch, has_event_receipt
+
+        async with self.session_factory() as db:
+            ws = Workspace(display_name="WS Comment", namespace="ws-comment", description="")
+            db.add(ws)
+            await db.commit()
+            await db.refresh(ws)
+
+            src = WorkspacePromptSource(workspace_id=ws.id, name="src", repo_url="https://github.com/org/p", branch="main")
+            db.add(src)
+            await db.commit()
+            prompt = WorkspacePrompt(source_id=src.id, filename="p.md", display_name="P", content="hi", content_hash="h")
+            db.add(prompt)
+            await db.commit()
+
+            sess = Session(workspace_id=ws.id, name="sess-comment", mode="prompt", agent_tool="opencode")
+            db.add(sess)
+            await db.commit()
+            await db.refresh(sess)
+
+            repo_rec = SessionRepo(
+                session_id=sess.id,
+                repo_url="https://github.com/stolostron/agent-swarm.git",
+                local_path="agent-swarm",
+            )
+            sched = SessionSchedule(
+                session_id=sess.id,
+                prompt_id=prompt.id,
+                trigger_type="event",
+                event_condition="pr_comment",
+                author_scope="all",
+                delay_minutes=3,
+                enabled=True,
+            )
+            db.add_all([repo_rec, sched])
+            await db.commit()
+            await db.refresh(sched)
+
+            pr_state = PRState(
+                repo="stolostron/agent-swarm",
+                pr_number=300,
+                title="PR 300",
+                body="",
+                author_login="author-test",
+                author_association="CONTRIBUTOR",
+                is_draft=False,
+                head_sha="sha300",
+                head_ref="feat",
+                base_ref="main",
+                mergeable_state="clean",
+                is_fork=False,
+                unresolved_review_comments=0,
+                coderabbit_unresolved_comments=0,
+                check_state=CheckState(total=1, passing=1),
+                raw_payload={"number": 300},
+            )
+            comment_events = {
+                300: {
+                    "id": "ev-300",
+                    "type": "IssueCommentEvent",
+                    "at": datetime.now(timezone.utc),
+                    "created_at": datetime.now(timezone.utc),
+                }
+            }
+
+            with patch("swarmer.pr_watcher._fetch_open_prs", new=AsyncMock(return_value=[{"number": 300}])), \
+                 patch("swarmer.pr_watcher._build_pr_state", new=AsyncMock(return_value=(pr_state, []))):
+                async with httpx.AsyncClient() as client:
+                    await _evaluate_and_dispatch_prs(
+                        client,
+                        "stolostron/agent-swarm",
+                        [(sched, sess)],
+                        None,
+                        db,
+                        comment_events=comment_events,
+                    )
+
+            row = await get_comment_dispatch(db, "stolostron/agent-swarm", 300, sched.id)
+            self.assertIsNotNone(row)
+            self.assertEqual(row.status, "queued")
+            self.assertEqual(row.last_comment_event_id, "ev-300")
+            self.assertTrue(await has_event_receipt(db, "stolostron/agent-swarm", "ev-300"))
+
+    async def test_drain_refreshes_head_sha_from_pr_details(self):
+        """When PR details return a newer commit during drain, head_sha is updated."""
+        from unittest.mock import AsyncMock, patch
+        import httpx
+        from swarmer.models.workspace import Workspace
+        from swarmer.models.session import Session
+        from swarmer.models.session_schedule import SessionSchedule
+        from swarmer.models.workspace_prompt import WorkspacePrompt, WorkspacePromptSource
+        from swarmer.pr_watcher import _drain_queued_dispatches
+        from swarmer.pr_watcher_store import upsert_comment_dispatch, get_comment_dispatch
+
+        async with self.session_factory() as db:
+            ws = Workspace(display_name="WS Drain", namespace="ws-drain", description="")
+            db.add(ws)
+            await db.commit()
+            await db.refresh(ws)
+
+            src = WorkspacePromptSource(workspace_id=ws.id, name="src2", repo_url="https://github.com/org/p2", branch="main")
+            db.add(src)
+            await db.commit()
+            prompt = WorkspacePrompt(source_id=src.id, filename="p2.md", display_name="P2", content="hi", content_hash="h2")
+            db.add(prompt)
+            await db.commit()
+
+            sess = Session(workspace_id=ws.id, name="sess-drain", mode="prompt", agent_tool="opencode", phase="idle")
+            db.add(sess)
+            await db.commit()
+            await db.refresh(sess)
+
+            sched = SessionSchedule(
+                session_id=sess.id,
+                prompt_id=prompt.id,
+                trigger_type="event",
+                event_condition="pr_comment",
+                author_scope="all",
+                delay_minutes=0,
+                enabled=True,
+            )
+            db.add(sched)
+            await db.commit()
+            await db.refresh(sched)
+            await db.refresh(sess, ["schedules", "workspace"])
+
+            now = datetime.now(timezone.utc) - timedelta(minutes=1)
+            await upsert_comment_dispatch(
+                db, repo="stolostron/agent-swarm", pr_number=301, session_id=sess.id,
+                schedule_id=sched.id, head_sha="old-sha", event_context='{"head_sha": "old-sha"}',
+                event_id="ev-301", event_at=now, delay_minutes=0,
+            )
+
+            pr_details = {
+                "state": "open",
+                "draft": False,
+                "head": {"sha": "new-sha-301"},
+            }
+
+            with patch("swarmer.pr_watcher._fetch_pr_details", new=AsyncMock(return_value=pr_details)), \
+                 patch("swarmer.routers.sessions._do_launch", new=AsyncMock()):
+                async with httpx.AsyncClient() as client:
+                    await _drain_queued_dispatches(db, client)
+
+            updated = await get_comment_dispatch(db, "stolostron/agent-swarm", 301, sched.id)
+            self.assertEqual(updated.status, "dispatched")
+            self.assertEqual(updated.head_sha, "new-sha-301")
+
+
 if __name__ == "__main__":
     unittest.main()

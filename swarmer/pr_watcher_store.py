@@ -232,21 +232,36 @@ async def prune_etags(db: AsyncSession, active_repos: set[str]) -> None:
     await db.commit()
 
 
+async def has_event_receipt(db: AsyncSession, repo: str, event_id: str) -> bool:
+    if not event_id:
+        return False
+    existing = await db.scalar(select(GitHubEventReceipt).where(
+        GitHubEventReceipt.repo == repo,
+        GitHubEventReceipt.event_id == event_id,
+    ))
+    return existing is not None
+
+
 async def record_event_receipt(
     db: AsyncSession, *, repo: str, event_id: str, event_type: str,
     pr_number: int, event_created_at: datetime | None,
+    commit: bool = True,
 ) -> bool:
     """Record a qualifying event; return False when it was already observed."""
     if not event_id:
         return False
-    existing = await db.scalar(select(GitHubEventReceipt).where(GitHubEventReceipt.event_id == event_id))
+    existing = await db.scalar(select(GitHubEventReceipt).where(
+        GitHubEventReceipt.repo == repo,
+        GitHubEventReceipt.event_id == event_id,
+    ))
     if existing:
         return False
     db.add(GitHubEventReceipt(
         repo=repo, event_id=event_id, event_type=event_type,
         pr_number=pr_number, event_created_at=event_created_at,
     ))
-    await db.commit()
+    if commit:
+        await db.commit()
     return True
 
 
@@ -262,6 +277,8 @@ async def upsert_comment_dispatch(
     db: AsyncSession, *, repo: str, pr_number: int, session_id: int, schedule_id: int,
     head_sha: str, event_context: str, event_id: str, event_at: datetime,
     delay_minutes: int,
+    event_type: str = "",
+    event_created_at: datetime | None = None,
 ) -> PRCommentDispatch:
     row = await get_comment_dispatch(db, repo, pr_number, schedule_id)
     not_before = event_at + timedelta(minutes=delay_minutes)
@@ -281,6 +298,16 @@ async def upsert_comment_dispatch(
         row.last_comment_event_id = event_id
         row.last_comment_event_at = event_at
         row.last_error = ""
+    if event_id:
+        existing = await db.scalar(select(GitHubEventReceipt).where(
+            GitHubEventReceipt.repo == repo,
+            GitHubEventReceipt.event_id == event_id,
+        ))
+        if not existing:
+            db.add(GitHubEventReceipt(
+                repo=repo, event_id=event_id, event_type=event_type,
+                pr_number=pr_number, event_created_at=event_created_at or event_at,
+            ))
     await db.commit()
     await db.refresh(row)
     return row

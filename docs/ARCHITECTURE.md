@@ -587,7 +587,10 @@ sqlite3 "$SWARMER_DB_PATH" "SELECT repo, pr_number, head_sha, action, status, at
 # Inspect cached GitHub Events ETags
 sqlite3 "$SWARMER_DB_PATH" "SELECT repo, etag, last_checked_at FROM repo_etags;"
 
-# Inspect durable comment receipts and sliding-debounce work
+# Inspect durable comment receipts
+sqlite3 "$SWARMER_DB_PATH" "SELECT repo, event_id, event_type, pr_number, event_created_at, received_at FROM github_event_receipts ORDER BY received_at DESC LIMIT 20;"
+
+# Inspect sliding-debounce dispatches
 sqlite3 "$SWARMER_DB_PATH" "SELECT repo, pr_number, schedule_id, status, not_before, last_comment_event_id FROM pr_comment_dispatches ORDER BY updated_at DESC;"
 ```
 
