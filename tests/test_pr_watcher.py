@@ -12,6 +12,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from swarmer.pr_state import (  # noqa: E402
     CheckState,
+    EventTrigger,
     PRState,
     TrustPolicy,
     TrustStrategy,
@@ -46,6 +47,17 @@ class TestPRCommentEventClassification(unittest.TestCase):
         ]
         assert [_classify_comment_event(event)[0] for event in cases] == [1, 2, 3]
 
+    def test_accepts_created_nonempty_review_comments(self):
+        event = {
+            "type": "PullRequestReviewEvent", "id": "i-created", "created_at": "2026-09-16T12:00:00Z",
+            "actor": {"login": "carol"},
+            "payload": {
+                "action": "created", "pull_request": {"number": 4},
+                "review": {"body": "LGTM", "author_association": "OWNER"},
+            },
+        }
+        assert _classify_comment_event(event)[0] == 4
+
     def test_ignores_empty_reviews_and_non_creation_actions(self):
         empty = {"type": "PullRequestReviewEvent", "id": "i4", "payload": {"action": "submitted", "review": {"body": " "}, "pull_request": {"number": 4}}}
         edited = {"type": "IssueCommentEvent", "id": "i5", "payload": {"action": "edited", "issue": {"number": 5, "pull_request": {}}}}
@@ -64,6 +76,79 @@ class TestPRCommentEventClassification(unittest.TestCase):
         }
         assert _classify_comment_event(no_actor) is None
         assert _classify_comment_event(no_assoc) is None
+    def test_retains_comment_author_for_scope_routing(self):
+        event = {
+            "type": "IssueCommentEvent",
+            "id": "i6",
+            "created_at": "2026-09-16T12:00:00Z",
+            "payload": {
+                "action": "created",
+                "issue": {"number": 6, "pull_request": {}},
+                "comment": {"user": {"login": "reviewer", "author_association": "MEMBER"}},
+            },
+        }
+        classified = _classify_comment_event(event)
+        assert classified[3:] == ("reviewer", "MEMBER")
+
+
+class TestReviewApprovedEventClassification(unittest.IsolatedAsyncioTestCase):
+    async def test_classifies_approved_review_without_comment_body(self):
+        import httpx
+        from swarmer.pr_watcher import _classify_event_triggers
+
+        event = {
+            "type": "PullRequestReviewEvent",
+            "id": "review-approved-1",
+            "created_at": "2026-09-16T12:00:00Z",
+            "actor": {"login": "coderabbitai[bot]"},
+            "payload": {
+                "action": "created",
+                "pull_request": {"number": 7},
+                "review": {
+                    "state": "approved",
+                    "body": "",
+                    "user": {"login": "coderabbitai[bot]"},
+                    "author_association": "NONE",
+                },
+            },
+        }
+        async with httpx.AsyncClient() as client:
+            triggers = await _classify_event_triggers(client, "org/repo", [event], None)
+
+        self.assertEqual(len(triggers[7]), 1)
+        self.assertEqual(triggers[7][0].condition, "review_approved")
+        self.assertEqual(triggers[7][0].actor_login, "coderabbitai[bot]")
+
+    async def test_any_actionable_uses_pushing_actor_association(self):
+        import httpx
+        from swarmer.pr_watcher import _classify_event_triggers
+
+        async def handler(request: httpx.Request) -> httpx.Response:
+            url = str(request.url)
+            if url.endswith("/commits/sha"):
+                return httpx.Response(200, json={"author": {"login": "commit-author"}})
+            if url.endswith("/collaborators/commit-author/permission"):
+                return httpx.Response(200, json={"permission": "write"})
+            if url.endswith("/collaborators/pusher/permission"):
+                return httpx.Response(200, json={"permission": "none"})
+            return httpx.Response(404)
+
+        event = {
+            "type": "PullRequestEvent", "id": "sync-1", "created_at": "2026-09-16T12:00:00Z",
+            "actor": {"login": "pusher"},
+            "payload": {
+                "action": "synchronize", "pull_request": {
+                    "number": 8, "head": {"sha": "sha"},
+                },
+            },
+        }
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            triggers = await _classify_event_triggers(client, "org/repo", [event], None)
+
+        by_condition = {trigger.condition: trigger for trigger in triggers[8]}
+        self.assertEqual(by_condition["new_pr_or_commit"].actor_association, "COLLABORATOR")
+        self.assertEqual(by_condition["any_actionable"].actor_login, "pusher")
+        self.assertEqual(by_condition["any_actionable"].actor_association, "NONE")
 
 
 class TestPRStateNormalization(unittest.TestCase):
@@ -694,6 +779,34 @@ class TestPRWatcherSignalRouting(unittest.TestCase):
         ]
 
         self.assertEqual(_extract_event_pr_numbers(events), {153, 154})
+
+    def test_comment_actor_scope_is_independent_of_pr_author(self):
+        from swarmer.pr_watcher import _match_triggers_for_pr
+
+        pr = self._make_pr(author_login="automation[bot]", author_association="NONE")
+        sched = self._make_schedule(50, "pr_comment", "team")
+        event = EventTrigger(
+            condition="pr_comment", event_id="comment-1", actor_login="reviewer",
+            pr_number=pr.pr_number, event_type="IssueCommentEvent", actor_association="MEMBER",
+        )
+        matches = _match_triggers_for_pr(
+            pr, {"pr_comment"}, [(sched, self._make_session(50))], event_triggers=[event]
+        )
+        self.assertEqual(len(matches), 1)
+
+    def test_review_approved_uses_bot_actor_scope(self):
+        from swarmer.pr_watcher import _match_triggers_for_pr
+
+        pr = self._make_pr(author_login="human-author", author_association="MEMBER")
+        sched = self._make_schedule(51, "review_approved", "bots")
+        event = EventTrigger(
+            condition="review_approved", event_id="review-1", actor_login="coderabbitai[bot]",
+            pr_number=pr.pr_number, event_type="PullRequestReviewEvent",
+        )
+        matches = _match_triggers_for_pr(
+            pr, {"review_approved"}, [(sched, self._make_session(51))], event_triggers=[event]
+        )
+        self.assertEqual(len(matches), 1)
 
 
 class TestPRWatcherDispatchFlow(unittest.IsolatedAsyncioTestCase):

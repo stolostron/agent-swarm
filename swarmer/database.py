@@ -305,12 +305,10 @@ async def migrate_db() -> None:
         )""",
         # ACM-43054: pr_action_state dispatch key includes session_id for multi-session fan-out
         "ALTER TABLE pr_action_state ADD COLUMN session_id INTEGER DEFAULT NULL",
-        "DROP INDEX IF EXISTS uq_pr_action_state_key",
-        """CREATE UNIQUE INDEX IF NOT EXISTS uq_pr_action_state_key
-           ON pr_action_state (repo, pr_number, head_sha, action, session_id)""",
         # ACM-42978: queued PR watcher dispatches need serialized event context
         # so same-session fan-out can run reliably after the active session ends.
         "ALTER TABLE pr_action_state ADD COLUMN event_context TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE pr_action_state ADD COLUMN event_id VARCHAR(255) NOT NULL DEFAULT ''",
         """CREATE TABLE IF NOT EXISTS repo_etags (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             repo VARCHAR(255) NOT NULL UNIQUE,
@@ -375,6 +373,50 @@ async def migrate_db() -> None:
                     continue
                 log.error("Migration failed for %r: %s", stmt, e)
                 raise
+
+        # SQLite implements a table-level UNIQUE constraint as an internal
+        # autoindex, which cannot be removed with DROP INDEX. Rebuild legacy
+        # tables so dispatches differing only by event_id are allowed.
+        if str(_engine.url).startswith("sqlite"):
+            result = await conn.execute(text("PRAGMA index_list(pr_action_state)"))
+            legacy_unique = False
+            for index in result.mappings():
+                if index.get("unique") and str(index["name"]).startswith("sqlite_autoindex_"):
+                    legacy_unique = True
+                    break
+            if legacy_unique:
+                await conn.execute(text("ALTER TABLE pr_action_state RENAME TO pr_action_state_legacy"))
+                await conn.execute(text("""CREATE TABLE pr_action_state (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    repo VARCHAR(255) NOT NULL,
+                    pr_number INTEGER NOT NULL,
+                    head_sha VARCHAR(64) NOT NULL,
+                    action VARCHAR(32) NOT NULL,
+                    session_id INTEGER,
+                    status VARCHAR(32) NOT NULL DEFAULT 'dispatched',
+                    attempts INTEGER NOT NULL DEFAULT 0,
+                    last_error TEXT NOT NULL DEFAULT '',
+                    last_dispatched_at DATETIME,
+                    event_context TEXT NOT NULL DEFAULT '',
+                    event_id VARCHAR(255) NOT NULL DEFAULT '',
+                    created_at DATETIME NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%S', 'now')),
+                    updated_at DATETIME NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%S', 'now'))
+                )"""))
+                await conn.execute(text("""INSERT INTO pr_action_state
+                    (id, repo, pr_number, head_sha, action, session_id, status,
+                     attempts, last_error, last_dispatched_at, event_context,
+                     event_id, created_at, updated_at)
+                    SELECT id, repo, pr_number, head_sha, action, session_id, status,
+                     attempts, last_error, last_dispatched_at, event_context,
+                     event_id, created_at, updated_at
+                    FROM pr_action_state_legacy"""))
+                await conn.execute(text("DROP TABLE pr_action_state_legacy"))
+
+            await conn.execute(text("DROP INDEX IF EXISTS uq_pr_action_state_key"))
+            await conn.execute(text("""CREATE INDEX IF NOT EXISTS uq_pr_action_state_key
+                ON pr_action_state (repo, pr_number, head_sha, action, session_id)"""))
+            await conn.execute(text("""CREATE UNIQUE INDEX IF NOT EXISTS uq_pr_action_state_event_key
+                ON pr_action_state (repo, pr_number, head_sha, action, session_id, event_id)"""))
 
 
 async def checkpoint_db() -> None:

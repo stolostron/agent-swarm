@@ -12,6 +12,7 @@ EVENT_CONDITIONS: dict[str, str] = {
     "ci_fail_or_conflict": "CI Failure or Merge Conflict",
     "new_pr_or_commit": "New PR or New Commits",
     "review_comments": "Review Comments (CodeRabbit / Human)",
+    "review_approved": "Review Approved (Human / CodeRabbit / Bot)",
     "pr_comment": "Any PR Comment (CodeRabbit / Discussion / Review)",
     "any_actionable": "Any Actionable PR State",
 }

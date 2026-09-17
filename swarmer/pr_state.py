@@ -111,6 +111,19 @@ class PRState:
     raw_payload: dict[str, Any] = field(default_factory=dict)
 
 
+@dataclass(frozen=True)
+class EventTrigger:
+    """A qualifying GitHub event and the author relevant to its scope."""
+
+    condition: str
+    event_id: str
+    actor_login: str
+    pr_number: int
+    event_type: str
+    created_at: datetime | None = None
+    actor_association: str = ""
+
+
 def parse_iso_datetime(dt_str: str | None) -> datetime | None:
     if not dt_str:
         return None
