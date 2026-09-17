@@ -776,6 +776,24 @@ class TestScheduleAPI:
         assert resp.status_code == 200, resp.text
         assert resp.json()["include_event_context"] is False
 
+    @pytest.mark.asyncio
+    async def test_comment_delay_round_trip_and_validation(self, client):
+        ws = await _create_workspace(client)
+        s = await _create_session(client, ws["id"])
+        prompt_id = await _create_prompt(ws["id"])
+        url = f"/api/v1/workspaces/{ws['id']}/sessions/{s['id']}/schedules"
+        resp = await client.post(url, json={
+            "trigger_type": "event", "event_condition": "pr_comment",
+            "prompt_id": prompt_id, "delay_minutes": 3,
+        })
+        assert resp.status_code == 201
+        assert resp.json()["delay_minutes"] == 3
+        invalid = await client.post(url, json={
+            "trigger_type": "event", "event_condition": "pr_comment",
+            "prompt_id": prompt_id, "delay_minutes": 1441,
+        })
+        assert invalid.status_code == 422
+
 
     @pytest.mark.asyncio
     async def test_delete_schedule(self, client):

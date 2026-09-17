@@ -284,6 +284,7 @@ async def migrate_db() -> None:
         "ALTER TABLE session_schedules ADD COLUMN fix_authors VARCHAR(512) NOT NULL DEFAULT ''",
         "ALTER TABLE session_schedules ADD COLUMN include_event_context BOOLEAN NOT NULL DEFAULT 1",
         "ALTER TABLE session_schedules ADD COLUMN provider VARCHAR(128) NOT NULL DEFAULT ''",
+        "ALTER TABLE session_schedules ADD COLUMN delay_minutes INTEGER NOT NULL DEFAULT 0",
         "ALTER TABLE session_runs ADD COLUMN trigger_type VARCHAR(32) NOT NULL DEFAULT 'manual'",
         "ALTER TABLE session_runs ADD COLUMN event_context TEXT NOT NULL DEFAULT ''",
         "ALTER TABLE sessions ADD COLUMN event_context TEXT NOT NULL DEFAULT ''",
@@ -315,6 +316,34 @@ async def migrate_db() -> None:
             repo VARCHAR(255) NOT NULL UNIQUE,
             etag VARCHAR(255) NOT NULL DEFAULT '',
             last_checked_at DATETIME NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%S', 'now'))
+        )""",
+        """CREATE TABLE IF NOT EXISTS github_event_receipts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            repo VARCHAR(255) NOT NULL,
+            event_id VARCHAR(255) NOT NULL,
+            event_type VARCHAR(64) NOT NULL,
+            pr_number INTEGER NOT NULL,
+            event_created_at DATETIME,
+            received_at DATETIME NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%S', 'now')),
+            UNIQUE(repo, event_id)
+        )""",
+        """CREATE TABLE IF NOT EXISTS pr_comment_dispatches (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            repo VARCHAR(255) NOT NULL,
+            pr_number INTEGER NOT NULL,
+            session_id INTEGER NOT NULL,
+            schedule_id INTEGER NOT NULL,
+            status VARCHAR(32) NOT NULL DEFAULT 'queued',
+            head_sha VARCHAR(64) NOT NULL DEFAULT '',
+            event_context TEXT NOT NULL DEFAULT '',
+            not_before DATETIME,
+            last_comment_event_id VARCHAR(255) NOT NULL DEFAULT '',
+            last_comment_event_at DATETIME,
+            attempts INTEGER NOT NULL DEFAULT 0,
+            last_error TEXT NOT NULL DEFAULT '',
+            created_at DATETIME NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%S', 'now')),
+            updated_at DATETIME NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%S', 'now')),
+            UNIQUE(repo, pr_number, schedule_id)
         )""",
         # ACM-44757: Support OIDC client_credentials / Service Account for dedicated OpenShell gateways
         "ALTER TABLE workspace_gateways ADD COLUMN client_secret_enc TEXT DEFAULT NULL",

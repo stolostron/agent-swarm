@@ -12,6 +12,7 @@ EVENT_CONDITIONS: dict[str, str] = {
     "ci_fail_or_conflict": "CI Failure or Merge Conflict",
     "new_pr_or_commit": "New PR or New Commits",
     "review_comments": "Review Comments (CodeRabbit / Human)",
+    "pr_comment": "Any PR Comment (CodeRabbit / Discussion / Review)",
     "any_actionable": "Any Actionable PR State",
 }
 
@@ -54,6 +55,7 @@ class SessionSchedule(Base):
     include_event_context: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=True, server_default="1"
     )
+    delay_minutes: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="1")
     created_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, server_default=func.now()

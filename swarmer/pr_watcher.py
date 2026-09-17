@@ -28,12 +28,18 @@ from swarmer.models.session import Session
 from swarmer.models.session_schedule import SessionSchedule
 from swarmer.pr_watcher_store import (
     get_etag,
+    get_comment_dispatch,
+    has_event_receipt,
     is_blocked,
+    list_due_comment_dispatches,
     list_queued_dispatches,
     prune_etags,
+    record_event_receipt,
     record_dispatch,
     resolve_event_triggers,
     save_etag,
+    update_comment_dispatch,
+    upsert_comment_dispatch,
 )
 
 log = logging.getLogger(__name__)
@@ -440,6 +446,48 @@ def _extract_event_pr_numbers(events: list[dict[str, Any]]) -> set[int]:
     return pr_numbers
 
 
+def _classify_comment_event(event: dict[str, Any]) -> tuple[int, str, datetime] | None:
+    payload = event.get("payload") or {}
+    event_type = event.get("type", "")
+    action = payload.get("action")
+    if event_type == "IssueCommentEvent" and action == "created":
+        issue = payload.get("issue") or {}
+        if "pull_request" not in issue or issue.get("pull_request") is None:
+            return None
+        number = issue.get("number")
+    elif event_type == "PullRequestReviewCommentEvent" and action == "created":
+        number = (payload.get("pull_request") or {}).get("number")
+    elif event_type == "PullRequestReviewEvent" and action == "submitted":
+        if not ((payload.get("review") or {}).get("body") or "").strip():
+            return None
+        number = (payload.get("pull_request") or {}).get("number")
+    else:
+        return None
+    if not isinstance(number, int) or not event.get("id"):
+        return None
+    return number, str(event["id"]), parse_iso_datetime(event.get("created_at")) or datetime.now(timezone.utc)
+
+
+async def _fresh_comment_events(db, repo: str, events: list[dict[str, Any]]) -> dict[int, dict[str, Any]]:
+    fresh: dict[int, dict[str, Any]] = {}
+    for event in events:
+        classified = _classify_comment_event(event)
+        if not classified:
+            continue
+        number, event_id, event_at = classified
+        if not await has_event_receipt(db, repo, event_id):
+            observed_at = datetime.now(timezone.utc)
+            previous = fresh.get(number)
+            if previous is None or event_at >= previous["created_at"]:
+                fresh[number] = {
+                    "id": event_id,
+                    "type": event.get("type", ""),
+                    "at": observed_at,
+                    "created_at": event_at,
+                }
+    return fresh
+
+
 def _schedule_matches_author_scope(
     pr: PRState,
     sched: SessionSchedule,
@@ -547,8 +595,12 @@ async def _dispatch_session_run(
     pr_number: int,
     head_sha: str,
     queue_if_active: bool,
-) -> bool:
-    """Dispatch a schedule run for a session, optionally queueing if the session is busy."""
+) -> tuple[str, str]:
+    """Dispatch a schedule run for a session, optionally queueing if the session is busy.
+
+    Returns:
+        (outcome, error) where outcome is "launched", "deferred", or "failed".
+    """
     if session.is_active:
         if queue_if_active:
             attempts = await record_dispatch(
@@ -571,11 +623,11 @@ async def _dispatch_session_run(
                 action_key,
                 attempts,
             )
-        return False
+        return "deferred", ""
 
     ws = session.workspace
     if not ws:
-        return False
+        return "failed", f"Session {session.id} has no workspace"
 
     try:
         from swarmer.routers.sessions import _do_launch
@@ -598,7 +650,7 @@ async def _dispatch_session_run(
             event_context=event_ctx_json,
         )
         log.info("pr-watcher: session %d launched (phase=%s, attempt=%d)", session.id, session.phase, attempts)
-        return True
+        return "launched", ""
     except Exception as exc:
         log.exception("pr-watcher: failed to launch session %d for PR %s#%d: %s", session.id, repo, pr_number, exc)
         attempts = await record_dispatch(
@@ -624,7 +676,7 @@ async def _dispatch_session_run(
                 error=f"Max dispatch attempts ({attempts}) reached",
                 event_context=event_ctx_json,
             )
-        return False
+        return "failed", str(exc)
 
 
 async def _load_session_with_context(db, session_id: int) -> Session | None:
@@ -641,13 +693,51 @@ async def _load_session_with_context(db, session_id: int) -> Session | None:
     return result.scalar_one_or_none()
 
 
-async def _drain_queued_dispatches(db) -> None:
+async def _drain_queued_dispatches(db, client: httpx.AsyncClient | None = None) -> None:
     """Replay queued watcher dispatches for sessions that are now idle."""
     queued_rows = await list_queued_dispatches(db)
-    if not queued_rows:
-        return
 
     launched_sessions: set[int] = set()
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    for row in await list_due_comment_dispatches(db, now):
+        session = await _load_session_with_context(db, row.session_id)
+        sched = next((s for s in (session.schedules if session else []) if s.id == row.schedule_id), None)
+        if not session or not sched or not sched.enabled or sched.trigger_type != "event" or sched.event_condition != "pr_comment":
+            await update_comment_dispatch(db, row, status="completed")
+            continue
+        if session.is_active or row.session_id in launched_sessions:
+            continue
+        if client:
+            token = await _resolve_github_token_for_workspace_repo(
+                session.workspace_id, row.repo, [(sched, session)], db
+            )
+            detail = await _fetch_pr_details(client, row.repo, row.pr_number, token)
+            if not detail:
+                continue
+            if detail.get("state") != "open" or detail.get("draft", False):
+                await update_comment_dispatch(db, row, status="completed")
+                continue
+            curr_head_sha = (detail.get("head") or {}).get("sha") or row.head_sha
+            if curr_head_sha and curr_head_sha != row.head_sha:
+                row.head_sha = curr_head_sha
+                if row.event_context:
+                    try:
+                        ctx = json.loads(row.event_context)
+                        ctx["head_sha"] = curr_head_sha
+                        row.event_context = json.dumps(ctx)
+                    except Exception:
+                        pass
+                await db.commit()
+        outcome, err = await _dispatch_session_run(
+            db, session=session, sched=sched, event_ctx_json=row.event_context,
+            action_key="pr_comment", repo=row.repo, pr_number=row.pr_number,
+            head_sha=row.head_sha, queue_if_active=False,
+        )
+        if outcome == "launched":
+            await update_comment_dispatch(db, row, status="dispatched")
+            launched_sessions.add(row.session_id)
+        elif outcome == "failed":
+            await update_comment_dispatch(db, row, status="failed", error=err)
     for row in queued_rows:
         if not row.session_id or row.session_id in launched_sessions:
             continue
@@ -699,7 +789,7 @@ async def _drain_queued_dispatches(db) -> None:
             )
             continue
 
-        launched = await _dispatch_session_run(
+        outcome, _ = await _dispatch_session_run(
             db,
             session=session,
             sched=sched,
@@ -710,7 +800,7 @@ async def _drain_queued_dispatches(db) -> None:
             head_sha=row.head_sha,
             queue_if_active=False,
         )
-        if launched:
+        if outcome == "launched":
             launched_sessions.add(session.id)
 
 
@@ -721,6 +811,7 @@ async def _evaluate_and_dispatch_prs(
     token: str | None,
     db,
     target_pr_numbers: set[int] | None = None,
+    comment_events: dict[int, dict[str, Any]] | None = None,
 ) -> None:
     """Scan open PRs in repo, evaluate against trigger conditions, and dispatch sessions."""
     open_prs = await _fetch_open_prs(client, repo, token)
@@ -733,16 +824,33 @@ async def _evaluate_and_dispatch_prs(
 
         pr_state, label_events = await _build_pr_state(client, repo, raw_pr, token)
 
+        # A commit event during a comment quiet period changes the head to
+        # evaluate, but must not restart the quiet-period timer.
+        if comment_events is not None and pr_state.pr_number not in comment_events:
+            for sched, _session in sched_sessions:
+                if sched.enabled and sched.event_condition == "pr_comment":
+                    queued = await get_comment_dispatch(db, repo, pr_state.pr_number, sched.id)
+                    if queued and queued.status == "queued":
+                        queued.head_sha = pr_state.head_sha
+                        queued.event_context = json.dumps(_build_event_context(
+                            sched=sched, repo=repo, pr_state=pr_state, condition="pr_comment",
+                        ))
+                        await db.commit()
+
         event_conditions = {
             sched.event_condition
             for sched, _sess in sched_sessions
             if sched.enabled and sched.trigger_type == "event"
         }
+        if comment_events is None:
+            event_conditions.discard("pr_comment")
         matched_conditions = evaluate_pr_conditions(
             pr_state,
             event_conditions=event_conditions,
             quiet_period_seconds=float(settings.pr_watcher_debounce_seconds),
         )
+        if comment_events and pr_state.pr_number in comment_events and "pr_comment" in event_conditions:
+            matched_conditions.add("pr_comment")
         if not matched_conditions:
             continue
 
@@ -770,6 +878,36 @@ async def _evaluate_and_dispatch_prs(
                 condition=condition,
             )
             event_ctx_json = json.dumps(event_ctx)
+
+            if condition == "pr_comment":
+                comment = (comment_events or {}).get(pr_state.pr_number)
+                if not comment:
+                    queued = await get_comment_dispatch(db, repo, pr_state.pr_number, sched.id)
+                    if queued and queued.status == "queued":
+                        queued.head_sha = pr_state.head_sha
+                        queued.event_context = event_ctx_json
+                        await db.commit()
+                    continue
+                row = await upsert_comment_dispatch(
+                    db, repo=repo, pr_number=pr_state.pr_number, session_id=session.id,
+                    schedule_id=sched.id, head_sha=pr_state.head_sha,
+                    event_context=event_ctx_json, event_id=comment["id"], event_at=comment["at"],
+                    delay_minutes=sched.delay_minutes,
+                    event_type=comment.get("type", ""),
+                    event_created_at=comment.get("created_at"),
+                )
+                if sched.delay_minutes:
+                    continue
+                outcome, err = await _dispatch_session_run(
+                    db, session=session, sched=sched, event_ctx_json=event_ctx_json,
+                    action_key=condition, repo=repo, pr_number=pr_state.pr_number,
+                    head_sha=pr_state.head_sha, queue_if_active=False,
+                )
+                if outcome == "launched":
+                    await update_comment_dispatch(db, row, status="dispatched")
+                elif outcome == "failed":
+                    await update_comment_dispatch(db, row, status="failed", error=err)
+                continue
 
             if await is_blocked(
                 db,
@@ -802,6 +940,15 @@ async def _evaluate_and_dispatch_prs(
                 queue_if_active=True,
             )
 
+    if comment_events:
+        for pr_num, comment_info in comment_events.items():
+            ev_id = comment_info.get("id")
+            if ev_id and not await has_event_receipt(db, repo, ev_id):
+                await record_event_receipt(
+                    db, repo=repo, event_id=ev_id, event_type=comment_info.get("type", ""),
+                    pr_number=pr_num, event_created_at=comment_info.get("created_at"),
+                )
+
 
 async def _pr_watcher_loop() -> None:
     """Main async background polling loop."""
@@ -822,7 +969,7 @@ async def _pr_watcher_loop() -> None:
                     if all_active_repos:
                         await prune_etags(db, all_active_repos)
 
-                    await _drain_queued_dispatches(db)
+                    await _drain_queued_dispatches(db, client)
 
                     now_ts = datetime.now(timezone.utc).timestamp()
                     is_sweep_due = (now_ts - last_sweep) >= settings.pr_watcher_sweep_interval
@@ -843,6 +990,7 @@ async def _pr_watcher_loop() -> None:
                                         client, repo, cached_etag, token
                                     )
                                     if status == 200:
+                                        comment_events = await _fresh_comment_events(db, repo, events)
                                         if new_etag:
                                             await save_etag(db, repo, new_etag)
                                         target_prs = _extract_event_pr_numbers(events)
@@ -857,6 +1005,7 @@ async def _pr_watcher_loop() -> None:
                                             token,
                                             db,
                                             target_pr_numbers=target_prs or None,
+                                            comment_events=comment_events,
                                         )
                             except Exception as repo_err:
                                 log.warning(

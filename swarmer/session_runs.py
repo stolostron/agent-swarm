@@ -115,6 +115,8 @@ async def record_session_run(
     try:
         from swarmer.pr_watcher_store import reconcile_completed
         await reconcile_completed(db, session.id, phase)
+        from swarmer.pr_watcher_store import reconcile_comment_dispatches
+        await reconcile_comment_dispatches(db, session.id, phase)
     except Exception:
         log.warning("record_session_run: failed to reconcile pr_action_state for session %d", session.id, exc_info=True)
 

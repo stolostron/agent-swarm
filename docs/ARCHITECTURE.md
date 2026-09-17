@@ -586,7 +586,19 @@ sqlite3 "$SWARMER_DB_PATH" "SELECT repo, pr_number, head_sha, action, status, at
 
 # Inspect cached GitHub Events ETags
 sqlite3 "$SWARMER_DB_PATH" "SELECT repo, etag, last_checked_at FROM repo_etags;"
+
+# Inspect durable comment receipts
+sqlite3 "$SWARMER_DB_PATH" "SELECT repo, event_id, event_type, pr_number, event_created_at, received_at FROM github_event_receipts ORDER BY received_at DESC LIMIT 20;"
+
+# Inspect sliding-debounce dispatches
+sqlite3 "$SWARMER_DB_PATH" "SELECT repo, pr_number, schedule_id, status, not_before, last_comment_event_id FROM pr_comment_dispatches ORDER BY updated_at DESC;"
 ```
+
+The `pr_comment` event condition is reactive only: it consumes fresh GitHub
+comment events and can delay dispatch with a sliding quiet period (for example,
+three minutes to let CodeRabbit finish posting). Low-frequency cron/sweep
+schedules remain required for hygiene transitions caused by total inactivity,
+because GitHub emits no event for an unchanged stale pull request.
 
 ### 4. OpenShell Sandbox & Gateway Logs
 - **Gateway Logs (Credential Injection & Proxy Routing):**

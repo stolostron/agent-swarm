@@ -1,14 +1,14 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import logging
 
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from swarmer.models.pr_watcher_state import PRActionState, RepoETag
+from swarmer.models.pr_watcher_state import GitHubEventReceipt, PRActionState, PRCommentDispatch, RepoETag
 from swarmer.models.session import Session
 from swarmer.models.session_repo import SessionRepo
 from swarmer.models.session_schedule import SessionSchedule
@@ -229,4 +229,113 @@ async def prune_etags(db: AsyncSession, active_repos: set[str]) -> None:
     for (repo,) in result.all():
         if repo not in active_repos:
             await db.execute(delete(RepoETag).where(RepoETag.repo == repo))
+    await db.commit()
+
+
+async def has_event_receipt(db: AsyncSession, repo: str, event_id: str) -> bool:
+    if not event_id:
+        return False
+    existing = await db.scalar(select(GitHubEventReceipt).where(
+        GitHubEventReceipt.repo == repo,
+        GitHubEventReceipt.event_id == event_id,
+    ))
+    return existing is not None
+
+
+async def record_event_receipt(
+    db: AsyncSession, *, repo: str, event_id: str, event_type: str,
+    pr_number: int, event_created_at: datetime | None,
+    commit: bool = True,
+) -> bool:
+    """Record a qualifying event; return False when it was already observed."""
+    if not event_id:
+        return False
+    existing = await db.scalar(select(GitHubEventReceipt).where(
+        GitHubEventReceipt.repo == repo,
+        GitHubEventReceipt.event_id == event_id,
+    ))
+    if existing:
+        return False
+    db.add(GitHubEventReceipt(
+        repo=repo, event_id=event_id, event_type=event_type,
+        pr_number=pr_number, event_created_at=event_created_at,
+    ))
+    if commit:
+        await db.commit()
+    return True
+
+
+async def get_comment_dispatch(db: AsyncSession, repo: str, pr_number: int, schedule_id: int) -> PRCommentDispatch | None:
+    return await db.scalar(select(PRCommentDispatch).where(
+        PRCommentDispatch.repo == repo,
+        PRCommentDispatch.pr_number == pr_number,
+        PRCommentDispatch.schedule_id == schedule_id,
+    ))
+
+
+async def upsert_comment_dispatch(
+    db: AsyncSession, *, repo: str, pr_number: int, session_id: int, schedule_id: int,
+    head_sha: str, event_context: str, event_id: str, event_at: datetime,
+    delay_minutes: int,
+    event_type: str = "",
+    event_created_at: datetime | None = None,
+) -> PRCommentDispatch:
+    row = await get_comment_dispatch(db, repo, pr_number, schedule_id)
+    not_before = event_at + timedelta(minutes=delay_minutes)
+    if row is None:
+        row = PRCommentDispatch(
+            repo=repo, pr_number=pr_number, session_id=session_id, schedule_id=schedule_id,
+            status="queued", head_sha=head_sha, event_context=event_context,
+            not_before=not_before, last_comment_event_id=event_id, last_comment_event_at=event_at,
+        )
+        db.add(row)
+    else:
+        row.session_id = session_id
+        row.status = "queued"
+        row.head_sha = head_sha
+        row.event_context = event_context
+        row.not_before = not_before
+        row.last_comment_event_id = event_id
+        row.last_comment_event_at = event_at
+        row.last_error = ""
+    if event_id:
+        existing = await db.scalar(select(GitHubEventReceipt).where(
+            GitHubEventReceipt.repo == repo,
+            GitHubEventReceipt.event_id == event_id,
+        ))
+        if not existing:
+            db.add(GitHubEventReceipt(
+                repo=repo, event_id=event_id, event_type=event_type,
+                pr_number=pr_number, event_created_at=event_created_at or event_at,
+            ))
+    await db.commit()
+    await db.refresh(row)
+    return row
+
+
+async def list_due_comment_dispatches(db: AsyncSession, now: datetime) -> list[PRCommentDispatch]:
+    result = await db.execute(select(PRCommentDispatch).where(
+        PRCommentDispatch.status == "queued",
+        PRCommentDispatch.not_before <= now,
+    ).order_by(PRCommentDispatch.not_before, PRCommentDispatch.id))
+    return list(result.scalars().all())
+
+
+async def update_comment_dispatch(db: AsyncSession, row: PRCommentDispatch, *, status: str, error: str = "") -> None:
+    row.status = status
+    row.last_error = error
+    if status == "dispatched":
+        row.attempts += 1
+    await db.commit()
+
+
+async def reconcile_comment_dispatches(db: AsyncSession, session_id: int, phase: str) -> None:
+    result = await db.execute(select(PRCommentDispatch).where(
+        PRCommentDispatch.session_id == session_id,
+        PRCommentDispatch.status == "dispatched",
+    ))
+    for row in result.scalars().all():
+        row.status = "completed" if phase == "succeeded" else "failed"
+        if phase != "succeeded":
+            row.last_error = f"session ended in phase '{phase}'"
     await db.commit()

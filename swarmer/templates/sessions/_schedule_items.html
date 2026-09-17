@@ -18,7 +18,9 @@
           <dt style="font-weight:700;">New PR or New Commits</dt>
           <dd style="margin:0 0 var(--pf-t--global--spacer--xs);">Matches a PR with a new head commit; each head is dispatched only once.</dd>
           <dt style="font-weight:700;">Review Comments</dt>
-          <dd style="margin:0 0 var(--pf-t--global--spacer--xs);">Matches PRs with unresolved review threads.</dd>
+           <dd style="margin:0 0 var(--pf-t--global--spacer--xs);">Matches PRs with unresolved review threads.</dd>
+           <dt style="font-weight:700;">Any PR Comment</dt>
+           <dd style="margin:0 0 var(--pf-t--global--spacer--xs);">Matches new discussion, inline review, or submitted review comments. Optional delay waits for a quiet period.</dd>
           <dt style="font-weight:700;">Any Actionable PR State</dt>
           <dd style="margin:0;">Matches any of the conditions above.</dd>
         </dl>
@@ -51,7 +53,7 @@
       <div>
         {% if sched.trigger_type == 'event' %}
           <span class="pf-v6-c-label pf-m-gold" style="margin-right:var(--pf-t--global--spacer--xs);"><span class="pf-v6-c-label__content">{{ sched.label or '⚡ GitHub Event' }}</span></span>
-          <code style="font-size:var(--pf-t--global--font--size--xs);">{{ event_conditions.get(sched.event_condition, sched.event_condition or 'Any Event') }} ({{ author_scopes.get(sched.author_scope, sched.author_scope) }})</code>
+           <code style="font-size:var(--pf-t--global--font--size--xs);">{{ event_conditions.get(sched.event_condition, sched.event_condition or 'Any Event') }} ({{ author_scopes.get(sched.author_scope, sched.author_scope) }}){% if sched.delay_minutes %} (+{{ sched.delay_minutes }}m delay){% endif %}</code>
         {% else %}
           {% if sched.label %}
           <span class="pf-v6-c-label pf-m-purple" style="margin-right:var(--pf-t--global--spacer--xs);"><span class="pf-v6-c-label__content">{{ sched.label }}</span></span>
@@ -170,12 +172,17 @@
                    value="{{ sched.fix_authors }}" placeholder="e.g. alice, bob"
                    style="width:100%; font-size:var(--pf-t--global--font--size--sm);">
           </div>
-          <div class="pf-v6-c-check" style="margin-top:var(--pf-t--global--spacer--xs);">
+           <div class="pf-v6-c-check" style="margin-top:var(--pf-t--global--spacer--xs);">
             <input class="pf-v6-c-check__input" type="checkbox" id="sched-include-context-{{ sched.id }}"
                    name="include_event_context" value="1" {% if sched.include_event_context %}checked{% endif %}>
             <label class="pf-v6-c-check__label" for="sched-include-context-{{ sched.id }}">Pass event details to the agent prompt</label>
             <span class="pf-v6-c-check__description">Include the triggering GitHub event data in the run prompt.</span>
-          </div>
+           </div>
+           <div style="margin-top:var(--pf-t--global--spacer--xs);">
+             <label style="font-size:var(--pf-t--global--font--size--sm); color:var(--pf-t--global--text--color--subtle);">Quiet-period delay (minutes)</label>
+             <input type="number" name="delay_minutes" min="0" max="1440" value="{{ sched.delay_minutes }}" class="pf-v6-c-form-control">
+             <span style="font-size:var(--pf-t--global--font--size--xs); color:var(--pf-t--global--text--color--subtle);">For Any PR Comment, wait until this many minutes after the latest comment.</span>
+           </div>
         </div>
 
         <div>
@@ -306,6 +313,11 @@
                name="include_event_context" value="1" checked>
         <label class="pf-v6-c-check__label" for="sched-add-include-context">Pass event details to the agent prompt</label>
         <span class="pf-v6-c-check__description">Include the triggering GitHub event data in the run prompt.</span>
+      </div>
+      <div style="margin-top:var(--pf-t--global--spacer--xs);">
+        <label style="font-size:var(--pf-t--global--font--size--sm); color:var(--pf-t--global--text--color--subtle);">Quiet-period delay (minutes)</label>
+        <input type="number" name="delay_minutes" min="0" max="1440" value="0" class="pf-v6-c-form-control">
+        <span style="font-size:var(--pf-t--global--font--size--xs); color:var(--pf-t--global--text--color--subtle);">Use 3 for PR hygiene to let CodeRabbit finish posting comments.</span>
       </div>
     </div>
 
