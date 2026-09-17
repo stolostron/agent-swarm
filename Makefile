@@ -55,7 +55,7 @@ OPENSHELL_WORKSPACE_STORAGE ?= 10Gi
         dev lint helm-lint test smoke-test-jira \
         sync-images image-build image-push \
         deploy delete connect mcp-setup mcp-api mcp-url api-url openshell-register connect-openshell status \
-        kind-deploy kind-delete \
+        kind-deploy kind-delete kind-destroy test-e2e-kind \
         help
 
 # ──────────────────────────────────────────────────────────────
@@ -786,6 +786,11 @@ kind-deploy:  ## One-shot local dev: create kind cluster + build + load image + 
 kind-delete:  ## Delete the kind cluster (removes all data inside it)
 	kind delete cluster --name $(KIND_CLUSTER)
 	@echo "✓ kind cluster '$(KIND_CLUSTER)' deleted."
+
+kind-destroy: kind-delete  ## Alias for kind-delete
+
+test-e2e-kind:  ## Run the KinD deployment lifecycle e2e test
+	python3 scripts/e2e_kind_deploy.py --cluster-name $(KIND_CLUSTER) --namespace $(NAMESPACE)
 
 # ──────────────────────────────────────────────────────────────
 #  Help

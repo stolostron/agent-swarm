@@ -34,6 +34,8 @@ make image-push REGISTRY=...  # Push to registry
 # Local kind cluster
 make kind-deploy         # One-shot: create cluster + build + load image + deploy (includes OpenShell)
 make kind-delete         # Tear down kind cluster
+make kind-destroy        # Alias for kind-delete
+make test-e2e-kind       # Run the standalone KinD deploy/auth/destroy smoke test
 
 # Deploy / manage (OpenShell is installed automatically; auto-detects OpenShift vs generic K8s)
 make deploy              # Deploy swarmer + OpenShell to current kubectl context

@@ -1,0 +1,49 @@
+name: KinD E2E
+
+on:
+  workflow_dispatch:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+
+jobs:
+  kind-lifecycle:
+    name: E2E test
+    runs-on: ubuntu-latest
+    env:
+      CONTAINER_CMD: docker
+      KIND_CLUSTER: swarmer
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+        with:
+          persist-credentials: false
+
+      - name: Install KinD
+        run: |
+          curl -fsSLo kind-linux-amd64 https://kind.sigs.k8s.io/dl/v0.32.0/kind-linux-amd64
+          curl -fsSLo kind.sha256sum https://kind.sigs.k8s.io/dl/v0.32.0/kind-linux-amd64.sha256sum
+          sha256sum --check kind.sha256sum
+          chmod +x kind-linux-amd64
+          sudo mv kind-linux-amd64 /usr/local/bin/kind
+          kind version
+
+      - name: Set up Swarmer secret
+        run: make setup-secret
+
+      - name: Install MCP server
+        run: python3 -m pip install --quiet -e mcp-server
+
+      - name: Run KinD deployment lifecycle e2e
+        run: make test-e2e-kind
+
+      - name: Collect diagnostics on failure
+        if: failure()
+        run: |
+          kubectl get pods -A -o wide || true
+          kubectl get events -A --sort-by='.lastTimestamp' || true
+          kubectl logs -n swarmer deployment/swarmer --tail=200 || true
+          kubectl logs -n openshell deployment/openshell --tail=200 || true
