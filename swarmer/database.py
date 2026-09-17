@@ -381,15 +381,9 @@ async def migrate_db() -> None:
             result = await conn.execute(text("PRAGMA index_list(pr_action_state)"))
             legacy_unique = False
             for index in result.mappings():
-                if index.get("unique"):
-                    columns = await conn.execute(
-                        text("SELECT name FROM pragma_index_info(:index_name)"),
-                        {"index_name": index["name"]},
-                    )
-                    names = [row[0] for row in columns]
-                    if names == ["repo", "pr_number", "head_sha", "action", "session_id"]:
-                        legacy_unique = True
-                        break
+                if index.get("unique") and str(index["name"]).startswith("sqlite_autoindex_"):
+                    legacy_unique = True
+                    break
             if legacy_unique:
                 await conn.execute(text("ALTER TABLE pr_action_state RENAME TO pr_action_state_legacy"))
                 await conn.execute(text("""CREATE TABLE pr_action_state (
