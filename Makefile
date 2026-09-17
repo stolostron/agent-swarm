@@ -790,7 +790,7 @@ kind-delete:  ## Delete the kind cluster (removes all data inside it)
 kind-destroy: kind-delete  ## Alias for kind-delete
 
 test-e2e-kind:  ## Run the KinD deployment lifecycle e2e test
-	python3 scripts/e2e_kind_deploy.py --namespace $(NAMESPACE)
+	python3 scripts/e2e_kind_deploy.py --cluster-name $(KIND_CLUSTER) --namespace $(NAMESPACE)
 
 # ──────────────────────────────────────────────────────────────
 #  Help

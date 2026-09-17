@@ -57,6 +57,7 @@ def test_makefile_kind_destroy_alias_and_e2e_target():
     assert "kind-destroy: kind-delete" in content
     assert "test-e2e-kind:" in content
     assert "scripts/e2e_kind_deploy.py" in content
+    assert "--cluster-name $(KIND_CLUSTER)" in content
     assert "--namespace $(NAMESPACE)" in content
 
 

@@ -24,11 +24,11 @@ jobs:
 
       - name: Install KinD
         run: |
-          curl -fsSLo kind https://kind.sigs.k8s.io/dl/v0.32.0/kind-linux-amd64
+          curl -fsSLo kind-linux-amd64 https://kind.sigs.k8s.io/dl/v0.32.0/kind-linux-amd64
           curl -fsSLo kind.sha256sum https://kind.sigs.k8s.io/dl/v0.32.0/kind-linux-amd64.sha256sum
-          sha256sum --check --ignore-missing kind.sha256sum
-          chmod +x kind
-          sudo mv kind /usr/local/bin/kind
+          sha256sum --check kind.sha256sum
+          chmod +x kind-linux-amd64
+          sudo mv kind-linux-amd64 /usr/local/bin/kind
           kind version
 
       - name: Set up Swarmer secret
