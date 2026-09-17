@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
 import json
 import logging
 import os
 from dataclasses import replace
+from datetime import datetime, timezone
 from typing import Any
 
 import httpx
@@ -14,6 +14,9 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import selectinload
 
 from swarmer.config import settings
+from swarmer.database import get_db
+from swarmer.models.session import Session
+from swarmer.models.session_schedule import SessionSchedule
 from swarmer.pr_state import (
     DEFAULT_BOT_LOGINS,
     EventTrigger,
@@ -26,19 +29,16 @@ from swarmer.pr_state import (
     normalize_ci_checks,
     parse_iso_datetime,
 )
-from swarmer.database import get_db
-from swarmer.models.session import Session
-from swarmer.models.session_schedule import SessionSchedule
 from swarmer.pr_watcher_store import (
-    get_etag,
     get_comment_dispatch,
+    get_etag,
     has_event_receipt,
     is_blocked,
     list_due_comment_dispatches,
     list_queued_dispatches,
     prune_etags,
-    record_event_receipt,
     record_dispatch,
+    record_event_receipt,
     resolve_event_triggers,
     save_etag,
     update_comment_dispatch,
@@ -243,6 +243,31 @@ async def _fetch_commit_author(
     except Exception:
         pass
     return ""
+
+
+async def _fetch_actor_association(
+    client: httpx.AsyncClient, repo: str, login: str, token: str | None
+) -> str:
+    """Resolve a GitHub user's repository association for event routing."""
+    if not login:
+        return ""
+    headers = {"Accept": "application/vnd.github+json", "User-Agent": "Swarmer-PR-Watcher/1.0"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    try:
+        resp = await client.get(
+            f"https://api.github.com/repos/{repo}/collaborators/{login}/permission",
+            headers=headers,
+            timeout=15,
+        )
+        if resp.is_success:
+            permission = (resp.json().get("permission") or "").lower()
+            return {"admin": "OWNER", "maintain": "MEMBER", "push": "COLLABORATOR", "triage": "COLLABORATOR"}.get(
+                permission, "NONE"
+            )
+    except Exception:
+        pass
+    return "NONE"
 
 
 async def _fetch_review_comments(
@@ -544,8 +569,10 @@ async def _classify_event_triggers(
                 condition = "new_pr_or_commit"
                 sha = ((pr.get("head") or {}).get("sha") or "")
                 relevant_author = await _fetch_commit_author(client, repo, sha, token)
+                association = await _fetch_actor_association(client, repo, relevant_author, token)
             elif action in {"ready_for_review", "converted_to_ready_for_review", "review_requested", "labeled", "unlabeled"}:
                 condition = "any_actionable"
+                association = await _fetch_actor_association(client, repo, actor, token)
         elif event_type == "CheckRunEvent":
             check = payload.get("check_run") or {}
             if action == "completed" and (check.get("conclusion") or "").lower() in {
@@ -564,6 +591,8 @@ async def _classify_event_triggers(
                 if (review.get("state") or "").lower() == "approved" and isinstance(number, int):
                     approved_user = (review.get("user") or {}).get("login", "") or actor
                     approved_association = review.get("author_association", "")
+                    if not approved_association:
+                        approved_association = await _fetch_actor_association(client, repo, approved_user, token)
                     triggers.setdefault(number, []).append(EventTrigger(
                         "review_approved", event_id, approved_user, number,
                         event_type, created_at, approved_association,
@@ -633,7 +662,7 @@ def _schedule_matches_author_scope(
         trust = evaluate_author_trust(
             scoped_pr,
             policy=TrustPolicy(strategy=TrustStrategy.ORG_AND_COLLABORATORS),
-            label_events=label_events,
+            label_events=label_events if actor_login is None else None,
         )
         if not trust.is_trusted:
             return False
@@ -649,12 +678,12 @@ def _match_triggers_for_pr(
     label_events: list[dict[str, Any]] | None = None,
     blocked_conditions: set[str] | None = None,
     event_triggers: list[EventTrigger] | None = None,
-) -> list[tuple[SessionSchedule, Session]]:
+) -> list[tuple[SessionSchedule, Session, EventTrigger | None]]:
     """Find all schedules whose conditions and author scopes match a PR."""
     if pr.is_draft:
         return []
 
-    matches: list[tuple[SessionSchedule, Session]] = []
+    matches: list[tuple[SessionSchedule, Session, EventTrigger | None]] = []
     for sched, session in sched_sessions:
         if not sched.enabled or sched.trigger_type != "event":
             continue
@@ -669,17 +698,15 @@ def _match_triggers_for_pr(
             continue
         if not relevant:
             relevant = [None]
-        if any(
-            _schedule_matches_author_scope(
+        matching_event = next((event for event in relevant if _schedule_matches_author_scope(
                 pr,
                 sched,
                 label_events,
                 actor_login=event.actor_login if event else None,
                 actor_association=event.actor_association if event else "",
-            )
-            for event in relevant
-        ):
-            matches.append((sched, session))
+            )), None)
+        if matching_event is not None or any(event is None for event in relevant):
+            matches.append((sched, session, matching_event))
     return matches
 
 
@@ -698,7 +725,7 @@ def _match_trigger_for_pr(
         label_events,
         blocked_conditions,
     )
-    return matches[0] if matches else None
+    return matches[0][:2] if matches else None
 
 
 def _build_event_context(
@@ -1060,18 +1087,18 @@ async def _evaluate_and_dispatch_prs(
             continue
 
         pr_comment_matches = [
-            (s, sess) for s, sess in matches if s.event_condition == "pr_comment"
+            (s, sess, event) for s, sess, event in matches if s.event_condition == "pr_comment"
         ]
         other_matches = [
-            (s, sess) for s, sess in matches if s.event_condition != "pr_comment"
+            (s, sess, event) for s, sess, event in matches if s.event_condition != "pr_comment"
         ]
 
         if pr_comment_matches:
             if comment:
                 comment_rows: list[tuple[SessionSchedule, Session, Any, str]] = []
-                for sched, session in pr_comment_matches:
+                for sched, session, event in pr_comment_matches:
                     event_ctx = _build_event_context(
-                        sched=sched, repo=repo, pr_state=pr_state, condition="pr_comment",
+                        sched=sched, repo=repo, pr_state=pr_state, condition="pr_comment", event=event,
                     )
                     ctx_str = json.dumps(event_ctx)
                     row = await upsert_comment_dispatch(
@@ -1107,24 +1134,34 @@ async def _evaluate_and_dispatch_prs(
                     elif outcome == "failed":
                         await update_comment_dispatch(db, row, status="failed", error=err)
             else:
-                for sched, session in pr_comment_matches:
+                for sched, session, event in pr_comment_matches:
                     queued = await get_comment_dispatch(db, repo, pr_state.pr_number, sched.id)
                     if queued and queued.status == "queued":
+                        previous_ctx = json.loads(queued.event_context or "{}")
+                        previous_event = EventTrigger(
+                            "pr_comment",
+                            previous_ctx.get("event_id", queued.last_comment_event_id),
+                            previous_ctx.get("event_actor", ""),
+                            pr_state.pr_number,
+                            previous_ctx.get("event_type", ""),
+                            previous_ctx.get("event_created_at"),
+                        ) if previous_ctx.get("event_id") or queued.last_comment_event_id else None
                         event_ctx = _build_event_context(
                             sched=sched, repo=repo, pr_state=pr_state, condition="pr_comment",
+                            event=event or previous_event,
                         )
                         queued.head_sha = pr_state.head_sha
                         queued.event_context = json.dumps(event_ctx)
                         await db.commit()
 
-        for sched, session in other_matches:
+        for sched, session, event in other_matches:
             condition = sched.event_condition
             event_ctx = _build_event_context(
                 sched=sched,
                 repo=repo,
                 pr_state=pr_state,
                 condition=condition,
-                event=next((e for e in pr_event_triggers if e.condition == condition), None),
+                event=event,
             )
             event_ctx_json = json.dumps(event_ctx)
 
