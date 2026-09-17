@@ -510,7 +510,7 @@ def _classify_comment_event(event: dict[str, Any]) -> tuple[int, str, datetime, 
     elif event_type == "PullRequestReviewCommentEvent" and action == "created":
         number = (payload.get("pull_request") or {}).get("number")
         comment_obj = payload.get("comment") or {}
-    elif event_type == "PullRequestReviewEvent" and action == "submitted":
+    elif event_type == "PullRequestReviewEvent" and action in {"created", "submitted"}:
         review = payload.get("review") or {}
         if not ((review.get("body") or "").strip()):
             return None
@@ -610,8 +610,11 @@ async def _classify_event_triggers(
                 condition, event_id, relevant_author, number, event_type, created_at, association
             ))
             if condition in {"new_pr_or_commit", "any_actionable"}:
+                actor_association = association
+                if actor.lower() != relevant_author.lower():
+                    actor_association = await _fetch_actor_association(client, repo, actor, token)
                 triggers[number].append(EventTrigger(
-                    "any_actionable", event_id, actor, number, event_type, created_at, association
+                    "any_actionable", event_id, actor, number, event_type, created_at, actor_association
                 ))
     return triggers
 

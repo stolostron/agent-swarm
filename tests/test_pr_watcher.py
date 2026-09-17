@@ -47,6 +47,17 @@ class TestPRCommentEventClassification(unittest.TestCase):
         ]
         assert [_classify_comment_event(event)[0] for event in cases] == [1, 2, 3]
 
+    def test_accepts_created_nonempty_review_comments(self):
+        event = {
+            "type": "PullRequestReviewEvent", "id": "i-created", "created_at": "2026-09-16T12:00:00Z",
+            "actor": {"login": "carol"},
+            "payload": {
+                "action": "created", "pull_request": {"number": 4},
+                "review": {"body": "LGTM", "author_association": "OWNER"},
+            },
+        }
+        assert _classify_comment_event(event)[0] == 4
+
     def test_ignores_empty_reviews_and_non_creation_actions(self):
         empty = {"type": "PullRequestReviewEvent", "id": "i4", "payload": {"action": "submitted", "review": {"body": " "}, "pull_request": {"number": 4}}}
         edited = {"type": "IssueCommentEvent", "id": "i5", "payload": {"action": "edited", "issue": {"number": 5, "pull_request": {}}}}
@@ -107,6 +118,37 @@ class TestReviewApprovedEventClassification(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(triggers[7]), 1)
         self.assertEqual(triggers[7][0].condition, "review_approved")
         self.assertEqual(triggers[7][0].actor_login, "coderabbitai[bot]")
+
+    async def test_any_actionable_uses_pushing_actor_association(self):
+        import httpx
+        from swarmer.pr_watcher import _classify_event_triggers
+
+        async def handler(request: httpx.Request) -> httpx.Response:
+            url = str(request.url)
+            if url.endswith("/commits/sha"):
+                return httpx.Response(200, json={"author": {"login": "commit-author"}})
+            if url.endswith("/collaborators/commit-author/permission"):
+                return httpx.Response(200, json={"permission": "write"})
+            if url.endswith("/collaborators/pusher/permission"):
+                return httpx.Response(200, json={"permission": "none"})
+            return httpx.Response(404)
+
+        event = {
+            "type": "PullRequestEvent", "id": "sync-1", "created_at": "2026-09-16T12:00:00Z",
+            "actor": {"login": "pusher"},
+            "payload": {
+                "action": "synchronize", "pull_request": {
+                    "number": 8, "head": {"sha": "sha"},
+                },
+            },
+        }
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            triggers = await _classify_event_triggers(client, "org/repo", [event], None)
+
+        by_condition = {trigger.condition: trigger for trigger in triggers[8]}
+        self.assertEqual(by_condition["new_pr_or_commit"].actor_association, "COLLABORATOR")
+        self.assertEqual(by_condition["any_actionable"].actor_login, "pusher")
+        self.assertEqual(by_condition["any_actionable"].actor_association, "NONE")
 
 
 class TestPRStateNormalization(unittest.TestCase):
