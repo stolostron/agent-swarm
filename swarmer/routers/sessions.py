@@ -2647,6 +2647,7 @@ async def schedule_create(
     provider: str = Form(""),
     instruction_prompt: str = Form(""),
     include_event_context: bool = Form(False),
+    delay_minutes: int = Form(0),
     enabled: str = Form("on"),
     db: AsyncSession = Depends(get_db),
 ):
@@ -2657,6 +2658,8 @@ async def schedule_create(
     session = await db.get(Session, sid)
     if ws is None or session is None or session.workspace_id != ws_id:
         return HTMLResponse("", status_code=404)
+    if not 0 <= delay_minutes <= 1440:
+        return HTMLResponse("", status_code=422, headers={"HX-Trigger": "scheduleFormError"})
 
     trigger_type = trigger_type.strip().lower()
     if trigger_type not in ("cron", "event"):
@@ -2694,6 +2697,7 @@ async def schedule_create(
         provider=provider.strip() if provider.strip() in ("", "claude", "gemini", "openai") else "",
         instruction_prompt=instruction_prompt,
         include_event_context=include_event_context,
+        delay_minutes=delay_minutes,
         enabled=(enabled == "on"),
     )
     db.add(sched)
@@ -2720,6 +2724,7 @@ async def schedule_edit(
     provider: str = Form(""),
     instruction_prompt: str = Form(""),
     include_event_context: bool = Form(False),
+    delay_minutes: int = Form(0),
     db: AsyncSession = Depends(get_db),
 ):
     from croniter import croniter as _croniter
@@ -2730,6 +2735,8 @@ async def schedule_edit(
     sched = await db.get(SessionSchedule, sched_id)
     if ws is None or session is None or session.workspace_id != ws_id or sched is None or sched.session_id != sid:
         return HTMLResponse("", status_code=404)
+    if not 0 <= delay_minutes <= 1440:
+        return HTMLResponse("", status_code=422, headers={"HX-Trigger": "scheduleFormError"})
 
     pid = int(prompt_id) if prompt_id.strip().isdigit() else None
     if pid is None:
@@ -2769,6 +2776,7 @@ async def schedule_edit(
     sched.instruction_prompt = instruction_prompt
     if trigger_type == "event":
         sched.include_event_context = include_event_context
+        sched.delay_minutes = delay_minutes
     # Enabled/disabled state is managed exclusively by the schedule_toggle
     # endpoint. The inline edit form has no `enabled` field, so this handler
     # must never touch sched.enabled — doing so previously forced every edit

@@ -206,7 +206,7 @@ class KnownUsersOut(BaseModel):
 class ScheduleEntryCreate(BaseModel):
     trigger_type: str = Field("cron", pattern=r"^(cron|event)$")
     cron_schedule: str = Field("", max_length=128)
-    event_condition: str = Field("", max_length=64, pattern=r"^(|ci_fail_or_conflict|new_pr_or_commit|review_comments|any_actionable)$")
+    event_condition: str = Field("", max_length=64, pattern=r"^(|ci_fail_or_conflict|new_pr_or_commit|review_comments|pr_comment|any_actionable)$")
     author_scope: str = Field("all", max_length=32, pattern=r"^(self|team|bots|all)$")
     fix_authors: str = Field("", max_length=512)
     label: str = ""
@@ -215,12 +215,13 @@ class ScheduleEntryCreate(BaseModel):
     instruction_prompt: str = ""
     include_event_context: bool = True
     enabled: bool = True
+    delay_minutes: int = Field(0, ge=0, le=1440)
 
 
 class ScheduleEntryUpdate(BaseModel):
     trigger_type: str | None = Field(None, pattern=r"^(cron|event)$")
     cron_schedule: str | None = Field(None, max_length=128)
-    event_condition: str | None = Field(None, max_length=64, pattern=r"^(|ci_fail_or_conflict|new_pr_or_commit|review_comments|any_actionable)$")
+    event_condition: str | None = Field(None, max_length=64, pattern=r"^(|ci_fail_or_conflict|new_pr_or_commit|review_comments|pr_comment|any_actionable)$")
     author_scope: str | None = Field(None, max_length=32, pattern=r"^(self|team|bots|all)$")
     fix_authors: str | None = Field(None, max_length=512)
     label: str | None = None
@@ -229,6 +230,7 @@ class ScheduleEntryUpdate(BaseModel):
     instruction_prompt: str | None = None
     include_event_context: bool | None = None
     enabled: bool | None = None
+    delay_minutes: int | None = Field(None, ge=0, le=1440)
 
 
 class ScheduleEntryOut(BaseModel):
@@ -248,6 +250,7 @@ class ScheduleEntryOut(BaseModel):
     enabled: bool
     created_at: datetime
     updated_at: datetime
+    delay_minutes: int = 0
 
     model_config = {"from_attributes": True}
 

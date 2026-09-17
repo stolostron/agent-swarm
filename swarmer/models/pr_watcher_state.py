@@ -56,3 +56,39 @@ class RepoETag(Base):
     last_checked_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, server_default=func.now(), onupdate=func.now()
     )
+
+
+class GitHubEventReceipt(Base):
+    """Durable receipt for a qualifying GitHub comment event."""
+
+    __tablename__ = "github_event_receipts"
+    __table_args__ = (UniqueConstraint("repo", "event_id", name="uq_github_event_receipt"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    repo: Mapped[str] = mapped_column(String(255), nullable=False)
+    event_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    event_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    pr_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    event_created_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    received_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.now())
+
+
+class PRCommentDispatch(Base):
+    """Mutable, schedule-scoped sliding debounce state for PR comments."""
+
+    __tablename__ = "pr_comment_dispatches"
+    __table_args__ = (UniqueConstraint("repo", "pr_number", "schedule_id", name="uq_pr_comment_dispatch_key"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    repo: Mapped[str] = mapped_column(String(255), nullable=False)
+    pr_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    session_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    schedule_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="queued", server_default="queued")
+    head_sha: Mapped[str] = mapped_column(String(64), nullable=False, default="", server_default="")
+    event_context: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
+    not_before: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_comment_event_id: Mapped[str] = mapped_column(String(255), nullable=False, default="", server_default="")
+    last_comment_event_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    last_error: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.now(), onupdate=func.now())

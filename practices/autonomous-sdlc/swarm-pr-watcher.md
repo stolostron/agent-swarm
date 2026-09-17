@@ -106,7 +106,7 @@ There is no configuration file. Everything is configured per-session in the Web 
 
 1. Navigate to a session's detail page → **Schedule** card → **+ Add trigger / schedule**.
 2. Select **⚡ GitHub Event** as the Trigger Type.
-3. Choose the **Event Condition** (`ci_fail_or_conflict`, `new_pr_or_commit`, `review_comments`, `any_actionable`).
+3. Choose the **Event Condition** (`ci_fail_or_conflict`, `new_pr_or_commit`, `review_comments`, `pr_comment`, `any_actionable`). Use `pr_comment` with `delay_minutes=3` when CodeRabbit or other review automation needs time to finish posting.
 4. Choose the **Author Scope** (`self`, `team`, `bots`, `all`).
 5. If `self` is selected, provide a comma-separated list of GitHub logins in **Author Logins** (e.g. `<github-login-1>, <github-login-2>`).
 6. Save. The in-process watcher automatically picks up the new trigger on its next repo-refresh cycle — no restart required.

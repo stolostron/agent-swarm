@@ -45,6 +45,7 @@ def _fmt_schedule(sc: dict) -> dict:
         "provider": sc.get("provider", ""),
         "instruction_prompt": sc.get("instruction_prompt", ""),
         "include_event_context": sc.get("include_event_context", True),
+        "delay_minutes": sc.get("delay_minutes", 0),
         "enabled": sc.get("enabled", True),
     }
 
@@ -502,6 +503,7 @@ class AgentSwarmMCPServer:
         instruction_prompt: str = "",
         include_event_context: bool = True,
         enabled: bool = True,
+        delay_minutes: int = 0,
     ) -> dict:
         sc = await self.client.create_session_schedule(
             workspace_id, session_id, cron_schedule,
@@ -511,6 +513,7 @@ class AgentSwarmMCPServer:
             provider=provider,
             instruction_prompt=instruction_prompt,
             include_event_context=include_event_context, enabled=enabled,
+            delay_minutes=delay_minutes,
         )
         return _fmt_schedule(sc)
 
@@ -1090,6 +1093,7 @@ class AgentSwarmMCPServer:
             instruction_prompt: str = "",
             include_event_context: bool = True,
             enabled: bool = True,
+            delay_minutes: int = 0,
         ) -> dict:
             """Add a new schedule or event trigger to a session.
 
@@ -1098,7 +1102,7 @@ class AgentSwarmMCPServer:
                 session_id: The session id.
                 cron_schedule: Cron expression (e.g. '0 9 * * 1-5'). Required for cron triggers.
                 trigger_type: 'cron' for scheduled runs, 'event' for GitHub event triggers.
-                event_condition: Event trigger condition (e.g. 'ci_fail_or_conflict', 'new_pr_or_commit', 'review_comments', 'any_actionable').
+                 event_condition: Event trigger condition (e.g. 'ci_fail_or_conflict', 'new_pr_or_commit', 'review_comments', 'pr_comment', 'any_actionable').
                 author_scope: PR author scope (e.g. 'self', 'team', 'bots', 'all').
                 fix_authors: Comma-separated GitHub logins for 'self' author scope.
                 label: Human-readable name for this trigger.
@@ -1107,7 +1111,8 @@ class AgentSwarmMCPServer:
                     Empty means use the session provider.
                 instruction_prompt: Additional instructions; overrides session default when set.
                 include_event_context: Include triggering event data in the agent prompt.
-                enabled: Whether the schedule is active. Default: True.
+                 enabled: Whether the schedule is active. Default: True.
+                 delay_minutes: Quiet-period delay for PR comments, from 0 to 1440 minutes.
             """
             return await self._add_session_schedule(
                 workspace_id, session_id, cron_schedule,
@@ -1116,7 +1121,8 @@ class AgentSwarmMCPServer:
                 label=label, prompt_id=prompt_id,
                 provider=provider,
                 instruction_prompt=instruction_prompt,
-                include_event_context=include_event_context, enabled=enabled,
+                 include_event_context=include_event_context, enabled=enabled,
+                 delay_minutes=delay_minutes,
             )
 
         @mcp.tool()
@@ -1135,6 +1141,7 @@ class AgentSwarmMCPServer:
             instruction_prompt: str | None = None,
             include_event_context: bool | None = None,
             enabled: bool | None = None,
+            delay_minutes: int | None = None,
         ) -> dict:
             """Update an existing session schedule or event trigger.
 
@@ -1144,7 +1151,7 @@ class AgentSwarmMCPServer:
                 schedule_id: The schedule id to update.
                 cron_schedule: New cron expression.
                 trigger_type: 'cron' or 'event'.
-                event_condition: New event condition ('ci_fail_or_conflict', 'new_pr_or_commit', 'review_comments', 'any_actionable').
+                 event_condition: New event condition ('ci_fail_or_conflict', 'new_pr_or_commit', 'review_comments', 'pr_comment', 'any_actionable').
                 author_scope: New author scope ('self', 'team', 'bots', 'all').
                 fix_authors: Comma-separated GitHub logins for 'self' author scope.
                 label: New label.
@@ -1152,7 +1159,8 @@ class AgentSwarmMCPServer:
                 provider: AI provider override; empty uses the session provider.
                 instruction_prompt: New additional instructions.
                 include_event_context: Include triggering event data in the agent prompt.
-                enabled: Enable or disable the schedule.
+                 enabled: Enable or disable the schedule.
+                 delay_minutes: Quiet-period delay for PR comments, from 0 to 1440 minutes.
             """
             fields: dict[str, Any] = {}
             if cron_schedule is not None:
@@ -1177,6 +1185,8 @@ class AgentSwarmMCPServer:
                 fields["include_event_context"] = include_event_context
             if enabled is not None:
                 fields["enabled"] = enabled
+            if delay_minutes is not None:
+                fields["delay_minutes"] = delay_minutes
             return await self._update_session_schedule(workspace_id, session_id, schedule_id, **fields)
 
         @mcp.tool()

@@ -333,11 +333,12 @@ class AgentSwarmClient:
         instruction_prompt: str = "",
         include_event_context: bool = True,
         enabled: bool = True,
+        delay_minutes: int = 0,
     ) -> dict:
         """Create a cron or event execution schedule for a session.
 
         Event conditions include: ci_fail_or_conflict, new_pr_or_commit,
-        review_comments, and any_actionable.
+        review_comments, pr_comment, and any_actionable.
         """
         body: dict = {
             "trigger_type": trigger_type,
@@ -350,6 +351,7 @@ class AgentSwarmClient:
             "instruction_prompt": instruction_prompt,
             "include_event_context": include_event_context,
             "enabled": enabled,
+            "delay_minutes": delay_minutes,
         }
         body["prompt_id"] = prompt_id
         return await self._post(f"/api/v1/workspaces/{ws_id}/sessions/{sid}/schedules", json=body)

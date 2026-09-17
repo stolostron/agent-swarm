@@ -22,6 +22,23 @@ from swarmer.pr_state import (  # noqa: E402
     normalize_ci_checks,
 )
 from swarmer.pr_watcher_store import extract_repo_from_url  # noqa: E402
+from swarmer.pr_watcher import _classify_comment_event  # noqa: E402
+
+
+class TestPRCommentEventClassification(unittest.TestCase):
+    def test_accepts_issue_inline_and_nonempty_review_comments(self):
+        cases = [
+            {"type": "IssueCommentEvent", "id": "i1", "created_at": "2026-09-16T12:00:00Z", "payload": {"action": "created", "issue": {"number": 1, "pull_request": {}}}},
+            {"type": "PullRequestReviewCommentEvent", "id": "i2", "created_at": "2026-09-16T12:00:00Z", "payload": {"action": "created", "pull_request": {"number": 2}}},
+            {"type": "PullRequestReviewEvent", "id": "i3", "created_at": "2026-09-16T12:00:00Z", "payload": {"action": "submitted", "review": {"body": "LGTM"}, "pull_request": {"number": 3}}},
+        ]
+        assert [_classify_comment_event(event)[0] for event in cases] == [1, 2, 3]
+
+    def test_ignores_empty_reviews_and_non_creation_actions(self):
+        empty = {"type": "PullRequestReviewEvent", "id": "i4", "payload": {"action": "submitted", "review": {"body": " "}, "pull_request": {"number": 4}}}
+        edited = {"type": "IssueCommentEvent", "id": "i5", "payload": {"action": "edited", "issue": {"number": 5, "pull_request": {}}}}
+        assert _classify_comment_event(empty) is None
+        assert _classify_comment_event(edited) is None
 
 
 class TestPRStateNormalization(unittest.TestCase):
