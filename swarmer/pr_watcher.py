@@ -483,8 +483,10 @@ def _classify_comment_event(event: dict[str, Any]) -> tuple[int, str, datetime, 
     author_association = (
         comment_obj.get("author_association")
         or actor_obj.get("author_association")
-        or "NONE"
+        or ""
     )
+    if not actor_login or not author_association:
+        return None
 
     created_at = parse_iso_datetime(event.get("created_at")) or datetime.now(timezone.utc)
     return number, str(event["id"]), created_at, actor_login, author_association
@@ -520,11 +522,13 @@ def _schedule_matches_author_scope(
     comment_actor_association: str | None = None,
 ) -> bool:
     """Apply author routing after the event condition has matched."""
-    check_login = (
-        comment_actor_login
-        if (sched.event_condition == "pr_comment" and comment_actor_login)
-        else pr.author_login
-    )
+    if sched.event_condition == "pr_comment":
+        if not comment_actor_login or not comment_actor_association:
+            return False
+        check_login = comment_actor_login
+    else:
+        check_login = pr.author_login
+
     author_lower = check_login.lower()
     fix_logins = sched.fix_author_logins
     is_self = author_lower in fix_logins if fix_logins else False
@@ -535,7 +539,7 @@ def _schedule_matches_author_scope(
     if sched.author_scope == "team":
         if is_self or is_bot:
             return False
-        if sched.event_condition == "pr_comment" and comment_actor_association:
+        if sched.event_condition == "pr_comment":
             if comment_actor_association not in TRUSTED_ASSOCIATIONS:
                 return False
         else:

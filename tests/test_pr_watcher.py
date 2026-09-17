@@ -28,9 +28,21 @@ from swarmer.pr_watcher import _classify_comment_event  # noqa: E402
 class TestPRCommentEventClassification(unittest.TestCase):
     def test_accepts_issue_inline_and_nonempty_review_comments(self):
         cases = [
-            {"type": "IssueCommentEvent", "id": "i1", "created_at": "2026-09-16T12:00:00Z", "payload": {"action": "created", "issue": {"number": 1, "pull_request": {}}}},
-            {"type": "PullRequestReviewCommentEvent", "id": "i2", "created_at": "2026-09-16T12:00:00Z", "payload": {"action": "created", "pull_request": {"number": 2}}},
-            {"type": "PullRequestReviewEvent", "id": "i3", "created_at": "2026-09-16T12:00:00Z", "payload": {"action": "submitted", "review": {"body": "LGTM"}, "pull_request": {"number": 3}}},
+            {
+                "type": "IssueCommentEvent", "id": "i1", "created_at": "2026-09-16T12:00:00Z",
+                "actor": {"login": "alice", "author_association": "MEMBER"},
+                "payload": {"action": "created", "issue": {"number": 1, "pull_request": {}}},
+            },
+            {
+                "type": "PullRequestReviewCommentEvent", "id": "i2", "created_at": "2026-09-16T12:00:00Z",
+                "actor": {"login": "bob"},
+                "payload": {"action": "created", "pull_request": {"number": 2}, "comment": {"author_association": "COLLABORATOR"}},
+            },
+            {
+                "type": "PullRequestReviewEvent", "id": "i3", "created_at": "2026-09-16T12:00:00Z",
+                "actor": {"login": "carol"},
+                "payload": {"action": "submitted", "review": {"body": "LGTM", "author_association": "OWNER"}, "pull_request": {"number": 3}},
+            },
         ]
         assert [_classify_comment_event(event)[0] for event in cases] == [1, 2, 3]
 
@@ -39,6 +51,19 @@ class TestPRCommentEventClassification(unittest.TestCase):
         edited = {"type": "IssueCommentEvent", "id": "i5", "payload": {"action": "edited", "issue": {"number": 5, "pull_request": {}}}}
         assert _classify_comment_event(empty) is None
         assert _classify_comment_event(edited) is None
+
+    def test_rejects_missing_actor_or_association(self):
+        no_actor = {
+            "type": "IssueCommentEvent", "id": "i6", "created_at": "2026-09-16T12:00:00Z",
+            "payload": {"action": "created", "issue": {"number": 1, "pull_request": {}}, "comment": {"author_association": "MEMBER"}},
+        }
+        no_assoc = {
+            "type": "IssueCommentEvent", "id": "i7", "created_at": "2026-09-16T12:00:00Z",
+            "actor": {"login": "alice"},
+            "payload": {"action": "created", "issue": {"number": 1, "pull_request": {}}},
+        }
+        assert _classify_comment_event(no_actor) is None
+        assert _classify_comment_event(no_assoc) is None
 
 
 class TestPRStateNormalization(unittest.TestCase):
@@ -1098,6 +1123,8 @@ class TestPRCommentDispatchFixes(unittest.IsolatedAsyncioTestCase):
                     "type": "IssueCommentEvent",
                     "at": datetime.now(timezone.utc),
                     "created_at": datetime.now(timezone.utc),
+                    "actor_login": "author-test",
+                    "author_association": "CONTRIBUTOR",
                 }
             }
 
