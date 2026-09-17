@@ -10,6 +10,7 @@ permissions:
 
 jobs:
   kind-lifecycle:
+    name: E2E test
     runs-on: ubuntu-latest
     env:
       CONTAINER_CMD: docker
