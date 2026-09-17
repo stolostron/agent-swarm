@@ -40,6 +40,16 @@ def test_makefile_manifest_fallback_present():
     assert pattern.search(content), "Makefile deploy target missing sandbox.yaml -> manifest.yaml fallback"
 
 
+def test_makefile_kind_destroy_alias_and_e2e_target():
+    """The lifecycle smoke test has a stable destroy alias and Make target."""
+    with open(MAKEFILE_PATH, "r", encoding="utf-8") as f:
+        content = f.read()
+
+    assert "kind-destroy: kind-delete" in content
+    assert "test-e2e-kind:" in content
+    assert "scripts/e2e_kind_deploy.py" in content
+
+
 def test_makefile_openshift_scc_includes_agent_sandbox_and_openshell():
     """Verify OpenShift SCC grants include agent-sandbox-controller, openshell, and openshell-sandbox."""
     with open(MAKEFILE_PATH, "r", encoding="utf-8") as f:

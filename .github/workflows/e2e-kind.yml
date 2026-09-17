@@ -1,0 +1,43 @@
+name: KinD E2E
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  kind-lifecycle:
+    runs-on: ubuntu-latest
+    env:
+      CONTAINER_CMD: docker
+      KIND_CLUSTER: swarmer
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install KinD
+        run: |
+          curl -fsSLo kind https://kind.sigs.k8s.io/dl/v0.32.0/kind-linux-amd64
+          chmod +x kind
+          sudo mv kind /usr/local/bin/kind
+          kind version
+
+      - name: Set up Swarmer secret
+        run: make setup-secret
+
+      - name: Run KinD deployment lifecycle e2e
+        run: make test-e2e-kind
+
+      - name: Collect diagnostics on failure
+        if: failure()
+        run: |
+          kubectl get pods -A -o wide || true
+          kubectl get events -A --sort-by='.lastTimestamp' || true
+          kubectl logs -n swarmer deployment/swarmer --tail=200 || true
+          kubectl logs -n openshell deployment/openshell --tail=200 || true
+
+      - name: Destroy KinD cluster
+        if: always()
+        run: make kind-destroy

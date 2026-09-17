@@ -171,6 +171,8 @@ Dashboard: http://localhost:8080 (via NodePort — no port-forward needed)
 Teardown:
 ```sh
 make kind-delete     # deletes the kind cluster and all data inside it
+make kind-destroy    # alias for kind-delete
+make test-e2e-kind   # create, validate, and destroy a fresh KinD deployment
 ```
 
 ### Option 3 — Kind Hybrid (Hot-Reload Dev)
