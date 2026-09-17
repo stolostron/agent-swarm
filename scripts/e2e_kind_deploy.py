@@ -143,13 +143,14 @@ async def call_mcp_get_me(api_url: str, token: str) -> dict:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--cluster-name", default=os.getenv("KIND_CLUSTER", "swarmer"))
+    parser.add_argument("--namespace", default=os.getenv("NAMESPACE", "swarmer"))
     parser.add_argument("--user", default="e2e-tester")
     parser.add_argument("--timeout", type=int, default=600)
     parser.add_argument("--keep-cluster", action="store_true")
     parser.add_argument("--url", default=DEFAULT_URL)
     args = parser.parse_args()
 
-    make = ["make", f"KIND_CLUSTER={args.cluster_name}"]
+    make = ["make", f"KIND_CLUSTER={args.cluster_name}", f"NAMESPACE={args.namespace}"]
     cleanup_needed = False
     failed = False
 
@@ -177,7 +178,7 @@ def main() -> int:
                 "status",
                 "deployment/swarmer",
                 "-n",
-                "swarmer",
+                args.namespace,
                 f"--timeout={args.timeout}s",
             ],
             timeout=args.timeout + 30,
@@ -198,7 +199,7 @@ def main() -> int:
         log_step("HTTP connectivity", True)
 
         status, _, body = request(f"{args.url.rstrip('/')}/api/v1/me", token=token)
-        expected_user = f"system:serviceaccount:swarmer:{args.user}"
+        expected_user = f"system:serviceaccount:{args.namespace}:{args.user}"
         if status != 200 or expected_user not in body:
             raise RuntimeError(f"/api/v1/me returned HTTP {status}: {body[:300]}")
         log_step("bearer token authentication", True)

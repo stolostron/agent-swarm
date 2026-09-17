@@ -3,10 +3,19 @@
 import os
 import re
 import subprocess
-import pytest
+import importlib.util
 
 REPO_ROOT = os.path.join(os.path.dirname(__file__), "..")
 MAKEFILE_PATH = os.path.join(REPO_ROOT, "Makefile")
+E2E_SCRIPT_PATH = os.path.join(REPO_ROOT, "scripts", "e2e_kind_deploy.py")
+
+
+def _load_e2e_script():
+    spec = importlib.util.spec_from_file_location("e2e_kind_deploy", E2E_SCRIPT_PATH)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def test_makefile_agent_sandbox_version_default():
@@ -48,6 +57,49 @@ def test_makefile_kind_destroy_alias_and_e2e_target():
     assert "kind-destroy: kind-delete" in content
     assert "test-e2e-kind:" in content
     assert "scripts/e2e_kind_deploy.py" in content
+    assert "--namespace $(NAMESPACE)" in content
+
+
+def test_e2e_existing_cluster_is_not_destroyed(monkeypatch, capsys):
+    """A pre-existing cluster must not be treated as test-owned cleanup."""
+    e2e = _load_e2e_script()
+    commands = []
+    monkeypatch.setattr(e2e, "require_commands", lambda commands: None)
+    monkeypatch.setattr(e2e, "assert_port_available", lambda port: None)
+    monkeypatch.setattr(e2e, "cluster_exists", lambda cluster: True)
+    monkeypatch.setattr(e2e, "run", lambda command, timeout: commands.append(command))
+    monkeypatch.setattr(e2e.sys, "argv", ["e2e_kind_deploy.py"])
+
+    assert e2e.main() == 1
+    assert not any("kind-destroy" in command for command in commands)
+    assert "already exists" in capsys.readouterr().out
+
+
+def test_e2e_uses_namespace_for_deploy_and_rollout(monkeypatch):
+    """The configured namespace must be passed to Make and kubectl."""
+    e2e = _load_e2e_script()
+    commands = []
+    cluster_checks = iter([False, False])
+
+    def fake_run(command, timeout):
+        commands.append(command)
+        if "kind-deploy" in command:
+            return subprocess.CompletedProcess(command, 0, "", "")
+        if command[:2] == ["kubectl", "rollout"]:
+            return subprocess.CompletedProcess(command, 1, "", "rollout failed")
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    monkeypatch.setattr(e2e, "require_commands", lambda commands: None)
+    monkeypatch.setattr(e2e, "assert_port_available", lambda port: None)
+    monkeypatch.setattr(e2e, "cluster_exists", lambda cluster: next(cluster_checks))
+    monkeypatch.setattr(e2e, "run", fake_run)
+    monkeypatch.setattr(e2e.sys, "argv", ["e2e_kind_deploy.py", "--namespace", "custom-ns"])
+
+    assert e2e.main() == 1
+    assert ["KIND_CLUSTER=swarmer", "NAMESPACE=custom-ns"] == commands[0][1:3]
+    rollout = next(command for command in commands if command[:2] == ["kubectl", "rollout"])
+    assert rollout[rollout.index("-n") + 1] == "custom-ns"
+    assert any("kind-destroy" in command for command in commands)
 
 
 def test_makefile_openshift_scc_includes_agent_sandbox_and_openshell():

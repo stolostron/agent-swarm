@@ -18,11 +18,15 @@ jobs:
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+        with:
+          persist-credentials: false
 
       - name: Install KinD
         run: |
           curl -fsSLo kind https://kind.sigs.k8s.io/dl/v0.32.0/kind-linux-amd64
+          curl -fsSLo kind.sha256sum https://kind.sigs.k8s.io/dl/v0.32.0/kind-linux-amd64.sha256sum
+          sha256sum --check --ignore-missing kind.sha256sum
           chmod +x kind
           sudo mv kind /usr/local/bin/kind
           kind version
@@ -43,7 +47,3 @@ jobs:
           kubectl get events -A --sort-by='.lastTimestamp' || true
           kubectl logs -n swarmer deployment/swarmer --tail=200 || true
           kubectl logs -n openshell deployment/openshell --tail=200 || true
-
-      - name: Destroy KinD cluster
-        if: always()
-        run: make kind-destroy
