@@ -15,6 +15,7 @@ from swarmer.config import settings
 from swarmer.pr_state import (
     DEFAULT_BOT_LOGINS,
     PRState,
+    TRUSTED_ASSOCIATIONS,
     TrustPolicy,
     TrustStrategy,
     evaluate_author_trust,
@@ -446,26 +447,46 @@ def _extract_event_pr_numbers(events: list[dict[str, Any]]) -> set[int]:
     return pr_numbers
 
 
-def _classify_comment_event(event: dict[str, Any]) -> tuple[int, str, datetime] | None:
+def _classify_comment_event(event: dict[str, Any]) -> tuple[int, str, datetime, str, str] | None:
     payload = event.get("payload") or {}
     event_type = event.get("type", "")
     action = payload.get("action")
+    comment_obj: dict[str, Any] = {}
     if event_type == "IssueCommentEvent" and action == "created":
         issue = payload.get("issue") or {}
         if "pull_request" not in issue or issue.get("pull_request") is None:
             return None
         number = issue.get("number")
+        comment_obj = payload.get("comment") or {}
     elif event_type == "PullRequestReviewCommentEvent" and action == "created":
         number = (payload.get("pull_request") or {}).get("number")
+        comment_obj = payload.get("comment") or {}
     elif event_type == "PullRequestReviewEvent" and action == "submitted":
-        if not ((payload.get("review") or {}).get("body") or "").strip():
+        review = payload.get("review") or {}
+        if not ((review.get("body") or "").strip()):
             return None
         number = (payload.get("pull_request") or {}).get("number")
+        comment_obj = review
     else:
         return None
     if not isinstance(number, int) or not event.get("id"):
         return None
-    return number, str(event["id"]), parse_iso_datetime(event.get("created_at")) or datetime.now(timezone.utc)
+
+    actor_obj = event.get("actor") or {}
+    actor_login = (
+        actor_obj.get("login")
+        or (comment_obj.get("user") or {}).get("login")
+        or (payload.get("sender") or {}).get("login")
+        or ""
+    )
+    author_association = (
+        comment_obj.get("author_association")
+        or actor_obj.get("author_association")
+        or "NONE"
+    )
+
+    created_at = parse_iso_datetime(event.get("created_at")) or datetime.now(timezone.utc)
+    return number, str(event["id"]), created_at, actor_login, author_association
 
 
 async def _fresh_comment_events(db, repo: str, events: list[dict[str, Any]]) -> dict[int, dict[str, Any]]:
@@ -474,7 +495,7 @@ async def _fresh_comment_events(db, repo: str, events: list[dict[str, Any]]) -> 
         classified = _classify_comment_event(event)
         if not classified:
             continue
-        number, event_id, event_at = classified
+        number, event_id, event_at, actor_login, author_association = classified
         if not await has_event_receipt(db, repo, event_id):
             observed_at = datetime.now(timezone.utc)
             previous = fresh.get(number)
@@ -484,6 +505,8 @@ async def _fresh_comment_events(db, repo: str, events: list[dict[str, Any]]) -> 
                     "type": event.get("type", ""),
                     "at": observed_at,
                     "created_at": event_at,
+                    "actor_login": actor_login,
+                    "author_association": author_association,
                 }
     return fresh
 
@@ -492,25 +515,36 @@ def _schedule_matches_author_scope(
     pr: PRState,
     sched: SessionSchedule,
     label_events: list[dict[str, Any]] | None = None,
+    comment_actor_login: str | None = None,
+    comment_actor_association: str | None = None,
 ) -> bool:
     """Apply author routing after the event condition has matched."""
-    author_lower = pr.author_login.lower()
+    check_login = (
+        comment_actor_login
+        if (sched.event_condition == "pr_comment" and comment_actor_login)
+        else pr.author_login
+    )
+    author_lower = check_login.lower()
     fix_logins = sched.fix_author_logins
     is_self = author_lower in fix_logins if fix_logins else False
-    is_bot = is_bot_author(pr.author_login, set(DEFAULT_BOT_LOGINS))
+    is_bot = is_bot_author(check_login, set(DEFAULT_BOT_LOGINS))
 
     if sched.author_scope == "self" and not is_self:
         return False
     if sched.author_scope == "team":
         if is_self or is_bot:
             return False
-        trust = evaluate_author_trust(
-            pr,
-            policy=TrustPolicy(strategy=TrustStrategy.ORG_AND_COLLABORATORS),
-            label_events=label_events,
-        )
-        if not trust.is_trusted:
-            return False
+        if sched.event_condition == "pr_comment" and comment_actor_association:
+            if comment_actor_association not in TRUSTED_ASSOCIATIONS:
+                return False
+        else:
+            trust = evaluate_author_trust(
+                pr,
+                policy=TrustPolicy(strategy=TrustStrategy.ORG_AND_COLLABORATORS),
+                label_events=label_events,
+            )
+            if not trust.is_trusted:
+                return False
     if sched.author_scope == "bots" and not is_bot:
         return False
     return True
@@ -522,6 +556,8 @@ def _match_triggers_for_pr(
     sched_sessions: list[tuple[SessionSchedule, Session]],
     label_events: list[dict[str, Any]] | None = None,
     blocked_conditions: set[str] | None = None,
+    comment_actor_login: str | None = None,
+    comment_actor_association: str | None = None,
 ) -> list[tuple[SessionSchedule, Session]]:
     """Find all schedules whose conditions and author scopes match a PR."""
     if pr.is_draft:
@@ -535,7 +571,13 @@ def _match_triggers_for_pr(
             continue
         if blocked_conditions and sched.event_condition in blocked_conditions:
             continue
-        if _schedule_matches_author_scope(pr, sched, label_events):
+        if _schedule_matches_author_scope(
+            pr,
+            sched,
+            label_events,
+            comment_actor_login=comment_actor_login,
+            comment_actor_association=comment_actor_association,
+        ):
             matches.append((sched, session))
     return matches
 
@@ -854,11 +896,14 @@ async def _evaluate_and_dispatch_prs(
         if not matched_conditions:
             continue
 
+        comment = (comment_events or {}).get(pr_state.pr_number)
         matches = _match_triggers_for_pr(
             pr_state,
             matched_conditions,
             sched_sessions,
             label_events,
+            comment_actor_login=comment.get("actor_login") if comment else None,
+            comment_actor_association=comment.get("author_association") if comment else None,
         )
         if not matches:
             log.debug(
@@ -869,7 +914,61 @@ async def _evaluate_and_dispatch_prs(
             )
             continue
 
-        for sched, session in matches:
+        pr_comment_matches = [
+            (s, sess) for s, sess in matches if s.event_condition == "pr_comment"
+        ]
+        other_matches = [
+            (s, sess) for s, sess in matches if s.event_condition != "pr_comment"
+        ]
+
+        if pr_comment_matches:
+            if comment:
+                comment_rows: list[tuple[SessionSchedule, Session, Any, str]] = []
+                for sched, session in pr_comment_matches:
+                    event_ctx = _build_event_context(
+                        sched=sched, repo=repo, pr_state=pr_state, condition="pr_comment",
+                    )
+                    ctx_str = json.dumps(event_ctx)
+                    row = await upsert_comment_dispatch(
+                        db, repo=repo, pr_number=pr_state.pr_number, session_id=session.id,
+                        schedule_id=sched.id, head_sha=pr_state.head_sha,
+                        event_context=ctx_str, event_id=comment["id"], event_at=comment["at"],
+                        delay_minutes=sched.delay_minutes,
+                        event_type=comment.get("type", ""),
+                        event_created_at=comment.get("created_at"),
+                        commit=False,
+                    )
+                    comment_rows.append((sched, session, row, ctx_str))
+
+                # Atomically commit all matching comment dispatches and the receipt
+                await db.commit()
+                for _, _, r, _ in comment_rows:
+                    await db.refresh(r)
+
+                for sched, session, row, event_ctx_json in comment_rows:
+                    if sched.delay_minutes:
+                        continue
+                    outcome, err = await _dispatch_session_run(
+                        db, session=session, sched=sched, event_ctx_json=event_ctx_json,
+                        action_key="pr_comment", repo=repo, pr_number=pr_state.pr_number,
+                        head_sha=pr_state.head_sha, queue_if_active=False,
+                    )
+                    if outcome == "launched":
+                        await update_comment_dispatch(db, row, status="dispatched")
+                    elif outcome == "failed":
+                        await update_comment_dispatch(db, row, status="failed", error=err)
+            else:
+                for sched, session in pr_comment_matches:
+                    queued = await get_comment_dispatch(db, repo, pr_state.pr_number, sched.id)
+                    if queued and queued.status == "queued":
+                        event_ctx = _build_event_context(
+                            sched=sched, repo=repo, pr_state=pr_state, condition="pr_comment",
+                        )
+                        queued.head_sha = pr_state.head_sha
+                        queued.event_context = json.dumps(event_ctx)
+                        await db.commit()
+
+        for sched, session in other_matches:
             condition = sched.event_condition
             event_ctx = _build_event_context(
                 sched=sched,
@@ -878,36 +977,6 @@ async def _evaluate_and_dispatch_prs(
                 condition=condition,
             )
             event_ctx_json = json.dumps(event_ctx)
-
-            if condition == "pr_comment":
-                comment = (comment_events or {}).get(pr_state.pr_number)
-                if not comment:
-                    queued = await get_comment_dispatch(db, repo, pr_state.pr_number, sched.id)
-                    if queued and queued.status == "queued":
-                        queued.head_sha = pr_state.head_sha
-                        queued.event_context = event_ctx_json
-                        await db.commit()
-                    continue
-                row = await upsert_comment_dispatch(
-                    db, repo=repo, pr_number=pr_state.pr_number, session_id=session.id,
-                    schedule_id=sched.id, head_sha=pr_state.head_sha,
-                    event_context=event_ctx_json, event_id=comment["id"], event_at=comment["at"],
-                    delay_minutes=sched.delay_minutes,
-                    event_type=comment.get("type", ""),
-                    event_created_at=comment.get("created_at"),
-                )
-                if sched.delay_minutes:
-                    continue
-                outcome, err = await _dispatch_session_run(
-                    db, session=session, sched=sched, event_ctx_json=event_ctx_json,
-                    action_key=condition, repo=repo, pr_number=pr_state.pr_number,
-                    head_sha=pr_state.head_sha, queue_if_active=False,
-                )
-                if outcome == "launched":
-                    await update_comment_dispatch(db, row, status="dispatched")
-                elif outcome == "failed":
-                    await update_comment_dispatch(db, row, status="failed", error=err)
-                continue
 
             if await is_blocked(
                 db,
