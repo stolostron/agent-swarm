@@ -16,6 +16,7 @@ for debugging.
 from __future__ import annotations
 
 import argparse
+import asyncio
 import os
 import re
 import shutil
@@ -123,6 +124,22 @@ def wait_for_http(url: str, timeout: int) -> tuple[int, str, str]:
     raise RuntimeError(last_error)
 
 
+async def call_mcp_get_me(api_url: str, token: str) -> dict:
+    """Call the MCP tool in-process over FastMCP's client protocol."""
+    sys.path.insert(0, os.path.join(REPO_ROOT, "mcp-server"))
+    from agent_swarm_mcp_server.config import AgentSwarmConfig
+    from agent_swarm_mcp_server.server import AgentSwarmMCPServer
+    from fastmcp import Client
+
+    server = AgentSwarmMCPServer(AgentSwarmConfig(api_url=api_url, token=token))
+    async with Client(server.mcp) as client:
+        result = await client.call_tool("get_me")
+    structured_content = getattr(result, "structured_content", None)
+    if result.is_error or not structured_content:
+        raise RuntimeError("MCP get_me returned an error or no structured content")
+    return structured_content
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--cluster-name", default=os.getenv("KIND_CLUSTER", "swarmer"))
@@ -190,6 +207,11 @@ def main() -> int:
         if status != 200:
             raise RuntimeError(f"/api/v1/workspaces returned HTTP {status}")
         log_step("authenticated workspace API", True)
+
+        mcp_identity = asyncio.run(call_mcp_get_me(args.url, token))
+        if mcp_identity.get("username") != expected_user:
+            raise RuntimeError("MCP get_me returned an unexpected identity")
+        log_step("MCP get_me tool", True)
 
         status, location, _ = request(
             f"{args.url.rstrip('/')}/login", form=urlencode({"token": token})

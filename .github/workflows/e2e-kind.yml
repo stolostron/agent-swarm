@@ -30,6 +30,9 @@ jobs:
       - name: Set up Swarmer secret
         run: make setup-secret
 
+      - name: Install MCP server
+        run: python3 -m pip install --quiet -e mcp-server
+
       - name: Run KinD deployment lifecycle e2e
         run: make test-e2e-kind
 
