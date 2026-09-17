@@ -9,6 +9,7 @@ from typing import Any
 
 import httpx
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import selectinload
 
 from swarmer.config import settings
@@ -941,7 +942,11 @@ async def _evaluate_and_dispatch_prs(
                     comment_rows.append((sched, session, row, ctx_str))
 
                 # Atomically commit all matching comment dispatches and the receipt
-                await db.commit()
+                try:
+                    await db.commit()
+                except IntegrityError:
+                    await db.rollback()
+                    raise
                 for _, _, r, _ in comment_rows:
                     await db.refresh(r)
 
