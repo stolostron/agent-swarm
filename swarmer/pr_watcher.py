@@ -262,7 +262,7 @@ async def _fetch_actor_association(
         )
         if resp.is_success:
             permission = (resp.json().get("permission") or "").lower()
-            return {"admin": "OWNER", "maintain": "MEMBER", "push": "COLLABORATOR", "triage": "COLLABORATOR"}.get(
+            return {"admin": "OWNER", "maintain": "MEMBER", "write": "COLLABORATOR", "triage": "COLLABORATOR"}.get(
                 permission, "NONE"
             )
     except Exception:
