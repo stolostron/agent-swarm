@@ -51,7 +51,8 @@ python3 scripts/openshell_smoke_test.py                          # OpenCode + Ge
 python3 scripts/openshell_smoke_test.py --vertex                 # OpenCode + Claude via VertexAI
 python3 scripts/openshell_smoke_test.py --policy-extract --repo https://github.com/org/repo  # git clone + policy
 python3 scripts/openshell_jira_smoke_test.py                     # Jira MCP: env → policy → binary → mcp-server
-# See docs/ARCHITECTURE.md "Adding a new MCP server" for how to write new smoke tests
+# See `swarmer/openshell_policy.py` and `scripts/openshell_jira_smoke_test.py` when adding
+# an MCP integration; update policy, provider injection, unit tests, and an e2e smoke test.
 
 # User management
 make user-token SA_USER=alice   # Issue a K8s login token (default 8h); logs in as
@@ -70,7 +71,7 @@ make user-token SA_USER=alice   # Issue a K8s login token (default 8h); logs in 
 
 ## Architecture
 
-For system architecture, data flows, module layout, and guidance on adding new features, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+For system architecture, data flows, module layout, cross-repository image/version flow, and OpenShell deployment contracts, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Sensitive Data Policy
 
