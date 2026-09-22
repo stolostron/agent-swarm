@@ -38,7 +38,7 @@ repository root; symbols are the preferred code entry points.
 | Authn | `swarmer/k8s_auth.py`, `swarmer/deps.py`, `swarmer/routers/auth.py` | TokenReview, `require_auth`, `get_user_token`, login/OAuth callbacks |
 | Workspace authz | `swarmer/workspace_acl.py`, `swarmer/models/workspace_member.py`, `swarmer/models/global_admin.py` | Owner/member/admin checks; `can_access_workspace()` and user discovery |
 | Session orchestration | `swarmer/routers/sessions.py` | `_do_launch()`, `_setup_openshell_sandbox()`, `_run_openshell_agent()`, stop/delete paths |
-| Cron and queue | `swarmer/scheduler.py` | 30-second cron/queue loop; `_process_queue()`; sandbox GC; capacity limit |
+| Cron and queue | `swarmer/scheduler.py` | 30-second scheduler tick for cron and queue processing; `_process_queue()` applies a 2-minute retry cooldown when capacity is full; sandbox GC; capacity limit |
 | GitHub PR events | `swarmer/pr_watcher.py` | In-process ETag polling, trust filters, debounce, circuit breaker, event dispatch |
 | OpenShell SDK boundary | `swarmer/openshell_client.py` | `create_sandbox()`, `start_agent()`, `exec_command()`, `exec_interactive()`, `expose_service()` |
 | OpenShell policy | `swarmer/openshell_policy.py` | `build_session_network_policies()`; OPA/Landlock + egress proxy rules |
@@ -71,8 +71,8 @@ repository root; symbols are the preferred code entry points.
 ### Application startup
 
 `main.py:lifespan()` -> `init_crypto()` -> `init_db()` / `migrate_db()` -> initialize K8s
-and settings -> restart surviving server/TUI sessions and GitHub IAT refresh loops -> start
-`scheduler.py` and `pr_watcher.py` background tasks.
+and settings -> restart surviving prompt pollers, server/TUI sessions, and GitHub IAT
+refresh loops -> start `scheduler.py` and `pr_watcher.py` background tasks.
 
 ### Session launch
 
