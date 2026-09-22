@@ -8,9 +8,10 @@ repository root; symbols are the preferred code entry points.
 
 - **OpenShell owns agent runtimes.** Swarmer does not create session pods, PVCs, Services,
   Routes, or session credential Secrets. It calls the OpenShell Gateway and Supervisor.
-- **The Gateway owns credential injection.** AI credentials, GitHub credentials, MCP
-  credentials, and workspace environment variables are registered with Gateway providers
-  and injected into sandboxes at launch.
+- **The Gateway owns credential injection.** AI credentials, GitHub credentials, and MCP
+  credentials are registered with Gateway providers and injected into sandboxes at launch.
+  Workspace environment variables are passed directly to the agent process through
+  `ExecSandboxRequest.environment`.
 - **Kubernetes authenticates identity, not workspace authorization.** `k8s_auth.py` uses
   TokenReview or its fallback identity probe. Workspace access is enforced by the database
   ACL in `workspace_acl.py`; do not add K8s RBAC checks to workspace operations.
@@ -56,11 +57,11 @@ repository root; symbols are the preferred code entry points.
 
 | Entity | Source | Meaning |
 |---|---|---|
-| `Workspace` | `swarmer/models/workspace.py` | Logical owner of sessions and credentials; namespace is only a legacy Secret slug |
+| `Workspace` | `swarmer/models/workspace.py` | Logical owner of sessions and credentials; derived namespace remains the slug for pull-secret operations and image-availability checks |
 | `WorkspaceMember` / `GlobalAdmin` | `swarmer/models/` | Database ACL membership and global administration |
 | `Session` | `swarmer/models/session.py` | Agent run: `prompt`, `server`, or `tui`; phases include `idle`, `queued`, `pending`, `running`, `succeeded`, `failed`, `stopped` |
 | `SessionRun` | `swarmer/models/session_run.py` | Historical completed execution, trigger metadata, processed/raw output |
-| `SessionSchedule` | `swarmer/models/session.py` | `cron` or GitHub `event` trigger; cron sets prompt mode at launch |
+| `SessionSchedule` | `swarmer/models/session_schedule.py` | `cron` or GitHub `event` trigger; cron sets prompt mode at launch |
 | `SessionRepo` | `swarmer/models/session_repo.py` | Repository cloned into `/sandbox` at launch |
 | `GitHubPAT` / `GitHubApp` | `swarmer/models/` | Encrypted Git credentials; App credentials produce short-lived IATs |
 | `McpServer` / `SandboxEnvVar` | `swarmer/models/` | Encrypted MCP credentials and workspace environment injection |
@@ -101,8 +102,10 @@ ACL helpers; they must not inspect bearer headers or implement ad hoc access che
 
 `scheduler.py` checks every 30 seconds -> atomically claims due schedules -> changes the
 scheduled run to prompt mode -> calls shared `_do_launch()` -> queues when capacity is full.
-The same task performs FIFO queue processing and periodic orphan sandbox GC. Queued sessions
-are not failures and have no sandbox to delete.
+The cron scheduler task also performs FIFO queue processing; a separate `sandbox-gc`
+background task periodically collects orphaned sandboxes. When capacity is full,
+`_process_queue()` applies a 2-minute retry cooldown. Queued sessions are not failures and
+have no sandbox to delete.
 
 ### Event-driven PR watcher
 
