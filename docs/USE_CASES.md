@@ -83,7 +83,7 @@ knowledge between otherwise stateless runs.
 ## Session Execution Modes
 
 - **Prompt:** Run a one-shot task, preserve the agent output and raw log, and
-  clean up the sandbox after completion.
+  clean up the sandbox after successful completion.
 - **TUI:** Keep an interactive terminal session available through the browser.
 - **Server:** Keep an OpenCode server running and expose its web interface
   through the chat proxy.
