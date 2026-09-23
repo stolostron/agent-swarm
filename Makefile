@@ -29,6 +29,7 @@ LOCAL_PORT      ?= 8080
 OS_LOCAL_PORT   ?= 17671
 
 # User token duration
+TOKEN_DURATION ?= 8h
 # agent-containers build defaults (registry + image tag — checked in)
 AC_DEFAULTS ?= .push-defaults
 
