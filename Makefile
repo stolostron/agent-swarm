@@ -195,6 +195,12 @@ grant-workspace-access:  # [Legacy/optional, hidden from `make help`] K8s namesp
 	esac
 	@python3 -c "$$K8S_DNS_LABEL_CHECK_PY" WORKSPACE_NS "$$_WORKSPACE_NS"
 	@python3 -c "$$K8S_DNS_LABEL_CHECK_PY" NAMESPACE "$$_NAMESPACE"
+	@kubectl get clusterrole swarmer-user > /dev/null 2>&1 || \
+	  (echo "Error: ClusterRole 'swarmer-user' not found on this cluster." >&2; \
+	   echo "The grant would silently do nothing without it. Apply the RBAC manifests first:" >&2; \
+	   echo "  kubectl apply -f k8s/swarmer/rbac.yaml" >&2; \
+	   echo "(or run 'make deploy', which applies it automatically)" >&2; \
+	   exit 1)
 	@if [ -n "$$_SA_USER" ]; then \
 	  _BIND_NAME=$$(python3 -c "$$K8S_SAFE_NAME_PY" swarmer-user "$$_SA_USER"); \
 	  kubectl create rolebinding "$$_BIND_NAME" \
@@ -227,6 +233,12 @@ grant-workspace-create:  # [Legacy/optional, hidden from `make help`] K8s Cluste
 	  *[!A-Za-z0-9._:@-]*) echo "Error: SA_USER/OIDC_USER may only contain letters, digits, and . _ - : @" >&2; exit 1 ;; \
 	esac
 	@python3 -c "$$K8S_DNS_LABEL_CHECK_PY" NAMESPACE "$$_NAMESPACE"
+	@kubectl get clusterrole swarmer-workspace-creator > /dev/null 2>&1 || \
+	  (echo "Error: ClusterRole 'swarmer-workspace-creator' not found on this cluster." >&2; \
+	   echo "The grant would silently do nothing without it. Apply the RBAC manifests first:" >&2; \
+	   echo "  kubectl apply -f k8s/swarmer/rbac.yaml" >&2; \
+	   echo "(or run 'make deploy', which applies it automatically)" >&2; \
+	   exit 1)
 	@if [ -n "$$_SA_USER" ]; then \
 	  _BIND_NAME=$$(python3 -c "$$K8S_SAFE_NAME_PY" swarmer-workspace-creator "$$_SA_USER"); \
 	  kubectl create clusterrolebinding "$$_BIND_NAME" \
