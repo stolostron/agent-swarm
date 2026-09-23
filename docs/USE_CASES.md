@@ -109,6 +109,31 @@ session can have multiple independent schedule rows, but one schedule cannot
 combine both trigger types. Event schedules can also specify author scope,
 event context, and a quiet-period delay.
 
+### Maintainer Executive Digest
+
+For a popular CNCF project with 1,000+ stars and fully public repositories,
+maintainers can set up a daily or weekly cronjob that reviews the entire org
+across all repos without requiring any GitHub credentials. The workflow can:
+
+- Collect newly opened issues and recently created or updated pull requests.
+- Triage each item in depth, tracking the latest discussion threads,
+  reviewer feedback, and maintainers' notes.
+- Score issues and PRs by urgency, blast radius, confidence, and maintenance
+  risk so the busiest signals surface first.
+- Compare the current state against `coderabbitai` suggested fixes and
+  `dosubot` triage guidance to propose next actions.
+- Export suggested fixes as downloadable `.patch` files so follow-up work can
+  be applied later without granting direct write access.
+- Pace GitHub API calls intelligently to avoid rate-limit spikes and retry
+  storms during large-org sweeps.
+
+The result is a single executive summary after each scheduled run that gives a maintainer
+or project lead a fast read on org-wide health, plus a drill-down path for
+opening the full context of any issue, PR, discussion, or recommended fix
+when deeper investigation is needed. The application records each terminal
+run's output and trigger metadata in run history. Scheduled runs can repeat as
+new activity appears, but they do not inherit prior prompt context.
+
 ## Inputs and Outputs
 
 Typical inputs include repositories and branches, prompt-library entries,
