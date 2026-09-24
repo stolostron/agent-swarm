@@ -299,6 +299,100 @@ oc apply -k kustomize/overlays/my-env
 - **Overlay pattern** — environment-specific values (namespace, image, env vars) are separated from the base manifests
 - **User onboarding** — `make user-token`, `make grant-workspace-access`, and `make grant-workspace-create` still work alongside Kustomize deployments
 
+### Option 6 — Bare Local Dev Against an Existing Cluster (No Kind)
+
+Run the FastAPI process directly on your laptop with `make dev`, pointed at a real Kubernetes/OpenShift cluster you already have access to — no Kind, no image build, no `make deploy`. Fastest way to browse the UI and iterate on Python code, at the cost of not being able to launch real agent sessions (no OpenShell gateway locally).
+
+Use this when: you just want to click around the dashboard, test workspace/session/secrets forms, or make a quick Python change — and you already have `kubectl`/`oc` pointed at a cluster.
+
+#### Prerequisites
+
+- A Kubernetes/OpenShift cluster you can already reach with `kubectl`/`oc` (any cluster — doesn't need OpenShell or Swarmer deployed on it)
+- Python 3.12 (the project targets 3.12; the container image uses `python-312-minimal`)
+- **macOS note:** Homebrew's Python does **not** provide a bare `pip` binary — only `pip3`, `pip3.12`, etc. Running `make dev` directly will fail with `make: pip: No such file or directory`. Use a virtualenv (below) so `pip`/`python`/`uvicorn` resolve correctly inside it.
+
+#### Setup
+
+```sh
+# 1. One-time: generate the Fernet encryption key
+make setup-secret
+
+# 2. Create and activate a Python 3.12 virtualenv
+python3.12 -m venv .venv
+source .venv/bin/activate          # bash/zsh
+# source .venv/bin/activate.fish   # fish shell
+
+# 3. Install dependencies into the venv
+pip install -r requirements.txt
+
+# 4. Create the SQLite data directory
+#    NOTE: make dev does NOT create this itself — a fresh clone will hit
+#    "sqlite3.OperationalError: unable to open database file" without it.
+mkdir -p data
+```
+
+#### Point the local process at your real cluster
+
+`config.py`'s default `K8S_API_URL` is `https://kubernetes.default.svc` — a hostname that **only resolves from inside a pod**. Running `make dev` without overriding it will authenticate you at login, but any subsequent K8s call (e.g. checking workspace-creation permission) fails with:
+
+```
+NameResolutionError: Failed to resolve 'kubernetes.default.svc'
+```
+
+Fix it by adding your cluster's real API URL to `.env`:
+
+```sh
+cp .env.example .env   # if you don't have one yet
+```
+
+Edit `.env` (or append):
+
+```sh
+K8S_API_URL=$(oc whoami --show-server)   # or paste it manually
+K8S_IN_CLUSTER=false
+```
+
+`.env` is gitignored — safe to put your real cluster URL there; it never gets committed or shared.
+
+#### Run it
+
+```sh
+make dev
+```
+
+Dashboard: http://localhost:8090
+
+```sh
+make user-token SA_USER=<you>   # prints a token, valid 8h by default
+```
+
+Paste the token into the login page. On current `main`, workspace creation is open to any authenticated user by default (`WORKSPACE_CREATE_POLICY=all`) — no RBAC grants (`make grant-workspace-access` / `make grant-workspace-create`) are needed just to log in and create a workspace. Those targets are legacy/optional, kept for older shared-namespace deployments (see [Access Control](../README.md#access-control) in the README).
+
+#### What this setup can and can't do
+
+| Capability | Works? |
+|---|---|
+| Browse the dashboard, log in | ✅ |
+| Create workspaces, configure secrets/MCP servers/env vars | ✅ |
+| Create and configure sessions | ✅ |
+| **Launch** a session (agent actually runs) | ❌ — needs a real OpenShell gateway |
+
+To also launch sessions from local dev, follow [docs/OPENSHELL_LOCAL_SETUP.md](OPENSHELL_LOCAL_SETUP.md)'s `make connect-openshell` step against a cluster where OpenShell/Swarmer have already been deployed (`make deploy`), and add the `OPENSHELL_*` variables to your `.env`.
+
+#### Troubleshooting
+
+**`make: pip: No such file or directory`**
+→ You're not in a virtualenv. See Setup step 2 above.
+
+**`sqlite3.OperationalError: unable to open database file`**
+→ The `data/` directory doesn't exist yet. Run `mkdir -p data`.
+
+**`/workspaces` page is empty, or returns a 500 with `NameResolutionError: kubernetes.default.svc`**
+→ `K8S_API_URL` isn't set to your real cluster. See "Point the local process at your real cluster" above. Restart `make dev` after editing `.env` (or restart from the same shell where you exported it, if using `set -x`/`export` instead of `.env`).
+
+**Fish shell: `set -x` only affects the shell it's run in**
+→ If `make dev` runs in a different terminal than the one where you set the env var, it won't see it. Either set it in the same terminal before running `make dev`, or (recommended) put it in `.env` so it applies regardless of which shell starts the process.
+
 ---
 
 ## Configure
