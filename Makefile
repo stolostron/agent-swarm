@@ -76,9 +76,13 @@ update-deps:  ## Fetch the latest stable OpenShell dependencies and update pins
 	 (echo "Error: neither sandbox.yaml nor manifest.yaml found for Agent Sandbox $(LATEST_AGENT_SANDBOX)" >&2 && exit 1)
 	@echo "OpenShell: $(OPENSHELL_VERSION) -> $(LATEST_OPENSHELL)"
 	@echo "Agent Sandbox: $(AGENT_SANDBOX_VERSION) -> $(LATEST_AGENT_SANDBOX)"
-	@sed -i 's/^OPENSHELL_VERSION\s*?= .*/OPENSHELL_VERSION        ?= $(LATEST_OPENSHELL)/' Makefile
-	@sed -i 's/^AGENT_SANDBOX_VERSION\s*?= .*/AGENT_SANDBOX_VERSION    ?= $(LATEST_AGENT_SANDBOX)/' Makefile
-	@sed -i 's/^openshell[=><].*$$/openshell==$(LATEST_OPENSHELL)     # OpenShell sandbox SDK; update with make update-deps/' requirements.txt
+	@# Portable in-place edit: GNU sed's `-i` and BSD/macOS sed's `-i` take backup-suffix
+	@# arguments differently (BSD requires `-i ''`), and `\s` is a GNU-only escape that
+	@# BSD sed silently fails to match. Use a temp-file swap + POSIX [[:space:]] instead
+	@# so this works identically on both.
+	@sed 's/^OPENSHELL_VERSION[[:space:]]*?= .*/OPENSHELL_VERSION        ?= $(LATEST_OPENSHELL)/' Makefile > Makefile.tmp && mv Makefile.tmp Makefile
+	@sed 's/^AGENT_SANDBOX_VERSION[[:space:]]*?= .*/AGENT_SANDBOX_VERSION    ?= $(LATEST_AGENT_SANDBOX)/' Makefile > Makefile.tmp && mv Makefile.tmp Makefile
+	@sed 's/^openshell[=><].*$$/openshell==$(LATEST_OPENSHELL)     # OpenShell sandbox SDK; update with make update-deps/' requirements.txt > requirements.txt.tmp && mv requirements.txt.tmp requirements.txt
 
 sync-images:  ## Sync AGENT_IMAGE_OPENCODE in .env from ../agent-containers .push-defaults
 	@test -f $(AC_DEFAULTS) || (echo "$(AC_DEFAULTS) not found — create/update .push-defaults first" && exit 1)
@@ -91,8 +95,10 @@ sync-images:  ## Sync AGENT_IMAGE_OPENCODE in .env from ../agent-containers .pus
 	  (echo "Error: IMAGE_TAG in $(AC_DEFAULTS) contains unsupported characters" >&2 && exit 1)
 	@echo "Syncing agent image → $(AC_REGISTRY)/opencode:$(AC_TAG)"
 	@if [ -f .env ]; then \
+	  umask 077; \
 	  grep -q "^AGENT_IMAGE_OPENCODE=" .env || echo "AGENT_IMAGE_OPENCODE=" >> .env; \
-	  sed -i "s|^AGENT_IMAGE_OPENCODE=.*|AGENT_IMAGE_OPENCODE=$(AC_REGISTRY)/opencode:$(AC_TAG)|" .env \
+	  sed "s|^AGENT_IMAGE_OPENCODE=.*|AGENT_IMAGE_OPENCODE=$(AC_REGISTRY)/opencode:$(AC_TAG)|" .env > .env.tmp \
+	    && mv .env.tmp .env \
 	    && echo "✓ Updated .env" \
 	    || (echo "Error: failed to update .env" >&2 && exit 1); \
 	else \
@@ -360,7 +366,7 @@ deploy:  ## Deploy swarmer to the current kubectl context  (SILENT=1 for non-int
 	@echo "$(OPENSHELL_WORKSPACE_STORAGE)" | grep -Eq '^[0-9]+(\.[0-9]+)?[EPTGMK]i?$$' || \
 	  (echo "Error: OPENSHELL_WORKSPACE_STORAGE must be a Kubernetes quantity (e.g. 10Gi)" >&2 && exit 1)
 	@set -e; \
-	HELM_VER=$$(helm version --short 2>/dev/null | grep -oP 'v\K[0-9]+\.[0-9]+' | head -1); \
+	HELM_VER=$$(helm version --short 2>/dev/null | sed -n 's/^v\([0-9]*\.[0-9]*\).*/\1/p' | head -1); \
 	HELM_MAJOR=$$(echo "$$HELM_VER" | cut -d. -f1); \
 	HELM_MINOR=$$(echo "$$HELM_VER" | cut -d. -f2); \
 	if [ -z "$$HELM_VER" ] || { [ "$$HELM_MAJOR" -lt 4 ] && { [ "$$HELM_MAJOR" -lt 3 ] || [ "$$HELM_MINOR" -lt 8 ]; }; }; then \
@@ -451,7 +457,10 @@ and pinned version $(OPENSHELL_VERSION) with chart defaults..."; \
 	@# Generate / refresh OpenShell bearer token
 	@TOKEN=$$(python3 scripts/openshell_gen_token.py 2>/dev/null || true); \
 	if [ -n "$$TOKEN" ]; then \
-	  sed -i '/^OPENSHELL_BEARER_TOKEN=/d' .env 2>/dev/null || true; \
+	  umask 077; \
+	  if [ -f .env ]; then \
+	    sed '/^OPENSHELL_BEARER_TOKEN=/d' .env > .env.tmp && mv .env.tmp .env || true; \
+	  fi; \
 	  echo "OPENSHELL_BEARER_TOKEN=$$TOKEN" >> .env; \
 	  echo "✓ OPENSHELL_BEARER_TOKEN refreshed in .env (valid 30 days)"; \
 	fi
