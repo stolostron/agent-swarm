@@ -95,6 +95,7 @@ sync-images:  ## Sync AGENT_IMAGE_OPENCODE in .env from ../agent-containers .pus
 	  (echo "Error: IMAGE_TAG in $(AC_DEFAULTS) contains unsupported characters" >&2 && exit 1)
 	@echo "Syncing agent image → $(AC_REGISTRY)/opencode:$(AC_TAG)"
 	@if [ -f .env ]; then \
+	  umask 077; \
 	  grep -q "^AGENT_IMAGE_OPENCODE=" .env || echo "AGENT_IMAGE_OPENCODE=" >> .env; \
 	  sed "s|^AGENT_IMAGE_OPENCODE=.*|AGENT_IMAGE_OPENCODE=$(AC_REGISTRY)/opencode:$(AC_TAG)|" .env > .env.tmp \
 	    && mv .env.tmp .env \
@@ -456,6 +457,7 @@ and pinned version $(OPENSHELL_VERSION) with chart defaults..."; \
 	@# Generate / refresh OpenShell bearer token
 	@TOKEN=$$(python3 scripts/openshell_gen_token.py 2>/dev/null || true); \
 	if [ -n "$$TOKEN" ]; then \
+	  umask 077; \
 	  if [ -f .env ]; then \
 	    sed '/^OPENSHELL_BEARER_TOKEN=/d' .env > .env.tmp && mv .env.tmp .env || true; \
 	  fi; \
