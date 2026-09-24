@@ -134,6 +134,85 @@ when deeper investigation is needed. The application records each terminal
 run's output and trigger metadata in run history. Scheduled runs can repeat as
 new activity appears, but they do not inherit prior prompt context.
 
+## HyperShift and CNV (Workload Management)
+
+The HyperShift and CNV integration teams use Agent Swarm for scheduled operational
+digests and Jira CVE handoff. Prompts live in a git-backed workspace prompt library
+([swarm-prompt](https://github.com/yiraeChristineKim/swarm-prompt)); Swarmer runs
+them as **prompt-mode** sessions with optional **cron** schedules.
+
+### Morning PR digest (HyperShift / MTV repos)
+
+Weekday cron (for example `0 13 * * 1-5` when the cluster clock is UTC, ≈ 09:00
+America/New_York) scans open pull requests in:
+
+- [stolostron/mtv-integrations](https://github.com/stolostron/mtv-integrations)
+- [stolostron/hypershift-addon-operator](https://github.com/stolostron/hypershift-addon-operator)
+
+The agent classifies each open PR (needs review, changes requested, approved,
+draft, CI blocked) and posts a Slack mrkdwn summary to
+`#acm-hypershift-mtv-notification` using the workspace `SLACK_WEBHOOK_URL`.
+See [docs/SLACK_NOTIFICATIONS.md](SLACK_NOTIFICATIONS.md) for webhook setup.
+
+| Trigger | Session mode | Prompt source |
+|---------|--------------|---------------|
+| `cron` | Prompt | `morning-pr-digest-hypershift-mtv.md` |
+
+**Inputs:** `gh` / GitHub App auth in the sandbox, `SLACK_WEBHOOK_URL` on the
+workspace.
+
+**Outputs:** Slack digest; no repository writes.
+
+### CVE ACM → OCPBUGS (MCE pscomponents)
+
+On demand or on a schedule, a prompt-mode session moves open ACM `Vulnerability`
+issues (assigned to the operator) into **OCPBUGS** using a **real Jira project
+Move** (`ACM-XXXXX` becomes `OCPBUGS-NNNNN`), then sets component, OCP Affects /
+Target versions, MCE version comments, and component auto-assign. A Slack
+summary lists what was moved.
+
+| Workflow | ACM pscomponent | OCPBUGS component |
+|----------|-----------------|-------------------|
+| A | `multicluster-engine/cluster-api-provider-kubevirt-rhel9` | HyperShift / OCP Virtualization |
+| B | `multicluster-engine/cluster-api-provider-azure-rhel9` | HyperShift / ARO |
+| C | `multicluster-engine/hypershift-rhel9-operator` | HyperShift |
+| C | `multicluster-engine/hypershift-cli-rhel9` | HyperShift |
+
+**Out of scope:** `multicluster-engine/hypershift-addon-rhel9-operator` (do not
+move).
+
+MCE → OCP mapping used in the prompt (examples: 2.10 → 4.20, 2.11 → 4.21,
+2.17 → 4.22). Full table is in `cve-acm-to-ocpbugs.md`.
+
+| Trigger | Session mode | Prompt source |
+|---------|--------------|---------------|
+| `cron` or manual | Prompt | `cve-acm-to-ocpbugs.md` |
+
+**Inputs:** Jira MCP (search, update, comment), Jira Bulk Move REST API when MCP
+has no move tool, `SLACK_WEBHOOK_URL`.
+
+**Outputs:** Moved OCPBUGS issues, ACM comments/links, Slack handoff summary.
+
+### Interactive development (planned / ad hoc)
+
+Engineers also use **TUI** and **Server** sessions for repo work on HyperShift,
+MTV, and related stolostron repositories, with Jira MCP for ticket lookup and
+updates. This matches the personal development patterns above; team-specific
+cron workflows are the primary autonomous automation today.
+
+### Friction and gaps
+
+- **Jira Move:** CVE handoff requires Jira Cloud Bulk Move (`POST
+  /rest/api/3/bulk/issues/move`); Jira MCP tools create/update issues but do not
+  replace project move — prompts must document the REST fallback.
+- **Slack:** One Incoming Webhook per channel; workspace env var
+  `SLACK_WEBHOOK_URL` must target the correct channel per workflow.
+- **Prompt library:** Team prompts are maintained in `swarm-prompt` and wired in
+  Swarmer via git-backed prompt-library paths on the workspace.
+
+Documented for parent spike [ACM-46087](https://redhat.atlassian.net/browse/ACM-46087);
+sub-task [ACM-46099](https://redhat.atlassian.net/browse/ACM-46099).
+
 ## Inputs and Outputs
 
 Typical inputs include repositories and branches, prompt-library entries,
