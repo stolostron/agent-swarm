@@ -143,8 +143,8 @@ them as **prompt-mode** sessions with optional **cron** schedules.
 
 ### Morning PR digest (HyperShift / MTV repos)
 
-Weekday cron (for example `0 13 * * 1-5` when the cluster clock is UTC, ≈ 09:00
-America/New_York) scans open pull requests in:
+Weekday cron (for example `0 13 * * 1-5` when the cluster clock is UTC, 09:00
+America/New_York during EDT and 08:00 during EST) scans open pull requests in:
 
 - [stolostron/mtv-integrations](https://github.com/stolostron/mtv-integrations)
 - [stolostron/hypershift-addon-operator](https://github.com/stolostron/hypershift-addon-operator)
@@ -182,11 +182,13 @@ summary lists what was moved.
 move).
 
 MCE → OCP mapping used in the prompt (examples: 2.10 → 4.20, 2.11 → 4.21,
-2.17 → 4.22). Full table is in `cve-acm-to-ocpbugs.md`.
+2.17 → 4.22). The full table is in the external
+[cve-acm-to-ocpbugs.md](https://github.com/yiraeChristineKim/swarm-prompt/blob/main/cve-acm-to-ocpbugs.md)
+prompt.
 
 | Trigger | Session mode | Prompt source |
 |---------|--------------|---------------|
-| `cron` or manual | Prompt | `cve-acm-to-ocpbugs.md` |
+| `cron` or manual | Prompt | [cve-acm-to-ocpbugs.md](https://github.com/yiraeChristineKim/swarm-prompt/blob/main/cve-acm-to-ocpbugs.md) |
 
 **Inputs:** Jira MCP (search, update, comment), Jira Bulk Move REST API when MCP
 has no move tool, `SLACK_WEBHOOK_URL`.
