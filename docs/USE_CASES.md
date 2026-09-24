@@ -193,23 +193,6 @@ has no move tool, `SLACK_WEBHOOK_URL`.
 
 **Outputs:** Moved OCPBUGS issues, ACM comments/links, Slack handoff summary.
 
-### Interactive development (planned / ad hoc)
-
-Engineers also use **TUI** and **Server** sessions for repo work on HyperShift,
-MTV, and related stolostron repositories, with Jira MCP for ticket lookup and
-updates. This matches the personal development patterns above; team-specific
-cron workflows are the primary autonomous automation today.
-
-### Friction and gaps
-
-- **Jira Move:** CVE handoff requires Jira Cloud Bulk Move (`POST
-  /rest/api/3/bulk/issues/move`); Jira MCP tools create/update issues but do not
-  replace project move — prompts must document the REST fallback.
-- **Slack:** One Incoming Webhook per channel; workspace env var
-  `SLACK_WEBHOOK_URL` must target the correct channel per workflow.
-- **Prompt library:** Team prompts are maintained in `swarm-prompt` and wired in
-  Swarmer via git-backed prompt-library paths on the workspace.
-
 Documented for parent spike [ACM-46087](https://redhat.atlassian.net/browse/ACM-46087);
 sub-task [ACM-46099](https://redhat.atlassian.net/browse/ACM-46099).
 
