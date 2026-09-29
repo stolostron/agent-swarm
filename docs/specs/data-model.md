@@ -87,7 +87,7 @@ Relationships:
 - One-to-many `WorkspacePromptSource`
 - One-to-many `SandboxEnvVar`
 - One-to-many `WorkspaceMember`
-- One or more user-scoped `OpencodeSecret` records
+- Zero or more user-scoped `OpencodeSecret` records
 
 ### 3.2 `workspace_members`
 

@@ -426,7 +426,7 @@ Body:
 }
 ```
 
-`prompt_id` must reference a prompt in the same workspace. Cron schedules
+`prompt_id` is required and must reference a prompt in the same workspace. Cron schedules
 require a valid cron expression. Event schedules use event filters and do not
 require a cron expression.
 
@@ -544,7 +544,9 @@ connection, and the agent starts through OpenShell interactive execution.
 1. Every endpoint requires API bearer authentication.
 2. Every workspace resource is authorization-scoped.
 3. Inaccessible workspace IDs return `404` rather than leaking existence.
-4. Secret responses contain presence flags or masked values only.
+4. Secret responses contain presence flags or masked values only. The
+   environment-variable API currently returns a decrypted value, which is a
+   known deviation requiring remediation; this is the target contract.
 5. Session lifecycle transitions preserve queued/no-sandbox semantics.
 6. Schedule prompt references are workspace-scoped.
 7. Repository paths cannot escape the sandbox workspace.

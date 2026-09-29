@@ -49,6 +49,10 @@ async def session_tui(
         await websocket.close(code=4002, reason="Session not found")
         return
 
+    if session.mode != "tui":
+        await websocket.close(code=4003, reason="Session is not running in TUI mode")
+        return
+
     if session.phase != "running" or not session.sandbox_name:
         log.warning(
             "TUI WS: session %d not running (phase=%s, sandbox=%s)",

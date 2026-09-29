@@ -26,9 +26,10 @@ mode-specific output and configuration components.
 ## Load algorithm
 
 1. Resolve workspace and session, including PAT, repos, and selected prompt.
-2. Resolve visible credentials, provider options, MCP servers, prompt sources,
-   queue position, capacity, policy state, and up to 100 run records.
-3. Generate and store a one-time TUI token only for a running TUI session.
+2. Resolve visible credentials and generate/store a one-time TUI token only for
+   a running TUI session.
+3. Resolve provider options, MCP servers, prompt sources, queue position,
+   capacity, policy state, and up to 100 run records.
 4. Render tabs conditionally by mode and available state.
 
 ## Lifecycle actions

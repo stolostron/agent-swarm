@@ -790,7 +790,7 @@ async def session_detail(
     runs_result = await db.execute(
         select(SessionRun)
         .where(SessionRun.session_id == sid)
-        .order_by(desc(SessionRun.completed_at))
+        .order_by(desc(SessionRun.completed_at), desc(SessionRun.id))
         .limit(100)
     )
     session_runs = list(runs_result.scalars().all())
@@ -1867,6 +1867,7 @@ async def _setup_openshell_sandbox(
                         getattr(result, "exit_code", "?"),
                         (_stdout + _stderr).strip(),
                     )
+                    raise RuntimeError(f"git clone failed for {local_path}")
             if oc_client is not None:
                 await openshell_client.exec_command(
                     ref.name, ["sh", "-c", "git config --global --add safe.directory '*'"], client=oc_client
@@ -1903,6 +1904,7 @@ async def _setup_openshell_sandbox(
                             getattr(result, "exit_code", "?"),
                             (_stdout + _stderr).strip(),
                         )
+                        raise RuntimeError(f"git checkout failed for {repo_branch} in {rd['local_path']}")
             if working_branch:
                 for rd in repos_data:
                     branch_cmd = (
@@ -1927,6 +1929,9 @@ async def _setup_openshell_sandbox(
                             rd["local_path"],
                             getattr(result, "exit_code", "?"),
                             (_stdout + _stderr).strip(),
+                        )
+                        raise RuntimeError(
+                            f"git checkout of working branch failed for {rd['local_path']}"
                         )
 
         # Build the agent command.
