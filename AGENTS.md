@@ -73,6 +73,15 @@ make user-token SA_USER=alice   # Issue a K8s login token (default 8h); logs in 
 
 For system architecture, data flows, module layout, cross-repository image/version flow, and OpenShell deployment contracts, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
+For implementation-oriented workspace and session UI component contracts, start
+with [docs/specs/README.md](docs/specs/README.md). The component pages document
+the owning templates, HTML routers, REST API references, models, algorithms,
+HTMX/WebSocket behavior, OpenShell tooling, invariants, and acceptance checks:
+
+- Workspace: [overview](docs/specs/PAGE_workspace.md), [sessions](docs/specs/PAGE_workspace_sessions.md), [members](docs/specs/PAGE_workspace_members.md), and [settings](docs/specs/PAGE_workspace_settings.md)
+- Session: [overview](docs/specs/PAGE_session_overview.md), [settings](docs/specs/PAGE_session_settings.md), [repositories](docs/specs/PAGE_session_repositories.md), [schedules](docs/specs/PAGE_session_schedules.md), [logging](docs/specs/PAGE_session_logging.md), and [history](docs/specs/PAGE_session_history.md)
+- Session modes and artifacts: [terminal](docs/specs/PAGE_session_terminal.md), [chat](docs/specs/PAGE_session_chat.md), [prompt](docs/specs/PAGE_session_prompt.md), [patch export](docs/specs/PAGE_session_patch.md), and [network rules](docs/specs/PAGE_session_network_rules.md)
+
 ## Sensitive Data Policy
 
 **NEVER include any of the following in generated code, templates, configs, or comments:**
