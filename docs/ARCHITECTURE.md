@@ -53,6 +53,24 @@ repository root; symbols are the preferred code entry points.
 | K8s integration | `swarmer/k8s.py`, `swarmer/k8s_auth.py` | Auth identity, legacy pull secrets, candidate discovery; imports are lazy |
 | MCP server | `mcp-server/agent_swarm_mcp_server/` | FastMCP server/client/auth mirror the Swarmer REST API |
 
+## Workspace and Session Component Specifications
+
+The implementation-oriented UI component contracts are indexed in
+[`docs/specs/README.md`](specs/README.md). Use these pages when changing a
+workspace or session component; they connect the rendered templates to their
+HTML routes, REST endpoints, models, client-side HTMX/WebSocket behavior, and
+OpenShell runtime boundaries.
+
+| Component area | Specification pages |
+|---|---|
+| Workspace overview and session list | [`PAGE_workspace.md`](specs/PAGE_workspace.md), [`PAGE_workspace_sessions.md`](specs/PAGE_workspace_sessions.md) |
+| Workspace access and configuration | [`PAGE_workspace_members.md`](specs/PAGE_workspace_members.md), [`PAGE_workspace_settings.md`](specs/PAGE_workspace_settings.md) |
+| Session lifecycle and configuration | [`PAGE_session_overview.md`](specs/PAGE_session_overview.md), [`PAGE_session_settings.md`](specs/PAGE_session_settings.md) |
+| Session repositories and schedules | [`PAGE_session_repositories.md`](specs/PAGE_session_repositories.md), [`PAGE_session_schedules.md`](specs/PAGE_session_schedules.md) |
+| Session output and history | [`PAGE_session_logging.md`](specs/PAGE_session_logging.md), [`PAGE_session_history.md`](specs/PAGE_session_history.md) |
+| Interactive modes | [`PAGE_session_terminal.md`](specs/PAGE_session_terminal.md), [`PAGE_session_chat.md`](specs/PAGE_session_chat.md), [`PAGE_session_prompt.md`](specs/PAGE_session_prompt.md) |
+| Session artifacts and policy | [`PAGE_session_patch.md`](specs/PAGE_session_patch.md), [`PAGE_session_network_rules.md`](specs/PAGE_session_network_rules.md) |
+
 ## Domain Model
 
 | Entity | Source | Meaning |
