@@ -43,4 +43,6 @@ including URL, branch, local path, and credential source.
 - PAT/App selection controls discovery and launch authentication but is never
   rendered as a token.
 - Duplicate or invalid repository state must not create a partial launch.
-- Multiple repositories must have distinct usable local paths.
+- Multiple repositories must have distinct usable local paths. The current
+  implementation does not yet enforce this requirement; equivalent paths such
+  as `foo` and `./foo` can be persisted.

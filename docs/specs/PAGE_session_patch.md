@@ -2,8 +2,8 @@
 
 ## Purpose
 
-Patch export turns changes made in repository-backed sessions into a downloadable
-multi-repository patch and local application instructions.
+Patch export turns changes made in a running OpenShell session into a downloadable
+patch and local application instructions.
 
 ## Sources
 
@@ -13,24 +13,24 @@ multi-repository patch and local application instructions.
 
 ## Methods and tooling
 
-- OpenShell/git commands inspect the configured working repositories.
-- Diff paths are prefixed with each repository local path.
+- OpenShell runs a single `git diff` command in the session sandbox.
+- The command uses `origin/{patch_base_ref}` when a base reference is configured;
+  otherwise it compares the current working tree.
 - Safe filename generation replaces unsafe session-name characters.
 - Browser clipboard API copies apply commands and generated commit message.
 - Gemini-based commit-message generation has a safe changed-file fallback.
 
 ## Algorithm
 
-1. Require configured repositories and a running session for generation.
-2. Collect repository diffs from the session working branches.
-3. Prefix paths to prevent collisions across repositories.
-4. Persist patch output, base reference, and optional commit message.
-5. Render copyable clone/checkout/apply commands.
-6. Return the patch with `text/x-patch` and a safe download filename.
+1. Require an OpenShell sandbox and a running session for generation.
+2. Run `git diff` in the sandbox, optionally against the configured base ref.
+3. Persist patch output and an optional generated commit message.
+4. Render copyable clone/checkout/apply commands.
+5. Return the patch with `text/x-patch` and a safe download filename.
 
 ## Acceptance checks
 
 - Patch generation is disabled when the session is not running.
 - Download is unavailable when no patch exists.
-- Generated paths apply to the intended repository subdirectories.
+- Generated paths reflect the working tree returned by the sandbox git diff.
 - Commit-message fallback works without an in-process provider credential.

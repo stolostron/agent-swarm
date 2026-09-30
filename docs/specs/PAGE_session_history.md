@@ -14,14 +14,15 @@ duration, phase, trigger source, event context, and expandable output.
 
 ## Methods and tooling
 
-- Detail page queries the newest 100 runs ordered by completion time.
+- Detail page queries the newest 100 runs ordered by completion time, then `id`
+  for stable ordering when completion times tie.
 - PatternFly expandable table and client-side row toggles.
 - Output/Raw Log toggles are client-side.
 - ANSI output is rendered through the shared output filter.
 
 ## Algorithm
 
-1. Create a run record when a launch/trigger begins.
+1. Create a run record when a session reaches a terminal phase.
 2. Update phase, status detail, timestamps, output, and trigger metadata as the
    runtime progresses.
 3. Render source labels for TUI, Chat, Prompt, schedules, and events.
@@ -33,4 +34,5 @@ duration, phase, trigger source, event context, and expandable output.
 - History remains after current output is cleared.
 - Failed and stopped runs retain status detail.
 - Event context is bounded and does not expose secrets.
-- The newest 100 records are deterministic and ordered descending.
+- The newest 100 records are deterministic and ordered by `completed_at` and
+  `id`, descending.
