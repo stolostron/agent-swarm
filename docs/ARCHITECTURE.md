@@ -34,7 +34,8 @@ repository root; symbols are the preferred code entry points.
 | Concern | Read first | Key symbols / facts |
 |---|---|---|
 | App boot and shutdown | `swarmer/main.py` | `app`, `lifespan`; initializes crypto/DB, starts background loops, resumes sessions |
-| Configuration | `swarmer/config.py` | `Settings`, module-level `settings`; env var bindings and defaults |
+| Configuration | `swarmer/config.py` | `Settings`, module-level `settings`; env var bindings and application defaults |
+| Model presets | `k8s/swarmer/configmap.yaml`, `swarmer/config.py` | Deployed plan/build/small preset values; Python defaults are fallbacks |
 | HTTP/UI routing | `swarmer/routers/`, `swarmer/api/v1/` | Router modules; REST API is under `/api/v1/` |
 | Authn | `swarmer/k8s_auth.py`, `swarmer/deps.py`, `swarmer/routers/auth.py` | TokenReview, `require_auth`, `get_user_token`, login/OAuth callbacks |
 | Workspace authz | `swarmer/workspace_acl.py`, `swarmer/models/workspace_member.py`, `swarmer/models/global_admin.py` | Owner/member/admin checks; `can_access_workspace()` and user discovery |
@@ -138,6 +139,11 @@ OpenCode is the default agent tool selected by `swarmer/agent_tools/opencode.py`
 model configuration, command construction, and server/TUI binaries are provided by the
 `AgentToolStrategy` interface. Do not hardcode OpenCode behavior in session orchestration;
 add tool-specific behavior to `agent_tools/`.
+
+Provider presets map `plan`, `build`, and `small` roles through `swarmer/config.py` and
+`k8s/swarmer/configmap.yaml`. The OpenAI preset defaults are `openai/gpt-6-sol` for plan
+and `openai/gpt-6-luna` for both build and small; the ConfigMap values override the Python
+defaults in deployed environments.
 
 | Use case | Swarmer behavior | OpenShell behavior |
 |---|---|---|
