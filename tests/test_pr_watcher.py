@@ -150,6 +150,36 @@ class TestReviewApprovedEventClassification(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(by_condition["any_actionable"].actor_login, "pusher")
         self.assertEqual(by_condition["any_actionable"].actor_association, "NONE")
 
+    async def test_review_requested_has_specific_and_catchall_triggers(self):
+        import httpx
+        from swarmer.pr_watcher import _classify_event_triggers
+
+        async def handler(request: httpx.Request) -> httpx.Response:
+            if request.url.path.endswith("/collaborators/reviewer/permission"):
+                return httpx.Response(200, json={"permission": "write"})
+            return httpx.Response(404)
+
+        event = {
+            "type": "PullRequestEvent",
+            "id": "review-request-1",
+            "created_at": "2026-09-16T12:00:00Z",
+            "actor": {"login": "reviewer"},
+            "payload": {
+                "action": "review_requested",
+                "pull_request": {"number": 9},
+            },
+        }
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            triggers = await _classify_event_triggers(client, "org/repo", [event], None)
+
+        by_condition = {trigger.condition: trigger for trigger in triggers[9]}
+        self.assertEqual(set(by_condition), {"review_requested", "any_actionable"})
+        self.assertEqual(by_condition["review_requested"].event_id, "review-request-1")
+        self.assertEqual(by_condition["review_requested"].actor_login, "reviewer")
+        self.assertEqual(by_condition["review_requested"].actor_association, "COLLABORATOR")
+        self.assertEqual(by_condition["review_requested"].action, "review_requested")
+        self.assertEqual(by_condition["any_actionable"].action, "review_requested")
+
 
 class TestPRStateNormalization(unittest.TestCase):
     def test_normalize_ci_checks_mixed(self):
@@ -729,6 +759,8 @@ class TestPRWatcherSignalRouting(unittest.TestCase):
             enabled=True,
             trigger_type="event",
             event_condition=event_condition,
+            label="",
+            trigger_label=event_condition,
             author_scope=author_scope,
             fix_author_logins={a.strip().lower() for a in fix_authors.split(",") if a.strip()},
         )
@@ -807,6 +839,68 @@ class TestPRWatcherSignalRouting(unittest.TestCase):
             pr, {"review_approved"}, [(sched, self._make_session(51))], event_triggers=[event]
         )
         self.assertEqual(len(matches), 1)
+
+    def test_review_requested_matches_specific_and_any_actionable_schedules(self):
+        from swarmer.pr_watcher import _build_event_context, _match_triggers_for_pr
+
+        pr = self._make_pr()
+        specific = self._make_schedule(52, "review_requested", "team")
+        catchall = self._make_schedule(53, "any_actionable", "team")
+        event = EventTrigger(
+            condition="review_requested",
+            event_id="review-request-1",
+            actor_login="reviewer",
+            pr_number=pr.pr_number,
+            event_type="PullRequestEvent",
+            actor_association="MEMBER",
+            action="review_requested",
+        )
+        any_actionable_event = EventTrigger(
+            condition="any_actionable",
+            event_id="review-request-1",
+            actor_login="reviewer",
+            pr_number=pr.pr_number,
+            event_type="PullRequestEvent",
+            actor_association="MEMBER",
+            action="review_requested",
+        )
+        matches = _match_triggers_for_pr(
+            pr,
+            {"review_requested", "any_actionable"},
+            [(specific, self._make_session(52)), (catchall, self._make_session(53))],
+            event_triggers=[event, any_actionable_event],
+        )
+
+        self.assertEqual([match[0].event_condition for match in matches], ["review_requested", "any_actionable"])
+        event_context = _build_event_context(
+            sched=specific,
+            repo=pr.repo,
+            pr_state=pr,
+            condition="review_requested",
+            event=event,
+        )
+        self.assertEqual(event_context["event_type"], "PullRequestEvent")
+        self.assertEqual(event_context["event_action"], "review_requested")
+        self.assertEqual(event_context["event_actor"], "reviewer")
+
+        untrusted_event = EventTrigger(
+            condition="review_requested",
+            event_id="review-request-untrusted",
+            actor_login="external-reviewer",
+            pr_number=pr.pr_number,
+            event_type="PullRequestEvent",
+            actor_association="NONE",
+            action="review_requested",
+        )
+        self.assertEqual(
+            _match_triggers_for_pr(
+                pr,
+                {"review_requested"},
+                [(specific, self._make_session(52))],
+                event_triggers=[untrusted_event],
+            ),
+            [],
+        )
 
 
 class TestPRWatcherDispatchFlow(unittest.IsolatedAsyncioTestCase):
