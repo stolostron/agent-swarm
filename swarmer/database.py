@@ -89,6 +89,13 @@ async def migrate_db() -> None:
         "ALTER TABLE github_pats ADD COLUMN shared BOOLEAN NOT NULL DEFAULT 1",
         "ALTER TABLE mcp_servers ADD COLUMN user_id VARCHAR(255) NOT NULL DEFAULT ''",
         "ALTER TABLE mcp_servers ADD COLUMN shared BOOLEAN NOT NULL DEFAULT 1",
+        # ACM-47170: enroll the internal Agent Swarm MCP in every existing
+        # workspace. INSERT OR IGNORE is safe on repeated application and uses
+        # the (workspace_id, slug) uniqueness constraint as the idempotency key.
+        """INSERT OR IGNORE INTO mcp_servers
+           (workspace_id, user_id, shared, slug, display_name, server_url, server_type, enabled)
+           SELECT id, '', 1, 'agent-swarm', 'Agent Swarm', '', 'stdio', 1
+           FROM workspaces""",
         "ALTER TABLE sessions ADD COLUMN prompt_id INTEGER REFERENCES workspace_prompts(id) ON DELETE SET NULL",
         "ALTER TABLE sessions DROP COLUMN resume",
         "ALTER TABLE sessions ADD COLUMN sandbox_name VARCHAR(255)",

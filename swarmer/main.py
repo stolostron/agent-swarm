@@ -47,6 +47,7 @@ log = logging.getLogger(__name__)
 # task object could be garbage-collected mid-refresh with no warning. Each task
 # removes itself via add_done_callback once it completes (or is cancelled).
 _iat_refresh_restart_tasks: set[asyncio.Task] = set()
+_agent_swarm_refresh_restart_tasks: set[asyncio.Task] = set()
 
 
 @asynccontextmanager
@@ -313,6 +314,7 @@ async def _restart_server_sessions() -> None:
                     continue
 
             await _restart_github_app_iat_refresh(s, db)
+            await _restart_agent_swarm_token_refresh(s, db, client=oc_client)
 
         await db.commit()
         break
@@ -386,6 +388,53 @@ async def _restart_github_app_iat_refresh(session: Session, db: AsyncSession) ->
             "restart: failed to restart GitHub App IAT refresh for session %d — "
             "existing IAT will keep working until it expires",
             session.id, exc_info=True,
+        )
+
+
+async def _restart_agent_swarm_token_refresh(
+    session: Session,
+    db: AsyncSession,
+    client=None,
+) -> None:
+    """Re-mint and refresh Agent Swarm credentials for a surviving session."""
+    from swarmer import openshell_client
+    from swarmer.routers.mcp_servers import get_enabled_mcp_servers
+    from swarmer.routers.sessions import _agent_swarm_provider_name
+    from swarmer.session_auth import mint_session_token, start_token_refresh_loop
+
+    servers = await get_enabled_mcp_servers(session.workspace_id, db)
+    selected_ids = session.enabled_mcp_ids
+    if selected_ids:
+        servers = [server for server in servers if server.id in selected_ids]
+    if not any(getattr(server, "slug", "") == "agent-swarm" for server in servers):
+        return
+
+    provider_name = _agent_swarm_provider_name(session.workspace_id, session.id)
+    try:
+        await openshell_client.ensure_provider(
+            provider_name,
+            "agent-swarm",
+            {},
+            credentials={"AGENT_SWARM_API_TOKEN": mint_session_token(session.id, session.workspace_id)},
+            client=client,
+        )
+        task = asyncio.create_task(
+            start_token_refresh_loop(
+                session_id=session.id,
+                workspace_id=session.workspace_id,
+                provider_name=provider_name,
+                client=client,
+            ),
+            name=f"agent-swarm-refresh-{session.id}",
+        )
+        _agent_swarm_refresh_restart_tasks.add(task)
+        task.add_done_callback(_agent_swarm_refresh_restart_tasks.discard)
+        log.info("restart: refreshed Agent Swarm token for session %d", session.id)
+    except Exception:
+        log.warning(
+            "restart: failed to refresh Agent Swarm token for session %d",
+            session.id,
+            exc_info=True,
         )
 
 

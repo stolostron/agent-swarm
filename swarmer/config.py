@@ -16,6 +16,7 @@ class Settings(BaseSettings):
     agent_image_shell: str = ""
     default_agent_tool: str = "opencode"
     k8s_namespace: str = ""
+    pod_namespace: str = ""
     max_concurrent_agents: int = 5
 
     # Workspace access control (ACM-41659) — database-backed ACL replaces
@@ -43,6 +44,7 @@ class Settings(BaseSettings):
     openshell_tls_ca: str = ""          # path to CA bundle
     openshell_tls_verify: bool = True   # verify gateway server certificates
     openshell_bearer_token: str = ""    # bearer token for gateway/supervisor auth
+    agent_swarm_internal_url: str = ""  # internal URL used by the Agent Swarm MCP
     sandbox_gc_interval: int = 300      # seconds between sandbox GC sweeps
     log_level: str = "INFO"             # Python logging level: DEBUG, INFO, WARNING, ERROR
 
@@ -75,3 +77,14 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+
+def get_agent_swarm_internal_url() -> str:
+    """Return the URL used by sandbox MCP clients to reach Swarmer."""
+    configured = settings.agent_swarm_internal_url.strip()
+    if configured:
+        return configured.rstrip("/")
+    namespace = (settings.pod_namespace or settings.k8s_namespace).strip()
+    if namespace:
+        return f"http://swarmer.{namespace}.svc.cluster.local:8080"
+    return "http://127.0.0.1:8080"

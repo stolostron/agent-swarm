@@ -133,11 +133,17 @@ async def can_create_workspace(
 
 
 async def user_can_access_workspace(
-    db: AsyncSession, ws: Workspace, username: str, groups: list[str] | None = None
+    db: AsyncSession,
+    ws: Workspace,
+    username: str,
+    groups: list[str] | None = None,
+    session_workspace_id: int | None = None,
 ) -> bool:
     """Return True when *username* may view/manage *ws*."""
     if not username:
         return False
+    if session_workspace_id is not None:
+        return ws.id == session_workspace_id
     if settings.k8s_namespace:
         # Shared-namespace deployment: all workspaces already live in one
         # namespace with one Role/RoleBinding — preserve that flat access
@@ -185,11 +191,15 @@ async def filter_accessible_workspaces(
 
 
 async def can_manage_members(
-    db: AsyncSession, ws: Workspace, username: str, groups: list[str] | None = None
+    db: AsyncSession,
+    ws: Workspace,
+    username: str,
+    groups: list[str] | None = None,
+    session_identity: bool = False,
 ) -> bool:
     """Owner, a global admin, or anyone (while the workspace is unclaimed)
     can rename/delete a workspace or manage its members."""
-    if not username:
+    if not username or session_identity:
         return False
     if await is_admin(db, username, groups):
         return True

@@ -1337,12 +1337,14 @@ class TestRestartGitHubAppIATRefresh:
         mock_mint = AsyncMock(return_value="ghs_freshtoken")
         mock_ensure_provider = AsyncMock()
         mock_start_loop = AsyncMock()
+        mock_agent_swarm_loop = AsyncMock()
 
         with (
             patch("swarmer.openshell_client.list_sandboxes", new=AsyncMock(return_value=["sandbox-tui"])),
             patch("swarmer.openshell_client.ensure_provider", new=mock_ensure_provider),
             patch("swarmer.github_auth.mint_installation_token", new=mock_mint),
             patch("swarmer.github_auth.start_token_refresh_loop", new=mock_start_loop),
+            patch("swarmer.session_auth.start_token_refresh_loop", new=mock_agent_swarm_loop),
             patch("swarmer.database.get_db", new=_override_get_db),
         ):
             from swarmer.main import _restart_server_sessions
@@ -1350,13 +1352,15 @@ class TestRestartGitHubAppIATRefresh:
             await asyncio.sleep(0)  # let the created task run its first line
 
         mock_mint.assert_awaited_once()
-        mock_ensure_provider.assert_awaited_once()
-        _, provider_type, _config = mock_ensure_provider.call_args.args[:3]
+        github_calls = [call for call in mock_ensure_provider.await_args_list if call.args[1] == "github"]
+        assert len(github_calls) == 1
+        _, provider_type, _config = github_calls[0].args[:3]
         assert provider_type == "github"
-        creds = mock_ensure_provider.call_args.kwargs["credentials"]
+        creds = github_calls[0].kwargs["credentials"]
         assert creds["GH_TOKEN"] == "ghs_freshtoken"
         assert creds["GITHUB_TOKEN"] == "ghs_freshtoken"
         mock_start_loop.assert_called_once()
+        mock_agent_swarm_loop.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_session_with_pat_skips_iat_refresh(self, client):

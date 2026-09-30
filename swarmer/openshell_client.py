@@ -53,10 +53,45 @@ _PROVIDER_CACHE_TTL: float = 30.0
 _provider_cache: dict[str, tuple[bool, float]] = {}  # name → (exists, expires_at)
 _OPENSHELL_WORKSPACE = "default"
 
+
+def _agent_swarm_profile() -> dict:
+    from urllib.parse import urlparse
+
+    from swarmer.config import get_agent_swarm_internal_url
+
+    parsed = urlparse(get_agent_swarm_internal_url())
+    return {
+        "id": "agent-swarm",
+        "display_name": "Agent Swarm",
+        "inference_capable": False,
+        "credentials": [{
+            "name": "AGENT_SWARM_API_TOKEN",
+            "env_vars": ["AGENT_SWARM_API_TOKEN"],
+            "required": True,
+            "auth_style": "bearer",
+            "header_name": "authorization",
+        }],
+        "endpoints": [{
+            "host": parsed.hostname or "127.0.0.1",
+            "port": parsed.port or (443 if parsed.scheme == "https" else 80),
+            "protocol": "rest",
+            "access": "read-write",
+            "enforcement": "enforce",
+        }],
+        "binaries": [
+            {"path": "/usr/local/bin/agent-swarm-mcp-server"},
+            {"path": "/usr/local/bin/python3.14"},
+            {"path": "/usr/local/bin/python3"},
+            {"path": "/usr/bin/python3"},
+            {"path": "/sandbox/.venv/bin/python*"},
+        ],
+    }
+
 # Custom provider profiles swarmer registers in OpenShell gateways.
 # Ensures static credentials (e.g. OPENAI_API_KEY, GOOGLE_API_KEY) are bound to
 # their endpoints so OpenShell 0.0.116+ does not withhold them as unbound credentials.
 CUSTOM_PROVIDER_PROFILES: list[dict] = [
+    _agent_swarm_profile(),
     {
         "id": "openai",
         "display_name": "OpenAI",
@@ -559,9 +594,13 @@ async def ensure_provider(
     if client is None:
         client = _get_client()
 
-    # Custom Swarmer-owned profiles (openai, google-ai-studio, jira) are imported
-    # on the resolved client so dedicated remote gateways and fresh setups behave consistently.
-    custom_profile = next((p for p in CUSTOM_PROVIDER_PROFILES if p["id"] == profile_type), None)
+    # Custom Swarmer-owned profiles are imported on the resolved client so
+    # dedicated remote gateways and fresh setups behave consistently.
+    custom_profile = (
+        _agent_swarm_profile()
+        if profile_type == "agent-swarm"
+        else next((p for p in CUSTOM_PROVIDER_PROFILES if p["id"] == profile_type), None)
+    )
     if custom_profile is not None:
         await import_provider_profiles([custom_profile], client=client)
 
@@ -1292,14 +1331,15 @@ async def import_provider_profiles(profiles: list[dict], client=None) -> None:
             req.profiles.append(openshell_pb2.ProviderProfileImportItem(profile=profile, source="swarmer"))
         try:
             client._stub.ImportProviderProfiles(req, timeout=client._timeout)
-            return
         except grpc.RpcError as exc:
             if not (isinstance(exc, grpc.Call) and exc.code() == grpc.StatusCode.ALREADY_EXISTS):
                 if isinstance(exc, grpc.Call) and exc.code() == grpc.StatusCode.UNIMPLEMENTED:
                     return
                 raise
 
-        # Profiles already exist — update them individually so new endpoints/credentials take effect.
+        # ImportProviderProfiles may report success while leaving an existing
+        # profile unchanged. Always reconcile each profile explicitly so endpoint
+        # and binary policy changes take effect on gateways that already have it.
         update_method = getattr(getattr(client, "_stub", None), "UpdateProviderProfiles", None)
         get_method = getattr(getattr(client, "_stub", None), "GetProviderProfile", None)
         if not callable(update_method) or not callable(get_method):

@@ -246,10 +246,15 @@ async def get_enabled_mcp_servers(
     filters = [
         McpServer.workspace_id == workspace_id,
         McpServer.enabled == True,  # noqa: E712
-        McpServer.jira_access_token_enc != "",
         or_(
-            McpServer.token_expires_at == None,  # noqa: E711
-            McpServer.token_expires_at > datetime.now(timezone.utc),
+            McpServer.slug == "agent-swarm",
+            (
+                (McpServer.jira_access_token_enc != "")
+                & or_(
+                    McpServer.token_expires_at == None,  # noqa: E711
+                    McpServer.token_expires_at > datetime.now(timezone.utc),
+                )
+            ),
         ),
     ]
     if user_id:

@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING
 
 from swarmer.agent_tools import AgentToolStrategy
 from swarmer.config import settings
+from swarmer.mcp_catalog import get_catalog_entry
 
 if TYPE_CHECKING:
     from swarmer.models.mcp_server import McpServer
@@ -132,11 +133,14 @@ class OpenCodeStrategy(AgentToolStrategy):
         if mcp_servers:
             mcp_config = {}
             for srv in mcp_servers:
+                entry = get_catalog_entry(srv.slug) or {}
+                command = getattr(srv, "command", None) or entry.get("command", srv.slug)
+                environment = getattr(srv, "environment", None) or entry.get("environment", {})
                 mcp_config[srv.slug] = {
                     "type": "local",
-                    "command": ["jira-mcp-server"],
+                    "command": command if isinstance(command, list) else [command],
                     "enabled": True,
-                    "environment": {
+                    "environment": environment or {
                         "JIRA_SERVER_URL": "{env:JIRA_SERVER_URL}",
                         "JIRA_ACCESS_TOKEN": "{env:JIRA_ACCESS_TOKEN}",
                         "JIRA_EMAIL": "{env:JIRA_EMAIL}",

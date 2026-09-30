@@ -14,7 +14,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from swarmer import workspace_acl
-from swarmer.api.deps import require_api_auth
+from swarmer.api.deps import require_human_api_auth
 from swarmer.api.schemas import (
     GlobalAdminCreate,
     GlobalAdminOut,
@@ -25,12 +25,12 @@ from swarmer.api.schemas import (
 from swarmer.database import get_db
 from swarmer.k8s_auth import TokenIdentity
 
-router = APIRouter(tags=["admins"], dependencies=[Depends(require_api_auth)])
+router = APIRouter(tags=["admins"], dependencies=[Depends(require_human_api_auth)])
 
 
 @router.get("/me", response_model=MeOut)
 async def get_me(
-    identity: TokenIdentity = Depends(require_api_auth),
+    identity: TokenIdentity = Depends(require_human_api_auth),
     db: AsyncSession = Depends(get_db),
 ):
     """Return the caller's identity and admin/create-workspace permissions.
@@ -52,7 +52,7 @@ async def get_me(
 
 @router.get("/users", response_model=KnownUsersOut)
 async def get_known_users(
-    identity: TokenIdentity = Depends(require_api_auth),
+    identity: TokenIdentity = Depends(require_human_api_auth),
     db: AsyncSession = Depends(get_db),
 ):
     """Autocomplete suggestions for Add Member / Add Admin forms.
@@ -75,7 +75,7 @@ async def _require_admin(identity: TokenIdentity, db: AsyncSession) -> None:
 
 @router.get("/admins", response_model=list[GlobalAdminOut])
 async def list_admins(
-    identity: TokenIdentity = Depends(require_api_auth),
+    identity: TokenIdentity = Depends(require_human_api_auth),
     db: AsyncSession = Depends(get_db),
 ):
     await _require_admin(identity, db)
@@ -85,7 +85,7 @@ async def list_admins(
 @router.post("/admins", response_model=GlobalAdminOut, status_code=status.HTTP_201_CREATED)
 async def add_admin(
     body: GlobalAdminCreate,
-    identity: TokenIdentity = Depends(require_api_auth),
+    identity: TokenIdentity = Depends(require_human_api_auth),
     db: AsyncSession = Depends(get_db),
 ):
     await _require_admin(identity, db)
@@ -108,7 +108,7 @@ async def add_admin(
 @router.delete("/admins/{user_id}", response_model=MessageOut)
 async def remove_admin(
     user_id: str,
-    identity: TokenIdentity = Depends(require_api_auth),
+    identity: TokenIdentity = Depends(require_human_api_auth),
     db: AsyncSession = Depends(get_db),
 ):
     await _require_admin(identity, db)
@@ -122,7 +122,7 @@ async def remove_admin(
 
 @router.post("/admins/bootstrap", response_model=GlobalAdminOut, status_code=status.HTTP_201_CREATED)
 async def bootstrap_admin(
-    identity: TokenIdentity = Depends(require_api_auth),
+    identity: TokenIdentity = Depends(require_human_api_auth),
     db: AsyncSession = Depends(get_db),
 ):
     """One-click self-promotion to global admin — only works while zero

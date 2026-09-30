@@ -38,6 +38,40 @@ from swarmer.models.workspace_prompt import WorkspacePrompt, WorkspacePromptSour
 
 log = logging.getLogger(__name__)
 _CLIENT_UNSET = object()
+_agent_swarm_refresh_tasks: set[asyncio.Task] = set()
+
+
+def _agent_swarm_provider_name(workspace_id: int, session_id: int) -> str:
+    return f"swarmer-ws-{workspace_id}-agent-swarm-s{session_id}"
+
+
+async def _delete_agent_swarm_provider(
+    workspace_id: int,
+    session_id: int,
+    client=_CLIENT_UNSET,
+) -> None:
+    """Cancel refresh and remove the session-scoped Agent Swarm provider."""
+    from swarmer import openshell_client
+
+    for task in asyncio.all_tasks():
+        if task.get_name() == f"agent-swarm-refresh-{session_id}":
+            task.cancel()
+            log.info("_delete_agent_swarm_provider: cancelled refresh for session %d", session_id)
+            break
+
+    provider_name = _agent_swarm_provider_name(workspace_id, session_id)
+    try:
+        oc_client = client
+        if oc_client is _CLIENT_UNSET:
+            oc_client = await openshell_client.get_client_for_workspace(workspace_id)
+        await openshell_client.delete_provider(provider_name, client=oc_client)
+        log.info("_delete_agent_swarm_provider: deleted provider %s", provider_name)
+    except Exception:
+        log.warning(
+            "_delete_agent_swarm_provider: failed to delete provider %s",
+            provider_name,
+            exc_info=True,
+        )
 
 # ── Security model overview ───────────────────────────────────────────────────
 #
@@ -1481,7 +1515,27 @@ async def _do_launch_openshell(
             "GH_TOKEN": pat_token,
         }, client=oc_client)
         provider_names.append(pname)
+    agent_swarm_provider_name = ""
     for mcp in (mcp_servers or []):
+        if getattr(mcp, "slug", "") == "agent-swarm":
+            from swarmer.session_auth import mint_session_token
+
+            agent_swarm_token = mint_session_token(session.id, ws_id)
+            agent_swarm_provider_name = _agent_swarm_provider_name(ws_id, session.id)
+            await openshell_client.ensure_provider(
+                agent_swarm_provider_name,
+                "agent-swarm",
+                {},
+                credentials={"AGENT_SWARM_API_TOKEN": agent_swarm_token},
+                client=oc_client,
+            )
+            provider_names.append(agent_swarm_provider_name)
+            from swarmer.config import get_agent_swarm_internal_url
+
+            internal_url = get_agent_swarm_internal_url()
+            env_vars["AGENT_SWARM_API_URL"] = internal_url
+            env_vars["AGENT_SWARM_WORKSPACE"] = str(ws_id)
+            break
         if "jira" in getattr(mcp, "slug", "") and getattr(mcp, "jira_access_token_enc", ""):
             pname = f"swarmer-ws-{ws_id}-jira"
             # All three Jira vars go through the gateway Provider API.
@@ -1614,6 +1668,7 @@ async def _do_launch_openshell(
             model_setup_cmd=model_setup_cmd,
             share_cmd=share_cmd,
             mcp_patch=mcp_patch,
+            agent_swarm_provider_name=agent_swarm_provider_name,
             repos_data=repos_data,
             git_username=git_username,
             pat_token=pat_token,
@@ -1681,6 +1736,7 @@ async def _setup_openshell_sandbox(
     iat_repo_names: list[str] | None = None,
     pat_id: int | None = None,  # PAT DB ID for provider cleanup on completion
     client=_CLIENT_UNSET,
+    agent_swarm_provider_name: str = "",
 ) -> None:
     """Background task: create sandbox and run all setup steps, then launch agent."""
     from swarmer import openshell_client
@@ -1725,6 +1781,18 @@ async def _setup_openshell_sandbox(
                 policy=policy,
                 provider_names=provider_names,
             )
+
+        # Provider credentials are attached to the sandbox at creation time, but
+        # OpenShell does not automatically forward them to later exec requests.
+        # Resolve the gateway-managed environment once the sandbox is ready and
+        # reuse it for setup and agent commands (without putting raw credentials
+        # into SandboxSpec.environment).
+        if provider_names:
+            provider_env = await openshell_client.get_sandbox_provider_environment(
+                ref.name,
+                client=oc_client,
+            )
+            env_vars.update(provider_env)
         await _update_db(sandbox_name=ref.name, status_detail="Applying network policies…")
 
         # Check if the session was stopped while sandbox was being created (race condition).
@@ -1999,7 +2067,7 @@ async def _setup_openshell_sandbox(
                 workspace_id=workspace_id,
             )
 
-            asyncio.create_task(
+            refresh_task = asyncio.create_task(
                 start_token_refresh_loop(
                     app=app_snapshot,  # type: ignore[arg-type]
                     session_id=session_id,
@@ -2011,6 +2079,21 @@ async def _setup_openshell_sandbox(
                 ),
                 name=f"iat-refresh-{session_id}",
             )
+
+        if agent_swarm_provider_name and mode != "prompt":
+            from swarmer.session_auth import start_token_refresh_loop
+
+            refresh_task = asyncio.create_task(
+                start_token_refresh_loop(
+                    session_id=session_id,
+                    workspace_id=workspace_id,
+                    provider_name=agent_swarm_provider_name,
+                    client=oc_client,
+                ),
+                name=f"agent-swarm-refresh-{session_id}",
+            )
+            _agent_swarm_refresh_tasks.add(refresh_task)
+            refresh_task.add_done_callback(_agent_swarm_refresh_tasks.discard)
 
     except asyncio.CancelledError:
         raise
@@ -2219,6 +2302,7 @@ async def _run_openshell_agent(
                     log.warning("Auto-cleanup of sandbox %s failed", sandbox_name, exc_info=True)
                 # Providers can only be deleted after sandbox is gone (Gateway rejects
                 # DeleteProvider with FAILED_PRECONDITION while sandbox is still attached).
+                await _delete_agent_swarm_provider(workspace_id, session_id, client=oc_client)
                 await _delete_github_app_provider(workspace_id, session_id, client=oc_client)
                 await _delete_pat_provider(workspace_id, pat_id, session_id, client=oc_client)
             else:
@@ -2427,7 +2511,11 @@ async def session_stop(
 
     # Cancel any background tasks for this session before touching the DB so
     # the task cannot race and overwrite the "stopped" phase we're about to set.
-    _task_names = (f"openshell-setup-{sid}", f"openshell-agent-{sid}")
+    _task_names = (
+        f"openshell-setup-{sid}",
+        f"openshell-agent-{sid}",
+        f"agent-swarm-refresh-{sid}",
+    )
     for _t in asyncio.all_tasks():
         if _t.get_name() in _task_names:
             _t.cancel()
@@ -2470,6 +2558,7 @@ async def session_stop(
 
     # Clean up GitHub credentials providers AFTER sandbox deletion — the Gateway
     # rejects DeleteProvider with FAILED_PRECONDITION if the sandbox is still attached.
+    await _delete_agent_swarm_provider(ws_id, sid, client=provider_client)
     await _delete_github_app_provider(ws_id, sid, client=provider_client)
     await _delete_pat_provider(ws_id, session.github_pat_id, sid, client=provider_client)
 
@@ -3277,6 +3366,7 @@ async def session_delete(
             flash(request, f"Sandbox deletion failed: {exc}", "warning")
 
     # Clean up GitHub credentials providers (App IAT and PAT).
+    await _delete_agent_swarm_provider(ws_id, sid, client=provider_client)
     await _delete_github_app_provider(ws_id, sid, client=provider_client)
     await _delete_pat_provider(ws_id, session.github_pat_id, sid, client=provider_client)
 

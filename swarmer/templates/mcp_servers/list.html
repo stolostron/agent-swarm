@@ -44,7 +44,22 @@
         </span>
       </div>
 
-      {% if s.server_type == "stdio" %}
+      {% if s.slug == "agent-swarm" %}
+      <div class="pf-v6-c-card__body">
+        <p style="margin:0; color:var(--pf-t--global--text--color--subtle);">
+          Automatically available to sessions in this workspace. Agents receive a
+          short-lived credential limited to this workspace.
+        </p>
+      </div>
+      <div class="pf-v6-c-card__footer" style="display:flex; gap:var(--pf-t--global--spacer--xs); align-items:center;">
+        <form method="post" action="/workspaces/{{ ws.id }}/mcp-servers/{{ s.id }}/toggle" style="display:inline;">
+          <button type="submit" class="pf-v6-c-button pf-m-tertiary pf-m-small">
+            {{ 'Disable' if s.enabled else 'Enable' }}
+          </button>
+        </form>
+      </div>
+
+      {% elif s.server_type == "stdio" %}
       {# ════════ STDIO SERVER: view / edit modes ════════ #}
 
       {# ── View mode (shown when configured) ── #}

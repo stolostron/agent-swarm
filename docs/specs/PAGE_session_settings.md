@@ -30,6 +30,21 @@ working branch, prompt, GitHub credential, and enabled MCP servers.
 4. The next launch translates persisted settings into OpenShell providers,
    policy, repo setup, and agent command.
 
+### Agent Swarm MCP provider
+
+When the persisted MCP selection includes `agent-swarm`, launch derives the
+provider name `swarmer-ws-{workspace_id}-agent-swarm-s{session_id}`. The
+provider is created or updated with a one-hour, workspace-bound session token
+and attached to the new sandbox. The provider profile must also contain the
+internal Swarmer REST endpoint, bearer credential mapping, and MCP binary
+attribution; the sandbox `swarm_mcp` network rule is separate and only permits
+network access.
+
+For `tui` and `server` sessions, the token is re-minted every 50 minutes and
+the existing provider is updated in place. Prompt sessions do not need a
+refresh loop because they are one-shot. Provider cleanup occurs after sandbox
+deletion on stop, delete, and successful prompt completion.
+
 ## Model semantics
 
 - Provider is a preset/identifier used by OpenCode; the exact model format is
@@ -46,3 +61,5 @@ working branch, prompt, GitHub credential, and enabled MCP servers.
 - Invalid prompt IDs from another workspace are rejected.
 - Server mode rejects unsupported agent tools server-side.
 - Autosave reports failure without silently losing the selected value.
+- Agent Swarm provider creation is driven by persisted `Session.mcp_server_ids`,
+  not by the local OpenCode configuration.

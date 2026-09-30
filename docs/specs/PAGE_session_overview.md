@@ -36,6 +36,8 @@ mode-specific output and configuration components.
 - Launch `tui`, `server`, or `prompt` through the shared `_do_launch()` path.
 - Stop always deletes the OpenShell sandbox and server service where present.
 - Delete is blocked while active and performs runtime/credential cleanup first.
+- Agent Swarm provider credentials are refreshed for long-running TUI/server
+  sessions and deleted after the sandbox is deleted.
 - Rename and configuration changes are blocked while active.
 
 ## API references
@@ -54,3 +56,6 @@ mode-specific output and configuration components.
   launch/edit operations.
 - Session state is persisted before the UI claims an operation succeeded.
 - Errors become safe flash messages or partial responses, never raw secrets.
+- The persisted session model stores selected MCP IDs in
+  `Session.mcp_server_ids`; the session-scoped OpenShell provider and token are
+  runtime resources and are not persisted as plaintext model fields.
