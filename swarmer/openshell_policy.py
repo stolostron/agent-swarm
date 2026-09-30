@@ -139,6 +139,34 @@ _JIRA_MCP_BLOCK = {
     ],
 }
 
+
+def _build_agent_swarm_mcp_block() -> dict:
+    from urllib.parse import urlparse
+
+    from swarmer.config import get_agent_swarm_internal_url
+
+    url = get_agent_swarm_internal_url()
+    parsed = urlparse(url)
+    host = parsed.hostname or "127.0.0.1"
+    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    return {
+        "name": "swarm-mcp",
+        "endpoints": [{
+            "host": host,
+            "port": port,
+            "protocol": "rest",
+            "enforcement": "enforce",
+            "access": "full",
+        }],
+        "binaries": [
+            _bin("/usr/local/bin/agent-swarm-mcp-server"),
+            _bin("/usr/local/bin/python3.14"),
+            _bin("/usr/local/bin/python3"),
+            _bin("/usr/bin/python3"),
+            _bin("/sandbox/.venv/bin/python*"),
+        ],
+    }
+
 # Added when the workspace has SLACK_WEBHOOK_URL set. Agent prompts post
 # digests via curl or Python urllib; without this block the egress proxy
 # returns 403: CONNECT hooks.slack.com:443 not permitted by policy.
@@ -492,6 +520,9 @@ def build_session_network_policies(
 
     if any("jira" in getattr(mcp, "slug", "") for mcp in (mcp_servers or [])):
         network_policies_dict["jira_mcp"] = _JIRA_MCP_BLOCK
+
+    if any(getattr(mcp, "slug", "") == "agent-swarm" for mcp in (mcp_servers or [])):
+        network_policies_dict["swarm_mcp"] = _build_agent_swarm_mcp_block()
 
     if has_slack_webhook:
         network_policies_dict["slack_webhook"] = _SLACK_WEBHOOK_BLOCK

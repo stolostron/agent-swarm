@@ -19,6 +19,23 @@ MCP_SERVER_CATALOG: list[dict] = [
         "icon": "fas fa-bug",
         "color": "blue",
     },
+    {
+        "slug": "agent-swarm",
+        "display_name": "Agent Swarm",
+        "description": "Manage sessions within this workspace from an agent.",
+        "server_url": "",
+        "server_type": "stdio",
+        "command": "agent-swarm-mcp-server",
+        "internal": True,
+        "environment": {
+            "AGENT_SWARM_API_URL": "{env:AGENT_SWARM_API_URL}",
+            "AGENT_SWARM_API_TOKEN": "{env:AGENT_SWARM_API_TOKEN}",
+            "AGENT_SWARM_WORKSPACE": "{env:AGENT_SWARM_WORKSPACE}",
+            "AGENT_SWARM_VERIFY_SSL": "false",
+        },
+        "icon": "fas fa-robot",
+        "color": "purple",
+    },
 ]
 
 

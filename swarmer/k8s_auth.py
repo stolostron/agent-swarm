@@ -31,6 +31,12 @@ class TokenIdentity:
     username: str
     uid: str = ""
     groups: list[str] = field(default_factory=list)
+    session_id: int | None = None
+    workspace_id: int | None = None
+
+    @property
+    def is_session(self) -> bool:
+        return self.session_id is not None and self.workspace_id is not None
 
 
 def _make_user_config(token: str, api_url: str, in_cluster: bool):
@@ -158,5 +164,4 @@ async def _probe_with_user_token(token: str, api_url: str, in_cluster: bool) -> 
             return None
 
     return await asyncio.to_thread(_do_probe)
-
 

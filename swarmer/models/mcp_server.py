@@ -69,10 +69,12 @@ class McpServer(Base):
 
     @property
     def is_authenticated(self) -> bool:
-        return bool(self.jira_access_token_enc)
+        return self.slug == "agent-swarm" or bool(self.jira_access_token_enc)
 
     @property
     def auth_status(self) -> str:
+        if self.slug == "agent-swarm":
+            return "active"
         if not self.is_authenticated:
             return "not_configured"
         return "expired" if self.token_expires_at else "active"

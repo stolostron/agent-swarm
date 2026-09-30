@@ -49,6 +49,10 @@ spec:
               value: "https://kubernetes.default.svc"
             - name: OPENSHIFT_OAUTH_URL
               value: "OPENSHIFT_OAUTH_URL_VALUE"
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
             - name: REDIRECT_BASE_URL
               value: "REDIRECT_BASE_URL_VALUE"
             - name: DEFAULT_AGENT_TOOL

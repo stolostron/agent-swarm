@@ -95,6 +95,24 @@ class AgentSwarmMCPServer:
         )
         self._register_tools()
 
+    async def _resolve_workspace_id(self, workspace_id: int | None) -> int:
+        """Resolve an omitted workspace from AGENT_SWARM_WORKSPACE."""
+        if workspace_id is not None:
+            return workspace_id
+        default = self.config.default_workspace
+        if not default:
+            raise ValueError("workspace_id is required unless AGENT_SWARM_WORKSPACE is set")
+        if default.isdigit():
+            return int(default)
+        for workspace in await self.client.list_workspaces():
+            if default in {
+                str(workspace.get("id", "")),
+                workspace.get("display_name", ""),
+                workspace.get("namespace", ""),
+            }:
+                return int(workspace["id"])
+        raise ValueError(f"Workspace {default!r} was not found")
+
     # ==================================================================
     # Tool implementations (testable as instance methods)
     # ==================================================================
@@ -244,9 +262,10 @@ class AgentSwarmMCPServer:
 
     async def _list_sessions(
         self,
-        workspace_id: int,
+        workspace_id: int | None,
         phase: str | None = None,
     ) -> list[dict]:
+        workspace_id = await self._resolve_workspace_id(workspace_id)
         sessions = await self.client.list_sessions(workspace_id)
         if phase:
             sessions = [s for s in sessions if s.get("phase") == phase]
@@ -283,7 +302,7 @@ class AgentSwarmMCPServer:
 
     async def _create_session(
         self,
-        workspace_id: int,
+        workspace_id: int | None,
         name: str,
         agent_tool: str = "opencode",
         mode: str = "prompt",
@@ -294,6 +313,7 @@ class AgentSwarmMCPServer:
         github_pat_id: int | None = None,
         prompt_id: int | None = None,
     ) -> dict:
+        workspace_id = await self._resolve_workspace_id(workspace_id)
         session = await self.client.create_session(
             workspace_id,
             name,
@@ -798,7 +818,7 @@ class AgentSwarmMCPServer:
 
         @mcp.tool()
         async def list_sessions(
-            workspace_id: int,
+            workspace_id: int | None = None,
             phase: str | None = None,
         ) -> list[dict]:
             """List sessions in a workspace.
@@ -839,8 +859,8 @@ class AgentSwarmMCPServer:
 
         @mcp.tool()
         async def create_session(
-            workspace_id: int,
-            name: str,
+            workspace_id: int | None = None,
+            name: str = "",
             agent_tool: str = "opencode",
             mode: str = "prompt",
             provider: str = "",
@@ -865,6 +885,8 @@ class AgentSwarmMCPServer:
                 github_pat_id: GitHub PAT id for private repos (from list_github_pats).
                 prompt_id: Base prompt id (from list_workspace_prompts).
             """
+            if not name.strip():
+                raise ValueError("name is required")
             return await self._create_session(
                 workspace_id, name, agent_tool, mode, provider,
                 persist, working_branch, instruction_prompt, github_pat_id, prompt_id,

@@ -122,6 +122,13 @@ async def _run_openshell_tui(
         await websocket.close(code=4004, reason="Sandbox lookup failed")
         return
 
+    # Provider credentials are attached to the sandbox, but interactive execs
+    # must receive the gateway-managed environment explicitly.
+    provider_env = await openshell_client.get_sandbox_provider_environment(
+        sandbox_id,
+        client=client,
+    )
+
     # Inject workspace extra env vars (arbitrary key-value pairs stored in DB) and
     # Jira MCP non-secret config (JIRA_SERVER_URL, JIRA_EMAIL).
     # NOTE: provider credentials (GOOGLE_API_KEY, JIRA_ACCESS_TOKEN, GH_TOKEN etc.)
@@ -190,6 +197,7 @@ async def _run_openshell_tui(
         from swarmer.config import settings
         if settings.opencode_experimental_plan_mode:
             tui_env["OPENCODE_EXPERIMENTAL_PLAN_MODE"] = "true"
+    tui_env.update(provider_env)
 
     command = ["sh", "-c", tui_shell]
 

@@ -36,6 +36,15 @@ async def require_api_auth(
     Returns a TokenIdentity on success; raises 401 on failure.
     """
     token = credentials.credentials
+    from swarmer.session_auth import validate_session_token
+
+    claims = validate_session_token(token)
+    if claims is not None:
+        return TokenIdentity(
+            username=f"session:{claims['session_id']}",
+            session_id=claims["session_id"],
+            workspace_id=claims["workspace_id"],
+        )
     identity = await validate_token(
         token, settings.k8s_api_url, settings.k8s_in_cluster
     )
@@ -54,12 +63,25 @@ async def get_current_user(
     return identity.username
 
 
+async def require_human_api_auth(
+    identity: TokenIdentity = Depends(require_api_auth),
+) -> TokenIdentity:
+    """Reject restricted session credentials on administrative endpoints."""
+    if identity.is_session:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Session credentials cannot use this endpoint",
+        )
+    return identity
+
+
 async def user_can_access_workspace(
     db: AsyncSession, ws: Workspace, identity: TokenIdentity
 ) -> bool:
     """Return True when *identity* has ACL access to the workspace."""
     return await workspace_acl.user_can_access_workspace(
-        db, ws, identity.username, identity.groups
+        db, ws, identity.username, identity.groups,
+        session_workspace_id=identity.workspace_id,
     )
 
 

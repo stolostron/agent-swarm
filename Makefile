@@ -325,7 +325,7 @@ image-build: sync-images  ## Build the swarmer container image  (REGISTRY, SILEN
 
 image-push:  ## Push image to registry  (requires REGISTRY=..., uses VERSION file)
 	@test -n "$(REGISTRY)" || (echo "Set REGISTRY=your.registry.example.com" && exit 1)
-	@TAG=$$(cat VERSION); \
+	@set -e; TAG=$$(cat VERSION); \
 	IMAGE_REF="$(REGISTRY)/$(IMAGE):$$TAG"; \
 	echo "Pushing $$IMAGE_REF..."; \
 	$(CONTAINER_CMD) push "$$IMAGE_REF"; \

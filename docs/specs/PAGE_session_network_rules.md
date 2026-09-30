@@ -21,6 +21,13 @@ or revoke selected rules for a session.
 - OpenShell draft-chunk approval and undo APIs for live apply/revoke.
 - JSON persistence for normalized custom rules.
 
+The built-in Agent Swarm rule is generated at launch as `swarm_mcp` and allows
+the MCP binary to reach the internal Swarmer REST service. Its endpoint is
+derived from `POD_NAMESPACE`/`K8S_NAMESPACE` or the explicit internal URL.
+This rule is distinct from the OpenShell provider profile: the provider
+profile supplies endpoint enforcement, binary attribution, and the bearer
+credential binding required for `AGENT_SWARM_API_TOKEN` injection.
+
 ## Promotion algorithm
 
 1. Load draft chunks live from OpenShell when active, otherwise use snapshot.
@@ -46,3 +53,5 @@ or revoke selected rules for a session.
 - Empty/invalid endpoint hosts are not sent to OpenShell.
 - Same rule name with different binaries merges rather than drops data.
 - Live failures are visible but do not roll back a valid persisted decision.
+- Agent Swarm launches have both a non-secret `swarm_mcp` network rule and a
+  session-scoped provider; either missing policy is treated as a launch defect.

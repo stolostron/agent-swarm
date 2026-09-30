@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from swarmer import k8s
 from swarmer.database import get_db
 from swarmer.k8s_auth import TokenIdentity
-from swarmer.api.deps import get_current_user, get_workspace_or_404, require_api_auth
+from swarmer.api.deps import get_current_user, get_workspace_or_404, require_human_api_auth
 from swarmer.api.schemas import (
     CredentialsOut,
     CredentialsSave,
@@ -34,7 +34,7 @@ from swarmer.models.workspace import Workspace
 router = APIRouter(
     prefix="/workspaces/{ws_id}/secrets",
     tags=["secrets"],
-    dependencies=[Depends(require_api_auth)],
+    dependencies=[Depends(require_human_api_auth)],
 )
 
 log = logging.getLogger(__name__)
@@ -79,7 +79,7 @@ async def save_credentials(
     body: CredentialsSave,
     ws: Workspace = Depends(get_workspace_or_404),
     db: AsyncSession = Depends(get_db),
-    identity: TokenIdentity = Depends(require_api_auth),
+    identity: TokenIdentity = Depends(require_human_api_auth),
 ):
     user = identity.username
     from swarmer import workspace_acl
@@ -293,7 +293,7 @@ async def delete_credential(
     provider: str,
     ws: Workspace = Depends(get_workspace_or_404),
     db: AsyncSession = Depends(get_db),
-    identity: TokenIdentity = Depends(require_api_auth),
+    identity: TokenIdentity = Depends(require_human_api_auth),
 ) -> MessageOut:
     user = identity.username
     provider_names = {

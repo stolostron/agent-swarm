@@ -958,6 +958,41 @@ async def test_import_provider_profiles_maps_endpoints_and_binaries(sdk_client):
     assert p.binaries[0].path == "/usr/bin/curl"
 
 
+@pytest.mark.asyncio
+async def test_import_provider_profiles_reconciles_after_successful_import():
+    """A successful bulk import still updates an existing stale profile."""
+    mock_client = MagicMock()
+    mock_client._timeout = 10
+    existing_resp = MagicMock()
+    existing_resp.profile.resource_version = 7
+    mock_client._stub.GetProviderProfile.return_value = existing_resp
+
+    profile = {
+        "id": "agent-swarm",
+        "display_name": "Agent Swarm",
+        "credentials": [{
+            "name": "AGENT_SWARM_API_TOKEN",
+            "env_vars": ["AGENT_SWARM_API_TOKEN"],
+            "auth_style": "bearer",
+            "header_name": "authorization",
+        }],
+        "endpoints": [{
+            "host": "swarmer.swarmer.svc.cluster.local",
+            "port": 8080,
+            "protocol": "rest",
+            "access": "read-write",
+            "enforcement": "enforce",
+        }],
+    }
+
+    await oc.import_provider_profiles([profile], client=mock_client)
+
+    mock_client._stub.UpdateProviderProfiles.assert_called_once()
+    request = mock_client._stub.UpdateProviderProfiles.call_args.args[0]
+    assert request.expected_resource_version == 7
+    assert request.profile.profile.endpoints[0].host == "swarmer.swarmer.svc.cluster.local"
+
+
 def test_jira_provider_profile_binds_atlassian_endpoints():
     """The Jira credential profile authorizes its Atlassian destinations."""
     from swarmer.openshell_client import CUSTOM_PROVIDER_PROFILES
@@ -975,7 +1010,6 @@ def test_jira_provider_profile_binds_atlassian_endpoints():
 async def test_import_provider_profiles_updates_existing_profile_on_already_exists():
     """When ImportProviderProfiles encounters ALREADY_EXISTS, it calls UpdateProviderProfiles."""
     import grpc
-    from openshell._proto import openshell_pb2
 
     mock_client = MagicMock()
 

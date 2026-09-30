@@ -39,6 +39,8 @@ from swarmer.k8s_auth import TokenIdentity
 from swarmer.models.workspace import Workspace
 from swarmer.models.workspace_gateway import WorkspaceGateway
 from swarmer.models.workspace_member import WorkspaceMember
+from swarmer.models.mcp_server import McpServer
+from swarmer.mcp_catalog import get_catalog_entry
 from swarmer.openshell_command_parser import parse_gateway_command_or_json
 from swarmer.openshell_oidc import oidc_manager
 from swarmer.openshell_token_parser import parse_token_input
@@ -307,6 +309,8 @@ async def list_workspaces(
     )
     workspaces = result.scalars().all()
     accessible = await filter_accessible_workspaces(db, workspaces, identity)
+    if identity.is_session:
+        accessible = [w for w in accessible if w.id == identity.workspace_id]
     missing_map = await get_missing_provider_names_bulk([w.id for w in accessible], db)
     output = []
     for workspace in accessible:
@@ -324,6 +328,11 @@ async def create_workspace(
     db: AsyncSession = Depends(get_db),
     identity: TokenIdentity = Depends(require_api_auth),
 ):
+    if identity.is_session:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Session credentials cannot create workspaces.",
+        )
     if settings.k8s_namespace:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -378,6 +387,19 @@ async def create_workspace(
     try:
         await db.commit()
         await db.refresh(ws)
+        entry = get_catalog_entry("agent-swarm")
+        if entry is not None:
+            db.add(McpServer(
+                workspace_id=ws.id,
+                user_id="",
+                shared=True,
+                slug=entry["slug"],
+                display_name=entry["display_name"],
+                server_url=entry.get("server_url", ""),
+                server_type=entry.get("server_type", "stdio"),
+                enabled=True,
+            ))
+            await db.commit()
         if gw is not None:
             await db.refresh(gw)
     except IntegrityError:
@@ -400,7 +422,9 @@ async def get_workspace(
         select(Workspace).where(Workspace.id == ws_id).options(selectinload(Workspace.gateway))
     )
     ws = result.scalar_one_or_none()
-    if ws is None or not await workspace_acl.user_can_access_workspace(db, ws, identity.username, identity.groups):
+    if ws is None or not await workspace_acl.user_can_access_workspace(
+        db, ws, identity.username, identity.groups, identity.workspace_id
+    ):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Workspace {ws_id} not found",
@@ -413,7 +437,7 @@ async def _require_manage_permission(
 ) -> None:
     """Raise 403 unless *identity* is the workspace owner or a configured admin."""
     if not await workspace_acl.can_manage_members(
-        db, ws, identity.username, identity.groups
+        db, ws, identity.username, identity.groups, identity.is_session
     ):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
