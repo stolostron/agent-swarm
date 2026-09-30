@@ -63,9 +63,9 @@ class TestResolvePreset:
 
     def test_openai_preset_defaults(self):
         assert _opencode.resolve_preset("openai") == {
-            "plan": "openai/gpt-5.6-terra",
-            "build": "openai/gpt-5.6-luna",
-            "small": "openai/gpt-5.6-luna-fast",
+            "plan": "openai/gpt-6-sol",
+            "build": "openai/gpt-6-luna",
+            "small": "openai/gpt-6-luna",
         }
 
     def test_resolve_unknown_preset_returns_none(self):
