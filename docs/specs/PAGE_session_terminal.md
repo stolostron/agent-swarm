@@ -24,7 +24,7 @@ sessions through an OpenShell PTY.
 
 1. Detail render creates a token only for a running TUI session.
 2. Browser passes the token when opening the WebSocket.
-3. Server validates workspace/session, mode, active phase, authentication, and
+3. Server validates workspace/session, confirms TUI mode, active phase, authentication, and
    token freshness, then consumes the token.
 4. Bidirectionally forward terminal bytes between xterm.js and OpenShell.
 5. Close the socket and PTY on stop, disconnect, invalid token, or runtime

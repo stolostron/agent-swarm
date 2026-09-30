@@ -824,7 +824,7 @@ async def session_detail(
     runs_result = await db.execute(
         select(SessionRun)
         .where(SessionRun.session_id == sid)
-        .order_by(desc(SessionRun.completed_at))
+        .order_by(desc(SessionRun.completed_at), desc(SessionRun.id))
         .limit(100)
     )
     session_runs = list(runs_result.scalars().all())
@@ -1516,8 +1516,12 @@ async def _do_launch_openshell(
         }, client=oc_client)
         provider_names.append(pname)
     agent_swarm_provider_name = ""
+    jira_provider_created = False
     for mcp in (mcp_servers or []):
-        if getattr(mcp, "slug", "") == "agent-swarm":
+        if (
+            getattr(mcp, "slug", "") == "agent-swarm"
+            and not agent_swarm_provider_name
+        ):
             from swarmer.session_auth import mint_session_token
 
             agent_swarm_token = mint_session_token(session.id, ws_id)
@@ -1535,8 +1539,12 @@ async def _do_launch_openshell(
             internal_url = get_agent_swarm_internal_url()
             env_vars["AGENT_SWARM_API_URL"] = internal_url
             env_vars["AGENT_SWARM_WORKSPACE"] = str(ws_id)
-            break
-        if "jira" in getattr(mcp, "slug", "") and getattr(mcp, "jira_access_token_enc", ""):
+            continue
+        if (
+            not jira_provider_created
+            and "jira" in getattr(mcp, "slug", "")
+            and getattr(mcp, "jira_access_token_enc", "")
+        ):
             pname = f"swarmer-ws-{ws_id}-jira"
             # All three Jira vars go through the gateway Provider API.
             # JIRA_ACCESS_TOKEN is a credential (injected as openshell:resolve:... token).
@@ -1557,7 +1565,7 @@ async def _do_launch_openshell(
             # sandbox process sees them directly on every exec call.
             env_vars["JIRA_SERVER_URL"] = mcp.jira_server_url or ""
             env_vars["JIRA_EMAIL"] = mcp.jira_email or ""
-            break  # only one Jira provider per workspace
+            jira_provider_created = True  # only one Jira provider per workspace
 
     # 2. Build policy YAML (pure computation, no I/O)
     # Parse session-level custom rules (approved from draft chunks) so they are
@@ -1935,6 +1943,7 @@ async def _setup_openshell_sandbox(
                         getattr(result, "exit_code", "?"),
                         (_stdout + _stderr).strip(),
                     )
+                    raise RuntimeError(f"git clone failed for {local_path}")
             if oc_client is not None:
                 await openshell_client.exec_command(
                     ref.name, ["sh", "-c", "git config --global --add safe.directory '*'"], client=oc_client
@@ -1971,6 +1980,7 @@ async def _setup_openshell_sandbox(
                             getattr(result, "exit_code", "?"),
                             (_stdout + _stderr).strip(),
                         )
+                        raise RuntimeError(f"git checkout failed for {repo_branch} in {rd['local_path']}")
             if working_branch:
                 for rd in repos_data:
                     branch_cmd = (
@@ -1995,6 +2005,9 @@ async def _setup_openshell_sandbox(
                             rd["local_path"],
                             getattr(result, "exit_code", "?"),
                             (_stdout + _stderr).strip(),
+                        )
+                        raise RuntimeError(
+                            f"git checkout of working branch failed for {rd['local_path']}"
                         )
 
         # Build the agent command.
