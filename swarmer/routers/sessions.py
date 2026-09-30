@@ -1794,7 +1794,7 @@ async def _setup_openshell_sandbox(
         # into SandboxSpec.environment).
         if provider_names:
             provider_env = await openshell_client.get_sandbox_provider_environment(
-                ref.name,
+                ref.id,
                 client=oc_client,
             )
             env_vars.update(provider_env)
