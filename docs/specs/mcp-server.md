@@ -238,6 +238,7 @@ Cron schedules require a valid cron expression. Event schedules support:
 ci_fail_or_conflict
 new_pr_or_commit
 review_comments
+review_requested
 review_approved
 pr_comment
 any_actionable

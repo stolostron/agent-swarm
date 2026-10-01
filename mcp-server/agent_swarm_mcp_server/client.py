@@ -338,7 +338,8 @@ class AgentSwarmClient:
         """Create a cron or event execution schedule for a session.
 
         Event conditions include: ci_fail_or_conflict, new_pr_or_commit,
-        review_comments, review_approved, pr_comment, and any_actionable.
+        review_comments, review_requested, review_approved, pr_comment, and
+        any_actionable.
         """
         body: dict = {
             "trigger_type": trigger_type,

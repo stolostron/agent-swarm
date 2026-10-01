@@ -554,7 +554,7 @@ async def _classify_event_triggers(
         created_at = parse_iso_datetime(event.get("created_at"))
         pr = payload.get("pull_request") or {}
         number = pr.get("number")
-        action = payload.get("action")
+        action = str(payload.get("action") or "")
         actor = (event.get("actor") or {}).get("login", "")
         condition = ""
         relevant_author = actor
@@ -570,7 +570,10 @@ async def _classify_event_triggers(
                 sha = ((pr.get("head") or {}).get("sha") or "")
                 relevant_author = await _fetch_commit_author(client, repo, sha, token)
                 association = await _fetch_actor_association(client, repo, relevant_author, token)
-            elif action in {"ready_for_review", "converted_to_ready_for_review", "review_requested", "labeled", "unlabeled"}:
+            elif action == "review_requested":
+                condition = "review_requested"
+                association = await _fetch_actor_association(client, repo, actor, token)
+            elif action in {"ready_for_review", "converted_to_ready_for_review", "labeled", "unlabeled"}:
                 condition = "any_actionable"
                 association = await _fetch_actor_association(client, repo, actor, token)
         elif event_type == "CheckRunEvent":
@@ -598,7 +601,7 @@ async def _classify_event_triggers(
                         approved_association = await _fetch_actor_association(client, repo, approved_user, token)
                     triggers.setdefault(number, []).append(EventTrigger(
                         "review_approved", event_id, approved_user, number,
-                        event_type, created_at, approved_association,
+                        event_type, created_at, approved_association, action,
                     ))
             classified = _classify_comment_event(event)
             if classified:
@@ -607,14 +610,14 @@ async def _classify_event_triggers(
                 relevant_author = actor_login
         if condition and isinstance(number, int):
             triggers.setdefault(number, []).append(EventTrigger(
-                condition, event_id, relevant_author, number, event_type, created_at, association
+                condition, event_id, relevant_author, number, event_type, created_at, association, action
             ))
-            if condition in {"new_pr_or_commit", "any_actionable"}:
+            if condition in {"new_pr_or_commit", "review_requested", "any_actionable"}:
                 actor_association = association
                 if actor.lower() != relevant_author.lower():
                     actor_association = await _fetch_actor_association(client, repo, actor, token)
                 triggers[number].append(EventTrigger(
-                    "any_actionable", event_id, actor, number, event_type, created_at, actor_association
+                    "any_actionable", event_id, actor, number, event_type, created_at, actor_association, action
                 ))
     return triggers
 
@@ -699,7 +702,8 @@ def _match_triggers_for_pr(
             continue
         relevant = [e for e in (event_triggers or []) if e.condition == sched.event_condition]
         if event_triggers is not None and sched.event_condition in {
-            "new_pr_or_commit", "review_comments", "review_approved", "pr_comment", "any_actionable", "ci_fail_or_conflict"
+            "new_pr_or_commit", "review_comments", "review_requested", "review_approved",
+            "pr_comment", "any_actionable", "ci_fail_or_conflict"
         } and not relevant:
             continue
         if not relevant:
@@ -756,6 +760,7 @@ def _build_event_context(
         "event_id": event.event_id if event else "",
         "event_actor": event.actor_login if event else "",
         "event_type": event.event_type if event else "",
+        "event_action": event.action if event else "",
         "event_condition": condition,
         "fork_no_push": bool(
             pr_state.is_fork and not pr_state.raw_payload.get("maintainer_can_modify", False)

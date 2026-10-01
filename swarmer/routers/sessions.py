@@ -2751,7 +2751,8 @@ async def schedule_create(
     db: AsyncSession = Depends(get_db),
 ):
     from croniter import croniter as _croniter
-    from swarmer.models.session_schedule import SessionSchedule
+
+    from swarmer.models.session_schedule import EVENT_CONDITIONS, SessionSchedule
 
     ws = await _get_workspace(ws_id, db)
     session = await db.get(Session, sid)
@@ -2763,6 +2764,12 @@ async def schedule_create(
     trigger_type = trigger_type.strip().lower()
     if trigger_type not in ("cron", "event"):
         trigger_type = "cron"
+    if (
+        trigger_type == "event"
+        and event_condition.strip()
+        and event_condition.strip() not in EVENT_CONDITIONS
+    ):
+        return HTMLResponse("", status_code=422, headers={"HX-Trigger": "scheduleFormError"})
 
     cron_schedule = ""
     cron_next_run = None
@@ -2827,7 +2834,8 @@ async def schedule_edit(
     db: AsyncSession = Depends(get_db),
 ):
     from croniter import croniter as _croniter
-    from swarmer.models.session_schedule import SessionSchedule
+
+    from swarmer.models.session_schedule import EVENT_CONDITIONS, SessionSchedule
 
     ws = await _get_workspace(ws_id, db)
     session = await db.get(Session, sid)
@@ -2851,6 +2859,12 @@ async def schedule_edit(
     trigger_type = trigger_type.strip().lower()
     if trigger_type not in ("cron", "event"):
         trigger_type = "cron"
+    if (
+        trigger_type == "event"
+        and event_condition.strip()
+        and event_condition.strip() not in EVENT_CONDITIONS
+    ):
+        return HTMLResponse("", status_code=422, headers={"HX-Trigger": "scheduleFormError"})
 
     sched.trigger_type = trigger_type
     if trigger_type == "event":

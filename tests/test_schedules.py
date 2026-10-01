@@ -661,6 +661,72 @@ class TestScheduleEditHTMXEndpoint:
         assert "value=\"1\" checked" in resp.text
         assert "schedule-help-popover" in resp.text
         assert 'Prompt <span' in resp.text
+        assert 'value="review_requested">Review Requested (including re-review)</option>' in resp.text
+        assert "Matches when a reviewer is requested on a PR" in resp.text
+
+    @pytest.mark.asyncio
+    async def test_review_requested_condition_is_accepted_by_html_create_and_edit(self, client):
+        from sqlalchemy import select
+        from swarmer.models.session_schedule import SessionSchedule
+
+        ws = await _create_workspace(client)
+        session = await _create_session(client, ws["id"])
+        prompt_id = await _create_prompt(ws["id"])
+        ws_id, sid = ws["id"], session["id"]
+
+        response = await client.post(
+            f"/workspaces/{ws_id}/sessions/{sid}/schedules",
+            data={
+                "trigger_type": "event",
+                "event_condition": "review_requested",
+                "author_scope": "all",
+                "prompt_id": str(prompt_id),
+                "enabled": "on",
+            },
+        )
+        assert response.status_code == 200, response.text
+        async with _TestSession() as db:
+            schedule = await db.scalar(
+                select(SessionSchedule).where(
+                    SessionSchedule.session_id == sid,
+                    SessionSchedule.event_condition == "review_requested",
+                )
+            )
+            assert schedule is not None
+            schedule_id = schedule.id
+
+        response = await client.post(
+            f"/workspaces/{ws_id}/sessions/{sid}/schedules/{schedule_id}/edit",
+            data={
+                "trigger_type": "event",
+                "event_condition": "review_requested",
+                "author_scope": "all",
+                "prompt_id": str(prompt_id),
+                "instruction_prompt": "",
+            },
+        )
+        assert response.status_code == 200, response.text
+
+        invalid_create = await client.post(
+            f"/workspaces/{ws_id}/sessions/{sid}/schedules",
+            data={
+                "trigger_type": "event",
+                "event_condition": "not_a_condition",
+                "prompt_id": str(prompt_id),
+            },
+        )
+        assert invalid_create.status_code == 422
+
+        invalid_edit = await client.post(
+            f"/workspaces/{ws_id}/sessions/{sid}/schedules/{schedule_id}/edit",
+            data={
+                "trigger_type": "event",
+                "event_condition": "not_a_condition",
+                "author_scope": "all",
+                "prompt_id": str(prompt_id),
+            },
+        )
+        assert invalid_edit.status_code == 422
 
     @pytest.mark.asyncio
     async def test_edit_can_disable_event_context(self, client):
@@ -1059,6 +1125,51 @@ class TestSchedulerMultiSchedule:
 
 
 class TestEventTriggers:
+    @pytest.mark.asyncio
+    async def test_review_requested_is_supported_by_schedule_api_create_update_and_response(self, client: AsyncClient):
+        ws = await _create_workspace(client)
+        session = await _create_session(client, ws["id"])
+        prompt_id = await _create_prompt(ws["id"])
+        schedule_url = f"/api/v1/workspaces/{ws['id']}/sessions/{session['id']}/schedules"
+
+        created = await client.post(
+            schedule_url,
+            json={
+                "trigger_type": "event",
+                "event_condition": "review_comments",
+                "prompt_id": prompt_id,
+            },
+        )
+        assert created.status_code == 201, created.text
+        schedule_id = created.json()["id"]
+
+        updated = await client.put(
+            f"{schedule_url}/{schedule_id}",
+            json={"event_condition": "review_requested"},
+        )
+        assert updated.status_code == 200, updated.text
+        assert updated.json()["event_condition"] == "review_requested"
+
+        listed = await client.get(schedule_url)
+        assert listed.status_code == 200
+        assert listed.json()[0]["event_condition"] == "review_requested"
+
+        invalid_create = await client.post(
+            schedule_url,
+            json={
+                "trigger_type": "event",
+                "event_condition": "not_a_condition",
+                "prompt_id": prompt_id,
+            },
+        )
+        assert invalid_create.status_code == 422
+
+        invalid_update = await client.put(
+            f"{schedule_url}/{schedule_id}",
+            json={"event_condition": "not_a_condition"},
+        )
+        assert invalid_update.status_code == 422
+
     @pytest.mark.asyncio
     async def test_create_event_trigger_api(self, client: AsyncClient):
         ws = await _create_workspace(client)

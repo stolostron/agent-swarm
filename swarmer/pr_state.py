@@ -122,6 +122,7 @@ class EventTrigger:
     event_type: str
     created_at: datetime | None = None
     actor_association: str = ""
+    action: str = ""
 
 
 def parse_iso_datetime(dt_str: str | None) -> datetime | None:

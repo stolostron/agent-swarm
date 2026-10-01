@@ -21,6 +21,9 @@ an actionable GitHub event.
 - REST CRUD supports automation clients.
 - Event schedules carry author scope, optional fixed authors, event context,
   and quiet-period delay.
+- The `review_requested` event condition matches GitHub PullRequestEvent review
+  requests, including re-review requests; it is a separate choice from the
+  `any_actionable` catch-all.
 
 ## Create/edit algorithm
 
