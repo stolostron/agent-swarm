@@ -201,6 +201,8 @@ agent-containers/Makefile pins
   squash merge once, publishes its SemVer and `latest` tags, and commits the new `VERSION`,
   `IMAGE_DIGEST`, and `IMAGE_PUBLISH_STATE` cursor. The cursor lets it catch up merged PRs
   after GitHub Actions coalesces pending runs; publisher commits do not trigger new runs.
+  The workflow YAML is staged at `docs/publish-image.workflow.yml` until an account with
+  GitHub `workflows` permission moves it to `.github/workflows/publish-image.yml`.
   Checkout credentials are not persisted, and image builds receive neither the Quay token
   nor the GitHub token. Registry and GitHub credentials are used only for their respective
   publishing and metadata operations. Protected `main` must allow the workflow to push

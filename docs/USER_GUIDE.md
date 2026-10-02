@@ -493,6 +493,8 @@ make image-push REGISTRY=your-registry.example.com IMAGE_TAG=1.4.9
 
 **Automated publishing to Quay:**
 
+The workflow definition is staged at `docs/publish-image.workflow.yml`. To activate it, an account with GitHub `workflows` permission must move it to `.github/workflows/publish-image.yml` and commit that move. GitHub does not execute the staged file under `docs/`.
+
 After a squash-merged pull request lands on `main`, GitHub Actions builds its dashboard image with Podman, increments the last component of `VERSION` (for example, `1.4.9` to `1.4.10`), and publishes to Quay. Configure these repository-level Actions values:
 
 - Variable `QUAY_REPOSITORY_PATH`: the registry and repository namespace only, such as `quay.io/<namespace>`; do not include `/swarmer` or a tag.
