@@ -4,13 +4,17 @@
 #  Variables (override on the command line or in .env)
 # ──────────────────────────────────────────────────────────────
 -include .env
+# Record whether IMAGE_REF was explicitly supplied (including through .env).
+DEPLOY_IMAGE_OVERRIDE := $(if $(filter undefined,$(origin IMAGE_REF)),,1)
 
 # Container image settings
 IMAGE        ?= swarmer
-IMAGE_TAG    ?= $(shell cat VERSION)
+IMAGE_TAG    ?= local
 REGISTRY     ?=
-# If REGISTRY is set, full ref is REGISTRY/IMAGE:TAG, otherwise IMAGE:TAG
-IMAGE_REF     = $(if $(REGISTRY),$(REGISTRY)/$(IMAGE):$(IMAGE_TAG),$(IMAGE):$(IMAGE_TAG))
+LOCAL_IMAGE_REF = $(IMAGE):$(IMAGE_TAG)
+PUSH_IMAGE_REF = $(REGISTRY)/$(IMAGE):$(IMAGE_TAG)
+# Registry deploys use the pushed manifest digest; kind overrides IMAGE_REF locally.
+IMAGE_REF    ?= $(shell python3 scripts/image_release.py read-digest IMAGE_DIGEST 2>/dev/null)
 
 # docker or podman
 CONTAINER_CMD ?= podman
@@ -303,39 +307,29 @@ smoke-test-jira:  ## Run Jira MCP OpenShell e2e smoke test (requires running Ope
 #  Container image
 # ──────────────────────────────────────────────────────────────
 
-image-build: sync-images  ## Build the swarmer container image  (REGISTRY, SILENT=1 to skip version prompt)
-	@set -e; \
-	CURRENT=$$(cat VERSION); \
-	if [ "$(SILENT)" != "1" ]; then \
-		printf "Image version [$$CURRENT]: "; \
-		read INPUT; \
-		if [ -n "$$INPUT" ]; then \
-			printf "$$INPUT\n" > VERSION; \
-			TAG=$$INPUT; \
-		else \
-			TAG=$$CURRENT; \
-		fi; \
-	else \
-		TAG=$$CURRENT; \
-	fi; \
-	IMAGE_REF="$(if $(REGISTRY),$(REGISTRY)/$(IMAGE),$(IMAGE)):$$TAG"; \
-	echo "Building $$IMAGE_REF..."; \
-	$(CONTAINER_CMD) build -f Containerfile -t "$$IMAGE_REF" .; \
-	echo "Built: $$IMAGE_REF"
+image-build:  ## Build the swarmer image (IMAGE_TAG=local by default)
+	@echo "Building $(LOCAL_IMAGE_REF)..."
+	$(CONTAINER_CMD) build -f Containerfile -t "$(LOCAL_IMAGE_REF)" .
 
-image-push:  ## Push image to registry  (requires REGISTRY=..., uses VERSION file)
+image-push:  ## Push the built tag and record its registry digest (requires REGISTRY=...)
 	@test -n "$(REGISTRY)" || (echo "Set REGISTRY=your.registry.example.com" && exit 1)
-	@set -e; TAG=$$(cat VERSION); \
-	IMAGE_REF="$(REGISTRY)/$(IMAGE):$$TAG"; \
-	echo "Pushing $$IMAGE_REF..."; \
-	$(CONTAINER_CMD) push "$$IMAGE_REF"; \
-	echo "Pushed: $$IMAGE_REF"
+	@test "$(CONTAINER_CMD)" = podman || (echo "image-push requires podman to capture the registry digest" && exit 1)
+	@set -e; DIGEST_FILE=$$(mktemp); trap 'rm -f "$$DIGEST_FILE"' EXIT; \
+	$(CONTAINER_CMD) tag "$(LOCAL_IMAGE_REF)" "$(PUSH_IMAGE_REF)"; \
+	echo "Pushing $(PUSH_IMAGE_REF)..."; \
+	$(CONTAINER_CMD) push --digestfile "$$DIGEST_FILE" "$(PUSH_IMAGE_REF)"; \
+	python3 scripts/image_release.py record-push IMAGE_DIGEST "$$DIGEST_FILE" "$(REGISTRY)"; \
+	echo "Pushed $(PUSH_IMAGE_REF) ($$(cat "$$DIGEST_FILE"))"
 
 # ──────────────────────────────────────────────────────────────
 #  Deploy / Delete  (auto-detects OpenShift vs generic K8s)
 # ──────────────────────────────────────────────────────────────
 
 deploy:  ## Deploy swarmer to the current kubectl context  (SILENT=1 for non-interactive)
+	@if [ -z "$(DEPLOY_IMAGE_OVERRIDE)" ]; then \
+	  python3 scripts/image_release.py read-digest IMAGE_DIGEST --repository "$(REGISTRY)" >/dev/null || exit 1; \
+	fi
+	@test -n "$(IMAGE_REF)" || { echo "Set a valid IMAGE_REF or push an image first" >&2; exit 1; }
 	@test -f auth/secret.key || (echo "Run 'make setup-secret' first." && exit 1)
 	@echo "Deploying $(IMAGE_REF) → namespace $(NAMESPACE)..."
 	@# ── 1. Namespace + RBAC + PVC ──────────────────────────────────────────
@@ -786,15 +780,15 @@ kind-deploy:  ## One-shot local dev: create kind cluster + build + load image + 
 	  echo "✓ kind cluster '$(KIND_CLUSTER)' created."; \
 	fi
 	@# Build and side-load image (no registry needed)
-	$(MAKE) image-build SILENT=1
-	@echo "Loading $(IMAGE_REF) into kind cluster '$(KIND_CLUSTER)'..."
+	$(MAKE) image-build
+	@echo "Loading $(LOCAL_IMAGE_REF) into kind cluster '$(KIND_CLUSTER)'..."
 	@if [ "$(CONTAINER_CMD)" = "podman" ]; then \
-	  podman save $(IMAGE_REF) | kind load image-archive /dev/stdin --name $(KIND_CLUSTER); \
+	  podman save $(LOCAL_IMAGE_REF) | kind load image-archive /dev/stdin --name $(KIND_CLUSTER); \
 	else \
-	  kind load docker-image $(IMAGE_REF) --name $(KIND_CLUSTER); \
+	  kind load docker-image $(LOCAL_IMAGE_REF) --name $(KIND_CLUSTER); \
 	fi
 	@echo "✓ Image loaded."
-	$(MAKE) deploy SILENT=1
+	$(MAKE) deploy SILENT=1 IMAGE_REF="$(LOCAL_IMAGE_REF)"
 	@echo "Restarting swarmer deployment to ensure latest loaded image is running..."
 	kubectl rollout restart deployment/swarmer -n $(NAMESPACE)
 	kubectl rollout status deployment/swarmer -n $(NAMESPACE) --timeout=120s

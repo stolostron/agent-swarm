@@ -28,8 +28,9 @@ pytest tests/test_api.py -q                          # Run a single test file
 pytest tests/test_ui_patternfly.py                   # Playwright UI tests (requires running dev server at :8091 with SWARMER_DEV_AUTH=1)
 
 # Container image
-make image-build         # Build container image (podman by default; SILENT=1 to skip version prompt)
-make image-push REGISTRY=...  # Push to registry
+make image-build                         # Build swarmer:local (or IMAGE_TAG=...)
+make image-push REGISTRY=...             # Push same tag and update IMAGE_DIGEST
+make deploy REGISTRY=...                 # Deploy digest-pinned registry image
 
 # Local kind cluster
 make kind-deploy         # One-shot: create cluster + build + load image + deploy (includes OpenShell)
@@ -183,7 +184,7 @@ Use placeholder patterns instead: `<YOUR_PROJECT>`, `example.com`, `your-registr
 
 14. **Chat proxy HTML rewriting**: For in-cluster OpenCode server sessions, the proxy injects a `<base>` tag and rewrites absolute asset paths (`src="/..."` → `src="/workspaces/{ws_id}/sessions/{sid}/chat/..."`).
 
-15. **`image-build` requires `sync-images`**: The `image-build` Makefile target depends on `sync-images`, which reads `../agent-containers/.push-defaults`. If that file doesn't exist, the build fails. Use `SILENT=1` to skip the interactive version prompt.
+15. **Image tag vs deployment digest**: Swarmer `image-build` and `image-push` use the same `IMAGE_TAG` (default `local`); a successful Podman push updates `IMAGE_DIGEST` with the complete immutable `registry/swarmer@sha256:...` reference. `make deploy` uses it verbatim, rejects a mismatched `REGISTRY`, and fails until a push initializes it. `VERSION` contains the patch SemVer counter advanced only by the GitHub publishing workflow. Build subprocesses must not receive Quay or GitHub tokens. Run `make sync-images` separately to update the unrelated OpenCode agent image from `.push-defaults`.
 
 16. **Container image runs as non-root**: The Containerfile uses UBI10 `python-312-minimal` with UID 1001. Directories `/data` and `/auth` are created as root then ownership dropped. PVCs must be group-0 writable for the non-root user.
 
