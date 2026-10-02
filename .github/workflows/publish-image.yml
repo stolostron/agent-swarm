@@ -1,0 +1,42 @@
+name: Publish image
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    name: Publish squash-merged images to Quay
+    runs-on: ubuntu-latest
+    concurrency:
+      group: swarmer-image-release-${{ github.repository }}
+      cancel-in-progress: false
+    permissions:
+      contents: write
+      pull-requests: read
+    steps:
+      - name: Check out main with full history for catch-up and metadata commits
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install Podman if needed
+        run: |
+          if ! command -v podman >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y podman
+          fi
+          podman --version
+
+      - name: Publish all unprocessed squash merges
+        env:
+          GH_TOKEN: ${{ github.token }}
+          QUAY_REPOSITORY_PATH: ${{ vars.QUAY_REPOSITORY_PATH }}
+          QUAY_ROBOT_USERNAME: ${{ vars.QUAY_ROBOT_USERNAME }}
+          QUAY_PUSH_TOKEN: ${{ secrets.QUAY_PUSH_TOKEN }}
+        run: python3 scripts/publish_image.py

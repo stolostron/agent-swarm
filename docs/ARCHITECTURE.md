@@ -191,8 +191,20 @@ agent-containers/Makefile pins
 
 - `make sync-images` reads `REGISTRY` and `IMAGE_TAG` from `.push-defaults`, validates both,
   and writes `AGENT_IMAGE_OPENCODE` to `.env`.
-- `make image-build` depends on `sync-images`; `make deploy` substitutes the image and
-  other deployment placeholders into `k8s/swarmer/deployment.yaml`.
+- Swarmer's dashboard image builds independently from `sync-images`. Local `make image-build`
+  and `make image-push` share the reusable `local` tag; a successful push writes its registry
+  manifest reference `REGISTRY/swarmer@sha256:...` to `IMAGE_DIGEST`. `make deploy` substitutes
+  that validated reference into `k8s/swarmer/deployment.yaml` and rejects a mismatched
+  `REGISTRY`. The empty initial file blocks registry deployment until a manual or automated
+  push succeeds. `kind-deploy` uses the local tag.
+- On `main`, the image publisher assigns the next patch version from `VERSION`, builds a
+  squash merge once, publishes its SemVer and `latest` tags, and commits the new `VERSION`,
+  `IMAGE_DIGEST`, and `IMAGE_PUBLISH_STATE` cursor. The cursor lets it catch up merged PRs
+  after GitHub Actions coalesces pending runs; publisher commits do not trigger new runs.
+  Checkout credentials are not persisted, and image builds receive neither the Quay token
+  nor the GitHub token. Registry and GitHub credentials are used only for their respective
+  publishing and metadata operations. Protected `main` must allow the workflow to push
+  its metadata commits.
 - `swarmer/config.py` reads `AGENT_IMAGE_OPENCODE`; `opencode.py:get_image()` supplies it
   to sandbox creation. The image is not selected from the model or hardcoded in Python.
 - OpenShell SDK and chart versions are pinned independently in this repository's `Makefile`
