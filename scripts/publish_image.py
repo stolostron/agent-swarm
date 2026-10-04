@@ -61,6 +61,7 @@ def publish() -> None:
 
         authfile = str(Path(directory) / "quay-auth.json")
         push_env = {**clean_env, "REGISTRY_AUTH_FILE": authfile}
+        published_references = []
         for source in sources:
             run("git", "fetch", "origin", "main", env=git_env)
             remote_tip = output("git", "rev-parse", "origin/main", env=clean_env)
@@ -97,7 +98,15 @@ def publish() -> None:
                 "commit", "-m", message, env=clean_env,
             )
             run("git", "push", "origin", "HEAD:main", env=git_env)
+            published_references.append(reference)
             Path(authfile).unlink(missing_ok=True)
+
+        output_path = os.environ.get("GITHUB_OUTPUT")
+        if output_path and published_references:
+            with Path(output_path).open("a", encoding="utf-8") as output_file:
+                output_file.write("image_refs<<EOF\n")
+                output_file.write("\n".join(published_references))
+                output_file.write("\nEOF\n")
 
 
 if __name__ == "__main__":

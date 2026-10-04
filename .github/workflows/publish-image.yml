@@ -15,6 +15,7 @@ jobs:
       group: swarmer-image-release-${{ github.repository }}
       cancel-in-progress: false
     permissions:
+      actions: write
       contents: write
       pull-requests: read
     steps:
@@ -34,9 +35,21 @@ jobs:
           podman --version
 
       - name: Publish all unprocessed squash merges
+        id: publish
         env:
           GH_TOKEN: ${{ github.token }}
           QUAY_REPOSITORY_PATH: ${{ vars.QUAY_REPOSITORY_PATH }}
           QUAY_ROBOT_USERNAME: ${{ vars.QUAY_ROBOT_USERNAME }}
           QUAY_PUSH_TOKEN: ${{ secrets.QUAY_PUSH_TOKEN }}
         run: python3 scripts/publish_image.py
+
+      - name: Dispatch KinD E2E for each published image digest
+        if: steps.publish.outputs.image_refs != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          IMAGE_REFS: ${{ steps.publish.outputs.image_refs }}
+        run: |
+          while IFS= read -r image_ref; do
+            [ -n "$image_ref" ] || continue
+            gh workflow run e2e-kind.yml --ref main --field "image_ref=$image_ref"
+          done <<< "$IMAGE_REFS"

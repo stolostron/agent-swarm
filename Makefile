@@ -25,6 +25,7 @@ AGENT_IMAGE_OPENCODE ?=
 # Kubernetes
 NAMESPACE            ?= swarmer
 KIND_CLUSTER         ?= swarmer
+KIND_IMAGE_REF       ?=
 OPENSHIFT_OAUTH_URL  ?=
 SWARMER_HOST         ?=
 
@@ -770,7 +771,7 @@ status:  ## Show OpenShell and swarmer deployment status
 #  kind (local development cluster)
 # ──────────────────────────────────────────────────────────────
 
-kind-deploy:  ## One-shot local dev: create kind cluster + build + load image + deploy swarmer
+kind-deploy:  ## Create kind cluster and deploy a local build or KIND_IMAGE_REF
 	@test -f auth/secret.key || (echo "Run 'make setup-secret' first." && exit 1)
 	@# Create cluster (idempotent)
 	@if kind get clusters 2>/dev/null | grep -q "^$(KIND_CLUSTER)$$"; then \
@@ -779,16 +780,19 @@ kind-deploy:  ## One-shot local dev: create kind cluster + build + load image + 
 	  kind create cluster --name $(KIND_CLUSTER) --config k8s/kind-config.yaml; \
 	  echo "✓ kind cluster '$(KIND_CLUSTER)' created."; \
 	fi
-	@# Build and side-load image (no registry needed)
-	$(MAKE) image-build
-	@echo "Loading $(LOCAL_IMAGE_REF) into kind cluster '$(KIND_CLUSTER)'..."
-	@if [ "$(CONTAINER_CMD)" = "podman" ]; then \
-	  podman save $(LOCAL_IMAGE_REF) | kind load image-archive /dev/stdin --name $(KIND_CLUSTER); \
+	@if [ -n "$(KIND_IMAGE_REF)" ]; then \
+	  echo "Using registry image $(KIND_IMAGE_REF)"; \
 	else \
-	  kind load docker-image $(LOCAL_IMAGE_REF) --name $(KIND_CLUSTER); \
+	  $(CONTAINER_CMD) build -f Containerfile -t "$(LOCAL_IMAGE_REF)" .; \
+	  echo "Loading $(LOCAL_IMAGE_REF) into kind cluster '$(KIND_CLUSTER)'..."; \
+	  if [ "$(CONTAINER_CMD)" = "podman" ]; then \
+	    podman save $(LOCAL_IMAGE_REF) | kind load image-archive /dev/stdin --name $(KIND_CLUSTER); \
+	  else \
+	    kind load docker-image $(LOCAL_IMAGE_REF) --name $(KIND_CLUSTER); \
+	  fi; \
+	  echo "✓ Image loaded."; \
 	fi
-	@echo "✓ Image loaded."
-	$(MAKE) deploy SILENT=1 IMAGE_REF="$(LOCAL_IMAGE_REF)"
+	$(MAKE) deploy SILENT=1 IMAGE_REF="$(if $(KIND_IMAGE_REF),$(KIND_IMAGE_REF),$(LOCAL_IMAGE_REF))"
 	@echo "Restarting swarmer deployment to ensure latest loaded image is running..."
 	kubectl rollout restart deployment/swarmer -n $(NAMESPACE)
 	kubectl rollout status deployment/swarmer -n $(NAMESPACE) --timeout=120s

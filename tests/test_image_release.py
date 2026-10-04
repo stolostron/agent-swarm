@@ -95,7 +95,7 @@ def test_workflow_tag_override_and_kind_tag():
     assert '"swarmer:1.4.10"' in build
     assert '"swarmer:1.4.10" "quay.io/example/swarmer:1.4.10"' in push
     makefile = (ROOT / "Makefile").read_text()
-    assert '$(MAKE) deploy SILENT=1 IMAGE_REF="$(LOCAL_IMAGE_REF)"' in makefile
+    assert '$(MAKE) deploy SILENT=1 IMAGE_REF="$(if $(KIND_IMAGE_REF),$(KIND_IMAGE_REF),$(LOCAL_IMAGE_REF))"' in makefile
 
 
 def test_push_records_digest_only_after_success(tmp_path):
@@ -167,6 +167,8 @@ def test_publisher_catches_up_two_merges_without_rebuilding(tmp_path, monkeypatc
     monkeypatch.setenv("QUAY_ROBOT_USERNAME", "example-bot")
     monkeypatch.setenv("QUAY_PUSH_TOKEN", "mock-token")
     monkeypatch.setenv("GH_TOKEN", "mock-github-token")
+    output_file = tmp_path / "github-output"
+    monkeypatch.setenv("GITHUB_OUTPUT", str(output_file))
     monkeypatch.setattr(publish_image, "pending_sources", lambda repo, baseline, tip, env: sources)
     calls = []
 
@@ -188,6 +190,7 @@ def test_publisher_catches_up_two_merges_without_rebuilding(tmp_path, monkeypatc
     assert (tmp_path / "VERSION").read_text() == "1.4.10\n"
     assert (tmp_path / "IMAGE_PUBLISH_STATE").read_text() == sources[-1] + "\n"
     assert (tmp_path / "IMAGE_DIGEST").read_text() == REFERENCE + "\n"
+    assert output_file.read_text() == f"image_refs<<EOF\n{REFERENCE}\n{REFERENCE}\nEOF\n"
     commands = [command for command, _ in calls]
     builds = [call for call in commands if call[:2] == ("make", "image-build")]
     assert len(builds) == 2
