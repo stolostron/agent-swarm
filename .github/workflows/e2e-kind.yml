@@ -2,6 +2,11 @@ name: KinD E2E
 
 on:
   workflow_dispatch:
+    inputs:
+      image_ref:
+        description: Immutable published Swarmer image reference to test
+        required: false
+        type: string
   pull_request:
     types: [opened, synchronize, reopened]
 
@@ -15,6 +20,7 @@ jobs:
     env:
       CONTAINER_CMD: docker
       KIND_CLUSTER: swarmer
+      NAMESPACE: swarmer
 
     steps:
       - name: Check out repository
@@ -38,7 +44,17 @@ jobs:
         run: python3 -m pip install --quiet -e mcp-server
 
       - name: Run KinD deployment lifecycle e2e
-        run: make test-e2e-kind
+        env:
+          IMAGE_REF: ${{ inputs.image_ref }}
+        run: |
+          args=()
+          if [[ -n "$IMAGE_REF" ]]; then
+            args+=(--image-ref "$IMAGE_REF")
+          fi
+          python3 scripts/e2e_kind_deploy.py \
+            --cluster-name "$KIND_CLUSTER" \
+            --namespace "$NAMESPACE" \
+            "${args[@]}"
 
       - name: Collect diagnostics on failure
         if: failure()

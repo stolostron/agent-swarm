@@ -49,7 +49,8 @@ APPS_DOMAIN=$(oc get ingress.config cluster -o jsonpath='{.spec.domain}')
 SWARMER_HOST="swarmer.${APPS_DOMAIN}"
 OAUTH_HOST=$(oc get route oauth-openshift -n openshift-authentication -o jsonpath='{.spec.host}')
 OPENSHIFT_OAUTH_URL="https://${OAUTH_HOST}"
-SWARMER_IMAGE="quay.io/jpacker/swarmer:$(cat VERSION)"
+QUAY_REPOSITORY_PATH="quay.io/<namespace>" # set this to the repository prefix used for image pushes
+SWARMER_IMAGE="$(python3 scripts/image_release.py read-digest IMAGE_DIGEST --repository "$QUAY_REPOSITORY_PATH")"
 
 # Agent tool image — update this to match your registry
 AGENT_IMAGE_OPENCODE="quay.io/jpacker/opencode:0.3.9"
@@ -196,7 +197,7 @@ Push the image to a registry and deploy to your current `kubectl` context.
 ```sh
 make setup-secret
 make image-build image-push REGISTRY=your-registry.example.com
-make deploy                # applies namespace, RBAC, PVC, service, deployment + installs OpenShell
+make deploy REGISTRY=your-registry.example.com # uses the digest captured by image-push
 make connect               # port-forward → http://localhost:8080
 ```
 
@@ -476,7 +477,7 @@ Agent container images are built from the repository's Containerfiles:
 **Building:**
 
 ```sh
-make image-build           # Build swarmer image (depends on sync-images)
+make image-build           # Build swarmer:local; does not require a committed version bump
 ```
 
 > **Note:** The OpenCode agent image is built from the `stolostron/agent-containers` repository, not this Makefile.
@@ -484,8 +485,23 @@ make image-build           # Build swarmer image (depends on sync-images)
 **Pushing:**
 
 ```sh
-make image-push REGISTRY=your-registry.example.com
+make image-push REGISTRY=your-registry.example.com  # push :local and capture IMAGE_DIGEST
+# Both commands must use the same IMAGE_TAG when overriding it.
+make image-build REGISTRY=your-registry.example.com IMAGE_TAG=1.4.9
+make image-push REGISTRY=your-registry.example.com IMAGE_TAG=1.4.9
 ```
+
+**Automated publishing to Quay:**
+
+The GitHub Actions workflow is active at `.github/workflows/publish-image.yml` and runs on pushes to `main`. Configure its repository-level Actions variables and secret as described below.
+
+After a squash-merged pull request lands on `main`, GitHub Actions builds its dashboard image with Podman, increments the last component of `VERSION` (for example, `1.4.9` to `1.4.10`), and publishes to Quay. Configure these repository-level Actions values:
+
+- Variable `QUAY_REPOSITORY_PATH`: the registry and repository namespace only, such as `quay.io/<namespace>`; do not include `/swarmer` or a tag.
+- Variable `QUAY_ROBOT_USERNAME`: the Quay robot account login name.
+- Secret `QUAY_PUSH_TOKEN`: the robot account token. Grant the robot push permission only for the target image repository.
+
+The image name remains `swarmer`. The workflow builds each unprocessed squash merge once with its next SemVer tag, pushes it and `latest` from the same build, then commits the incremented `VERSION` and immutable full reference (`registry/namespace/swarmer@sha256:...`) to `IMAGE_DIGEST`. `IMAGE_PUBLISH_STATE` tracks the last published squash commit so a later run can catch up PRs omitted by Actions' pending-run coalescing. Metadata commits made with `GITHUB_TOKEN` do not trigger another workflow run. Registry deployment uses the reference in `IMAGE_DIGEST` verbatim and rejects a conflicting `REGISTRY`. Manual pushes update `IMAGE_DIGEST` locally without changing `VERSION`. Before the first push, the empty digest file intentionally prevents registry deployment; a successful manual or Actions push initializes it. The publisher checks out without persisting GitHub credentials, builds without GitHub or Quay tokens, and authenticates only for repository access and registry pushes. Pull-request validation does not receive Quay push credentials. The Action needs permission to push its metadata commit to protected `main` (configure an approved bot exception if required).
 
 **Syncing agent image refs into `.env`:**
 
@@ -495,7 +511,7 @@ The `sync-images` target reads `REGISTRY` and `IMAGE_TAG` from `.push-defaults` 
 make sync-images
 ```
 
-> **Note:** `image-build` depends on `sync-images`, which requires `.push-defaults` to exist. Use `SILENT=1` to skip the interactive version prompt: `make image-build SILENT=1`.
+> **Note:** `sync-images` manages the separate OpenCode agent image. Swarmer's `image-build` does not depend on it and does not prompt for a version.
 
 PVCs must be group-0 writable for the non-root UID 1001 user in the swarmer container.
 
@@ -874,8 +890,8 @@ All targets can be listed with `make help`. Run `make lint` to check code style 
 
 | Target | Description | Key Variables |
 |---|---|---|
-| `image-build` | Build the swarmer container image | `REGISTRY`, `SILENT` |
-| `image-push` | Push image to registry | `REGISTRY` |
+| `image-build` | Build the swarmer container image | `REGISTRY`, `IMAGE_TAG` (default `local`) |
+| `image-push` | Push image to registry and record `IMAGE_DIGEST` | `REGISTRY`, `IMAGE_TAG` (default `local`) |
 
 #### Deploy / Delete
 
@@ -908,7 +924,7 @@ All targets can be listed with `make help`. Run `make lint` to check code style 
 | Variable | Default | Description |
 |---|---|---|
 | `IMAGE` | `swarmer` | Image name |
-| `IMAGE_TAG` | `$(cat VERSION)` | Image tag (from `VERSION` file) |
+| `IMAGE_TAG` | `local` | Tag used by both build and push; Actions explicitly sets the SemVer tag |
 | `REGISTRY` | _(empty)_ | Container registry prefix |
 | `CONTAINER_CMD` | `podman` | Container runtime (`podman` or `docker`) |
 | `KIND_CLUSTER` | `swarmer` | Kind cluster name |
@@ -931,7 +947,7 @@ SQLite does not support concurrent writers. The K8s Deployment uses `strategy: R
 
 #### `sync-images` requires `.push-defaults`
 
-The `image-build` target depends on `sync-images`, which reads `REGISTRY` and `IMAGE_TAG` from `.push-defaults`. If this file does not exist, the build fails. Create `.push-defaults` with:
+Run `make sync-images` separately when updating the OpenCode agent image reference. It reads `REGISTRY` and `IMAGE_TAG` from `.push-defaults`. If this file does not exist, create `.push-defaults` with:
 
 ```
 REGISTRY=your-registry.example.com

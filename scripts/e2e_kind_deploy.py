@@ -32,6 +32,9 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DEFAULT_URL = "http://127.0.0.1:8080"
 TOKEN_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._~+/=-]{20,}")
+IMAGE_REF_PATTERN = re.compile(
+    r"quay\.io/[a-z0-9]+(?:[._-][a-z0-9]+)*/swarmer@sha256:[0-9a-f]{64}\Z"
+)
 
 
 class _NoRedirects(HTTPRedirectHandler):
@@ -61,6 +64,12 @@ def require_commands(commands: list[str]) -> None:
     missing = [command for command in commands if shutil.which(command) is None]
     if missing:
         raise RuntimeError(f"missing required commands: {', '.join(missing)}")
+
+
+def validate_image_ref(image_ref: str) -> str:
+    if not IMAGE_REF_PATTERN.fullmatch(image_ref):
+        raise ValueError("image reference must be an immutable published Swarmer sha256 digest")
+    return image_ref
 
 
 def assert_port_available(port: int) -> None:
@@ -148,9 +157,18 @@ def main() -> int:
     parser.add_argument("--timeout", type=int, default=600)
     parser.add_argument("--keep-cluster", action="store_true")
     parser.add_argument("--url", default=DEFAULT_URL)
+    parser.add_argument("--image-ref", default="")
     args = parser.parse_args()
 
+    if args.image_ref:
+        try:
+            args.image_ref = validate_image_ref(args.image_ref)
+        except ValueError as exc:
+            parser.error(str(exc))
+
     make = ["make", f"KIND_CLUSTER={args.cluster_name}", f"NAMESPACE={args.namespace}"]
+    if args.image_ref:
+        make.append(f"KIND_IMAGE_REF={args.image_ref}")
     cleanup_needed = False
     failed = False
 

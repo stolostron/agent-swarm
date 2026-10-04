@@ -27,7 +27,8 @@ APPS_DOMAIN=$(oc get ingress.config cluster -o jsonpath='{.spec.domain}')
 SWARMER_HOST="swarmer.${APPS_DOMAIN}"
 OAUTH_HOST=$(oc get route oauth-openshift -n openshift-authentication -o jsonpath='{.spec.host}')
 OPENSHIFT_OAUTH_URL="https://${OAUTH_HOST}"
-SWARMER_IMAGE="quay.io/jpacker/swarmer:$(cat VERSION)"
+QUAY_REPOSITORY_PATH="quay.io/<namespace>" # set this to the repository prefix used for image pushes
+SWARMER_IMAGE="$(python3 scripts/image_release.py read-digest IMAGE_DIGEST --repository "$QUAY_REPOSITORY_PATH")"
 
 # Agent tool image — update this to match your registry
 AGENT_IMAGE_OPENCODE="quay.io/jpacker/opencode:0.3.9"
