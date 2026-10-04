@@ -18,6 +18,7 @@ jobs:
       actions: write
       contents: write
       pull-requests: read
+      statuses: write
     steps:
       - name: Check out main with full history for catch-up and metadata commits
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -44,12 +45,23 @@ jobs:
         run: python3 scripts/publish_image.py
 
       - name: Dispatch KinD E2E for each published image digest
-        if: steps.publish.outputs.image_refs != ''
+        if: ${{ always() && steps.publish.outputs.releases != '' }}
         env:
           GH_TOKEN: ${{ github.token }}
-          IMAGE_REFS: ${{ steps.publish.outputs.image_refs }}
+          RELEASES: ${{ steps.publish.outputs.releases }}
         run: |
-          while IFS= read -r image_ref; do
-            [ -n "$image_ref" ] || continue
-            gh workflow run e2e-kind.yml --ref main --field "image_ref=$image_ref"
-          done <<< "$IMAGE_REFS"
+          while IFS=$'\t' read -r metadata_sha image_ref; do
+            [[ "$metadata_sha" =~ ^[0-9a-f]{40}$ && -n "$image_ref" ]] || exit 1
+            gh api --method POST "repos/${{ github.repository }}/statuses/$metadata_sha" \
+              -f state=pending -f context='KinD E2E / published image' \
+              -f description='Waiting for published-image E2E' \
+              -f target_url='${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}' >/dev/null
+            if ! gh workflow run e2e-kind.yml --ref main \
+              --field "image_ref=$image_ref" --field "metadata_sha=$metadata_sha"; then
+              gh api --method POST "repos/${{ github.repository }}/statuses/$metadata_sha" \
+                -f state=error -f context='KinD E2E / published image' \
+                -f description='Could not dispatch published-image E2E' \
+                -f target_url='${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}' >/dev/null
+              exit 1
+            fi
+          done <<< "$RELEASES"
