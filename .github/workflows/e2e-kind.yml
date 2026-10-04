@@ -20,6 +20,7 @@ jobs:
     env:
       CONTAINER_CMD: docker
       KIND_CLUSTER: swarmer
+      NAMESPACE: swarmer
 
     steps:
       - name: Check out repository
