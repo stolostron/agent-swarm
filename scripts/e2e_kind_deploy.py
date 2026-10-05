@@ -90,6 +90,27 @@ def cluster_exists(cluster: str) -> bool:
     return cluster in result.stdout.splitlines()
 
 
+def collect_diagnostics(namespace: str) -> None:
+    """Print KinD state before cleanup removes the failed deployment."""
+    commands = [
+        ["kubectl", "get", "pods", "-A", "-o", "wide"],
+        ["kubectl", "get", "events", "-A", "--sort-by=.lastTimestamp"],
+        ["kubectl", "logs", "-n", namespace, "deployment/swarmer", "--all-containers", "--tail=200"],
+        ["kubectl", "logs", "-n", "openshell", "deployment/openshell", "--all-containers", "--tail=200"],
+    ]
+    print("Collecting KinD diagnostics before cluster cleanup...")
+    for command in commands:
+        try:
+            result = run(command, timeout=30)
+        except (OSError, subprocess.SubprocessError) as exc:
+            print(f"Diagnostic command failed: {exc}", file=sys.stderr)
+            continue
+        if result.stdout:
+            print(result.stdout.rstrip())
+        if result.stderr:
+            print(result.stderr.rstrip(), file=sys.stderr)
+
+
 def extract_token(output: str) -> str:
     for line in output.splitlines():
         candidate = line.strip()
@@ -251,6 +272,8 @@ def main() -> int:
         failed = True
         log_step("lifecycle verification", False, str(exc).strip())
     finally:
+        if failed and cleanup_needed:
+            collect_diagnostics(args.namespace)
         if cleanup_needed and not args.keep_cluster:
             destroy = run(make + ["kind-destroy"], timeout=120)
             if destroy.returncode == 0 and not cluster_exists(args.cluster_name):

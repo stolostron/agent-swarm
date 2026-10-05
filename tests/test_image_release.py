@@ -168,10 +168,12 @@ def test_publisher_catches_up_two_merges_without_rebuilding(tmp_path, monkeypatc
     monkeypatch.setenv("QUAY_ROBOT_USERNAME", "example-bot")
     monkeypatch.setenv("QUAY_PUSH_TOKEN", "mock-token")
     monkeypatch.setenv("GH_TOKEN", "mock-github-token")
-    output_file = tmp_path / "github-output"
-    monkeypatch.setenv("GITHUB_OUTPUT", str(output_file))
+    monkeypatch.setenv("GITHUB_SERVER_URL", "https://github.com")
+    monkeypatch.setenv("GITHUB_RUN_ID", "123")
+    monkeypatch.setenv("CONTAINER_CMD", "docker")
     monkeypatch.setattr(publish_image, "pending_sources", lambda repo, baseline, tip, env: sources)
     calls = []
+    verified_metadata = []
 
     def fake_output(*command, env=None):
         if command[-1] == "HEAD":
@@ -185,6 +187,10 @@ def test_publisher_catches_up_two_merges_without_rebuilding(tmp_path, monkeypatc
             image_release.write_digest(Path("IMAGE_DIGEST"), DIGEST, "quay.io/example")
         elif command[:2] == ("git", "restore"):
             Path("IMAGE_DIGEST").write_text("")
+        elif command[:2] == ("python3", "scripts/e2e_kind_deploy.py"):
+            verified_metadata.append(
+                (Path("VERSION").read_text(), Path("IMAGE_DIGEST").read_text(), Path("IMAGE_PUBLISH_STATE").read_text())
+            )
 
     monkeypatch.setattr(publish_image, "output", fake_output)
     monkeypatch.setattr(publish_image, "run", fake_run)
@@ -192,28 +198,41 @@ def test_publisher_catches_up_two_merges_without_rebuilding(tmp_path, monkeypatc
     assert (tmp_path / "VERSION").read_text() == "1.4.10\n"
     assert (tmp_path / "IMAGE_PUBLISH_STATE").read_text() == sources[-1] + "\n"
     assert (tmp_path / "IMAGE_DIGEST").read_text() == REFERENCE + "\n"
-    assert output_file.read_text() == (
-        f"releases<<EOF\n{'4' * 40}\t{REFERENCE}\n{'5' * 40}\t{REFERENCE}\nEOF\n"
-    )
+    assert verified_metadata == [
+        ("1.4.9\n", REFERENCE + "\n", sources[0] + "\n"),
+        ("1.4.10\n", REFERENCE + "\n", sources[1] + "\n"),
+    ]
     commands = [command for command, _ in calls]
     builds = [call for call in commands if call[:2] == ("make", "image-build")]
     assert len(builds) == 2
     assert "IMAGE_TAG=1.4.9" in builds[0]
     assert "IMAGE_TAG=1.4.10" in builds[1]
-    for version in ("1.4.9", "1.4.10"):
+    for version, metadata_sha in (("1.4.9", "4" * 40), ("1.4.10", "5" * 40)):
         build = next(i for i, call in enumerate(commands) if call[:2] == ("make", "image-build") and f"IMAGE_TAG={version}" in call)
         login = next(i for i in range(build + 1, len(commands)) if commands[i][:2] == ("podman", "login"))
         semver_push = next(i for i, call in enumerate(commands) if call[:2] == ("make", "image-push") and f"IMAGE_TAG={version}" in call)
         latest_tag = next(i for i, call in enumerate(commands) if call[:2] == ("podman", "tag") and call[2] == f"swarmer:{version}")
         latest_push = next(i for i in range(latest_tag + 1, len(commands)) if commands[i][:2] == ("make", "image-push") and "IMAGE_TAG=latest" in commands[i])
-        metadata_commit = next(i for i in range(latest_push + 1, len(commands)) if "commit" in commands[i])
-        assert build < login < semver_push < latest_tag < latest_push < metadata_commit
+        e2e = next(i for i in range(latest_push + 1, len(commands)) if commands[i][:2] == ("python3", "scripts/e2e_kind_deploy.py"))
+        metadata_commit = next(i for i in range(e2e + 1, len(commands)) if "commit" in commands[i])
+        metadata_push = next(i for i in range(metadata_commit + 1, len(commands)) if commands[i][:2] == ("git", "push"))
+        status = next(i for i in range(metadata_push + 1, len(commands)) if commands[i][:2] == ("gh", "api"))
+        assert build < login < semver_push < latest_tag < latest_push < e2e < metadata_commit < metadata_push < status
+        assert "--image-ref" in commands[e2e] and REFERENCE in commands[e2e]
+        e2e_env = calls[e2e][1]["env"]
+        assert e2e_env["CONTAINER_CMD"] == "docker"
+        assert all(key not in e2e_env for key in ("GH_TOKEN", "QUAY_PUSH_TOKEN", "REGISTRY_AUTH_FILE", "GIT_ASKPASS"))
+        assert f"statuses/{metadata_sha}" in " ".join(commands[status])
+        assert "state=success" in commands[status]
+        assert "context=KinD E2E / published image" in commands[status]
+        assert "target_url=https://github.com/example/repo/actions/runs/123" in commands[status]
+        assert calls[status][1]["env"]["GH_TOKEN"] == "mock-github-token"
         build_env = calls[build][1]["env"]
         assert all(key not in build_env for key in ("GH_TOKEN", "QUAY_PUSH_TOKEN", "REGISTRY_AUTH_FILE", "GIT_ASKPASS"))
     assert len([call for call in commands if call[:2] == ("git", "push")]) == 2
 
 
-def test_publisher_reports_committed_releases_when_later_publish_fails(tmp_path, monkeypatch):
+def test_publisher_keeps_verified_release_when_later_publish_fails(tmp_path, monkeypatch):
     monkeypatch.syspath_prepend(str(ROOT / "scripts"))
     import publish_image
 
@@ -225,7 +244,7 @@ def test_publisher_reports_committed_releases_when_later_publish_fails(tmp_path,
         "GITHUB_REPOSITORY": "example/repo", "GITHUB_ACTOR": "example-bot",
         "QUAY_REPOSITORY_PATH": "quay.io/example", "QUAY_ROBOT_USERNAME": "example-bot",
         "QUAY_PUSH_TOKEN": "mock-token", "GH_TOKEN": "mock-github-token",
-        "GITHUB_OUTPUT": str(tmp_path / "github-output"),
+        "GITHUB_SERVER_URL": "https://github.com", "GITHUB_RUN_ID": "123",
     }.items():
         monkeypatch.setenv(key, value)
     monkeypatch.setattr(publish_image, "pending_sources", lambda *args: ["2" * 40, "3" * 40])
@@ -249,11 +268,11 @@ def test_publisher_reports_committed_releases_when_later_publish_fails(tmp_path,
     monkeypatch.setattr(publish_image, "run", fake_run)
     with pytest.raises(subprocess.CalledProcessError):
         publish_image.publish()
-    assert (tmp_path / "github-output").read_text() == f"releases<<EOF\n{'4' * 40}\t{REFERENCE}\nEOF\n"
     assert len([call for call in calls if call[:2] == ("git", "push")]) == 1
+    assert len([call for call in calls if call[:2] == ("gh", "api")]) == 1
 
 
-def test_publisher_with_no_pending_merges_emits_no_releases(tmp_path, monkeypatch):
+def test_publisher_with_no_pending_merges_skips_release_steps(tmp_path, monkeypatch):
     monkeypatch.syspath_prepend(str(ROOT / "scripts"))
     import publish_image
 
@@ -262,73 +281,74 @@ def test_publisher_with_no_pending_merges_emits_no_releases(tmp_path, monkeypatc
     for key, value in {
         "GITHUB_REPOSITORY": "example/repo", "QUAY_REPOSITORY_PATH": "quay.io/example",
         "QUAY_ROBOT_USERNAME": "example-bot", "QUAY_PUSH_TOKEN": "mock-token",
-        "GH_TOKEN": "mock-github-token", "GITHUB_OUTPUT": str(tmp_path / "github-output"),
+        "GH_TOKEN": "mock-github-token",
     }.items():
         monkeypatch.setenv(key, value)
     monkeypatch.setattr(publish_image, "pending_sources", lambda *args: [])
     monkeypatch.setattr(publish_image, "output", lambda *args, **kwargs: "1" * 40)
-    monkeypatch.setattr(publish_image, "run", lambda *args, **kwargs: None)
+    calls = []
+    monkeypatch.setattr(publish_image, "run", lambda *args, **kwargs: calls.append(args))
     publish_image.publish()
-    assert not (tmp_path / "github-output").exists()
+    assert calls == [("git", "fetch", "origin", "main")]
 
 
-def test_workflow_reports_each_release_and_dispatch_failure(tmp_path):
-    gh = tmp_path / "gh"
-    gh.write_text(
-        "#!/bin/sh\n"
-        "printf '%s\\n' \"$*\" >> \"$GH_LOG\"\n"
-        "if [ \"$1 $2\" = 'workflow run' ] && [ -n \"$FAIL_DISPATCH\" ]; then exit 1; fi\n"
-    )
-    gh.chmod(0o755)
-    log = tmp_path / "gh-log"
-    repo = "example/repo"
-    run_url = f"https://github.com/{repo}/actions/runs/123"
+def test_publisher_e2e_failure_restores_local_metadata_and_does_not_push(tmp_path, monkeypatch):
+    monkeypatch.syspath_prepend(str(ROOT / "scripts"))
+    import publish_image
 
-    def workflow_step(workflow, name):
-        doc = yaml.load((ROOT / ".github/workflows" / workflow).read_text(), Loader=yaml.BaseLoader)
-        step = next(step for job in doc["jobs"].values() for step in job["steps"] if step.get("name") == name)
-        return (step["run"]
-                .replace("${{ github.repository }}", repo)
-                .replace("${{ github.server_url }}", "https://github.com")
-                .replace("${{ github.run_id }}", "123"))
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "VERSION").write_text("1.4.8\n")
+    (tmp_path / "IMAGE_DIGEST").write_text("")
+    (tmp_path / "IMAGE_PUBLISH_STATE").write_text("1" * 40 + "\n")
+    for key, value in {
+        "GITHUB_REPOSITORY": "example/repo", "GITHUB_ACTOR": "example-bot",
+        "QUAY_REPOSITORY_PATH": "quay.io/example", "QUAY_ROBOT_USERNAME": "example-bot",
+        "QUAY_PUSH_TOKEN": "mock-token", "GH_TOKEN": "mock-github-token",
+        "GITHUB_SERVER_URL": "https://github.com", "GITHUB_RUN_ID": "123",
+    }.items():
+        monkeypatch.setenv(key, value)
+    monkeypatch.setattr(publish_image, "pending_sources", lambda *args: ["2" * 40])
+    monkeypatch.setattr(publish_image, "output", lambda *args, **kwargs: "1" * 40)
+    calls = []
 
-    env = {
-        **os.environ, "PATH": f"{tmp_path}:{os.environ['PATH']}", "GH_LOG": str(log),
-        "RELEASES": f"{'4' * 40}\t{REFERENCE}\n{'5' * 40}\t{REFERENCE}",
-    }
-    dispatch = workflow_step("publish-image.yml", "Dispatch KinD E2E for each published image digest")
-    result = subprocess.run(["bash", "-e", "-c", dispatch], env=env, capture_output=True, text=True)
-    assert result.returncode == 0, result.stderr
-    calls = log.read_text().splitlines()
-    assert len(calls) == 4
-    for index, sha in enumerate(("4" * 40, "5" * 40)):
-        assert f"statuses/{sha}" in calls[index * 2]
-        assert "state=pending" in calls[index * 2]
-        assert f"metadata_sha={sha}" in calls[index * 2 + 1]
-        assert f"image_ref={REFERENCE}" in calls[index * 2 + 1]
+    def fake_run(*command, **kwargs):
+        calls.append(command)
+        if command[:2] == ("make", "image-push"):
+            image_release.write_digest(Path("IMAGE_DIGEST"), DIGEST, "quay.io/example")
+        elif command[:2] == ("git", "restore"):
+            if "--source=HEAD" in command:
+                (tmp_path / "VERSION").write_text("1.4.8\n")
+                (tmp_path / "IMAGE_DIGEST").write_text("")
+                (tmp_path / "IMAGE_PUBLISH_STATE").write_text("1" * 40 + "\n")
+            else:
+                (tmp_path / "IMAGE_DIGEST").write_text("")
+        elif command[:2] == ("python3", "scripts/e2e_kind_deploy.py"):
+            assert (tmp_path / "VERSION").read_text() == "1.4.9\n"
+            assert (tmp_path / "IMAGE_DIGEST").read_text() == REFERENCE + "\n"
+            raise subprocess.CalledProcessError(1, command)
 
-    log.write_text("")
-    result = subprocess.run(
-        ["bash", "-e", "-c", dispatch], env={**env, "FAIL_DISPATCH": "1"}, capture_output=True, text=True,
-    )
-    assert result.returncode != 0
-    calls = log.read_text().splitlines()
-    assert len(calls) == 3
-    assert f"statuses/{'4' * 40}" in calls[2] and "state=error" in calls[2]
+    monkeypatch.setattr(publish_image, "run", fake_run)
+    with pytest.raises(subprocess.CalledProcessError):
+        publish_image.publish()
 
-    report = workflow_step("e2e-kind.yml", "Update digest commit status")
-    for result_name, expected in (("success", "state=success"), ("failure", "state=failure")):
-        log.write_text("")
-        result = subprocess.run(
-            ["bash", "-e", "-c", report],
-            env={**env, "METADATA_SHA": "4" * 40, "E2E_RESULT": result_name},
-            capture_output=True, text=True,
-        )
-        assert result.returncode == 0, result.stderr
-        call = log.read_text()
-        assert f"statuses/{'4' * 40}" in call
-        assert expected in call
-        assert f"target_url={run_url}" in call
+    assert (tmp_path / "VERSION").read_text() == "1.4.8\n"
+    assert (tmp_path / "IMAGE_DIGEST").read_text() == ""
+    assert (tmp_path / "IMAGE_PUBLISH_STATE").read_text() == "1" * 40 + "\n"
+    assert not any("commit" in command for command in calls)
+    assert not any(command[:2] in (("git", "push"), ("gh", "api")) for command in calls)
+
+
+def test_publisher_workflow_runs_kind_prerequisites_inline():
+    workflow = yaml.load((ROOT / ".github/workflows/publish-image.yml").read_text(), Loader=yaml.BaseLoader)
+    publish = workflow["jobs"]["publish"]
+    names = [step.get("name") for step in publish["steps"]]
+    assert names.index("Install KinD") < names.index("Prepare KinD E2E dependencies") < names.index("Publish all unprocessed squash merges")
+    assert publish["env"]["CONTAINER_CMD"] == "docker"
+    assert not any("Dispatch KinD E2E" in str(name) for name in names)
+
+    e2e = yaml.load((ROOT / ".github/workflows/e2e-kind.yml").read_text(), Loader=yaml.BaseLoader)
+    assert "metadata_sha" not in e2e["on"]["workflow_dispatch"]["inputs"]
+    assert "report-published-image" not in e2e["jobs"]
 
 
 def test_failed_latest_push_does_not_advance_release(tmp_path, monkeypatch):

@@ -25,6 +25,7 @@ def build_environment() -> dict[str, str]:
     allowed = (
         "PATH", "HOME", "USER", "LOGNAME", "SHELL", "TMPDIR", "XDG_RUNTIME_DIR",
         "XDG_CONFIG_HOME", "LANG", "LC_ALL", "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY",
+        "CONTAINER_CMD",
     )
     return {key: os.environ[key] for key in allowed if key in os.environ}
 
@@ -61,56 +62,71 @@ def publish() -> None:
 
         authfile = str(Path(directory) / "quay-auth.json")
         push_env = {**clean_env, "REGISTRY_AUTH_FILE": authfile}
-        published_releases = []
-        try:
-            for source in sources:
-                run("git", "fetch", "origin", "main", env=git_env)
-                remote_tip = output("git", "rev-parse", "origin/main", env=clean_env)
-                # A concurrent human merge is handled by a later workflow run.
-                # A non-fast-forward metadata push below fails rather than losing it.
-                run("git", "switch", "-C", "image-publisher", remote_tip, env=clean_env)
-                version = next_version(read_semver(Path("VERSION")))
-                run("git", "switch", "--detach", source, env=clean_env)
-                print(f"Publishing squash merge {source} as {version}")
-                make_args = (f"REGISTRY={registry}", "IMAGE=swarmer", f"IMAGE_TAG={version}", "CONTAINER_CMD=podman")
-                run("make", "image-build", *make_args, env=clean_env)
-                run(
-                    "podman", "login", "--authfile", authfile, "--username", username,
-                    "--password-stdin", "quay.io", input=token, text=True, env=push_env,
-                )
-                run("make", "image-push", *make_args, env=push_env)
-                reference = read_digest(Path("IMAGE_DIGEST"), registry)
-                run("podman", "tag", f"swarmer:{version}", "swarmer:latest", env=push_env)
-                run("make", "image-push", f"REGISTRY={registry}", "IMAGE=swarmer", "IMAGE_TAG=latest", "CONTAINER_CMD=podman", env=push_env)
-                if read_digest(Path("IMAGE_DIGEST"), registry) != reference:
-                    raise ValueError("Latest and SemVer pushes produced different registry digests")
+        for source in sources:
+            run("git", "fetch", "origin", "main", env=git_env)
+            remote_tip = output("git", "rev-parse", "origin/main", env=clean_env)
+            # A concurrent human merge is handled by a later workflow run.
+            # A non-fast-forward metadata push below fails rather than losing it.
+            run("git", "switch", "-C", "image-publisher", remote_tip, env=clean_env)
+            version = next_version(read_semver(Path("VERSION")))
+            run("git", "switch", "--detach", source, env=clean_env)
+            print(f"Publishing squash merge {source} as {version}")
+            make_args = (f"REGISTRY={registry}", "IMAGE=swarmer", f"IMAGE_TAG={version}", "CONTAINER_CMD=podman")
+            run("make", "image-build", *make_args, env=clean_env)
+            run(
+                "podman", "login", "--authfile", authfile, "--username", username,
+                "--password-stdin", "quay.io", input=token, text=True, env=push_env,
+            )
+            run("make", "image-push", *make_args, env=push_env)
+            reference = read_digest(Path("IMAGE_DIGEST"), registry)
+            run("podman", "tag", f"swarmer:{version}", "swarmer:latest", env=push_env)
+            run("make", "image-push", f"REGISTRY={registry}", "IMAGE=swarmer", "IMAGE_TAG=latest", "CONTAINER_CMD=podman", env=push_env)
+            if read_digest(Path("IMAGE_DIGEST"), registry) != reference:
+                raise ValueError("Latest and SemVer pushes produced different registry digests")
 
-                run("git", "restore", "IMAGE_DIGEST", env=clean_env)
-                run("git", "switch", "image-publisher", env=clean_env)
-                atomic_write(Path("VERSION"), version)
-                write_digest(Path("IMAGE_DIGEST"), reference.rsplit("@", 1)[1], registry)
-                atomic_write(Path("IMAGE_PUBLISH_STATE"), source)
-                run("git", "add", "VERSION", "IMAGE_DIGEST", "IMAGE_PUBLISH_STATE", env=clean_env)
-                message = f"Publish swarmer {version}\n\nImage-Publish-Source-SHA: {source}"
-                author = os.environ["GITHUB_ACTOR"]
+            run("git", "restore", "IMAGE_DIGEST", env=clean_env)
+            run("git", "switch", "image-publisher", env=clean_env)
+            atomic_write(Path("VERSION"), version)
+            write_digest(Path("IMAGE_DIGEST"), reference.rsplit("@", 1)[1], registry)
+            atomic_write(Path("IMAGE_PUBLISH_STATE"), source)
+
+            # Verify the digest while it is present in the local publisher
+            # checkout; main is updated only after this deployment succeeds.
+            try:
                 run(
-                    "git", "-c", f"user.name={author}",
-                    "-c", f"user.email={author}@users.noreply.github.com",
-                    "commit", "-m", message, env=clean_env,
+                    "python3", "scripts/e2e_kind_deploy.py",
+                    "--cluster-name", "swarmer", "--namespace", "swarmer",
+                    "--image-ref", reference,
+                    env=clean_env,
                 )
-                metadata_sha = output("git", "rev-parse", "HEAD", env=clean_env)
-                if not SHA.fullmatch(metadata_sha):
-                    raise ValueError("Invalid metadata commit SHA")
-                run("git", "push", "origin", "HEAD:main", env=git_env)
-                published_releases.append((metadata_sha, reference))
-                Path(authfile).unlink(missing_ok=True)
-        finally:
-            output_path = os.environ.get("GITHUB_OUTPUT")
-            if output_path and published_releases:
-                with Path(output_path).open("a", encoding="utf-8") as output_file:
-                    output_file.write("releases<<EOF\n")
-                    output_file.write("\n".join(f"{sha}\t{ref}" for sha, ref in published_releases))
-                    output_file.write("\nEOF\n")
+            except Exception:
+                run(
+                    "git", "restore", "--source=HEAD", "--staged", "--worktree",
+                    "VERSION", "IMAGE_DIGEST", "IMAGE_PUBLISH_STATE", env=clean_env,
+                )
+                raise
+
+            run("git", "add", "VERSION", "IMAGE_DIGEST", "IMAGE_PUBLISH_STATE", env=clean_env)
+            message = f"Publish swarmer {version}\n\nImage-Publish-Source-SHA: {source}"
+            author = os.environ["GITHUB_ACTOR"]
+            run(
+                "git", "-c", f"user.name={author}",
+                "-c", f"user.email={author}@users.noreply.github.com",
+                "commit", "-m", message, env=clean_env,
+            )
+            metadata_sha = output("git", "rev-parse", "HEAD", env=clean_env)
+            if not SHA.fullmatch(metadata_sha):
+                raise ValueError("Invalid metadata commit SHA")
+            run("git", "push", "origin", "HEAD:main", env=git_env)
+
+            run(
+                "gh", "api", "--method", "POST", f"repos/{repo}/statuses/{metadata_sha}",
+                "-f", "state=success", "-f", "context=KinD E2E / published image",
+                "-f", "description=Published-image E2E passed",
+                "-f", f"target_url={os.environ['GITHUB_SERVER_URL']}/{repo}/actions/runs/{os.environ['GITHUB_RUN_ID']}",
+                env=github_env,
+            )
+            Path(authfile).unlink(missing_ok=True)
 
 
 if __name__ == "__main__":

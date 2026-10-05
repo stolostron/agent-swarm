@@ -15,10 +15,11 @@ jobs:
       group: swarmer-image-release-${{ github.repository }}
       cancel-in-progress: false
     permissions:
-      actions: write
       contents: write
       pull-requests: read
       statuses: write
+    env:
+      CONTAINER_CMD: docker
     steps:
       - name: Check out main with full history for catch-up and metadata commits
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -35,33 +36,24 @@ jobs:
           fi
           podman --version
 
+      - name: Install KinD
+        run: |
+          curl -fsSLo kind-linux-amd64 https://kind.sigs.k8s.io/dl/v0.32.0/kind-linux-amd64
+          curl -fsSLo kind.sha256sum https://kind.sigs.k8s.io/dl/v0.32.0/kind-linux-amd64.sha256sum
+          sha256sum --check kind.sha256sum
+          chmod +x kind-linux-amd64
+          sudo mv kind-linux-amd64 /usr/local/bin/kind
+          kind version
+
+      - name: Prepare KinD E2E dependencies
+        run: |
+          make setup-secret
+          python3 -m pip install --quiet -e mcp-server
+
       - name: Publish all unprocessed squash merges
-        id: publish
         env:
           GH_TOKEN: ${{ github.token }}
           QUAY_REPOSITORY_PATH: ${{ vars.QUAY_REPOSITORY_PATH }}
           QUAY_ROBOT_USERNAME: ${{ vars.QUAY_ROBOT_USERNAME }}
           QUAY_PUSH_TOKEN: ${{ secrets.QUAY_PUSH_TOKEN }}
         run: python3 scripts/publish_image.py
-
-      - name: Dispatch KinD E2E for each published image digest
-        if: ${{ always() && steps.publish.outputs.releases != '' }}
-        env:
-          GH_TOKEN: ${{ github.token }}
-          RELEASES: ${{ steps.publish.outputs.releases }}
-        run: |
-          while IFS=$'\t' read -r metadata_sha image_ref; do
-            [[ "$metadata_sha" =~ ^[0-9a-f]{40}$ && -n "$image_ref" ]] || exit 1
-            gh api --method POST "repos/${{ github.repository }}/statuses/$metadata_sha" \
-              -f state=pending -f context='KinD E2E / published image' \
-              -f description='Waiting for published-image E2E' \
-              -f target_url='${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}' >/dev/null
-            if ! gh workflow run e2e-kind.yml --ref main \
-              --field "image_ref=$image_ref" --field "metadata_sha=$metadata_sha"; then
-              gh api --method POST "repos/${{ github.repository }}/statuses/$metadata_sha" \
-                -f state=error -f context='KinD E2E / published image' \
-                -f description='Could not dispatch published-image E2E' \
-                -f target_url='${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}' >/dev/null
-              exit 1
-            fi
-          done <<< "$RELEASES"

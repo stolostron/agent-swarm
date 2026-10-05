@@ -198,9 +198,12 @@ agent-containers/Makefile pins
   `REGISTRY`. The empty initial file blocks registry deployment until a manual or automated
   push succeeds. `kind-deploy` uses the local tag.
 - On `main`, the image publisher assigns the next patch version from `VERSION`, builds a
-  squash merge once, publishes its SemVer and `latest` tags, and commits the new `VERSION`,
-  `IMAGE_DIGEST`, and `IMAGE_PUBLISH_STATE` cursor. The cursor lets it catch up merged PRs
-  after GitHub Actions coalesces pending runs; publisher commits do not trigger new runs.
+  squash merge once and publishes its SemVer and `latest` tags. It writes the new `VERSION`,
+  `IMAGE_DIGEST`, and `IMAGE_PUBLISH_STATE` cursor to its local `image-publisher` checkout,
+  runs the KinD deployment lifecycle against that digest, then commits and pushes the metadata
+  only after verification succeeds. Successful metadata commits receive a published-image
+  KinD E2E status linked to the publisher run. The cursor lets it catch up merged PRs after
+  GitHub Actions coalesces pending runs; publisher commits do not trigger new runs.
   The active GitHub Actions workflow is `.github/workflows/publish-image.yml` and runs on
   pushes to `main`.
   Checkout credentials are not persisted, and image builds receive neither the Quay token

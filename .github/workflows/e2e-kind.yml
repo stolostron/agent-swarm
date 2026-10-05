@@ -7,10 +7,6 @@ on:
         description: Immutable published Swarmer image reference to test
         required: false
         type: string
-      metadata_sha:
-        description: Digest metadata commit to report published-image E2E against
-        required: false
-        type: string
   pull_request:
     types: [opened, synchronize, reopened]
 
@@ -21,8 +17,6 @@ jobs:
   kind-lifecycle:
     name: E2E test
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
     env:
       CONTAINER_CMD: docker
       KIND_CLUSTER: swarmer
@@ -32,20 +26,7 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
         with:
-          ref: ${{ inputs.metadata_sha || github.sha }}
-          fetch-depth: ${{ inputs.metadata_sha && '0' || '1' }}
           persist-credentials: false
-
-      - name: Verify published digest belongs to metadata commit
-        if: ${{ inputs.metadata_sha != '' }}
-        env:
-          METADATA_SHA: ${{ inputs.metadata_sha }}
-          IMAGE_REF: ${{ inputs.image_ref }}
-        run: |
-          [[ "$METADATA_SHA" =~ ^[0-9a-f]{40}$ && -n "$IMAGE_REF" ]] || exit 1
-          [[ "$(git rev-parse HEAD)" == "$METADATA_SHA" ]] || exit 1
-          git merge-base --is-ancestor "$METADATA_SHA" origin/main
-          [[ "$(git show "$METADATA_SHA:IMAGE_DIGEST")" == "$IMAGE_REF" ]] || exit 1
 
       - name: Install KinD
         run: |
@@ -82,30 +63,3 @@ jobs:
           kubectl get events -A --sort-by='.lastTimestamp' || true
           kubectl logs -n swarmer deployment/swarmer --tail=200 || true
           kubectl logs -n openshell deployment/openshell --tail=200 || true
-
-  report-published-image:
-    name: Report E2E on digest commit
-    if: ${{ always() && inputs.metadata_sha != '' }}
-    needs: kind-lifecycle
-    runs-on: ubuntu-latest
-    permissions:
-      statuses: write
-    steps:
-      - name: Update digest commit status
-        env:
-          GH_TOKEN: ${{ github.token }}
-          METADATA_SHA: ${{ inputs.metadata_sha }}
-          E2E_RESULT: ${{ needs.kind-lifecycle.result }}
-        run: |
-          [[ "$METADATA_SHA" =~ ^[0-9a-f]{40}$ ]] || exit 1
-          if [[ "$E2E_RESULT" == success ]]; then
-            state=success
-            description='Published-image E2E passed'
-          else
-            state=failure
-            description='Published-image E2E failed'
-          fi
-          gh api --method POST "repos/${{ github.repository }}/statuses/$METADATA_SHA" \
-            -f "state=$state" -f context='KinD E2E / published image' \
-            -f "description=$description" \
-            -f target_url='${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}' >/dev/null
