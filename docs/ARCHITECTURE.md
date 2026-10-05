@@ -141,7 +141,7 @@ model configuration, command construction, and server/TUI binaries are provided 
 add tool-specific behavior to `agent_tools/`.
 
 Provider presets map `plan`, `build`, and `small` roles through `swarmer/config.py` and
-`k8s/swarmer/configmap.yaml`. The OpenAI preset defaults are `openai/gpt-6-sol` for plan
+`k8s/swarmer/configmap.yaml`. The OpenAI preset defaults are `openai/gpt-6.1-sol` for plan
 and `openai/gpt-6-luna` for both build and small; the ConfigMap values override the Python
 defaults in deployed environments.
 
