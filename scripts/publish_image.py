@@ -90,22 +90,6 @@ def publish() -> None:
             write_digest(Path("IMAGE_DIGEST"), reference.rsplit("@", 1)[1], registry)
             atomic_write(Path("IMAGE_PUBLISH_STATE"), source)
 
-            # Verify the digest while it is present in the local publisher
-            # checkout; main is updated only after this deployment succeeds.
-            try:
-                run(
-                    "python3", "scripts/e2e_kind_deploy.py",
-                    "--cluster-name", "swarmer", "--namespace", "swarmer",
-                    "--image-ref", reference,
-                    env=clean_env,
-                )
-            except Exception:
-                run(
-                    "git", "restore", "--source=HEAD", "--staged", "--worktree",
-                    "VERSION", "IMAGE_DIGEST", "IMAGE_PUBLISH_STATE", env=clean_env,
-                )
-                raise
-
             run("git", "add", "VERSION", "IMAGE_DIGEST", "IMAGE_PUBLISH_STATE", env=clean_env)
             message = f"Publish swarmer {version}\n\nImage-Publish-Source-SHA: {source}"
             author = os.environ["GITHUB_ACTOR"]
@@ -119,14 +103,34 @@ def publish() -> None:
                 raise ValueError("Invalid metadata commit SHA")
             run("git", "push", "origin", "HEAD:main", env=git_env)
 
-            run(
-                "gh", "api", "--method", "POST", f"repos/{repo}/statuses/{metadata_sha}",
-                "-f", "state=success", "-f", "context=KinD E2E / published image",
-                "-f", "description=Published-image E2E passed",
-                "-f", f"target_url={os.environ['GITHUB_SERVER_URL']}/{repo}/actions/runs/{os.environ['GITHUB_RUN_ID']}",
-                env=github_env,
-            )
+            status_url = f"{os.environ['GITHUB_SERVER_URL']}/{repo}/actions/runs/{os.environ['GITHUB_RUN_ID']}"
+            _set_e2e_status(github_env, repo, metadata_sha, "pending", status_url)
+            try:
+                run(
+                    "python3", "scripts/e2e_kind_deploy.py",
+                    "--cluster-name", "swarmer", "--namespace", "swarmer",
+                    "--image-ref", reference,
+                    env=clean_env,
+                )
+            except Exception:
+                _set_e2e_status(github_env, repo, metadata_sha, "failure", status_url)
+                raise
+            _set_e2e_status(github_env, repo, metadata_sha, "success", status_url)
             Path(authfile).unlink(missing_ok=True)
+
+
+def _set_e2e_status(env: dict[str, str], repo: str, sha: str, state: str, target_url: str) -> None:
+    descriptions = {
+        "pending": "Published-image E2E is running",
+        "success": "Published-image E2E passed",
+        "failure": "Published-image E2E failed",
+    }
+    run(
+        "gh", "api", "--method", "POST", f"repos/{repo}/statuses/{sha}",
+        "-f", f"state={state}", "-f", "context=KinD E2E / published image",
+        "-f", f"description={descriptions[state]}", "-f", f"target_url={target_url}",
+        env=env,
+    )
 
 
 if __name__ == "__main__":

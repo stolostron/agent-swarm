@@ -200,10 +200,11 @@ agent-containers/Makefile pins
 - On `main`, the image publisher assigns the next patch version from `VERSION`, builds a
   squash merge once and publishes its SemVer and `latest` tags. It writes the new `VERSION`,
   `IMAGE_DIGEST`, and `IMAGE_PUBLISH_STATE` cursor to its local `image-publisher` checkout,
-  runs the KinD deployment lifecycle against that digest, then commits and pushes the metadata
-  only after verification succeeds. Successful metadata commits receive a published-image
-  KinD E2E status linked to the publisher run. The cursor lets it catch up merged PRs after
-  GitHub Actions coalesces pending runs; publisher commits do not trigger new runs.
+  commits and pushes the metadata, then runs the KinD deployment lifecycle against that digest.
+  The digest commit receives a pending status during E2E and a success or failure status after,
+  linked to the publisher run. A failed E2E leaves the metadata commit in place. The cursor lets
+  it catch up merged PRs after GitHub Actions coalesces pending runs; publisher commits do not
+  trigger new runs.
   The active GitHub Actions workflow is `.github/workflows/publish-image.yml` and runs on
   pushes to `main`.
   Checkout credentials are not persisted, and image builds receive neither the Quay token

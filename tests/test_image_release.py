@@ -188,6 +188,8 @@ def test_publisher_catches_up_two_merges_without_rebuilding(tmp_path, monkeypatc
         elif command[:2] == ("git", "restore"):
             Path("IMAGE_DIGEST").write_text("")
         elif command[:2] == ("python3", "scripts/e2e_kind_deploy.py"):
+            assert any("commit" in prior for prior, _ in calls[:-1])
+            assert any(prior[:2] == ("git", "push") for prior, _ in calls[:-1])
             verified_metadata.append(
                 (Path("VERSION").read_text(), Path("IMAGE_DIGEST").read_text(), Path("IMAGE_PUBLISH_STATE").read_text())
             )
@@ -213,20 +215,22 @@ def test_publisher_catches_up_two_merges_without_rebuilding(tmp_path, monkeypatc
         semver_push = next(i for i, call in enumerate(commands) if call[:2] == ("make", "image-push") and f"IMAGE_TAG={version}" in call)
         latest_tag = next(i for i, call in enumerate(commands) if call[:2] == ("podman", "tag") and call[2] == f"swarmer:{version}")
         latest_push = next(i for i in range(latest_tag + 1, len(commands)) if commands[i][:2] == ("make", "image-push") and "IMAGE_TAG=latest" in commands[i])
-        e2e = next(i for i in range(latest_push + 1, len(commands)) if commands[i][:2] == ("python3", "scripts/e2e_kind_deploy.py"))
-        metadata_commit = next(i for i in range(e2e + 1, len(commands)) if "commit" in commands[i])
+        metadata_commit = next(i for i in range(latest_push + 1, len(commands)) if "commit" in commands[i])
         metadata_push = next(i for i in range(metadata_commit + 1, len(commands)) if commands[i][:2] == ("git", "push"))
-        status = next(i for i in range(metadata_push + 1, len(commands)) if commands[i][:2] == ("gh", "api"))
-        assert build < login < semver_push < latest_tag < latest_push < e2e < metadata_commit < metadata_push < status
+        pending_status = next(i for i in range(metadata_push + 1, len(commands)) if commands[i][:2] == ("gh", "api"))
+        e2e = next(i for i in range(pending_status + 1, len(commands)) if commands[i][:2] == ("python3", "scripts/e2e_kind_deploy.py"))
+        success_status = next(i for i in range(e2e + 1, len(commands)) if commands[i][:2] == ("gh", "api"))
+        assert build < login < semver_push < latest_tag < latest_push < metadata_commit < metadata_push < pending_status < e2e < success_status
         assert "--image-ref" in commands[e2e] and REFERENCE in commands[e2e]
         e2e_env = calls[e2e][1]["env"]
         assert e2e_env["CONTAINER_CMD"] == "docker"
         assert all(key not in e2e_env for key in ("GH_TOKEN", "QUAY_PUSH_TOKEN", "REGISTRY_AUTH_FILE", "GIT_ASKPASS"))
-        assert f"statuses/{metadata_sha}" in " ".join(commands[status])
-        assert "state=success" in commands[status]
-        assert "context=KinD E2E / published image" in commands[status]
-        assert "target_url=https://github.com/example/repo/actions/runs/123" in commands[status]
-        assert calls[status][1]["env"]["GH_TOKEN"] == "mock-github-token"
+        for status, state in ((pending_status, "state=pending"), (success_status, "state=success")):
+            assert f"statuses/{metadata_sha}" in " ".join(commands[status])
+            assert state in commands[status]
+            assert "context=KinD E2E / published image" in commands[status]
+            assert "target_url=https://github.com/example/repo/actions/runs/123" in commands[status]
+            assert calls[status][1]["env"]["GH_TOKEN"] == "mock-github-token"
         build_env = calls[build][1]["env"]
         assert all(key not in build_env for key in ("GH_TOKEN", "QUAY_PUSH_TOKEN", "REGISTRY_AUTH_FILE", "GIT_ASKPASS"))
     assert len([call for call in commands if call[:2] == ("git", "push")]) == 2
@@ -269,7 +273,7 @@ def test_publisher_keeps_verified_release_when_later_publish_fails(tmp_path, mon
     with pytest.raises(subprocess.CalledProcessError):
         publish_image.publish()
     assert len([call for call in calls if call[:2] == ("git", "push")]) == 1
-    assert len([call for call in calls if call[:2] == ("gh", "api")]) == 1
+    assert len([call for call in calls if call[:2] == ("gh", "api")]) == 2
 
 
 def test_publisher_with_no_pending_merges_skips_release_steps(tmp_path, monkeypatch):
@@ -292,7 +296,7 @@ def test_publisher_with_no_pending_merges_skips_release_steps(tmp_path, monkeypa
     assert calls == [("git", "fetch", "origin", "main")]
 
 
-def test_publisher_e2e_failure_restores_local_metadata_and_does_not_push(tmp_path, monkeypatch):
+def test_publisher_e2e_failure_keeps_commit_and_reports_failure(tmp_path, monkeypatch):
     monkeypatch.syspath_prepend(str(ROOT / "scripts"))
     import publish_image
 
@@ -316,12 +320,7 @@ def test_publisher_e2e_failure_restores_local_metadata_and_does_not_push(tmp_pat
         if command[:2] == ("make", "image-push"):
             image_release.write_digest(Path("IMAGE_DIGEST"), DIGEST, "quay.io/example")
         elif command[:2] == ("git", "restore"):
-            if "--source=HEAD" in command:
-                (tmp_path / "VERSION").write_text("1.4.8\n")
-                (tmp_path / "IMAGE_DIGEST").write_text("")
-                (tmp_path / "IMAGE_PUBLISH_STATE").write_text("1" * 40 + "\n")
-            else:
-                (tmp_path / "IMAGE_DIGEST").write_text("")
+            (tmp_path / "IMAGE_DIGEST").write_text("")
         elif command[:2] == ("python3", "scripts/e2e_kind_deploy.py"):
             assert (tmp_path / "VERSION").read_text() == "1.4.9\n"
             assert (tmp_path / "IMAGE_DIGEST").read_text() == REFERENCE + "\n"
@@ -331,11 +330,18 @@ def test_publisher_e2e_failure_restores_local_metadata_and_does_not_push(tmp_pat
     with pytest.raises(subprocess.CalledProcessError):
         publish_image.publish()
 
-    assert (tmp_path / "VERSION").read_text() == "1.4.8\n"
-    assert (tmp_path / "IMAGE_DIGEST").read_text() == ""
-    assert (tmp_path / "IMAGE_PUBLISH_STATE").read_text() == "1" * 40 + "\n"
-    assert not any("commit" in command for command in calls)
-    assert not any(command[:2] in (("git", "push"), ("gh", "api")) for command in calls)
+    assert (tmp_path / "VERSION").read_text() == "1.4.9\n"
+    assert (tmp_path / "IMAGE_DIGEST").read_text() == REFERENCE + "\n"
+    assert (tmp_path / "IMAGE_PUBLISH_STATE").read_text() == "2" * 40 + "\n"
+    assert any("commit" in command for command in calls)
+    assert any(command[:2] == ("git", "push") for command in calls)
+    e2e_index = next(i for i, command in enumerate(calls) if command[:2] == ("python3", "scripts/e2e_kind_deploy.py"))
+    statuses = [command for command in calls if command[:2] == ("gh", "api")]
+    assert len(statuses) == 2
+    assert "state=pending" in statuses[0]
+    assert "state=failure" in statuses[1]
+    assert all("1" * 40 in " ".join(command) for command in statuses)
+    assert not any("--source=HEAD" in command for command in calls[e2e_index + 1:])
 
 
 def test_publisher_workflow_runs_kind_prerequisites_inline():
