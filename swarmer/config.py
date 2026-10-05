@@ -66,7 +66,7 @@ class Settings(BaseSettings):
     gemini_preset_plan_model: str = "google/gemini-3.7-flash"
     gemini_preset_build_model: str = "google/gemini-3.7-flash"
     gemini_preset_small_model: str = "google/gemini-3.5-flash-lite"
-    openai_preset_plan_model: str = "openai/gpt-6-sol"
+    openai_preset_plan_model: str = "openai/gpt-6.1-sol"
     openai_preset_build_model: str = "openai/gpt-6-luna"
     openai_preset_small_model: str = "openai/gpt-6-luna"
     # Enables the opencode plan agent so the preset "plan" model is actually used
