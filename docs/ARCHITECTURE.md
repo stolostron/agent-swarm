@@ -197,16 +197,18 @@ agent-containers/Makefile pins
   that validated reference into `k8s/swarmer/deployment.yaml` and rejects a mismatched
   `REGISTRY`. The empty initial file blocks registry deployment until a manual or automated
   push succeeds. `kind-deploy` uses the local tag.
-- On `main`, the image publisher assigns the next patch version from `VERSION`, builds a
-  squash merge once and publishes its SemVer candidate tag. It writes the new `VERSION`,
-  `IMAGE_DIGEST`, and `IMAGE_PUBLISH_STATE` cursor to its local `image-publisher` checkout and
-  runs the KinD deployment lifecycle against that digest. Only a successful test promotes the
-  `latest` tag and allows the metadata commit to be pushed. A failed test discards the local
-  metadata changes; the candidate SemVer image may remain in the registry, while the committed
-  digest and `latest` stay at the prior release. The cursor lets it catch up merged PRs after
-  GitHub Actions coalesces pending runs; publisher commits do not trigger new runs.
-  The active GitHub Actions workflow is `.github/workflows/publish-image.yml` and runs on
-  pushes to `main`.
+- On `main`, the image publisher assigns the next patch version from `VERSION`, builds each
+  unprocessed squash merge once, and pushes its SemVer candidate tag. The workflow then runs
+  the KinD deployment lifecycle in a separate, visible step for every candidate digest. Only
+  after all candidates pass does a final step promote the last candidate to `latest` and push
+  the local metadata commits (`VERSION`, `IMAGE_DIGEST`, and `IMAGE_PUBLISH_STATE`) to `main`.
+  A failed test skips that final step; candidate SemVer images may remain in the registry, but
+  the committed digest and `latest` stay at the prior release. The cursor lets it catch up
+  merged PRs after GitHub Actions coalesces pending runs; publisher commits do not trigger new
+  runs. KinD installation and E2E dependencies are deferred until candidates exist, so a run
+  with no pending releases avoids that setup. Candidate publishing, each digest's E2E, latest
+  promotion, and the metadata push are grouped and labeled in the Actions logs. The active
+  workflow is `.github/workflows/publish-image.yml` and runs on pushes to `main`.
   Checkout credentials are not persisted, and image builds receive neither the Quay token
   nor the GitHub token. Registry and GitHub credentials are used only for their respective
   publishing and metadata operations. Protected `main` must allow the workflow to push
