@@ -15,9 +15,10 @@ jobs:
       group: swarmer-image-release-${{ github.repository }}
       cancel-in-progress: false
     permissions:
-      actions: write
       contents: write
       pull-requests: read
+    env:
+      CONTAINER_CMD: docker
     steps:
       - name: Check out main with full history for catch-up and metadata commits
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -34,22 +35,24 @@ jobs:
           fi
           podman --version
 
+      - name: Install KinD
+        run: |
+          curl -fsSLo kind-linux-amd64 https://kind.sigs.k8s.io/dl/v0.32.0/kind-linux-amd64
+          curl -fsSLo kind.sha256sum https://kind.sigs.k8s.io/dl/v0.32.0/kind-linux-amd64.sha256sum
+          sha256sum --check kind.sha256sum
+          chmod +x kind-linux-amd64
+          sudo mv kind-linux-amd64 /usr/local/bin/kind
+          kind version
+
+      - name: Prepare KinD E2E dependencies
+        run: |
+          make setup-secret
+          python3 -m pip install --quiet -e mcp-server
+
       - name: Publish all unprocessed squash merges
-        id: publish
         env:
           GH_TOKEN: ${{ github.token }}
           QUAY_REPOSITORY_PATH: ${{ vars.QUAY_REPOSITORY_PATH }}
           QUAY_ROBOT_USERNAME: ${{ vars.QUAY_ROBOT_USERNAME }}
           QUAY_PUSH_TOKEN: ${{ secrets.QUAY_PUSH_TOKEN }}
         run: python3 scripts/publish_image.py
-
-      - name: Dispatch KinD E2E for each published image digest
-        if: steps.publish.outputs.image_refs != ''
-        env:
-          GH_TOKEN: ${{ github.token }}
-          IMAGE_REFS: ${{ steps.publish.outputs.image_refs }}
-        run: |
-          while IFS= read -r image_ref; do
-            [ -n "$image_ref" ] || continue
-            gh workflow run e2e-kind.yml --ref main --field "image_ref=$image_ref"
-          done <<< "$IMAGE_REFS"

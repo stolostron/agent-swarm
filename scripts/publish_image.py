@@ -25,6 +25,7 @@ def build_environment() -> dict[str, str]:
     allowed = (
         "PATH", "HOME", "USER", "LOGNAME", "SHELL", "TMPDIR", "XDG_RUNTIME_DIR",
         "XDG_CONFIG_HOME", "LANG", "LC_ALL", "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY",
+        "CONTAINER_CMD",
     )
     return {key: os.environ[key] for key in allowed if key in os.environ}
 
@@ -61,7 +62,6 @@ def publish() -> None:
 
         authfile = str(Path(directory) / "quay-auth.json")
         push_env = {**clean_env, "REGISTRY_AUTH_FILE": authfile}
-        published_references = []
         for source in sources:
             run("git", "fetch", "origin", "main", env=git_env)
             remote_tip = output("git", "rev-parse", "origin/main", env=clean_env)
@@ -79,16 +79,34 @@ def publish() -> None:
             )
             run("make", "image-push", *make_args, env=push_env)
             reference = read_digest(Path("IMAGE_DIGEST"), registry)
-            run("podman", "tag", f"swarmer:{version}", "swarmer:latest", env=push_env)
-            run("make", "image-push", f"REGISTRY={registry}", "IMAGE=swarmer", "IMAGE_TAG=latest", "CONTAINER_CMD=podman", env=push_env)
-            if read_digest(Path("IMAGE_DIGEST"), registry) != reference:
-                raise ValueError("Latest and SemVer pushes produced different registry digests")
 
             run("git", "restore", "IMAGE_DIGEST", env=clean_env)
             run("git", "switch", "image-publisher", env=clean_env)
             atomic_write(Path("VERSION"), version)
             write_digest(Path("IMAGE_DIGEST"), reference.rsplit("@", 1)[1], registry)
             atomic_write(Path("IMAGE_PUBLISH_STATE"), source)
+
+            try:
+                run(
+                    "python3", "scripts/e2e_kind_deploy.py",
+                    "--cluster-name", "swarmer", "--namespace", "swarmer",
+                    "--image-ref", reference,
+                    env=clean_env,
+                )
+                run("podman", "tag", f"swarmer:{version}", "swarmer:latest", env=push_env)
+                run(
+                    "make", "image-push", f"REGISTRY={registry}", "IMAGE=swarmer",
+                    "IMAGE_TAG=latest", "CONTAINER_CMD=podman", env=push_env,
+                )
+                if read_digest(Path("IMAGE_DIGEST"), registry) != reference:
+                    raise ValueError("Latest and SemVer pushes produced different registry digests")
+            except Exception:
+                run(
+                    "git", "restore", "--source=HEAD", "--staged", "--worktree",
+                    "VERSION", "IMAGE_DIGEST", "IMAGE_PUBLISH_STATE", env=clean_env,
+                )
+                raise
+
             run("git", "add", "VERSION", "IMAGE_DIGEST", "IMAGE_PUBLISH_STATE", env=clean_env)
             message = f"Publish swarmer {version}\n\nImage-Publish-Source-SHA: {source}"
             author = os.environ["GITHUB_ACTOR"]
@@ -98,15 +116,7 @@ def publish() -> None:
                 "commit", "-m", message, env=clean_env,
             )
             run("git", "push", "origin", "HEAD:main", env=git_env)
-            published_references.append(reference)
             Path(authfile).unlink(missing_ok=True)
-
-        output_path = os.environ.get("GITHUB_OUTPUT")
-        if output_path and published_references:
-            with Path(output_path).open("a", encoding="utf-8") as output_file:
-                output_file.write("image_refs<<EOF\n")
-                output_file.write("\n".join(published_references))
-                output_file.write("\nEOF\n")
 
 
 if __name__ == "__main__":
