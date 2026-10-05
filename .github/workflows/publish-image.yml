@@ -17,7 +17,6 @@ jobs:
     permissions:
       contents: write
       pull-requests: read
-      statuses: write
     env:
       CONTAINER_CMD: docker
     steps:

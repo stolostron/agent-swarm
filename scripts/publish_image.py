@@ -79,16 +79,33 @@ def publish() -> None:
             )
             run("make", "image-push", *make_args, env=push_env)
             reference = read_digest(Path("IMAGE_DIGEST"), registry)
-            run("podman", "tag", f"swarmer:{version}", "swarmer:latest", env=push_env)
-            run("make", "image-push", f"REGISTRY={registry}", "IMAGE=swarmer", "IMAGE_TAG=latest", "CONTAINER_CMD=podman", env=push_env)
-            if read_digest(Path("IMAGE_DIGEST"), registry) != reference:
-                raise ValueError("Latest and SemVer pushes produced different registry digests")
 
             run("git", "restore", "IMAGE_DIGEST", env=clean_env)
             run("git", "switch", "image-publisher", env=clean_env)
             atomic_write(Path("VERSION"), version)
             write_digest(Path("IMAGE_DIGEST"), reference.rsplit("@", 1)[1], registry)
             atomic_write(Path("IMAGE_PUBLISH_STATE"), source)
+
+            try:
+                run(
+                    "python3", "scripts/e2e_kind_deploy.py",
+                    "--cluster-name", "swarmer", "--namespace", "swarmer",
+                    "--image-ref", reference,
+                    env=clean_env,
+                )
+                run("podman", "tag", f"swarmer:{version}", "swarmer:latest", env=push_env)
+                run(
+                    "make", "image-push", f"REGISTRY={registry}", "IMAGE=swarmer",
+                    "IMAGE_TAG=latest", "CONTAINER_CMD=podman", env=push_env,
+                )
+                if read_digest(Path("IMAGE_DIGEST"), registry) != reference:
+                    raise ValueError("Latest and SemVer pushes produced different registry digests")
+            except Exception:
+                run(
+                    "git", "restore", "--source=HEAD", "--staged", "--worktree",
+                    "VERSION", "IMAGE_DIGEST", "IMAGE_PUBLISH_STATE", env=clean_env,
+                )
+                raise
 
             run("git", "add", "VERSION", "IMAGE_DIGEST", "IMAGE_PUBLISH_STATE", env=clean_env)
             message = f"Publish swarmer {version}\n\nImage-Publish-Source-SHA: {source}"
@@ -98,39 +115,8 @@ def publish() -> None:
                 "-c", f"user.email={author}@users.noreply.github.com",
                 "commit", "-m", message, env=clean_env,
             )
-            metadata_sha = output("git", "rev-parse", "HEAD", env=clean_env)
-            if not SHA.fullmatch(metadata_sha):
-                raise ValueError("Invalid metadata commit SHA")
             run("git", "push", "origin", "HEAD:main", env=git_env)
-
-            status_url = f"{os.environ['GITHUB_SERVER_URL']}/{repo}/actions/runs/{os.environ['GITHUB_RUN_ID']}"
-            _set_e2e_status(github_env, repo, metadata_sha, "pending", status_url)
-            try:
-                run(
-                    "python3", "scripts/e2e_kind_deploy.py",
-                    "--cluster-name", "swarmer", "--namespace", "swarmer",
-                    "--image-ref", reference,
-                    env=clean_env,
-                )
-            except Exception:
-                _set_e2e_status(github_env, repo, metadata_sha, "failure", status_url)
-                raise
-            _set_e2e_status(github_env, repo, metadata_sha, "success", status_url)
             Path(authfile).unlink(missing_ok=True)
-
-
-def _set_e2e_status(env: dict[str, str], repo: str, sha: str, state: str, target_url: str) -> None:
-    descriptions = {
-        "pending": "Published-image E2E is running",
-        "success": "Published-image E2E passed",
-        "failure": "Published-image E2E failed",
-    }
-    run(
-        "gh", "api", "--method", "POST", f"repos/{repo}/statuses/{sha}",
-        "-f", f"state={state}", "-f", "context=KinD E2E / published image",
-        "-f", f"description={descriptions[state]}", "-f", f"target_url={target_url}",
-        env=env,
-    )
 
 
 if __name__ == "__main__":

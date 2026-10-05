@@ -168,8 +168,6 @@ def test_publisher_catches_up_two_merges_without_rebuilding(tmp_path, monkeypatc
     monkeypatch.setenv("QUAY_ROBOT_USERNAME", "example-bot")
     monkeypatch.setenv("QUAY_PUSH_TOKEN", "mock-token")
     monkeypatch.setenv("GH_TOKEN", "mock-github-token")
-    monkeypatch.setenv("GITHUB_SERVER_URL", "https://github.com")
-    monkeypatch.setenv("GITHUB_RUN_ID", "123")
     monkeypatch.setenv("CONTAINER_CMD", "docker")
     monkeypatch.setattr(publish_image, "pending_sources", lambda repo, baseline, tip, env: sources)
     calls = []
@@ -186,10 +184,19 @@ def test_publisher_catches_up_two_merges_without_rebuilding(tmp_path, monkeypatc
         if command[:2] == ("make", "image-push"):
             image_release.write_digest(Path("IMAGE_DIGEST"), DIGEST, "quay.io/example")
         elif command[:2] == ("git", "restore"):
-            Path("IMAGE_DIGEST").write_text("")
+            if "--source=HEAD" in command:
+                (tmp_path / "VERSION").write_text("1.4.8\n")
+                (tmp_path / "IMAGE_DIGEST").write_text("")
+                (tmp_path / "IMAGE_PUBLISH_STATE").write_text("1" * 40 + "\n")
+            else:
+                Path("IMAGE_DIGEST").write_text("")
         elif command[:2] == ("python3", "scripts/e2e_kind_deploy.py"):
-            assert any("commit" in prior for prior, _ in calls[:-1])
-            assert any(prior[:2] == ("git", "push") for prior, _ in calls[:-1])
+            publisher_switch = max(
+                i for i, (prior, _) in enumerate(calls[:-1]) if prior[:4] == ("git", "switch", "-C", "image-publisher")
+            )
+            current_release_calls = [prior for prior, _ in calls[publisher_switch + 1:-1]]
+            assert not any("commit" in prior for prior in current_release_calls)
+            assert not any(prior[:2] == ("git", "push") for prior in current_release_calls)
             verified_metadata.append(
                 (Path("VERSION").read_text(), Path("IMAGE_DIGEST").read_text(), Path("IMAGE_PUBLISH_STATE").read_text())
             )
@@ -209,34 +216,27 @@ def test_publisher_catches_up_two_merges_without_rebuilding(tmp_path, monkeypatc
     assert len(builds) == 2
     assert "IMAGE_TAG=1.4.9" in builds[0]
     assert "IMAGE_TAG=1.4.10" in builds[1]
-    for version, metadata_sha in (("1.4.9", "4" * 40), ("1.4.10", "5" * 40)):
+    for version in ("1.4.9", "1.4.10"):
         build = next(i for i, call in enumerate(commands) if call[:2] == ("make", "image-build") and f"IMAGE_TAG={version}" in call)
         login = next(i for i in range(build + 1, len(commands)) if commands[i][:2] == ("podman", "login"))
         semver_push = next(i for i, call in enumerate(commands) if call[:2] == ("make", "image-push") and f"IMAGE_TAG={version}" in call)
-        latest_tag = next(i for i, call in enumerate(commands) if call[:2] == ("podman", "tag") and call[2] == f"swarmer:{version}")
+        e2e = next(i for i in range(semver_push + 1, len(commands)) if commands[i][:2] == ("python3", "scripts/e2e_kind_deploy.py"))
+        latest_tag = next(i for i in range(e2e + 1, len(commands)) if commands[i][:2] == ("podman", "tag") and commands[i][2] == f"swarmer:{version}")
         latest_push = next(i for i in range(latest_tag + 1, len(commands)) if commands[i][:2] == ("make", "image-push") and "IMAGE_TAG=latest" in commands[i])
         metadata_commit = next(i for i in range(latest_push + 1, len(commands)) if "commit" in commands[i])
         metadata_push = next(i for i in range(metadata_commit + 1, len(commands)) if commands[i][:2] == ("git", "push"))
-        pending_status = next(i for i in range(metadata_push + 1, len(commands)) if commands[i][:2] == ("gh", "api"))
-        e2e = next(i for i in range(pending_status + 1, len(commands)) if commands[i][:2] == ("python3", "scripts/e2e_kind_deploy.py"))
-        success_status = next(i for i in range(e2e + 1, len(commands)) if commands[i][:2] == ("gh", "api"))
-        assert build < login < semver_push < latest_tag < latest_push < metadata_commit < metadata_push < pending_status < e2e < success_status
+        assert build < login < semver_push < e2e < latest_tag < latest_push < metadata_commit < metadata_push
         assert "--image-ref" in commands[e2e] and REFERENCE in commands[e2e]
         e2e_env = calls[e2e][1]["env"]
         assert e2e_env["CONTAINER_CMD"] == "docker"
         assert all(key not in e2e_env for key in ("GH_TOKEN", "QUAY_PUSH_TOKEN", "REGISTRY_AUTH_FILE", "GIT_ASKPASS"))
-        for status, state in ((pending_status, "state=pending"), (success_status, "state=success")):
-            assert f"statuses/{metadata_sha}" in " ".join(commands[status])
-            assert state in commands[status]
-            assert "context=KinD E2E / published image" in commands[status]
-            assert "target_url=https://github.com/example/repo/actions/runs/123" in commands[status]
-            assert calls[status][1]["env"]["GH_TOKEN"] == "mock-github-token"
         build_env = calls[build][1]["env"]
         assert all(key not in build_env for key in ("GH_TOKEN", "QUAY_PUSH_TOKEN", "REGISTRY_AUTH_FILE", "GIT_ASKPASS"))
     assert len([call for call in commands if call[:2] == ("git", "push")]) == 2
+    assert not any(call[:2] == ("gh", "api") for call in commands)
 
 
-def test_publisher_keeps_verified_release_when_later_publish_fails(tmp_path, monkeypatch):
+def test_publisher_keeps_prior_release_when_later_candidate_push_fails(tmp_path, monkeypatch):
     monkeypatch.syspath_prepend(str(ROOT / "scripts"))
     import publish_image
 
@@ -248,7 +248,6 @@ def test_publisher_keeps_verified_release_when_later_publish_fails(tmp_path, mon
         "GITHUB_REPOSITORY": "example/repo", "GITHUB_ACTOR": "example-bot",
         "QUAY_REPOSITORY_PATH": "quay.io/example", "QUAY_ROBOT_USERNAME": "example-bot",
         "QUAY_PUSH_TOKEN": "mock-token", "GH_TOKEN": "mock-github-token",
-        "GITHUB_SERVER_URL": "https://github.com", "GITHUB_RUN_ID": "123",
     }.items():
         monkeypatch.setenv(key, value)
     monkeypatch.setattr(publish_image, "pending_sources", lambda *args: ["2" * 40, "3" * 40])
@@ -273,7 +272,7 @@ def test_publisher_keeps_verified_release_when_later_publish_fails(tmp_path, mon
     with pytest.raises(subprocess.CalledProcessError):
         publish_image.publish()
     assert len([call for call in calls if call[:2] == ("git", "push")]) == 1
-    assert len([call for call in calls if call[:2] == ("gh", "api")]) == 2
+    assert not any(call[:2] == ("gh", "api") for call in calls)
 
 
 def test_publisher_with_no_pending_merges_skips_release_steps(tmp_path, monkeypatch):
@@ -296,7 +295,7 @@ def test_publisher_with_no_pending_merges_skips_release_steps(tmp_path, monkeypa
     assert calls == [("git", "fetch", "origin", "main")]
 
 
-def test_publisher_e2e_failure_keeps_commit_and_reports_failure(tmp_path, monkeypatch):
+def test_publisher_e2e_failure_discards_local_metadata_without_commit(tmp_path, monkeypatch):
     monkeypatch.syspath_prepend(str(ROOT / "scripts"))
     import publish_image
 
@@ -308,7 +307,6 @@ def test_publisher_e2e_failure_keeps_commit_and_reports_failure(tmp_path, monkey
         "GITHUB_REPOSITORY": "example/repo", "GITHUB_ACTOR": "example-bot",
         "QUAY_REPOSITORY_PATH": "quay.io/example", "QUAY_ROBOT_USERNAME": "example-bot",
         "QUAY_PUSH_TOKEN": "mock-token", "GH_TOKEN": "mock-github-token",
-        "GITHUB_SERVER_URL": "https://github.com", "GITHUB_RUN_ID": "123",
     }.items():
         monkeypatch.setenv(key, value)
     monkeypatch.setattr(publish_image, "pending_sources", lambda *args: ["2" * 40])
@@ -320,7 +318,12 @@ def test_publisher_e2e_failure_keeps_commit_and_reports_failure(tmp_path, monkey
         if command[:2] == ("make", "image-push"):
             image_release.write_digest(Path("IMAGE_DIGEST"), DIGEST, "quay.io/example")
         elif command[:2] == ("git", "restore"):
-            (tmp_path / "IMAGE_DIGEST").write_text("")
+            if "--source=HEAD" in command:
+                (tmp_path / "VERSION").write_text("1.4.8\n")
+                (tmp_path / "IMAGE_DIGEST").write_text("")
+                (tmp_path / "IMAGE_PUBLISH_STATE").write_text("1" * 40 + "\n")
+            else:
+                (tmp_path / "IMAGE_DIGEST").write_text("")
         elif command[:2] == ("python3", "scripts/e2e_kind_deploy.py"):
             assert (tmp_path / "VERSION").read_text() == "1.4.9\n"
             assert (tmp_path / "IMAGE_DIGEST").read_text() == REFERENCE + "\n"
@@ -330,18 +333,14 @@ def test_publisher_e2e_failure_keeps_commit_and_reports_failure(tmp_path, monkey
     with pytest.raises(subprocess.CalledProcessError):
         publish_image.publish()
 
-    assert (tmp_path / "VERSION").read_text() == "1.4.9\n"
-    assert (tmp_path / "IMAGE_DIGEST").read_text() == REFERENCE + "\n"
-    assert (tmp_path / "IMAGE_PUBLISH_STATE").read_text() == "2" * 40 + "\n"
-    assert any("commit" in command for command in calls)
-    assert any(command[:2] == ("git", "push") for command in calls)
+    assert (tmp_path / "VERSION").read_text() == "1.4.8\n"
+    assert (tmp_path / "IMAGE_DIGEST").read_text() == ""
+    assert (tmp_path / "IMAGE_PUBLISH_STATE").read_text() == "1" * 40 + "\n"
+    assert not any("commit" in command for command in calls)
+    assert not any(command[:2] in (("git", "push"), ("gh", "api")) for command in calls)
     e2e_index = next(i for i, command in enumerate(calls) if command[:2] == ("python3", "scripts/e2e_kind_deploy.py"))
-    statuses = [command for command in calls if command[:2] == ("gh", "api")]
-    assert len(statuses) == 2
-    assert "state=pending" in statuses[0]
-    assert "state=failure" in statuses[1]
-    assert all("1" * 40 in " ".join(command) for command in statuses)
-    assert not any("--source=HEAD" in command for command in calls[e2e_index + 1:])
+    restore_index = next(i for i, command in enumerate(calls) if "--source=HEAD" in command)
+    assert e2e_index < restore_index
 
 
 def test_publisher_workflow_runs_kind_prerequisites_inline():
@@ -350,6 +349,7 @@ def test_publisher_workflow_runs_kind_prerequisites_inline():
     names = [step.get("name") for step in publish["steps"]]
     assert names.index("Install KinD") < names.index("Prepare KinD E2E dependencies") < names.index("Publish all unprocessed squash merges")
     assert publish["env"]["CONTAINER_CMD"] == "docker"
+    assert "statuses" not in publish["permissions"]
     assert not any("Dispatch KinD E2E" in str(name) for name in names)
 
     e2e = yaml.load((ROOT / ".github/workflows/e2e-kind.yml").read_text(), Loader=yaml.BaseLoader)
@@ -381,11 +381,26 @@ def test_failed_latest_push_does_not_advance_release(tmp_path, monkeypatch):
             if "IMAGE_TAG=latest" in command:
                 raise subprocess.CalledProcessError(1, command)
             image_release.write_digest(Path("IMAGE_DIGEST"), DIGEST, "quay.io/example")
+        elif command[:2] == ("python3", "scripts/e2e_kind_deploy.py"):
+            assert (tmp_path / "VERSION").read_text() == "1.4.10\n"
+            assert (tmp_path / "IMAGE_DIGEST").read_text() == REFERENCE + "\n"
+        elif command[:2] == ("git", "restore"):
+            if "--source=HEAD" in command:
+                (tmp_path / "VERSION").write_text("1.4.9\n")
+                (tmp_path / "IMAGE_DIGEST").write_text("")
+                (tmp_path / "IMAGE_PUBLISH_STATE").write_text("1" * 40 + "\n")
+            else:
+                (tmp_path / "IMAGE_DIGEST").write_text("")
 
     monkeypatch.setattr(publish_image, "run", fake_run)
     with pytest.raises(subprocess.CalledProcessError):
         publish_image.publish()
     assert (tmp_path / "VERSION").read_text() == "1.4.9\n"
+    assert (tmp_path / "IMAGE_DIGEST").read_text() == ""
     assert (tmp_path / "IMAGE_PUBLISH_STATE").read_text() == "1" * 40 + "\n"
     assert not any("commit" in call for call in calls)
+    commands = calls
+    e2e = next(i for i, command in enumerate(commands) if command[:2] == ("python3", "scripts/e2e_kind_deploy.py"))
+    latest_push = next(i for i, command in enumerate(commands) if command[:2] == ("make", "image-push") and "IMAGE_TAG=latest" in command)
     assert any("IMAGE_TAG=1.4.10" in call for call in calls)
+    assert e2e < latest_push
