@@ -35,7 +35,17 @@ jobs:
           fi
           podman --version
 
+      - name: Publish all unprocessed squash merges
+        id: publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          QUAY_REPOSITORY_PATH: ${{ vars.QUAY_REPOSITORY_PATH }}
+          QUAY_ROBOT_USERNAME: ${{ vars.QUAY_ROBOT_USERNAME }}
+          QUAY_PUSH_TOKEN: ${{ secrets.QUAY_PUSH_TOKEN }}
+        run: python3 scripts/publish_image.py --stage publish
+
       - name: Install KinD
+        if: ${{ success() && steps.publish.outputs.published == 'true' }}
         run: |
           curl -fsSLo kind-linux-amd64 https://kind.sigs.k8s.io/dl/v0.32.0/kind-linux-amd64
           curl -fsSLo kind.sha256sum https://kind.sigs.k8s.io/dl/v0.32.0/kind-linux-amd64.sha256sum
@@ -45,14 +55,47 @@ jobs:
           kind version
 
       - name: Prepare KinD E2E dependencies
+        if: ${{ success() && steps.publish.outputs.published == 'true' }}
         run: |
           make setup-secret
           python3 -m pip install --quiet -e mcp-server
 
-      - name: Publish all unprocessed squash merges
+      - name: Run KinD deployment lifecycle e2e
+        if: ${{ success() && steps.publish.outputs.published == 'true' }}
+        env:
+          IMAGE_REFS: ${{ steps.publish.outputs.image_refs }}
+        run: |
+          candidate=0
+          [[ -n "$IMAGE_REFS" ]]
+          while IFS= read -r image_ref; do
+            [ -n "$image_ref" ] || continue
+            candidate=$((candidate + 1))
+            echo "::group::KinD E2E candidate $candidate — $image_ref"
+            if python3 scripts/e2e_kind_deploy.py \
+              --cluster-name swarmer \
+              --namespace swarmer \
+              --image-ref "$image_ref"; then
+              echo "::endgroup::"
+            else
+              result=$?
+              echo "::endgroup::"
+              exit "$result"
+            fi
+          done <<< "$IMAGE_REFS"
+
+      - name: Promote latest and push release metadata to main
+        if: ${{ success() && steps.publish.outputs.published == 'true' }}
         env:
           GH_TOKEN: ${{ github.token }}
           QUAY_REPOSITORY_PATH: ${{ vars.QUAY_REPOSITORY_PATH }}
           QUAY_ROBOT_USERNAME: ${{ vars.QUAY_ROBOT_USERNAME }}
           QUAY_PUSH_TOKEN: ${{ secrets.QUAY_PUSH_TOKEN }}
-        run: python3 scripts/publish_image.py
+        run: python3 scripts/publish_image.py --stage promote-and-push
+
+      - name: Collect diagnostics on failure
+        if: failure()
+        run: |
+          kubectl get pods -A -o wide || true
+          kubectl get events -A --sort-by='.lastTimestamp' || true
+          kubectl logs -n swarmer deployment/swarmer --tail=200 || true
+          kubectl logs -n openshell deployment/openshell --tail=200 || true
