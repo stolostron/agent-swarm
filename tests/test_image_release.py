@@ -54,7 +54,7 @@ def test_deploy_refuses_missing_digest_and_renders_valid_digest(tmp_path):
     shutil.copy(ROOT / "scripts/image_release.py", scripts / "image_release.py")
     shutil.copy(ROOT / "scripts/resolve_agent_image.py", scripts / "resolve_agent_image.py")
     (tmp_path / "IMAGE_DIGEST").write_text("")
-    (tmp_path / ".env").write_text("AGENT_IMAGE_OPENCODE=ghcr.io/anomalyco/opencode:1.2.3\n")
+    (tmp_path / ".env").write_text("AGENT_IMAGE_OPENCODE=registry.example.com/team/opencode:1.2.3\n")
     command = ["make", "deploy", "REGISTRY=quay.io/example", "SILENT=1"]
     failed = subprocess.run(command, cwd=tmp_path, capture_output=True, text=True)
     assert failed.returncode != 0
@@ -70,7 +70,7 @@ def test_deploy_refuses_missing_digest_and_renders_valid_digest(tmp_path):
     for config in ("command", "env"):
         if config == "env":
             (tmp_path / ".env").write_text(
-                "AGENT_IMAGE_OPENCODE=ghcr.io/anomalyco/opencode:1.2.3\n"
+                "AGENT_IMAGE_OPENCODE=registry.example.com/team/opencode:1.2.3\n"
                 "IMAGE_REF=quay.io/example/swarmer:manual\n"
             )
             override = []
