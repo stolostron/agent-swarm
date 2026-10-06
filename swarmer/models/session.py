@@ -65,6 +65,9 @@ class Session(Base):
     language: Mapped[str] = mapped_column(String(32), nullable=False, default="golang", server_default="golang")
     agent_tool: Mapped[str] = mapped_column(String(32), nullable=False, default="opencode", server_default="opencode")
     instruction_prompt: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    # Per-run manual launch override retained only while a launch waits in the
+    # queue. NULL means no override; an empty string is an explicit blank.
+    queued_instruction_prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
     working_branch: Mapped[str] = mapped_column(String(255), nullable=False, default="", server_default="")
     patch_output: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
     commit_msg: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")

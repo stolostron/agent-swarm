@@ -146,14 +146,12 @@
             <button type="submit" class="pf-v6-c-button pf-m-warning pf-m-small">&#9632; Stop</button>
           </form>
         {% else %}
-          <form method="post" action="/workspaces/{{ ws.id }}/sessions/{{ s.id }}/launch" style="display:inline;">
-            <input type="hidden" name="redirect_to" value="list">
-            <button type="submit"
-                    class="pf-v6-c-button pf-m-small {% if _avail %}pf-m-primary{% else %}pf-m-secondary{% endif %}"
-                    {% if not _avail %}disabled{% endif %}>
-              &#9654; Launch
-            </button>
-          </form>
+          <button type="button"
+                  data-launch-dialog-url="/workspaces/{{ ws.id }}/sessions/{{ s.id }}/launch-dialog?mode=prompt&amp;redirect_to=list"
+                  class="pf-v6-c-button pf-m-small {% if _avail %}pf-m-primary{% else %}pf-m-secondary{% endif %}"
+                  {% if not _avail %}disabled{% endif %}>
+            &#9654; Launch
+          </button>
         {% endif %}
       </td>
     </tr>

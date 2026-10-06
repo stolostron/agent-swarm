@@ -54,12 +54,20 @@ class AgentToolStrategy(ABC):
         ...
 
     @abstractmethod
-    def build_main_cmd(self, session: "Session", model: str, resolved_prompt: str = "") -> str:
+    def build_main_cmd(
+        self,
+        session: "Session",
+        model: str,
+        resolved_prompt: str | None = None,
+    ) -> str:
         """Return the shell command string to execute inside the sandbox.
 
         Implementations must handle at least prompt mode.  TUI mode (return a
         long-running command such as ``sleep infinity``) and server mode are
         optional — raise ``ValueError`` for unsupported modes.
+
+        ``None`` means no resolved override was supplied; an empty string is
+        an explicit blank override and must not fall back to saved instructions.
 
         Security contract for implementers:
             The returned string is passed directly to ``["sh", "-c", cmd]``

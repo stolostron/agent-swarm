@@ -434,6 +434,7 @@ async def _check_and_launch(db=None) -> None:
                 from swarmer.routers.sessions import _do_launch
                 session.mode = "prompt"
                 session.active_schedule_id = sched_id
+                session.queued_instruction_prompt = None
                 await db.commit()
                 await _do_launch(session, ws, db)
 
@@ -455,6 +456,7 @@ async def _check_and_launch(db=None) -> None:
                 await db.rollback()
                 session.phase = "idle"
                 session.active_schedule_id = None
+                session.queued_instruction_prompt = None
                 # Still advance the schedule so it doesn't retry immediately.
                 if sched_id:
                     sched = await db.get(SessionSchedule, sched_id)
@@ -521,10 +523,24 @@ async def _process_queue(db) -> None:
             continue
         session.phase = "idle"  # reset so _do_launch gate sees accurate count
         try:
-            await _do_launch(session, ws, db)
+            manual_instruction_prompt = (
+                session.queued_instruction_prompt
+                if session.active_schedule_id is None
+                else None
+            )
+            if manual_instruction_prompt is None:
+                await _do_launch(session, ws, db)
+            else:
+                await _do_launch(
+                    session,
+                    ws,
+                    db,
+                    manual_instruction_prompt=manual_instruction_prompt,
+                )
             log.info("queue: launched session %d (%s), phase=%s", session.id, session.name, session.phase)
         except Exception:
             log.exception("queue: failed to launch session %d", session.id)
             session.phase = "idle"
             session.status_detail = ""
+            session.queued_instruction_prompt = None
             await db.commit()

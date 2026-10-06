@@ -34,6 +34,14 @@ mode-specific output and configuration components.
 ## Lifecycle actions
 
 - Launch `tui`, `server`, or `prompt` through the shared `_do_launch()` path.
+- Manual launches from each mode use the same accessible confirmation dialog.
+  Prompt, provider, and mode selections are stored on the session and reused by
+  all modes. Additional Instructions are run-only; they never update session or
+  schedule defaults. The queued override column is nullable so an explicit
+  blank remains distinct from no override, and is consumed when dispatch starts.
+- Scheduled/event launches continue to compose schedule instructions with the
+  session defaults when a schedule field is empty. Manual overrides do not enter
+  that fallback path.
 - Stop always deletes the OpenShell sandbox and server service where present.
 - Delete is blocked while active and performs runtime/credential cleanup first.
 - Agent Swarm provider credentials are refreshed for long-running TUI/server
@@ -48,6 +56,7 @@ mode-specific output and configuration components.
 - `POST .../{sid}/set-name`
 - `POST .../{sid}/set-mode`
 - `POST .../{sid}/set-provider`
+- `GET /workspaces/{ws_id}/sessions/{sid}/launch-dialog`
 
 ## Invariants
 
