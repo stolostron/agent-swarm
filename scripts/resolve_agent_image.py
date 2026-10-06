@@ -64,12 +64,12 @@ def fetch_latest_version() -> str:
     if not match:
         raise ResolutionError(f"OpenCode release has an invalid SemVer tag: {tag!r}")
     prerelease = match.group(4)
-    invalid_prerelease = prerelease and any(
-        identifier.isdigit() and len(identifier) > 1 and identifier.startswith("0")
-        for identifier in prerelease.split(".")
-    )
-    if invalid_prerelease or match.group(5):
-        raise ResolutionError(f"OpenCode release tag cannot be represented as an OCI SemVer tag: {tag!r}")
+    if prerelease:
+        raise ResolutionError(f"OpenCode release is not a stable version: {tag!r}")
+    if match.group(5):
+        raise ResolutionError(
+            f"OpenCode release tag cannot be represented as an OCI SemVer tag: {tag!r}"
+        )
 
     # OpenCode release tags use a leading v; container tags use bare SemVer.
     return tag.removeprefix("v")

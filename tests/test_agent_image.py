@@ -50,6 +50,7 @@ def test_latest_stable_release_produces_published_semver_image(monkeypatch):
     [
         [],
         {"tag_name": "not-a-version"},
+        {"tag_name": "v1.2.3-rc.1", "draft": False, "prerelease": False},
         {"tag_name": "v1.2.3-rc.01"},
         {"tag_name": "v1.2.3+build.5"},
         {"tag_name": "v1.2.3", "draft": True},
@@ -81,6 +82,17 @@ def test_explicit_full_image_override_is_offline_and_wins(monkeypatch):
 
     assert resolver.resolve_image("registry.example.com/team/opencode:1.2.3") == (
         "registry.example.com/team/opencode:1.2.3"
+    )
+
+
+def test_explicit_prerelease_image_override_remains_available(monkeypatch):
+    def unexpected_network(request, timeout):
+        pytest.fail("explicit override should not request GitHub metadata")
+
+    monkeypatch.setattr(resolver, "urlopen", unexpected_network)
+
+    assert resolver.resolve_image("registry.example.com/team/opencode:1.2.3-rc.1") == (
+        "registry.example.com/team/opencode:1.2.3-rc.1"
     )
 
 
