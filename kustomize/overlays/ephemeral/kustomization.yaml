@@ -37,10 +37,5 @@ patches:
       - op: add
         path: /spec/template/spec/containers/0/env/-
         value:
-          name: AGENT_IMAGE_OPENCODE
-          value: "quay.io/jpacker/opencode:0.3.9"
-      - op: add
-        path: /spec/template/spec/containers/0/env/-
-        value:
           name: DEFAULT_AGENT_TOOL
           value: "opencode"

@@ -159,39 +159,40 @@ pod. TUI agent startup belongs in the WebSocket flow, not sandbox setup.
 
 ## Container Image and Version Flow
 
-`agent-containers` produces the runtime image consumed by this repository.
+Swarmer resolves its default runtime image from the latest stable OpenCode release on GitHub.
+`agent-containers` remains a separate project for building custom agent images, but Swarmer
+builds and deploys no longer require that repository to be checked out.
 
 ```text
-agent-containers/Makefile pins
-  -> make update-deps
-  -> Containerfile.agents build args
-  -> make publish-opencode
-  -> agent-swarm/.push-defaults (REGISTRY + IMAGE_TAG, tracked source of truth)
-  -> make sync-images
-  -> .env: AGENT_IMAGE_OPENCODE
-  -> deploy substitution: AGENT_IMAGE_OPENCODE_VALUE
+GitHub anomalyco/opencode latest stable release tag
+  -> scripts/resolve_agent_image.py validates SemVer
+  -> ghcr.io/anomalyco/opencode:<SemVer>
+  -> make image-build build arg / make deploy environment
   -> Settings.agent_image_opencode
   -> agent_tools/opencode.py:get_image()
   -> OpenShell create_sandbox(image=...)
 ```
 
-### Producer: `../agent-containers`
+### OpenCode image selection
 
-- `Makefile` owns pinned `GO_VERSION`, `PYTHON_VERSION`, `OPENCODE_VERSION`, GitHub CLI,
-  `rg`, `fzf`, LSP, MCP, and vulnerability scanner versions.
-- `make update-deps` discovers and validates upstream versions, then updates the pins.
-- Every version must flow through `Makefile` -> `scripts/build.sh` build args -> `ARG`
-  declarations in `containerfiles/Containerfile.agents` (including the target stage).
-- `make publish-opencode` builds and pushes the `opencode` image and updates the shared
-  `agent-swarm/.push-defaults` contract. Commit tag/default changes with related code.
-- `agent-containers/docs/ARCHITECTURE.md` and its `AGENTS.md` contain the producer-side
-  version wiring and test requirement (`tests/test_lsp_version_pinning.sh`).
+- The resolver requests `https://api.github.com/repos/anomalyco/opencode/releases/latest`,
+  rejects malformed, draft, prerelease, or unavailable metadata, and prints a
+  registry-qualified SemVer reference. The default does not use an image digest.
+- `AGENT_IMAGE_OPENCODE` may be set to a full registry-qualified `name:tag` or digest to
+  override resolution. Make's command-line value takes precedence over `.env`; `.env` takes
+  precedence over the process environment. Any non-empty value is an explicit override and
+  is used offline. A stale `.env` value therefore remains in effect until updated or cleared;
+  malformed overrides fail rather than falling back to network metadata.
+- Resolution happens inside the `image-build` and `deploy` target recipes, not during Makefile
+  parsing. The resolved value is passed to the dashboard Containerfile as its runtime default
+  and to the Deployment manifest for a deploy. Resolution never rewrites `.env`, `.push-defaults`,
+  or other tracked metadata, so CI candidate builds leave repository metadata clean.
+- `make sync-images` remains an explicit compatibility helper for users who maintain a custom
+  image in `../agent-containers`; it is not required by builds or deployments.
 
 ### Consumer: `agent-swarm`
 
-- `make sync-images` reads `REGISTRY` and `IMAGE_TAG` from `.push-defaults`, validates both,
-  and writes `AGENT_IMAGE_OPENCODE` to `.env`.
-- Swarmer's dashboard image builds independently from `sync-images`. Local `make image-build`
+- Swarmer's dashboard image builds independently from the selected agent image. Local `make image-build`
   and `make image-push` share the reusable `local` tag; a successful push writes its registry
   manifest reference `REGISTRY/swarmer@sha256:...` to `IMAGE_DIGEST`. `make deploy` substitutes
   that validated reference into `k8s/swarmer/deployment.yaml` and rejects a mismatched
