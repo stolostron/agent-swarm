@@ -8,7 +8,7 @@ import re
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -35,6 +35,7 @@ from swarmer.api.schemas import (
     SetProviderRequest,
 )
 from swarmer.models.session import Session
+from swarmer.models.mcp_server import McpServer
 from swarmer.models.session_run import SessionRun
 from swarmer.models.workspace import Workspace
 from swarmer.models.workspace_prompt import WorkspacePrompt, WorkspacePromptSource
@@ -83,6 +84,96 @@ async def _get_session_or_404(
     return session
 
 
+async def _validate_mcp_ids(
+    ws_id: int, server_ids: list[int] | None, user: str, db: AsyncSession,
+) -> list[int]:
+    """Validate the complete MCP selection before changing any session fields."""
+    ids = list(dict.fromkeys(server_ids or []))
+    if not ids:
+        return ids
+    result = await db.execute(
+        select(McpServer.id).where(
+            McpServer.workspace_id == ws_id,
+            McpServer.id.in_(ids),
+            or_(
+                McpServer.user_id == user,
+                McpServer.shared == True,  # noqa: E712
+                McpServer.user_id == "",
+            ),
+        )
+    )
+    visible_ids = set(result.scalars().all())
+    if visible_ids != set(ids):
+        raise HTTPException(
+            status_code=422,
+            detail="One or more MCP servers are invalid or not visible to this caller",
+        )
+    return ids
+
+
+def _apply_mcp_selection(
+    session: Session,
+    server_ids: list[int] | None,
+    selection: str | None,
+    *,
+    creating: bool,
+) -> None:
+    if selection == "inherit":
+        if server_ids is not None:
+            raise HTTPException(status_code=422, detail="Inherited MCP selection must omit server IDs")
+        session.mcp_server_ids = ""
+    elif selection == "disabled":
+        if server_ids:
+            raise HTTPException(status_code=422, detail="Disabled MCP selection cannot include server IDs")
+        session.mcp_server_ids = "none"
+    elif server_ids:
+        session.enabled_mcp_ids = server_ids
+    elif creating or server_ids == []:
+        # New sessions are safely disabled unless inheritance is requested.
+        session.mcp_server_ids = "none"
+
+
+async def _attach_mcp_readback(
+    session: Session, user: str, db: AsyncSession,
+) -> Session:
+    """Attach visibility-scoped configuration and currently eligible MCP IDs."""
+    result = await db.execute(
+        select(McpServer.id).where(
+            McpServer.workspace_id == session.workspace_id,
+            or_(
+                McpServer.user_id == user,
+                McpServer.shared == True,  # noqa: E712
+                McpServer.user_id == "",
+            ),
+        )
+    )
+    visible_ids = set(result.scalars().all())
+    configured_ids = [
+        server_id for server_id in session.configured_mcp_ids if server_id in visible_ids
+    ]
+
+    from swarmer.routers.mcp_servers import get_enabled_mcp_servers
+
+    eligible = await get_enabled_mcp_servers(session.workspace_id, db, user_id=user)
+    eligible = [
+        server for server in eligible
+        if getattr(server, "enabled", True) and getattr(server, "auth_status", "active") != "expired"
+    ]
+    eligible_ids = {server.id for server in eligible}
+    if session.mcp_selection == "inherit":
+        runtime_ids = sorted(eligible_ids)
+    elif session.mcp_selection == "selected":
+        runtime_ids = sorted(eligible_ids.intersection(configured_ids))
+    else:
+        runtime_ids = []
+    # Pydantic reads this transient property when serializing SessionOut. It is
+    # never persisted and contains no server configuration or credentials.
+    session._runtime_mcp_server_ids = runtime_ids
+    # Expose only caller-visible IDs in the stored selection readback.
+    session._configured_mcp_ids = configured_ids
+    return session
+
+
 # ---------- CRUD ----------
 
 
@@ -91,13 +182,17 @@ async def list_sessions(
     ws_id: int,
     ws: Workspace = Depends(get_workspace_or_404),
     db: AsyncSession = Depends(get_db),
+    user: str = Depends(get_current_user),
 ):
     result = await db.execute(
         select(Session)
         .where(Session.workspace_id == ws_id)
         .order_by(Session.name)
     )
-    return result.scalars().all()
+    sessions = list(result.scalars().all())
+    for session in sessions:
+        await _attach_mcp_readback(session, user, db)
+    return sessions
 
 
 @router.post("", response_model=SessionOut, status_code=status.HTTP_201_CREATED)
@@ -106,6 +201,7 @@ async def create_session(
     body: SessionCreate,
     ws: Workspace = Depends(get_workspace_or_404),
     db: AsyncSession = Depends(get_db),
+    user: str = Depends(get_current_user),
 ):
     if body.mode not in ("tui", "server", "prompt"):
         raise HTTPException(status_code=422, detail="Invalid mode")
@@ -119,6 +215,8 @@ async def create_session(
     if wb and not _is_valid_ref_name(wb):
         raise HTTPException(status_code=422, detail="Invalid working branch name")
 
+    selected_mcp_ids = await _validate_mcp_ids(ws_id, body.mcp_server_ids, user, db)
+
     session = Session(
         workspace_id=ws_id,
         github_pat_id=body.github_pat_id,
@@ -130,10 +228,15 @@ async def create_session(
         agent_tool=agent_tool,
         working_branch=wb,
     )
-    if body.mcp_server_ids:
-        session.enabled_mcp_ids = body.mcp_server_ids
-    else:
-        session.mcp_server_ids = "none"
+    selection_ids = (
+        selected_mcp_ids if body.mcp_server_ids is not None else None
+    )
+    _apply_mcp_selection(
+        session,
+        selection_ids,
+        body.mcp_selection,
+        creating=True,
+    )
 
     db.add(session)
     try:
@@ -151,7 +254,7 @@ async def create_session(
             detail=f"A session named '{body.name}' already exists in this workspace.",
         )
 
-    return session
+    return await _attach_mcp_readback(session, user, db)
 
 
 @router.get("/{sid}", response_model=SessionOut)
@@ -160,8 +263,10 @@ async def get_session(
     sid: int,
     ws: Workspace = Depends(get_workspace_or_404),
     db: AsyncSession = Depends(get_db),
+    user: str = Depends(get_current_user),
 ):
-    return await _get_session_or_404(ws_id, sid, db)
+    session = await _get_session_or_404(ws_id, sid, db)
+    return await _attach_mcp_readback(session, user, db)
 
 
 @router.put("/{sid}", response_model=SessionOut)
@@ -171,10 +276,25 @@ async def update_session(
     body: SessionUpdate,
     ws: Workspace = Depends(get_workspace_or_404),
     db: AsyncSession = Depends(get_db),
+    user: str = Depends(get_current_user),
 ):
     session = await _get_session_or_404(ws_id, sid, db)
     if session.is_active:
         raise HTTPException(status_code=409, detail="Cannot edit a running session")
+
+    if body.mcp_selection is not None or body.mcp_server_ids is not None:
+        selected_mcp_ids = await _validate_mcp_ids(
+            ws_id, body.mcp_server_ids, user, db
+        )
+        selection_ids = (
+            selected_mcp_ids if body.mcp_server_ids is not None else None
+        )
+        _apply_mcp_selection(
+            session,
+            selection_ids,
+            body.mcp_selection,
+            creating=False,
+        )
 
     if body.name is not None:
         session.name = body.name.strip()
@@ -198,12 +318,6 @@ async def update_session(
         if wb and not _is_valid_ref_name(wb):
             raise HTTPException(status_code=422, detail="Invalid working branch name")
         session.working_branch = wb
-    if body.mcp_server_ids is not None:
-        if body.mcp_server_ids:
-            session.enabled_mcp_ids = body.mcp_server_ids
-        else:
-            session.mcp_server_ids = "none"
-
     try:
         await db.commit()
         await db.refresh(session)
@@ -211,7 +325,7 @@ async def update_session(
         await db.rollback()
         raise HTTPException(status_code=409, detail="A session with that name already exists")
 
-    return session
+    return await _attach_mcp_readback(session, user, db)
 
 
 @router.delete("/{sid}", response_model=MessageOut)
@@ -290,7 +404,7 @@ async def launch_session(
         raise HTTPException(status_code=500, detail=f"Launch failed: {exc}")
 
     await db.refresh(session)
-    return session
+    return await _attach_mcp_readback(session, user, db)
 
 
 @router.post("/{sid}/stop", response_model=SessionOut)
@@ -299,6 +413,7 @@ async def stop_session(
     sid: int,
     ws: Workspace = Depends(get_workspace_or_404),
     db: AsyncSession = Depends(get_db),
+    user: str = Depends(get_current_user),
 ):
     session = await _get_session_or_404(ws_id, sid, db)
 
@@ -306,9 +421,10 @@ async def stop_session(
         session.phase = "idle"
         session.status_detail = ""
         session.queued_instruction_prompt = None
+        session.queued_user_id = ""
         await db.commit()
         await db.refresh(session)
-        return session
+        return await _attach_mcp_readback(session, user, db)
 
     # Cancel any background tasks for this session before touching the DB so
     # the task cannot race and overwrite the "stopped" phase we're about to set.
@@ -369,7 +485,7 @@ async def stop_session(
 
     await db.commit()
     await db.refresh(session)
-    return session
+    return await _attach_mcp_readback(session, user, db)
 
 
 # ---------- Run history ----------
@@ -402,6 +518,7 @@ async def set_name(
     body: SetNameRequest,
     ws: Workspace = Depends(get_workspace_or_404),
     db: AsyncSession = Depends(get_db),
+    user: str = Depends(get_current_user),
 ):
     session = await _get_session_or_404(ws_id, sid, db)
     if session.is_active:
@@ -415,7 +532,7 @@ async def set_name(
         await db.rollback()
         raise HTTPException(status_code=409, detail="A session with that name already exists")
 
-    return session
+    return await _attach_mcp_readback(session, user, db)
 
 
 @router.post("/{sid}/set-mode", response_model=SessionOut)
@@ -425,6 +542,7 @@ async def set_mode(
     body: SetModeRequest,
     ws: Workspace = Depends(get_workspace_or_404),
     db: AsyncSession = Depends(get_db),
+    user: str = Depends(get_current_user),
 ):
     session = await _get_session_or_404(ws_id, sid, db)
     if session.is_active:
@@ -433,7 +551,7 @@ async def set_mode(
     session.mode = body.mode
     await db.commit()
     await db.refresh(session)
-    return session
+    return await _attach_mcp_readback(session, user, db)
 
 
 @router.post("/{sid}/set-provider", response_model=SessionOut)
@@ -443,6 +561,7 @@ async def set_provider(
     body: SetProviderRequest,
     ws: Workspace = Depends(get_workspace_or_404),
     db: AsyncSession = Depends(get_db),
+    user: str = Depends(get_current_user),
 ):
     session = await _get_session_or_404(ws_id, sid, db)
     new_provider = body.provider.strip()
@@ -450,7 +569,7 @@ async def set_provider(
     session.provider = new_provider
     await db.commit()
     await db.refresh(session)
-    return session
+    return await _attach_mcp_readback(session, user, db)
 
 
 # ---------- Scheduling ----------
@@ -480,6 +599,7 @@ async def schedule_session(
     body: ScheduleRequest,
     ws: Workspace = Depends(get_workspace_or_404),
     db: AsyncSession = Depends(get_db),
+    user: str = Depends(get_current_user),
 ):
     """Backward-compat: create or replace a single schedule entry on the session."""
     from croniter import croniter
@@ -515,7 +635,7 @@ async def schedule_session(
 
     await db.commit()
     await db.refresh(session)
-    return session
+    return await _attach_mcp_readback(session, user, db)
 
 
 @router.post("/{sid}/unschedule", response_model=SessionOut)
@@ -524,6 +644,7 @@ async def unschedule_session(
     sid: int,
     ws: Workspace = Depends(get_workspace_or_404),
     db: AsyncSession = Depends(get_db),
+    user: str = Depends(get_current_user),
 ):
     """Backward-compat: disable all schedules on the session and clear deprecated fields."""
     from swarmer.models.session_schedule import SessionSchedule
@@ -542,7 +663,7 @@ async def unschedule_session(
 
     await db.commit()
     await db.refresh(session)
-    return session
+    return await _attach_mcp_readback(session, user, db)
 
 
 # ---------- Schedule sub-resource ----------
@@ -713,13 +834,14 @@ async def clear_output(
     sid: int,
     ws: Workspace = Depends(get_workspace_or_404),
     db: AsyncSession = Depends(get_db),
+    user: str = Depends(get_current_user),
 ):
     session = await _get_session_or_404(ws_id, sid, db)
     session.last_output = ""
     session.raw_output = ""
     await db.commit()
     await db.refresh(session)
-    return session
+    return await _attach_mcp_readback(session, user, db)
 
 
 @router.post("/{sid}/generate-patch", response_model=PatchResult)

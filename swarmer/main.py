@@ -399,14 +399,15 @@ async def _restart_agent_swarm_token_refresh(
     """Re-mint and refresh Agent Swarm credentials for a surviving session."""
     from swarmer import openshell_client
     from swarmer.routers.mcp_servers import get_enabled_mcp_servers
-    from swarmer.routers.sessions import _agent_swarm_provider_name
+    from swarmer.routers.sessions import (
+        _agent_swarm_provider_name,
+        _select_session_mcp_servers,
+    )
     from swarmer.session_auth import mint_session_token, start_token_refresh_loop
 
     servers = await get_enabled_mcp_servers(session.workspace_id, db)
-    selected_ids = session.enabled_mcp_ids
-    if selected_ids:
-        servers = [server for server in servers if server.id in selected_ids]
-    if not any(getattr(server, "slug", "") == "agent-swarm" for server in servers):
+    servers = _select_session_mcp_servers(session, servers)
+    if not any(getattr(server, "slug", "") == "agent-swarm" for server in (servers or [])):
         return
 
     provider_name = _agent_swarm_provider_name(session.workspace_id, session.id)

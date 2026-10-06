@@ -1328,6 +1328,9 @@ class TestRestartGitHubAppIATRefresh:
             session_obj = await db.get(_Session, s["id"])
             session_obj.phase = "running"
             session_obj.sandbox_name = "sandbox-tui"
+            # Model a legacy session with inherited MCP selection. Newly
+            # created sessions default to MCP-disabled.
+            session_obj.mcp_server_ids = ""
             db.add(SessionRepo(
                 session_id=s["id"], repo_url="https://github.com/org/repo",
                 branch="main", local_path="repo",

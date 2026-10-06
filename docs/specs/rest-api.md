@@ -308,14 +308,24 @@ Body:
   "instruction_prompt": "",
   "github_pat_id": null,
   "prompt_id": null,
-  "working_branch": "",
-  "mcp_server_ids": []
+  "working_branch": ""
 }
 ```
 
 Valid modes are `prompt`, `server`, and `tui`. Valid tools are `opencode` and
 `shell`. If no branch is provided, the server generates a unique
 `swarmer/session-...` branch after insert.
+
+MCP selection is disabled by default for newly created sessions. Supplying a
+non-empty `mcp_server_ids` list selects those caller-visible MCPs; an empty list
+disables all MCPs. Set `mcp_selection` to `"inherit"` to opt into all currently
+eligible MCPs in the workspace. IDs must belong to the workspace and be visible
+to the caller; the request fails as a whole if any ID is invalid or inaccessible.
+When requesting inheritance, omit `mcp_server_ids` (or send `null`); combining
+inheritance with an ID list is rejected.
+The workspace MCP inventory is available from `GET /api/v1/workspaces/{ws_id}/mcp-servers`
+and contains caller-visible safe metadata only. Endpoint URLs omit userinfo,
+query strings, and fragments; credentials and ownership identifiers are never returned.
 
 #### `GET /api/v1/workspaces/{ws_id}/sessions/{sid}`
 
@@ -325,7 +335,14 @@ Returns the complete session resource, including schedule entries.
 
 Updates only supplied fields. Active sessions cannot be edited and return
 `409`. Name collisions return `409`. Working branches are validated as Git ref
-names.
+names. For MCPs, omitted or `null` selection fields leave the existing
+configuration unchanged; `mcp_server_ids: []` disables all, a non-empty list
+replaces the selection, and `mcp_selection: "inherit"` restores inheritance.
+An inheritance update must omit `mcp_server_ids` or set it to `null`.
+`mcp_selection` readback is `inherit`, `disabled`, or `selected`;
+`mcp_server_ids` reports the caller-visible saved selection, while
+`runtime_mcp_server_ids` contains only enabled, authenticated, unexpired MCPs
+that are eligible for this session.
 
 #### `DELETE /api/v1/workspaces/{ws_id}/sessions/{sid}`
 
@@ -505,7 +522,8 @@ DELETE /api/v1/workspaces/{ws_id}/mcp-servers/{server_id}
 
 Creation accepts a catalog slug. Current catalog support is Jira-oriented.
 Saving validates server URL, email, and token, then probes Jira and records
-health status.
+health status. Inventory visibility follows MCP ownership and sharing rules;
+credential values and ownership identifiers are not returned.
 
 ### 6.11 Prompt sources
 

@@ -68,6 +68,8 @@ class Session(Base):
     # Per-run manual launch override retained only while a launch waits in the
     # queue. NULL means no override; an empty string is an explicit blank.
     queued_instruction_prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Authenticated caller to use when a manual queued launch is dispatched.
+    queued_user_id: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
     working_branch: Mapped[str] = mapped_column(String(255), nullable=False, default="", server_default="")
     patch_output: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
     commit_msg: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
@@ -264,6 +266,27 @@ class Session(Base):
         if not self.mcp_server_ids:
             return []
         return [int(x) for x in self.mcp_server_ids.split(",") if x.strip().isdigit()]
+
+    @property
+    def mcp_selection(self) -> str:
+        """Describe whether MCP access is inherited, disabled, or explicitly selected."""
+        if self.mcp_server_ids == "none":
+            return "disabled"
+        if not self.mcp_server_ids:
+            return "inherit"
+        return "selected"
+
+    @property
+    def configured_mcp_ids(self) -> list[int]:
+        """Return explicitly selected IDs; inherited and disabled have no stored IDs."""
+        if hasattr(self, "_configured_mcp_ids"):
+            return self._configured_mcp_ids
+        return self.enabled_mcp_ids if self.mcp_selection == "selected" else []
+
+    @property
+    def runtime_mcp_server_ids(self) -> list[int]:
+        """Eligible MCP IDs attached transiently while building API readback."""
+        return getattr(self, "_runtime_mcp_server_ids", [])
 
     @enabled_mcp_ids.setter
     def enabled_mcp_ids(self, ids: list[int]) -> None:

@@ -257,13 +257,20 @@ async def get_enabled_mcp_servers(
             ),
         ),
     ]
+    # User-driven launches may use that caller's private MCPs. Background
+    # launches (scheduler/recovery) have no caller identity and are restricted
+    # to shared and legacy workspace-wide MCPs.
     if user_id:
-        filters.append(
-            or_(
-                McpServer.user_id == user_id,
-                McpServer.shared == True,  # noqa: E712
-                McpServer.user_id == "",
-            )
+        visibility = or_(
+            McpServer.user_id == user_id,
+            McpServer.shared == True,  # noqa: E712
+            McpServer.user_id == "",
         )
+    else:
+        visibility = or_(
+            McpServer.shared == True,  # noqa: E712
+            McpServer.user_id == "",
+        )
+    filters.append(visibility)
     result = await db.execute(select(McpServer).where(*filters))
     return list(result.scalars().all())
