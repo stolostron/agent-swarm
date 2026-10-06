@@ -68,6 +68,8 @@ class Session(Base):
     # Per-run manual launch override retained only while a launch waits in the
     # queue. NULL means no override; an empty string is an explicit blank.
     queued_instruction_prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Authenticated caller to use when a manual queued launch is dispatched.
+    queued_user_id: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
     working_branch: Mapped[str] = mapped_column(String(255), nullable=False, default="", server_default="")
     patch_output: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
     commit_msg: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")

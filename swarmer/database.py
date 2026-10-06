@@ -99,6 +99,8 @@ async def migrate_db() -> None:
         "ALTER TABLE sessions ADD COLUMN prompt_id INTEGER REFERENCES workspace_prompts(id) ON DELETE SET NULL",
         # ACM-47638: preserve per-run manual instructions only while queued.
         "ALTER TABLE sessions ADD COLUMN queued_instruction_prompt TEXT",
+        # Preserve manual-launch MCP visibility while a session waits for capacity.
+        "ALTER TABLE sessions ADD COLUMN queued_user_id TEXT NOT NULL DEFAULT ''",
         "ALTER TABLE sessions DROP COLUMN resume",
         "ALTER TABLE sessions ADD COLUMN sandbox_name VARCHAR(255)",
         "ALTER TABLE sessions ADD COLUMN service_url VARCHAR(512)",

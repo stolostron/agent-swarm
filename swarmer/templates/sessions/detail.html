@@ -879,6 +879,7 @@ function copyCommitMsg(btn) { _copyBlock('commit-msg', btn); }
 
   let savePromise = Promise.resolve();
   let saving = false;
+  let saveRequested = false;
   let pendingTextareaChange = false;
 
   function showStatus(msg, cls) {
@@ -892,14 +893,18 @@ function copyCommitMsg(btn) { _copyBlock('commit-msg', btn); }
   }
 
   function doSave() {
-    if (saving) return savePromise;
+    if (saving) {
+      saveRequested = true;
+      return savePromise;
+    }
     saving = true;
     showStatus('Saving…', 'text-muted');
     const data = new FormData(form);
     const submittedMcpChange = mcpSettingsChanged && mcpSettingsChanged.value === '1';
     const submittedMcpChangeVersion = mcpChangeVersion;
-    savePromise = fetch(form.action, { method: 'POST', body: data, redirect: 'manual' })
-      .then(() => {
+    savePromise = fetch(form.action, { method: 'POST', body: data })
+      .then(response => {
+        if (!response.ok) throw new Error(`Save failed (${response.status})`);
         if (submittedMcpChange && mcpChangeVersion === submittedMcpChangeVersion) {
           mcpSettingsChanged.value = '0';
         }
@@ -909,7 +914,13 @@ function copyCommitMsg(btn) { _copyBlock('commit-msg', btn); }
         document.body.dispatchEvent(new Event('repoListChanged'));
       })
       .catch(() => showStatus('Save failed', 'text-danger'))
-      .finally(() => { saving = false; });
+      .finally(() => {
+        saving = false;
+        if (saveRequested) {
+          saveRequested = false;
+          doSave();
+        }
+      });
     return savePromise;
   }
 

@@ -1309,6 +1309,7 @@ async def _do_launch(
             session.queued_instruction_prompt = (
                 manual_instruction_prompt if not session.active_schedule_id else None
             )
+            session.queued_user_id = user_id if not session.active_schedule_id else ""
             await db.commit()
             return
 
@@ -1368,8 +1369,9 @@ async def _do_launch(
     # Queued manual instructions are consumed exactly once when dispatch begins.
     # Clearing and committing before runtime setup means a setup failure cannot
     # leak the previous run's override into a later scheduled or manual launch.
-    if session.queued_instruction_prompt is not None:
+    if session.queued_instruction_prompt is not None or session.queued_user_id:
         session.queued_instruction_prompt = None
+        session.queued_user_id = ""
         await db.commit()
 
     # Fetch workspace prompt sources for network policy scoping.
@@ -2710,6 +2712,7 @@ async def session_stop(
         session.phase = "idle"
         session.status_detail = ""
         session.queued_instruction_prompt = None
+        session.queued_user_id = ""
         await db.commit()
         return RedirectResponse(url=f"/workspaces/{ws_id}/sessions/{sid}", status_code=302)
 

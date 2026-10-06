@@ -421,6 +421,7 @@ async def stop_session(
         session.phase = "idle"
         session.status_detail = ""
         session.queued_instruction_prompt = None
+        session.queued_user_id = ""
         await db.commit()
         await db.refresh(session)
         return await _attach_mcp_readback(session, user, db)

@@ -626,6 +626,73 @@ class TestProcessQueue:
         assert launched[1] == s2["id"]
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("owner_at_dequeue,visible", [("test-user", True), ("other-user", False)])
+    async def test_manual_queued_launch_revalidates_private_mcp_visibility(
+        self, client, monkeypatch, owner_at_dequeue, visible
+    ):
+        import swarmer.scheduler as sched
+        from swarmer.config import settings
+        from swarmer.models.mcp_server import McpServer
+        from swarmer.models.session import Session
+        from swarmer.models.workspace import Workspace
+        from swarmer.routers.sessions import _do_launch
+
+        sched._queue_next_check = None
+        settings.max_concurrent_agents = 1
+        ws_data = await _create_workspace(client, "Private MCP Queue")
+        session_data = await _create_session(client, ws_data["id"], "private-mcp-queued")
+        async with _TestSession() as db:
+            session = await db.get(Session, session_data["id"])
+            server = McpServer(
+                workspace_id=ws_data["id"],
+                user_id="test-user",
+                shared=False,
+                slug="private-queue-test",
+                display_name="Private queue test",
+                server_url="https://mcp.example.com",
+                server_type="http",
+                enabled=True,
+                jira_access_token_enc="encrypted-token",
+            )
+            db.add(server)
+            await db.flush()
+            session.enabled_mcp_ids = [server.id]
+            await db.commit()
+            server_id = server.id
+
+        count_running = AsyncMock(side_effect=[1, 0, 0])
+        monkeypatch.setattr("swarmer.routers.sessions._count_running_sessions", count_running)
+        async with _TestSession() as db:
+            session = await db.get(Session, session_data["id"], options=[selectinload(Session.repos)])
+            workspace = await db.get(Workspace, ws_data["id"])
+            await _do_launch(session, workspace, db, user_id="test-user")
+            assert session.phase == "queued"
+            assert session.queued_user_id == "test-user"
+
+        async with _TestSession() as db:
+            server = await db.get(McpServer, server_id)
+            server.user_id = owner_at_dequeue
+            await db.commit()
+
+        captured = {}
+
+        async def capture_launch(**kwargs):
+            captured.update(kwargs)
+
+        monkeypatch.setattr("swarmer.openshell_client.provider_exists", AsyncMock(return_value=False))
+        monkeypatch.setattr("swarmer.routers.sessions._get_prompt_sources", AsyncMock(return_value=[]))
+        monkeypatch.setattr("swarmer.routers.sessions._do_launch_openshell", capture_launch)
+
+        async with _TestSession() as db:
+            await sched._process_queue(db)
+
+        selected = captured.get("mcp_servers") or []
+        assert (server_id in [server.id for server in selected]) is visible
+        async with _TestSession() as db:
+            session = await db.get(Session, session_data["id"])
+            assert session.queued_user_id == ""
+
+    @pytest.mark.asyncio
     async def test_limits_launches_to_available_slots(self, client):
         import swarmer.scheduler as sched
 
