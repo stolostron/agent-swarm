@@ -9,9 +9,10 @@ from datetime import datetime, timezone
 
 import httpx
 
-from fastapi import APIRouter, Depends, Form, Request
+from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
+from starlette.datastructures import FormData
 from sqlalchemy import desc, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -417,6 +418,50 @@ def _current_user(request: Request) -> str:
     return request.session.get("username", "")
 
 
+def _parse_mcp_server_ids(values: list[str]) -> list[int]:
+    """Parse every submitted MCP ID or reject the form without dropping values."""
+    server_ids = []
+    for value in values:
+        raw_value = str(value)
+        if not re.fullmatch(r"[0-9]+", raw_value):
+            raise HTTPException(status_code=422, detail="MCP server IDs must be numeric")
+        try:
+            server_ids.append(int(raw_value))
+        except ValueError:
+            raise HTTPException(
+                status_code=422, detail="MCP server IDs must be numeric"
+            ) from None
+    return server_ids
+
+
+def _apply_form_mcp_selection(
+    session: Session,
+    form_data: FormData,
+    selected_mcp_ids: list[int],
+    *,
+    creating: bool,
+) -> None:
+    """Apply form MCP settings only when the edit form marks them intentional."""
+    if not creating and form_data.get("mcp_settings_changed") != "1":
+        return
+
+    from swarmer.api.v1.sessions import _apply_mcp_selection
+
+    selection = form_data.get("mcp_selection")
+    if selection is not None and not isinstance(selection, str):
+        raise HTTPException(status_code=422, detail="Invalid MCP selection")
+    if selection == "inherit" and selected_mcp_ids:
+        # A checked server is an explicit, narrower choice. Prefer it if a
+        # stale or non-JavaScript form also submits the inherit checkbox.
+        selection = None
+    _apply_mcp_selection(
+        session,
+        None if selection == "inherit" else selected_mcp_ids,
+        selection,
+        creating=creating,
+    )
+
+
 async def _visible_pats(ws_id: int, db: AsyncSession, user_id: str = "") -> list:
     """Return PATs visible to the given user (own + shared + legacy)."""
     filters = [GitHubPAT.workspace_id == ws_id]
@@ -655,6 +700,14 @@ async def session_create(
         flash(request, "Invalid working branch name.", "danger")
         return RedirectResponse(url=f"/workspaces/{ws_id}/sessions/new", status_code=302)
 
+    # Validate submitted IDs before constructing or adding a session to the DB.
+    form_data = await request.form()
+    submitted_mcp_ids = _parse_mcp_server_ids(form_data.getlist("mcp_server_ids"))
+    from swarmer.api.v1.sessions import _validate_mcp_ids
+    selected_mcp_ids = await _validate_mcp_ids(
+        ws_id, submitted_mcp_ids, _current_user(request), db
+    )
+
     session = Session(
         workspace_id=ws_id,
         github_pat_id=pat_id,
@@ -663,13 +716,9 @@ async def session_create(
         agent_tool=agent_tool,
         working_branch=wb,
     )
-    # Gather MCP server checkbox selections from the multi-value form field
-    form_data = await request.form()
-    selected_mcp_ids = [int(v) for v in form_data.getlist("mcp_server_ids") if str(v).isdigit()]
-    if selected_mcp_ids:
-        session.enabled_mcp_ids = selected_mcp_ids
-    else:
-        session.mcp_server_ids = "none"
+    _apply_form_mcp_selection(
+        session, form_data, selected_mcp_ids, creating=True
+    )
     db.add(session)
     try:
         await db.commit()
@@ -711,6 +760,7 @@ async def session_create(
                     "agent_tool": agent_tool,
                     "github_pat_id": github_pat_id,
                     "mcp_server_ids": selected_mcp_ids,
+                    "mcp_selection": form_data.get("mcp_selection"),
                 },
                 "provider_options": provider_options,
                 "selected_provider": provider,
@@ -896,6 +946,14 @@ async def session_edit(
         flash(request, "Cannot edit a running session. Stop it first.", "danger")
         return RedirectResponse(url=f"/workspaces/{ws_id}/sessions/{sid}", status_code=302)
 
+    # Parse and authorize every submitted ID before changing any session fields.
+    form_data = await request.form()
+    submitted_mcp_ids = _parse_mcp_server_ids(form_data.getlist("mcp_server_ids"))
+    from swarmer.api.v1.sessions import _validate_mcp_ids
+    selected_mcp_ids = await _validate_mcp_ids(
+        ws_id, submitted_mcp_ids, _current_user(request), db
+    )
+
     session.name = name.strip()
     session.github_pat_id = int(github_pat_id) if github_pat_id else None
 
@@ -916,7 +974,6 @@ async def session_edit(
 
     session.agent_tool = _new_agent_tool
 
-    form_data = await request.form()
     if "working_branch" in form_data:
         branch_val = form_data["working_branch"].strip()
         if branch_val and not _is_valid_ref_name(branch_val):
@@ -924,11 +981,9 @@ async def session_edit(
             return RedirectResponse(url=f"/workspaces/{ws_id}/sessions/{sid}", status_code=302)
         session.working_branch = branch_val
 
-    selected_mcp_ids = [int(v) for v in form_data.getlist("mcp_server_ids") if str(v).isdigit()]
-    if selected_mcp_ids:
-        session.enabled_mcp_ids = selected_mcp_ids
-    else:
-        session.mcp_server_ids = "none"
+    _apply_form_mcp_selection(
+        session, form_data, selected_mcp_ids, creating=False
+    )
 
     try:
         await db.commit()
@@ -966,6 +1021,22 @@ async def _resolve_session_prompt(session: Session, db: AsyncSession) -> str:
     else:
         resolved_prompt = base_prompt
     return resolved_prompt
+
+
+def _select_session_mcp_servers(session: Session, eligible_servers: list) -> list | None:
+    """Apply persisted inheritance/disabled/selected mode to eligible workspace MCPs."""
+    eligible_servers = [
+        server for server in eligible_servers
+        if getattr(server, "enabled", True) and getattr(server, "auth_status", "active") != "expired"
+    ]
+    if session.mcp_selection == "disabled":
+        return []
+    if session.mcp_selection == "selected":
+        selected_ids = set(session.enabled_mcp_ids)
+        return [server for server in eligible_servers if server.id in selected_ids]
+    # ``None`` retains the historical OpenCode default when inheritance has no
+    # eligible workspace MCPs; an empty list is the explicit disable override.
+    return eligible_servers or None
 
 
 def _compose_prompt(base_prompt: str, instruction_prompt: str | None) -> str:
@@ -1261,7 +1332,12 @@ async def _do_launch(
         except (TypeError, ValueError):
             saved_snapshot = {}
     reuse_snapshot = bool(saved_snapshot.get("context_captured")) and (
-        session.queued_instruction_prompt is not None or session.active_schedule_id is not None
+        session.queued_instruction_prompt is not None
+        or bool(session.queued_user_id)
+        or (
+            session.active_schedule_id is not None
+            and saved_snapshot.get("trigger_type") in ("cron", "event")
+        )
     )
     if reuse_snapshot:
         run_context_snapshot = saved_snapshot
@@ -1285,6 +1361,7 @@ async def _do_launch(
             session.queued_instruction_prompt = (
                 manual_instruction_prompt if not session.active_schedule_id else None
             )
+            session.queued_user_id = user_id if not session.active_schedule_id else ""
             await db.commit()
             return
 
@@ -1322,23 +1399,10 @@ async def _do_launch(
         pass
     # Fetch enabled & authenticated MCP servers for this workspace
     from swarmer.routers.mcp_servers import get_enabled_mcp_servers
-    all_ws_mcp = await get_enabled_mcp_servers(session.workspace_id, db, user_id=user_id)
-    ws_mcp_servers = [s for s in all_ws_mcp if s.auth_status != "expired"]
-
-    # Filter to only the MCP servers enabled for this specific session
-    # mcp_servers=None  → no MCP configured in workspace (skip override)
-    # mcp_servers=[]    → user explicitly disabled all (override with clean config)
-    # mcp_servers=[...] → user selected specific servers
-    if not all_ws_mcp:
-        mcp_servers = None
-    elif session.mcp_server_ids == "none":
-        mcp_servers = []
-    elif session.enabled_mcp_ids:
-        enabled_ids = set(session.enabled_mcp_ids)
-        mcp_servers = [s for s in ws_mcp_servers if s.id in enabled_ids]
-    else:
-        # No MCP selection stored — default to all workspace-enabled servers
-        mcp_servers = ws_mcp_servers
+    eligible_mcp_servers = await get_enabled_mcp_servers(
+        session.workspace_id, db, user_id=user_id
+    )
+    mcp_servers = _select_session_mcp_servers(session, eligible_mcp_servers)
 
     if session.active_schedule_id:
         session_provider = await _resolve_schedule_provider(session.active_schedule_id, session, db)
@@ -1348,8 +1412,9 @@ async def _do_launch(
     # Queued manual instructions are consumed exactly once when dispatch begins.
     # Clearing and committing before runtime setup means a setup failure cannot
     # leak the previous run's override into a later scheduled or manual launch.
-    if session.queued_instruction_prompt is not None:
+    if session.queued_instruction_prompt is not None or session.queued_user_id:
         session.queued_instruction_prompt = None
+        session.queued_user_id = ""
         await db.commit()
 
     # Fetch workspace prompt sources for network policy scoping.
@@ -2690,6 +2755,7 @@ async def session_stop(
         session.status_detail = ""
         session.queued_instruction_prompt = None
         session.run_context_snapshot = ""
+        session.queued_user_id = ""
         await db.commit()
         return RedirectResponse(url=f"/workspaces/{ws_id}/sessions/{sid}", status_code=302)
 

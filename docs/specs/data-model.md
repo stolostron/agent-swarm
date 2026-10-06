@@ -230,7 +230,7 @@ Unique key: `(workspace_id, name)`.
 | `agent_tool` | `opencode` or `shell` |
 | `instruction_prompt` | Additional instructions or shell command |
 | `working_branch` | Git branch/ref used by the agent |
-| `mcp_server_ids` | Comma-separated enabled MCP IDs; exposed as a list |
+| `mcp_server_ids` | Comma-separated selected MCP IDs; empty means inherited, `none` means explicitly disabled |
 | `phase` | Runtime lifecycle state |
 | `sandbox_name` | OpenShell sandbox name |
 | `service_url` | Exposed server-mode service URL |

@@ -1,16 +1,15 @@
-"""Resolve Swarmer's default OpenCode image from the latest stable release."""
+"""Resolve Swarmer's default OpenCode image from agent-containers' VERSION."""
 
 from __future__ import annotations
 
-import json
 import os
 import re
 import sys
 from urllib.error import URLError
 from urllib.request import Request, urlopen
 
-RELEASE_URL = "https://api.github.com/repos/anomalyco/opencode/releases/latest"
-IMAGE_REPOSITORY = "ghcr.io/anomalyco/opencode"
+VERSION_URL = "https://raw.githubusercontent.com/stolostron/agent-containers/main/VERSION"
+IMAGE_REPOSITORY = "quay.io/jpacker/opencode"
 SEMVER_RE = re.compile(
     r"^v?(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)"
     r"(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?"
@@ -38,41 +37,33 @@ def validate_image_ref(image_ref: str) -> str:
 
 
 def fetch_latest_version() -> str:
-    """Read and validate the latest stable OpenCode GitHub release tag."""
+    """Read and validate the published agent-containers image version."""
     request = Request(
-        RELEASE_URL,
+        VERSION_URL,
         headers={
-            "Accept": "application/vnd.github+json",
+            "Accept": "text/plain",
             "User-Agent": "agent-swarm-image-resolver",
         },
     )
     try:
         with urlopen(request, timeout=15) as response:
-            metadata = json.load(response)
-    except (OSError, URLError, TimeoutError, json.JSONDecodeError) as exc:
-        raise ResolutionError(f"could not fetch OpenCode release metadata: {exc}") from exc
+            version = response.read().decode("utf-8").strip()
+    except (OSError, URLError, TimeoutError, UnicodeDecodeError) as exc:
+        raise ResolutionError(f"could not fetch agent-containers VERSION: {exc}") from exc
 
-    if not isinstance(metadata, dict):
-        raise ResolutionError("OpenCode release metadata is not a JSON object")
-    if metadata.get("draft") is True or metadata.get("prerelease") is True:
-        raise ResolutionError("GitHub returned a draft or prerelease instead of a stable release")
-
-    tag = metadata.get("tag_name")
-    if not isinstance(tag, str):
-        raise ResolutionError(f"OpenCode release has an invalid SemVer tag: {tag!r}")
-    match = SEMVER_RE.fullmatch(tag)
+    match = SEMVER_RE.fullmatch(version)
     if not match:
-        raise ResolutionError(f"OpenCode release has an invalid SemVer tag: {tag!r}")
+        raise ResolutionError(f"agent-containers VERSION is not valid SemVer: {version!r}")
     prerelease = match.group(4)
     if prerelease:
-        raise ResolutionError(f"OpenCode release is not a stable version: {tag!r}")
+        raise ResolutionError(f"agent-containers VERSION is not a stable version: {version!r}")
     if match.group(5):
         raise ResolutionError(
-            f"OpenCode release tag cannot be represented as an OCI SemVer tag: {tag!r}"
+            f"agent-containers VERSION cannot be represented as an OCI SemVer tag: {version!r}"
         )
 
-    # OpenCode release tags use a leading v; container tags use bare SemVer.
-    return tag.removeprefix("v")
+    # VERSION is the image tag; normalize an optional leading v for OCI tagging.
+    return version.removeprefix("v")
 
 
 def resolve_image(override: str | None = None) -> str:

@@ -82,9 +82,9 @@ Until resolved, clients must not rely on `persist` being accepted or stored.
 
 ### 5.2 Session MCP server assignment
 
-REST create/update schemas support `mcp_server_ids`, while current MCP tool
-signatures do not expose it consistently. MCP must expose the field or clearly
-document that REST is required for session MCP assignment.
+REST and MCP create/update schemas expose MCP selection and the MCP inventory.
+New session creation defaults to disabled; inheritance requires the explicit
+`mcp_selection: "inherit"` opt-in.
 
 ### 5.3 Schedule provider on create
 
@@ -127,7 +127,9 @@ policy across all resource types.
 
 Session references such as `github_pat_id`, `prompt_id`, and
 `mcp_server_ids` must be validated against the same workspace and caller
-visibility. Database foreign keys alone do not enforce this tenant boundary.
+visibility. MCP selection validates the complete ID list before applying any
+session update; other references remain subject to their endpoint-specific
+validation.
 
 ## 6. Compatibility fields
 

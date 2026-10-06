@@ -309,6 +309,7 @@
                 action="/workspaces/{{ ws.id }}/sessions/{{ session.id }}/edit">
             <input type="hidden" name="name" value="{{ session.name }}">
             <input type="hidden" name="save_config" value="1">
+            <input type="hidden" name="mcp_settings_changed" value="0">
 
             {# Agent tool branded pills — first item in config card #}
             <div class="pf-v6-c-form__group" style="margin-bottom: var(--pf-t--global--spacer--md);">
@@ -402,18 +403,29 @@
               </div>
             </div>
 
-            {% if mcp_servers %}
             <div class="pf-v6-c-form__group" style="margin-bottom:var(--pf-t--global--spacer--md);">
               <label class="pf-v6-c-form__label" style="color:var(--pf-t--global--text--color--subtle); font-size:var(--pf-t--global--font--size--sm);">
                 <span class="pf-v6-c-form__label-text">MCP Servers</span>
               </label>
               <div class="pf-v6-c-form__group-control">
+                <div class="pf-v6-c-check" style="margin-bottom:var(--pf-t--global--spacer--sm);">
+                  <input class="pf-v6-c-check__input" type="checkbox" name="mcp_selection"
+                         data-mcp-selection-control
+                         value="inherit" id="mcp-detail-inherit" form="cfg-edit-form"
+                         {{ 'checked' if session.mcp_selection == 'inherit' }}
+                         {{ 'disabled' if session.is_active }}>
+                  <label class="pf-v6-c-check__label" for="mcp-detail-inherit" style="font-size:var(--pf-t--global--font--size--sm);">
+                    Inherit eligible workspace MCP servers
+                  </label>
+                </div>
+                {% if mcp_servers %}
                 {% for srv in mcp_servers %}
                 <div class="pf-v6-c-check" style="margin-bottom:var(--pf-t--global--spacer--xs);">
                   <input class="pf-v6-c-check__input" type="checkbox"
                          name="mcp_server_ids" value="{{ srv.id }}"
+                         data-mcp-selection-control
                          id="mcp-detail-{{ srv.id }}"
-                         {{ 'checked' if srv.auth_status != 'expired' and (srv.id in session.enabled_mcp_ids or not session.mcp_server_ids) }}
+                          {{ 'checked' if srv.auth_status != 'expired' and session.mcp_selection == 'selected' and srv.id in session.enabled_mcp_ids }}
                          {{ 'disabled' if srv.auth_status == 'expired' or session.is_active }}>
                   <label class="pf-v6-c-check__label" for="mcp-detail-{{ srv.id }}" style="font-size:var(--pf-t--global--font--size--sm);">
                     {{ srv.display_name }}
@@ -429,9 +441,11 @@
                   </label>
                 </div>
                 {% endfor %}
+                {% else %}
+                <span style="color:var(--pf-t--global--text--color--subtle); font-size:var(--pf-t--global--font--size--sm);">No eligible MCP servers are currently available.</span>
+                {% endif %}
               </div>
             </div>
-            {% endif %}
 
             <p style="color:var(--pf-t--global--text--color--subtle); font-size:var(--pf-t--global--font--size--sm); margin:0;{% if not session.is_active %} display:none;{% endif %}"
                id="cfg-stop-msg">Stop the session to edit settings.</p>
@@ -825,9 +839,25 @@ function copyCommitMsg(btn) { _copyBlock('commit-msg', btn); }
   const form = document.getElementById('cfg-edit-form');
   if (!form) return;
   const indicator = document.getElementById('cfg-save-indicator');
+  const mcpSettingsChanged = form.querySelector('[name="mcp_settings_changed"]');
+  let mcpChangeVersion = 0;
+
+  form.querySelectorAll('[data-mcp-selection-control]').forEach(el => {
+    el.addEventListener('change', () => {
+      mcpChangeVersion++;
+      if (mcpSettingsChanged) mcpSettingsChanged.value = '1';
+      if (el.checked && el.name === 'mcp_selection') {
+        form.querySelectorAll('[name="mcp_server_ids"]').forEach(server => { server.checked = false; });
+      } else if (el.checked && el.name === 'mcp_server_ids') {
+        const inherit = form.querySelector('[name="mcp_selection"]');
+        if (inherit) inherit.checked = false;
+      }
+    });
+  });
 
   let savePromise = Promise.resolve();
   let saving = false;
+  let saveRequested = false;
   let pendingTextareaChange = false;
 
   function showStatus(msg, cls) {
@@ -841,19 +871,34 @@ function copyCommitMsg(btn) { _copyBlock('commit-msg', btn); }
   }
 
   function doSave() {
-    if (saving) return savePromise;
+    if (saving) {
+      saveRequested = true;
+      return savePromise;
+    }
     saving = true;
     showStatus('Saving…', 'text-muted');
     const data = new FormData(form);
-    savePromise = fetch(form.action, { method: 'POST', body: data, redirect: 'manual' })
-      .then(() => {
+    const submittedMcpChange = mcpSettingsChanged && mcpSettingsChanged.value === '1';
+    const submittedMcpChangeVersion = mcpChangeVersion;
+    savePromise = fetch(form.action, { method: 'POST', body: data })
+      .then(response => {
+        if (!response.ok) throw new Error(`Save failed (${response.status})`);
+        if (submittedMcpChange && mcpChangeVersion === submittedMcpChangeVersion) {
+          mcpSettingsChanged.value = '0';
+        }
         showStatus('Saved', 'text-success');
         setTimeout(() => { if (indicator && indicator.textContent === 'Saved') indicator.textContent = ''; }, 2000);
         // Refresh the repo list so the + button reflects the new PAT choice
         document.body.dispatchEvent(new Event('repoListChanged'));
       })
       .catch(() => showStatus('Save failed', 'text-danger'))
-      .finally(() => { saving = false; });
+      .finally(() => {
+        saving = false;
+        if (saveRequested) {
+          saveRequested = false;
+          doSave();
+        }
+      });
     return savePromise;
   }
 

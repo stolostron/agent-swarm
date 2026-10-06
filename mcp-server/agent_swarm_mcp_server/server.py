@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import urlparse
 
 from fastmcp import Context, FastMCP
@@ -60,6 +60,9 @@ def _fmt_session(s: dict, repos: list[dict] | None = None) -> dict:
         "agent_tool": s.get("agent_tool"),
         "persist": s.get("persist"),
         "working_branch": s.get("working_branch"),
+        "mcp_selection": s.get("mcp_selection", "disabled"),
+        "mcp_server_ids": s.get("mcp_server_ids", []),
+        "runtime_mcp_server_ids": s.get("runtime_mcp_server_ids", []),
         "prompt_id": s.get("prompt_id"),
         "instruction_prompt": s.get("instruction_prompt"),
         "status_detail": s.get("status_detail"),
@@ -133,6 +136,10 @@ class AgentSwarmMCPServer:
 
     async def _get_workspace(self, workspace_id: int) -> dict:
         return await self.client.get_workspace(workspace_id)
+
+    async def _list_workspace_mcp_servers(self, workspace_id: int) -> list[dict]:
+        """Return the caller-visible MCP inventory supplied by the REST API."""
+        return await self.client.list_mcp_servers(workspace_id)
 
     async def _create_workspace(self, display_name: str, description: str = "") -> dict:
         return await self.client.create_workspace(display_name, description)
@@ -312,6 +319,8 @@ class AgentSwarmMCPServer:
         instruction_prompt: str = "",
         github_pat_id: int | None = None,
         prompt_id: int | None = None,
+        mcp_server_ids: list[int] | None = None,
+        mcp_selection: Literal["inherit", "disabled"] | None = None,
     ) -> dict:
         workspace_id = await self._resolve_workspace_id(workspace_id)
         session = await self.client.create_session(
@@ -325,6 +334,8 @@ class AgentSwarmMCPServer:
             prompt_id=prompt_id,
             persist=persist,
             working_branch=working_branch,
+            mcp_server_ids=mcp_server_ids,
+            mcp_selection=mcp_selection,
         )
         return _fmt_session(session)
 
@@ -341,6 +352,8 @@ class AgentSwarmMCPServer:
         persist: bool | None = None,
         working_branch: str | None = None,
         github_pat_id: int | None = None,
+        mcp_server_ids: list[int] | None = None,
+        mcp_selection: Literal["inherit", "disabled"] | None = None,
     ) -> dict:
         fields: dict[str, Any] = {}
         if name is not None:
@@ -361,6 +374,10 @@ class AgentSwarmMCPServer:
             fields["working_branch"] = working_branch
         if github_pat_id is not None:
             fields["github_pat_id"] = github_pat_id
+        if mcp_server_ids is not None:
+            fields["mcp_server_ids"] = mcp_server_ids
+        if mcp_selection is not None:
+            fields["mcp_selection"] = mcp_selection
         session = await self.client.update_session(workspace_id, session_id, **fields)
         return _fmt_session(session)
 
@@ -873,6 +890,8 @@ class AgentSwarmMCPServer:
             instruction_prompt: str = "",
             github_pat_id: int | None = None,
             prompt_id: int | None = None,
+            mcp_server_ids: list[int] | None = None,
+            mcp_selection: Literal["inherit", "disabled"] | None = None,
         ) -> dict:
             """Create a new agent session.
 
@@ -888,12 +907,17 @@ class AgentSwarmMCPServer:
                 instruction_prompt: Additional instructions prepended to the base prompt (or raw command for shell).
                 github_pat_id: GitHub PAT id for private repos (from list_github_pats).
                 prompt_id: Base prompt id (from list_workspace_prompts).
+                mcp_server_ids: Explicit MCP IDs from list_workspace_mcp_servers. Omit or
+                    pass [] to keep the default disabled behavior.
+                mcp_selection: "inherit" opts into eligible workspace MCP servers;
+                    "disabled" explicitly disables all MCP servers.
             """
             if not name.strip():
                 raise ValueError("name is required")
             return await self._create_session(
                 workspace_id, name, agent_tool, mode, provider,
                 persist, working_branch, instruction_prompt, github_pat_id, prompt_id,
+                mcp_server_ids, mcp_selection,
             )
 
         @mcp.tool()
@@ -909,6 +933,8 @@ class AgentSwarmMCPServer:
             persist: bool | None = None,
             working_branch: str | None = None,
             github_pat_id: int | None = None,
+            mcp_server_ids: list[int] | None = None,
+            mcp_selection: Literal["inherit", "disabled"] | None = None,
         ) -> dict:
             """Update a non-running session's configuration (only changed fields needed).
 
@@ -924,10 +950,15 @@ class AgentSwarmMCPServer:
                 persist: New persistence setting.
                 working_branch: New working branch.
                 github_pat_id: New GitHub PAT id.
+                mcp_server_ids: Replace selection with visible workspace MCP IDs; [] disables all.
+                    Omit or pass null to leave the current selection unchanged.
+                mcp_selection: "inherit" restores eligible workspace inheritance; "disabled"
+                    disables all. Omit or pass null to leave the current selection unchanged.
             """
             return await self._update_session(
                 workspace_id, session_id, name, mode, provider, agent_tool,
                 instruction_prompt, prompt_id, persist, working_branch, github_pat_id,
+                mcp_server_ids, mcp_selection,
             )
 
         @mcp.tool()
@@ -988,6 +1019,11 @@ class AgentSwarmMCPServer:
                 workspace_id: The workspace id.
             """
             return await self._list_workspace_prompts(workspace_id)
+
+        @mcp.tool()
+        async def list_workspace_mcp_servers(workspace_id: int) -> list[dict]:
+            """List caller-visible MCP servers with safe inventory metadata only."""
+            return await self._list_workspace_mcp_servers(workspace_id)
 
         @mcp.tool()
         async def set_session_prompt(

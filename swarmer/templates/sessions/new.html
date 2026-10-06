@@ -209,21 +209,29 @@
       </div>
 
       {# MCP Servers card #}
-      {% if mcp_servers %}
       <div class="pf-v6-c-card" style="margin-top:var(--pf-t--global--spacer--md);">
         <div class="pf-v6-c-card__header">
           <h3 class="pf-v6-c-card__header-main" style="font-weight:var(--pf-t--global--font--weight--heading--bold);">MCP Servers</h3>
         </div>
         <div class="pf-v6-c-card__body">
           <p style="color:var(--pf-t--global--text--color--subtle); font-size:var(--pf-t--global--font--size--sm); margin:0 0 var(--pf-t--global--spacer--sm) 0;">
-            Select which MCP servers to enable for this session.
+            MCP servers are disabled unless selected. Inheritance opts into all eligible workspace MCP servers, including servers added later.
           </p>
+          <div class="pf-v6-c-check" style="margin-bottom:var(--pf-t--global--spacer--sm);">
+            <input class="pf-v6-c-check__input" type="checkbox" name="mcp_selection"
+                   value="inherit" id="mcp-inherit"
+                   data-mcp-selection-control
+                   {{ 'checked' if form and form.mcp_selection == 'inherit' }}>
+            <label class="pf-v6-c-check__label" for="mcp-inherit">Inherit eligible workspace MCP servers</label>
+          </div>
+          {% if mcp_servers %}
           {% for srv in mcp_servers %}
           <div class="pf-v6-c-check" style="margin-bottom:var(--pf-t--global--spacer--xs);">
             <input class="pf-v6-c-check__input" type="checkbox"
                    name="mcp_server_ids" value="{{ srv.id }}"
+                   data-mcp-selection-control
                    id="mcp-{{ srv.id }}"
-                   {{ 'checked' if srv.auth_status != 'expired' }}
+                    {{ 'checked' if form and srv.id in form.mcp_server_ids }}
                    {{ 'disabled' if srv.auth_status == 'expired' }}>
             <label class="pf-v6-c-check__label" for="mcp-{{ srv.id }}">
               {{ srv.display_name }}
@@ -242,9 +250,11 @@
             </span>
           </div>
           {% endfor %}
+          {% else %}
+          <span style="color:var(--pf-t--global--text--color--subtle); font-size:var(--pf-t--global--font--size--sm);">No eligible MCP servers are currently available.</span>
+          {% endif %}
         </div>
       </div>
-      {% endif %}
     </div>
   </div>
 
@@ -256,4 +266,19 @@
     Git repositories can be added from the session detail page after creation.
   </p>
 </form>
+<script>
+  document.querySelectorAll('[data-mcp-selection-control]').forEach(function (control) {
+    control.addEventListener('change', function () {
+      if (!control.checked) return;
+      if (control.name === 'mcp_selection') {
+        document.querySelectorAll('[name="mcp_server_ids"]').forEach(function (server) {
+          server.checked = false;
+        });
+      } else {
+        var inherit = document.querySelector('[name="mcp_selection"]');
+        if (inherit) inherit.checked = false;
+      }
+    });
+  });
+</script>
 {% endblock %}

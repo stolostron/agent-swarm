@@ -37,6 +37,7 @@ An MCP server that exposes Agent Swarm session management as tools for AI agents
 | `add_repo_to_session` | Attach a git repository |
 | `remove_repo_from_session` | Detach a git repository |
 | `list_workspace_prompts` | Browse the workspace prompt library |
+| `list_workspace_mcp_servers` | List caller-visible workspace MCP servers with safe metadata |
 | `set_session_prompt` | Set base prompt and/or additional instructions |
 | `launch_session` | Start the session pod |
 | `stop_session` | Abort a running session |
@@ -54,6 +55,22 @@ An MCP server that exposes Agent Swarm session management as tools for AI agents
 | `test_workspace_gateway` | Test connectivity/auth to an OpenShell gateway |
 | `parse_gateway_command` | Parse a pasted `openshell gateway add ...` command or JSON metadata |
 | `parse_gateway_token` | Parse a pasted OIDC token/credential payload |
+
+### Session MCP access
+
+New sessions have MCP access disabled unless `mcp_server_ids` contains one or
+more IDs from `list_workspace_mcp_servers`. Passing an empty list also disables
+all MCPs. Set `mcp_selection` to `inherit` to opt into all enabled,
+authenticated, unexpired MCP servers visible to the caller in that workspace.
+Session updates leave MCP configuration unchanged when the selection arguments
+are omitted or null; an empty ID list disables all, a non-empty list replaces
+the saved selection, and `mcp_selection: inherit` restores inheritance.
+When opting into inheritance, omit `mcp_server_ids` or pass null.
+
+Session readback includes `mcp_selection` (`inherit`, `disabled`, or `selected`),
+the caller-visible saved `mcp_server_ids`, and `runtime_mcp_server_ids` containing
+only MCP servers currently eligible for access. Inventory and session responses
+never include MCP credentials or another caller's private server metadata.
 
 ## Installation
 

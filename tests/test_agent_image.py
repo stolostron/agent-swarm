@@ -20,7 +20,7 @@ SPEC.loader.exec_module(resolver)
 
 
 class _Response:
-    def __init__(self, value):
+    def __init__(self, value: str):
         self.value = value
 
     def __enter__(self):
@@ -30,47 +30,49 @@ class _Response:
         return None
 
     def read(self):
-        return json.dumps(self.value).encode()
+        return self.value.encode()
 
 
-def test_latest_stable_release_produces_published_semver_image(monkeypatch):
+def test_agent_containers_version_produces_published_image(monkeypatch):
+    def response(request, timeout):
+        assert request.full_url == resolver.VERSION_URL
+        assert timeout == 15
+        return _Response("0.5.4\n")
+
     monkeypatch.setattr(
         resolver,
         "urlopen",
-        lambda request, timeout: _Response(
-            {"tag_name": "v1.18.34", "draft": False, "prerelease": False}
-        ),
+        response,
     )
 
-    assert resolver.resolve_image() == "ghcr.io/anomalyco/opencode:1.18.34"
+    assert resolver.resolve_image() == "quay.io/jpacker/opencode:0.5.4"
 
 
 @pytest.mark.parametrize(
-    "metadata",
+    "version",
     [
-        [],
-        {"tag_name": "not-a-version"},
-        {"tag_name": "v1.2.3-rc.1", "draft": False, "prerelease": False},
-        {"tag_name": "v1.2.3-rc.01"},
-        {"tag_name": "v1.2.3+build.5"},
-        {"tag_name": "v1.2.3", "draft": True},
-        {"tag_name": "v1.2.3", "prerelease": True},
+        "",
+        "not-a-version\n",
+        "1.2.3-rc.1\n",
+        "1.2.3-rc.01\n",
+        "1.2.3+build.5\n",
+        '{"version":"1.2.3"}\n',
     ],
 )
-def test_invalid_release_metadata_fails_without_fallback(monkeypatch, metadata):
-    monkeypatch.setattr(resolver, "urlopen", lambda request, timeout: _Response(metadata))
+def test_invalid_version_file_fails_without_fallback(monkeypatch, version):
+    monkeypatch.setattr(resolver, "urlopen", lambda request, timeout: _Response(version))
 
-    with pytest.raises(resolver.ResolutionError):
+    with pytest.raises(resolver.ResolutionError, match="agent-containers VERSION"):
         resolver.resolve_image()
 
 
-def test_unavailable_release_metadata_fails_closed(monkeypatch):
+def test_unavailable_version_file_fails_closed(monkeypatch):
     def unavailable(request, timeout):
         raise OSError("offline")
 
     monkeypatch.setattr(resolver, "urlopen", unavailable)
 
-    with pytest.raises(resolver.ResolutionError, match="could not fetch"):
+    with pytest.raises(resolver.ResolutionError, match="could not fetch agent-containers VERSION"):
         resolver.resolve_image()
 
 

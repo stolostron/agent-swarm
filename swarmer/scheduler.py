@@ -435,6 +435,7 @@ async def _check_and_launch(db=None) -> None:
                 session.mode = "prompt"
                 session.active_schedule_id = sched_id
                 session.queued_instruction_prompt = None
+                session.queued_user_id = ""
                 await db.commit()
                 await _do_launch(session, ws, db)
 
@@ -458,6 +459,7 @@ async def _check_and_launch(db=None) -> None:
                 session.active_schedule_id = None
                 session.queued_instruction_prompt = None
                 session.run_context_snapshot = ""
+                session.queued_user_id = ""
                 # Still advance the schedule so it doesn't retry immediately.
                 if sched_id:
                     sched = await db.get(SessionSchedule, sched_id)
@@ -529,13 +531,15 @@ async def _process_queue(db) -> None:
                 if session.active_schedule_id is None
                 else None
             )
+            manual_user_id = session.queued_user_id
             if manual_instruction_prompt is None:
-                await _do_launch(session, ws, db)
+                await _do_launch(session, ws, db, user_id=manual_user_id)
             else:
                 await _do_launch(
                     session,
                     ws,
                     db,
+                    user_id=manual_user_id,
                     manual_instruction_prompt=manual_instruction_prompt,
                 )
             log.info("queue: launched session %d (%s), phase=%s", session.id, session.name, session.phase)
@@ -546,4 +550,5 @@ async def _process_queue(db) -> None:
             session.active_schedule_id = None
             session.queued_instruction_prompt = None
             session.run_context_snapshot = ""
+            session.queued_user_id = ""
             await db.commit()
