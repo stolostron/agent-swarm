@@ -52,8 +52,9 @@ OPENSHIFT_OAUTH_URL="https://${OAUTH_HOST}"
 QUAY_REPOSITORY_PATH="quay.io/<namespace>" # set this to the repository prefix used for image pushes
 SWARMER_IMAGE="$(python3 scripts/image_release.py read-digest IMAGE_DIGEST --repository "$QUAY_REPOSITORY_PATH")"
 
-# Agent tool image — update this to match your registry
-AGENT_IMAGE_OPENCODE="quay.io/jpacker/opencode:0.3.9"
+# Agent tool image — resolve the latest stable OpenCode SemVer image, or set a full
+# registry-qualified image reference here to use an explicit offline override.
+AGENT_IMAGE_OPENCODE="$(python3 scripts/resolve_agent_image.py)"
 
 echo "App domain:   ${APPS_DOMAIN}"
 echo "Swarmer URL:  https://${SWARMER_HOST}"
@@ -417,7 +418,7 @@ cp .env.example .env
 | `HOST` | `0.0.0.0` | Listen address |
 | `PORT` | `8080` | Listen port |
 | `AGENT_IMAGE` | _(empty)_ | Fallback image for session pods |
-| `AGENT_IMAGE_OPENCODE` | _(empty)_ | OpenCode agent container image |
+| `AGENT_IMAGE_OPENCODE` | _(resolved during build/deploy)_ | Optional full OpenCode image override. An empty value resolves the latest stable OpenCode GitHub release; a non-empty value in `.env` is explicit and may remain stale until cleared. |
 | `DEFAULT_AGENT_TOOL` | `opencode` | Default agent tool when creating sessions |
 | `AGENT_IMAGE_PULL_SECRET` | _(empty)_ | Pull secret name in the workspace namespace |
 | `AGENT_IMAGE_PULL_POLICY` | `IfNotPresent` | Image pull policy for session pods |
@@ -480,7 +481,11 @@ Agent container images are built from the repository's Containerfiles:
 make image-build           # Build swarmer:local; does not require a committed version bump
 ```
 
-> **Note:** The OpenCode agent image is built from the `stolostron/agent-containers` repository, not this Makefile.
+> **Note:** The default OpenCode agent reference is resolved from the latest stable
+> [`anomalyco/opencode`](https://github.com/anomalyco/opencode/releases) SemVer release and
+> uses the published `ghcr.io/anomalyco/opencode:<version>` image. A fresh Swarmer checkout
+> needs no local `agent-containers` repository. To pin or use a private image, set a full
+> reference with `AGENT_IMAGE_OPENCODE=registry.example.com/team/opencode:1.2.3`.
 
 **Pushing:**
 
@@ -505,15 +510,24 @@ The image name remains `swarmer`. The workflow builds each unprocessed squash me
 
 When the publisher catches up multiple squash merges, each candidate digest is tested in the visible KinD step; promotion and the metadata push happen only after every candidate passes. Pull requests continue to run their separate KinD E2E check before merging, using the unchanged `scripts/e2e_kind_deploy.py` interface.
 
-**Syncing agent image refs into `.env`:**
+**Optional custom image sync:**
 
-The `sync-images` target reads `REGISTRY` and `IMAGE_TAG` from `.push-defaults` and updates `AGENT_IMAGE_OPENCODE` in `.env`:
+`make sync-images` remains available for repositories that build a custom OpenCode image with
+`agent-containers`; it updates `.env` from `.push-defaults`. Normal Swarmer builds and deploys
+do not use that target. An explicit `AGENT_IMAGE_OPENCODE` value in `.env` overrides automatic
+GitHub release resolution (including when the value is stale), so clear it to resume automatic
+resolution. Invalid overrides or unavailable/invalid GitHub metadata stop the operation; no
+fallback value is written to `.env` or tracked metadata.
 
 ```sh
 make sync-images
 ```
 
-> **Note:** `sync-images` manages the separate OpenCode agent image. Swarmer's `image-build` does not depend on it and does not prompt for a version.
+`make image-build` and `make deploy` resolve the published OpenCode image at target execution
+time. `make kind-deploy` resolves once and passes that exact reference through both its local
+image build and deployment. The resolver performs no work at Make parse time and makes no
+configuration-file changes. You can check the selected reference with
+`python3 scripts/resolve_agent_image.py`.
 
 PVCs must be group-0 writable for the non-root UID 1001 user in the swarmer container.
 
@@ -947,9 +961,16 @@ If you regenerate the `SWARMER_SECRET_KEY`, all existing Fernet-encrypted data (
 
 SQLite does not support concurrent writers. The K8s Deployment uses `strategy: Recreate` (not `RollingUpdate`). Only one replica is safe. If you see database locking errors, ensure only one swarmer pod is running.
 
-#### `sync-images` requires `.push-defaults`
+#### Legacy custom image sync requires `.push-defaults`
 
-Run `make sync-images` separately when updating the OpenCode agent image reference. It reads `REGISTRY` and `IMAGE_TAG` from `.push-defaults`. If this file does not exist, create `.push-defaults` with:
+Normal builds and deployments do not require `.push-defaults` or a local `agent-containers`
+checkout. For a custom image built by `agent-containers`, `make sync-images` still reads
+`REGISTRY` and `IMAGE_TAG` from `.push-defaults` and writes the full image override to `.env`.
+Clear or update that `AGENT_IMAGE_OPENCODE` entry to stop pinning the custom image and resume
+automatic GitHub release resolution.
+
+If you choose to maintain this legacy custom-image workflow and `.push-defaults` is absent,
+create it with:
 
 ```
 REGISTRY=your-registry.example.com

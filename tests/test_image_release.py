@@ -52,7 +52,9 @@ def test_deploy_refuses_missing_digest_and_renders_valid_digest(tmp_path):
     scripts = tmp_path / "scripts"
     scripts.mkdir()
     shutil.copy(ROOT / "scripts/image_release.py", scripts / "image_release.py")
+    shutil.copy(ROOT / "scripts/resolve_agent_image.py", scripts / "resolve_agent_image.py")
     (tmp_path / "IMAGE_DIGEST").write_text("")
+    (tmp_path / ".env").write_text("AGENT_IMAGE_OPENCODE=ghcr.io/anomalyco/opencode:1.2.3\n")
     command = ["make", "deploy", "REGISTRY=quay.io/example", "SILENT=1"]
     failed = subprocess.run(command, cwd=tmp_path, capture_output=True, text=True)
     assert failed.returncode != 0
@@ -67,7 +69,10 @@ def test_deploy_refuses_missing_digest_and_renders_valid_digest(tmp_path):
     (tmp_path / "IMAGE_DIGEST").write_text("")
     for config in ("command", "env"):
         if config == "env":
-            (tmp_path / ".env").write_text("IMAGE_REF=quay.io/example/swarmer:manual\n")
+            (tmp_path / ".env").write_text(
+                "AGENT_IMAGE_OPENCODE=ghcr.io/anomalyco/opencode:1.2.3\n"
+                "IMAGE_REF=quay.io/example/swarmer:manual\n"
+            )
             override = []
         else:
             override = ["IMAGE_REF=quay.io/example/swarmer:manual"]
@@ -80,7 +85,8 @@ def test_deploy_refuses_missing_digest_and_renders_valid_digest(tmp_path):
 def test_make_build_and_push_use_same_default_tag():
     build = subprocess.check_output(["make", "-n", "image-build", "REGISTRY=quay.io/example"], cwd=ROOT, text=True)
     push = subprocess.check_output(["make", "-n", "image-push", "REGISTRY=quay.io/example"], cwd=ROOT, text=True)
-    assert 'podman build -f Containerfile -t "swarmer:local"' in build
+    assert 'podman build --build-arg "AGENT_IMAGE_OPENCODE=$AGENT_IMAGE_REF"' in build
+    assert '-f Containerfile -t "swarmer:local" .' in build
     assert 'podman tag "swarmer:local" "quay.io/example/swarmer:local"' in push
     assert 'podman push --digestfile "$DIGEST_FILE" "quay.io/example/swarmer:local"' in push
     assert "record-push IMAGE_DIGEST" in push

@@ -30,8 +30,8 @@ OPENSHIFT_OAUTH_URL="https://${OAUTH_HOST}"
 QUAY_REPOSITORY_PATH="quay.io/<namespace>" # set this to the repository prefix used for image pushes
 SWARMER_IMAGE="$(python3 scripts/image_release.py read-digest IMAGE_DIGEST --repository "$QUAY_REPOSITORY_PATH")"
 
-# Agent tool image — update this to match your registry
-AGENT_IMAGE_OPENCODE="quay.io/jpacker/opencode:0.3.9"
+# Agent tool image — latest stable release, or set a full image ref to pin/override
+AGENT_IMAGE_OPENCODE="$(python3 scripts/resolve_agent_image.py)"
 
 echo "App domain:   ${APPS_DOMAIN}"
 echo "Swarmer URL:  https://${SWARMER_HOST}"

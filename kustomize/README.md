@@ -68,9 +68,9 @@ oc apply -k kustomize/base/cluster-admin
 # 3. Set the image (replace SWARMER_IMAGE placeholder)
 oc set image deployment/swarmer swarmer=<your-image> -n swarmer
 
-# 4. Set agent image and OAuth URL
+# 4. Set agent image and OAuth URL. Use the resolver output, or supply a full image override.
 oc set env deployment/swarmer -n swarmer \
-  AGENT_IMAGE_OPENCODE=ghcr.io/anomalyco/opencode:latest \
+  AGENT_IMAGE_OPENCODE="$(python3 scripts/resolve_agent_image.py)" \
   OPENSHIFT_OAUTH_URL=https://$(oc get route oauth-openshift -n openshift-authentication -o jsonpath='{.spec.host}')
 
 # 5. Update OAuthClient redirect URI
@@ -116,6 +116,10 @@ cp -r kustomize/overlays/ephemeral kustomize/overlays/my-env
 
 # 4. Deploy
 oc apply -k kustomize/overlays/my-env
+
+# 5. Resolve and set the runtime agent image (or replace it with a full image override)
+oc set env deployment/swarmer -n "$NAMESPACE" \
+  AGENT_IMAGE_OPENCODE="$(python3 scripts/resolve_agent_image.py)"
 ```
 
 Dashboard: `https://swarmer-<namespace>.apps.<cluster-domain>`
@@ -129,7 +133,9 @@ The `overlays/ephemeral/` directory is a template with three placeholders:
 | `NAMESPACE` | Target namespace name | `ephemeral-abc123` |
 | `IMAGE_REGISTRY/NAMESPACE/swarmer` | Full image reference (without tag) | `image-registry.openshift-image-registry.svc:5000/ephemeral-abc123/swarmer` |
 
-The agent image defaults to `ghcr.io/anomalyco/opencode:latest`.
+When using a custom kustomize deployment, set `AGENT_IMAGE_OPENCODE` from
+`python3 scripts/resolve_agent_image.py` or provide an explicit full image reference. The
+resolver returns the latest stable SemVer tag from GitHub and does not change repository files.
 
 ## Teardown
 

@@ -1,5 +1,8 @@
 FROM registry.access.redhat.com/ubi10/python-312-minimal:latest
 
+ARG AGENT_IMAGE_OPENCODE
+ENV AGENT_IMAGE_OPENCODE=${AGENT_IMAGE_OPENCODE}
+
 WORKDIR /app
 
 # Install dependencies first (cached layer)

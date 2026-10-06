@@ -21,6 +21,7 @@ CONTAINER_CMD ?= podman
 
 # Agent tool image (overridable via .env or command line)
 AGENT_IMAGE_OPENCODE ?=
+export AGENT_IMAGE_OPENCODE
 
 # Kubernetes
 NAMESPACE            ?= swarmer
@@ -59,8 +60,8 @@ OPENSHELL_WORKSPACE_STORAGE ?= 10Gi
 .PHONY: setup-secret user-token api-info mcp-setup update-deps grant-workspace grant-workspace-access grant-workspace-create \
         dev lint helm-lint test smoke-test-jira \
         sync-images image-build image-push \
-        deploy delete connect mcp-setup mcp-api mcp-url api-url openshell-register connect-openshell status \
-        kind-deploy kind-delete kind-destroy test-e2e-kind \
+        deploy _deploy-resolved delete connect mcp-setup mcp-api mcp-url api-url openshell-register connect-openshell status \
+        kind-deploy _kind-deploy-resolved kind-delete kind-destroy test-e2e-kind \
         help
 
 # ──────────────────────────────────────────────────────────────
@@ -309,8 +310,11 @@ smoke-test-jira:  ## Run Jira MCP OpenShell e2e smoke test (requires running Ope
 # ──────────────────────────────────────────────────────────────
 
 image-build:  ## Build the swarmer image (IMAGE_TAG=local by default)
-	@echo "Building $(LOCAL_IMAGE_REF)..."
-	$(CONTAINER_CMD) build -f Containerfile -t "$(LOCAL_IMAGE_REF)" .
+	@set -e; \
+	  AGENT_IMAGE_REF=$$(python3 scripts/resolve_agent_image.py); \
+	  echo "Building $(LOCAL_IMAGE_REF) (OpenCode agent: $$AGENT_IMAGE_REF)..."; \
+	  $(CONTAINER_CMD) build --build-arg "AGENT_IMAGE_OPENCODE=$$AGENT_IMAGE_REF" \
+	    -f Containerfile -t "$(LOCAL_IMAGE_REF)" .
 
 image-push:  ## Push the built tag and record its registry digest (requires REGISTRY=...)
 	@test -n "$(REGISTRY)" || (echo "Set REGISTRY=your.registry.example.com" && exit 1)
@@ -326,7 +330,12 @@ image-push:  ## Push the built tag and record its registry digest (requires REGI
 #  Deploy / Delete  (auto-detects OpenShift vs generic K8s)
 # ──────────────────────────────────────────────────────────────
 
-deploy:  ## Deploy swarmer to the current kubectl context  (SILENT=1 for non-interactive)
+deploy:  ## Deploy Swarmer with the resolved OpenCode image (SILENT=1 for non-interactive)
+	@set -e; \
+	  AGENT_IMAGE_REF=$$(python3 scripts/resolve_agent_image.py); \
+	  $(MAKE) --no-print-directory _deploy-resolved AGENT_IMAGE_OPENCODE="$$AGENT_IMAGE_REF"
+
+_deploy-resolved:
 	@if [ -z "$(DEPLOY_IMAGE_OVERRIDE)" ]; then \
 	  python3 scripts/image_release.py read-digest IMAGE_DIGEST --repository "$(REGISTRY)" >/dev/null || exit 1; \
 	fi
@@ -771,7 +780,12 @@ status:  ## Show OpenShell and swarmer deployment status
 #  kind (local development cluster)
 # ──────────────────────────────────────────────────────────────
 
-kind-deploy:  ## Create kind cluster and deploy a local build or KIND_IMAGE_REF
+kind-deploy:  ## Resolve once, then create kind cluster and deploy a local build or KIND_IMAGE_REF
+	@set -e; \
+	  AGENT_IMAGE_REF=$$(python3 scripts/resolve_agent_image.py); \
+	  $(MAKE) --no-print-directory _kind-deploy-resolved AGENT_IMAGE_OPENCODE="$$AGENT_IMAGE_REF"
+
+_kind-deploy-resolved:
 	@test -f auth/secret.key || (echo "Run 'make setup-secret' first." && exit 1)
 	@# Create cluster (idempotent)
 	@if kind get clusters 2>/dev/null | grep -q "^$(KIND_CLUSTER)$$"; then \
@@ -783,7 +797,8 @@ kind-deploy:  ## Create kind cluster and deploy a local build or KIND_IMAGE_REF
 	@if [ -n "$(KIND_IMAGE_REF)" ]; then \
 	  echo "Using registry image $(KIND_IMAGE_REF)"; \
 	else \
-	  $(CONTAINER_CMD) build -f Containerfile -t "$(LOCAL_IMAGE_REF)" .; \
+	  $(CONTAINER_CMD) build --build-arg "AGENT_IMAGE_OPENCODE=$(AGENT_IMAGE_OPENCODE)" \
+	    -f Containerfile -t "$(LOCAL_IMAGE_REF)" .; \
 	  echo "Loading $(LOCAL_IMAGE_REF) into kind cluster '$(KIND_CLUSTER)'..."; \
 	  if [ "$(CONTAINER_CMD)" = "podman" ]; then \
 	    podman save $(LOCAL_IMAGE_REF) | kind load image-archive /dev/stdin --name $(KIND_CLUSTER); \
