@@ -4,8 +4,6 @@
   {% if redirect_to %}<input type="hidden" name="redirect_to" value="list">{% endif %}
   <div class="pf-v6-c-modal-box__header">
     <h2 class="pf-v6-c-modal-box__title" id="launch-dialog-title">Launch {{ session.name }}</h2>
-    <button type="button" class="pf-v6-c-button pf-m-plain" data-launch-dialog-close
-            aria-label="Close launch confirmation">&#10005;</button>
   </div>
   <div class="pf-v6-c-modal-box__body">
     <div class="pf-v6-c-form__group">
@@ -21,7 +19,7 @@
 
     <div class="pf-v6-c-form__group">
       <label class="pf-v6-c-form__label" for="launch-prompt-id">
-        <span class="pf-v6-c-form__label-text">Prompt</span>
+        <span class="pf-v6-c-form__label-text" style="font-weight:var(--pf-t--global--font--weight--heading--bold);">Prompt</span>
       </label>
       <select class="pf-v6-c-form-control" id="launch-prompt-id" name="prompt_id">
         <option value="" data-content="">(no base prompt)</option>
@@ -48,18 +46,20 @@
     {% include "sessions/_provider_select.html" %}
 
     <div class="pf-v6-c-form__group" style="margin-top:var(--pf-t--global--spacer--md);">
-      <label class="pf-v6-c-form__label" for="launch-instruction-prompt">
-        <span class="pf-v6-c-form__label-text">Additional Instructions</span>
-      </label>
+      <div style="display:flex; justify-content:space-between; align-items:center; gap:var(--pf-t--global--spacer--sm); margin-bottom:var(--pf-t--global--spacer--xs);">
+        <label class="pf-v6-c-form__label" for="launch-instruction-prompt" style="margin:0;">
+          <span class="pf-v6-c-form__label-text">Additional Instructions</span>
+        </label>
+        <button type="button" class="pf-v6-c-button pf-m-link pf-m-small"
+                id="clear-launch-instructions" disabled>Clear text</button>
+      </div>
       <textarea class="pf-v6-c-form-control" id="launch-instruction-prompt"
                 name="instruction_prompt" rows="5" style="resize:vertical;"></textarea>
       <div class="pf-v6-c-form__helper-text">
         <div class="pf-v6-c-helper-text__item">
-          <span class="pf-v6-c-helper-text__item-text">Applies to this manual run only. Scheduled runs continue to use their configured instructions.</span>
+          <span class="pf-v6-c-helper-text__item-text">Applies only to this manual launch and is not reused. It does not change scheduled-run instructions. For TUI and Chat, this is startup context written to AGENTS.md, not a chat message.</span>
         </div>
       </div>
-      <button type="button" class="pf-v6-c-button pf-m-link pf-m-small"
-              id="clear-launch-instructions">Clear</button>
     </div>
   </div>
   <div class="pf-v6-c-modal-box__footer">

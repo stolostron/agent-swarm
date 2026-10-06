@@ -166,6 +166,19 @@ def make_server() -> AgentSwarmMCPServer:
     return server
 
 
+@pytest.mark.asyncio
+async def test_launch_session_passes_run_only_instructions():
+    server = make_server()
+    server.client.launch_session.return_value = {"id": 7, "phase": "pending"}
+
+    result = await server._launch_session(1, 7, "run-only context")
+
+    server.client.launch_session.assert_awaited_once_with(
+        1, 7, instruction_prompt="run-only context"
+    )
+    assert result["phase"] == "pending"
+
+
 # ------------------------------------------------------------------
 # create_session & update_session with agent_tool
 # ------------------------------------------------------------------

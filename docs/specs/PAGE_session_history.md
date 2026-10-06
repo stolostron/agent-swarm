@@ -3,7 +3,8 @@
 ## Purpose
 
 History provides an auditable list of completed and stopped runs, including
-duration, phase, trigger source, event context, and expandable output.
+duration, phase, trigger source, immutable startup context, event context, and
+expandable output.
 
 ## Sources
 
@@ -17,17 +18,21 @@ duration, phase, trigger source, event context, and expandable output.
 - Detail page queries the newest 100 runs ordered by completion time, then `id`
   for stable ordering when completion times tie.
 - PatternFly expandable table and client-side row toggles.
+- Every row expands, including runs with neither output nor event context.
 - Output/Raw Log toggles are client-side.
 - ANSI output is rendered through the shared output filter.
 
 ## Algorithm
 
-1. Create a run record when a session reaches a terminal phase.
-2. Update phase, status detail, timestamps, output, and trigger metadata as the
-   runtime progresses.
+1. Capture prompt identity/content, additional instructions, composed startup
+   context, mode, trigger, and separate event context before runtime setup.
+2. Retain the snapshot through queue dispatch/restarts and copy it into the run
+   record when the session reaches a terminal phase.
 3. Render source labels for TUI, Chat, Prompt, schedules, and events.
 4. Expose event repository, PR, SHA, condition, and title when available.
-5. Expand only rows with output or event context.
+5. Show captured startup context even when output is empty; identify older runs
+   without a captured snapshot as unavailable instead of rebuilding it from
+   current settings. TUI/Chat conversation messages after startup are excluded.
 
 ## Acceptance checks
 

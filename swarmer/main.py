@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 from contextlib import asynccontextmanager
@@ -174,14 +175,17 @@ async def _restart_prompt_pollers() -> None:
 
             _tool = _get_tool(s.agent_tool)
             if s.agent_tool == "shell":
-                # Shell tool: reconstruct the command exactly as it was resolved
-                # at initial launch. build_main_cmd() at launch time is passed
-                # resolved_prompt (instruction_prompt layered with any
-                # prompt_id/schedule override — see _resolve_session_prompt /
-                # _resolve_schedule_prompt), which can differ from the raw
-                # instruction_prompt. Re-resolve the same way here so a restart
-                # reruns the identical command rather than a stale or empty one.
-                if s.active_schedule_id:
+                # Shell tool: rerun the exact command resolved at launch. New
+                # runs use their immutable context snapshot; legacy active runs
+                # fall back to the original session/schedule resolution path.
+                _context_snapshot = {}
+                try:
+                    _context_snapshot = json.loads(s.run_context_snapshot or "")
+                except (TypeError, ValueError):
+                    pass
+                if _context_snapshot.get("context_captured"):
+                    _raw_cmd = _context_snapshot.get("startup_prompt", "").strip()
+                elif s.active_schedule_id:
                     _raw_cmd = (await _resolve_schedule_prompt(s.active_schedule_id, s, db)).strip()
                 else:
                     _raw_cmd = (await _resolve_session_prompt(s, db)).strip()

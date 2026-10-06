@@ -389,8 +389,6 @@ async def launch_session(
             session.event_context = body.event_context
         else:
             session.event_context = ""
-        if body.instruction_prompt is not None:
-            session.instruction_prompt = body.instruction_prompt
         await db.commit()
     else:
         session.event_context = ""
@@ -398,7 +396,19 @@ async def launch_session(
 
     try:
         from swarmer.routers.sessions import _do_launch
-        await _do_launch(session, ws, db, user_id=user)
+        # Every REST launch is a manual run. Omitted and explicitly blank
+        # instructions both mean no additional instructions; legacy session
+        # defaults remain available to schedules only.
+        manual_instruction_prompt = (
+            body.instruction_prompt if body and body.instruction_prompt is not None else ""
+        )
+        await _do_launch(
+            session,
+            ws,
+            db,
+            user_id=user,
+            manual_instruction_prompt=manual_instruction_prompt,
+        )
     except Exception as exc:
         log.error("API session_launch failed for session %d: %s", sid, exc, exc_info=True)
         raise HTTPException(status_code=500, detail=f"Launch failed: {exc}")
@@ -421,6 +431,7 @@ async def stop_session(
         session.phase = "idle"
         session.status_detail = ""
         session.queued_instruction_prompt = None
+        session.run_context_snapshot = ""
         session.queued_user_id = ""
         await db.commit()
         await db.refresh(session)

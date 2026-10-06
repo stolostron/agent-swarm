@@ -458,6 +458,7 @@ async def _check_and_launch(db=None) -> None:
                 session.phase = "idle"
                 session.active_schedule_id = None
                 session.queued_instruction_prompt = None
+                session.run_context_snapshot = ""
                 session.queued_user_id = ""
                 # Still advance the schedule so it doesn't retry immediately.
                 if sched_id:
@@ -546,6 +547,8 @@ async def _process_queue(db) -> None:
             log.exception("queue: failed to launch session %d", session.id)
             session.phase = "idle"
             session.status_detail = ""
+            session.active_schedule_id = None
             session.queued_instruction_prompt = None
+            session.run_context_snapshot = ""
             session.queued_user_id = ""
             await db.commit()

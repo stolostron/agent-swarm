@@ -146,10 +146,13 @@ async def test_update_session_agent_tool(client):
 @pytest.mark.asyncio
 async def test_launch_session(client):
     with respx.mock(base_url=BASE_URL) as mock:
-        mock.post("/api/v1/workspaces/1/sessions/5/launch").mock(
+        route = mock.post("/api/v1/workspaces/1/sessions/5/launch").mock(
             return_value=httpx.Response(200, json={"id": 5, "phase": "pending"})
         )
-        result = await client.launch_session(1, 5)
+        result = await client.launch_session(1, 5, instruction_prompt="run-only context")
+        import json
+        body = json.loads(route.calls[0].request.content)
+        assert body == {"instruction_prompt": "run-only context"}
     assert result["phase"] == "pending"
 
 

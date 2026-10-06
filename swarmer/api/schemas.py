@@ -342,9 +342,14 @@ class SessionRunOut(BaseModel):
     raw_output: str = ""
     schedule_label: str = ""
     prompt_name: str = ""
+    prompt_id: int | None = None
     mode: str = "prompt"
     trigger_type: str = "manual"
     event_context: str = ""
+    prompt_content: str = ""
+    additional_instructions: str = ""
+    startup_context: str = ""
+    context_captured: bool = False
 
     model_config = {"from_attributes": True}
 
@@ -352,6 +357,8 @@ class SessionRunOut(BaseModel):
 class SessionLaunchRequest(BaseModel):
     pr_context: dict[str, Any] | None = None
     event_context: str | None = None
+    # Optional run-only override. Omitted or empty launches without additional
+    # instructions; legacy session defaults apply only to schedules.
     instruction_prompt: str | None = None
 
 

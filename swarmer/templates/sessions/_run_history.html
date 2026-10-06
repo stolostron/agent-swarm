@@ -1,4 +1,4 @@
-{# PF6 expandable data table — each row expands to show run output #}
+{# PF6 expandable data table — each row exposes its immutable context and output #}
 <table class="pf-v6-c-table pf-m-grid-md" role="grid" style="table-layout:fixed; width:100%;">
   <colgroup>
     <col style="width:2.5rem;">
@@ -23,19 +23,17 @@
   {# ── Main data row ── #}
   <tr class="pf-v6-c-table__tr" role="row">
     <td class="pf-v6-c-table__td pf-v6-c-table__toggle" id="hist-toggle-{{ run.id }}"
-        role="cell" style="{% if not (run.last_output or _is_event) %}visibility:hidden;{% endif %}">
-      {% if run.last_output or _is_event %}
-      <button type="button"
-              aria-expanded="false"
-              aria-label="Expand run {{ run.id }}"
-              onclick="toggleHistoryRow({{ run.id }})">
+        role="cell">
+        <button type="button"
+                aria-expanded="false"
+                aria-label="Expand run {{ run.id }} context and output"
+                onclick="toggleHistoryRow({{ run.id }})">
         {# Right-pointing chevron — rotates 90° via CSS when .pf-m-expanded is set #}
         <svg width="10" height="10" viewBox="0 0 10 10" fill="currentColor" aria-hidden="true">
           <path d="M3 1l4 4-4 4" stroke="currentColor" stroke-width="1.5"
                 fill="none" stroke-linecap="round" stroke-linejoin="round"/>
         </svg>
-      </button>
-      {% endif %}
+        </button>
     </td>
     <td class="pf-v6-c-table__td" role="cell" data-label="Started">
       <span style="font-size:var(--pf-t--global--font--size--sm);">
@@ -88,7 +86,6 @@
     </td>
   </tr>
   {# ── Expandable detail row ── #}
-  {% if run.last_output or _is_event %}
   <tr class="pf-v6-c-table__tr" id="hist-expand-{{ run.id }}"
       role="row" style="display:none;">
     <td class="pf-v6-c-table__td pf-v6-c-table__toggle" style="padding:0; border-bottom:none;"></td>
@@ -125,7 +122,41 @@
         {% if run.event_info.title %}Title: {{ run.event_info.title }}{% endif %}
       </div>
       {% endif %}
+      <section aria-label="Startup context" style="padding:var(--pf-t--global--spacer--md); border-bottom:1px solid var(--pf-t--global--border--color--default);">
+        <h4 style="margin:0 0 var(--pf-t--global--spacer--sm); font-size:var(--pf-t--global--font--size--md);">Startup context</h4>
+        {% if run.context_captured %}
+          <div style="margin-bottom:var(--pf-t--global--spacer--sm);">
+            <strong>Prompt{% if run.prompt_name %}: {{ run.prompt_name }}{% endif %}</strong>
+            {% if run.prompt_id is not none %}
+            <pre class="last-output" style="padding:var(--pf-t--global--spacer--sm); margin:var(--pf-t--global--spacer--xs) 0 0; max-height:220px; overflow:auto; white-space:pre-wrap;">{{ run.prompt_content }}</pre>
+            {% else %}
+            <div style="font-size:var(--pf-t--global--font--size--sm); color:var(--pf-t--global--text--color--subtle);">No base prompt selected.</div>
+            {% endif %}
+          </div>
+          <div style="margin-bottom:var(--pf-t--global--spacer--sm);">
+            <strong>Additional Instructions</strong>
+            <pre class="last-output" style="padding:var(--pf-t--global--spacer--sm); margin:var(--pf-t--global--spacer--xs) 0 0; max-height:220px; overflow:auto; white-space:pre-wrap;">{{ run.additional_instructions or '(none)' }}</pre>
+          </div>
+          {% if run.mode in ('tui', 'server') %}
+          <div style="font-size:var(--pf-t--global--font--size--xs); color:var(--pf-t--global--text--color--subtle); margin-bottom:var(--pf-t--global--spacer--xs);">TUI and Chat use this startup context from AGENTS.md. Later terminal or chat messages are not included.</div>
+          {% endif %}
+          <strong>Composed startup context</strong>
+          <pre class="last-output" style="padding:var(--pf-t--global--spacer--sm); margin:var(--pf-t--global--spacer--xs) 0 0; max-height:400px; overflow:auto; white-space:pre-wrap;">{{ run.startup_context }}</pre>
+        {% else %}
+          <div style="font-size:var(--pf-t--global--font--size--sm); color:var(--pf-t--global--text--color--subtle);">Startup context was not captured for this older run and is unavailable.</div>
+        {% endif %}
+      </section>
+      {% if run.event_context %}
+      <section aria-label="Event context" style="padding:var(--pf-t--global--spacer--md); border-bottom:1px solid var(--pf-t--global--border--color--default);">
+        <strong>Event context</strong>
+        <pre class="last-output" style="padding:var(--pf-t--global--spacer--sm); margin:var(--pf-t--global--spacer--xs) 0 0; max-height:300px; overflow:auto; white-space:pre-wrap;">{{ run.event_context }}</pre>
+      </section>
+      {% endif %}
       {# Output content #}
+      <div style="padding:var(--pf-t--global--spacer--sm) var(--pf-t--global--spacer--md); border-bottom:1px solid var(--pf-t--global--border--color--default);">
+        <strong>Run output</strong>
+      </div>
+      {% if run.last_output or run.raw_output %}
       <pre id="hist-out-processed-{{ run.id }}"
            class="last-output"
            style="padding:var(--pf-t--global--spacer--md); margin:0;
@@ -136,9 +167,11 @@
            style="padding:var(--pf-t--global--spacer--md); margin:0;
                   max-height:400px; overflow:auto; display:none;">{{ run.raw_output | ansi_to_html }}</pre>
       {% endif %}
+      {% else %}
+      <div style="padding:var(--pf-t--global--spacer--md); color:var(--pf-t--global--text--color--subtle);">No output captured for this run.</div>
+      {% endif %}
     </td>
   </tr>
-  {% endif %}
   {% endfor %}
 
   </tbody>

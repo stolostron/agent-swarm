@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from datetime import datetime, timedelta, timezone
 
@@ -25,10 +26,10 @@ def _as_utc(dt: datetime) -> datetime:
 
 
 async def _run_source_snapshot(db: AsyncSession, session: Session) -> tuple[str, str, str, str]:
-    """Resolve the (schedule_label, prompt_name, trigger_type, event_context) snapshot for a session.
+    """Resolve legacy source metadata when no launch-time context was captured.
 
-    Prefers the active schedule's label/prompt (the run was triggered by a
-    schedule); falls back to the session's own configured prompt and event_context.
+    New runs take this metadata from their immutable launch snapshot. This
+    fallback preserves source labels for executions that predate that capture.
     """
     import json as _json
     from swarmer.models.workspace_prompt import WorkspacePrompt
@@ -94,7 +95,24 @@ async def record_session_run(
         )
         return None
 
-    schedule_label, prompt_name, trigger_type, event_context = await _run_source_snapshot(db, session)
+    context_snapshot: dict = {}
+    try:
+        parsed_snapshot = json.loads(session.run_context_snapshot or "")
+        if isinstance(parsed_snapshot, dict):
+            context_snapshot = parsed_snapshot
+    except (TypeError, ValueError):
+        pass
+
+    context_captured = bool(context_snapshot.get("context_captured"))
+    if context_captured:
+        schedule_label = context_snapshot.get("schedule_label", "")
+        prompt_name = context_snapshot.get("prompt_name", "")
+        trigger_type = context_snapshot.get("trigger_type", "manual")
+        event_context = context_snapshot.get("event_context", "")
+    else:
+        # Legacy rows created before launch-time capture retain their historical
+        # source metadata, but are explicitly marked as having no context snapshot.
+        schedule_label, prompt_name, trigger_type, event_context = await _run_source_snapshot(db, session)
 
     run = SessionRun(
         session_id=session.id,
@@ -106,11 +124,19 @@ async def record_session_run(
         raw_output=raw_output or "",
         schedule_label=schedule_label,
         prompt_name=prompt_name,
-        mode=session.mode or "prompt",
+        prompt_id=context_snapshot.get("prompt_id") if context_captured else None,
+        mode=context_snapshot.get("mode", session.mode or "prompt") if context_captured else (session.mode or "prompt"),
         trigger_type=trigger_type,
         event_context=event_context,
+        prompt_content=context_snapshot.get("prompt_content", "") if context_captured else "",
+        additional_instructions=context_snapshot.get("additional_instructions", "") if context_captured else "",
+        startup_context=context_snapshot.get("startup_context", "") if context_captured else "",
+        context_captured=context_captured,
     )
     db.add(run)
+    # The run row is now the durable owner of the immutable context. Clearing
+    # the session copy prevents a later unrelated launch from reusing it.
+    session.run_context_snapshot = ""
     # Reconcile in-flight PR watcher dispatches for this session
     try:
         from swarmer.pr_watcher_store import reconcile_completed

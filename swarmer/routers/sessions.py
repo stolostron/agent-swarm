@@ -647,7 +647,6 @@ async def session_new(
     )
     from swarmer.routers.mcp_servers import get_enabled_mcp_servers
     mcp_servers = await get_enabled_mcp_servers(ws_id, db, user_id=_current_user(request))
-    prompt_sources = await _get_prompt_sources(ws_id, db)
     from swarmer.github_app import get_workspace_github_app
     _ws_github_app = await get_workspace_github_app(ws_id, db, user_id=_current_user(request))
     return templates.TemplateResponse(
@@ -663,7 +662,6 @@ async def session_new(
             "default_agent_tool": default_agent_tool,
             "tool_image_available": dict(zip([t.name for t in _tools], _avail, strict=False)),
             "mcp_servers": mcp_servers,
-            "prompt_sources": prompt_sources,
         },
     )
 
@@ -674,8 +672,6 @@ async def session_create(
     request: Request,
     name: str = Form(...),
     github_pat_id: str = Form(""),
-    prompt_id: str = Form(""),
-    instruction_prompt: str = Form(""),
     provider: str = Form(""),
     agent_tool: str = Form("opencode"),
     working_branch: str = Form(""),
@@ -686,30 +682,6 @@ async def session_create(
         return RedirectResponse(url="/workspaces", status_code=302)
 
     pat_id = int(github_pat_id) if github_pat_id else None
-    pid = None
-    if prompt_id:
-        try:
-            pid = int(prompt_id)
-            # Verify prompt ownership
-            from swarmer.models.workspace_prompt import WorkspacePrompt, WorkspacePromptSource
-            prompt = await db.get(WorkspacePrompt, pid)
-            if not prompt:
-                flash(request, "Selected prompt not found.", "danger")
-                return RedirectResponse(url=f"/workspaces/{ws_id}/sessions/new", status_code=302)
-
-            # WorkspacePrompt -> WorkspacePromptSource -> Workspace
-            # We need to load the source to check workspace_id
-            result = await db.execute(
-                select(WorkspacePromptSource).where(WorkspacePromptSource.id == prompt.source_id)
-            )
-            source = result.scalar_one_or_none()
-            if not source or source.workspace_id != ws_id:
-                flash(request, "Selected prompt does not belong to this workspace.", "danger")
-                return RedirectResponse(url=f"/workspaces/{ws_id}/sessions/new", status_code=302)
-        except ValueError:
-            flash(request, "Invalid prompt selection.", "danger")
-            return RedirectResponse(url=f"/workspaces/{ws_id}/sessions/new", status_code=302)
-
     try:
         agent_tool = get_tool(agent_tool).name
     except ValueError:
@@ -739,10 +711,8 @@ async def session_create(
     session = Session(
         workspace_id=ws_id,
         github_pat_id=pat_id,
-        prompt_id=pid,
         name=name.strip(),
         provider=provider.strip(),
-        instruction_prompt=instruction_prompt.strip(),
         agent_tool=agent_tool,
         working_branch=wb,
     )
@@ -774,7 +744,6 @@ async def session_create(
         )
         from swarmer.routers.mcp_servers import get_enabled_mcp_servers
         mcp_servers = await get_enabled_mcp_servers(ws_id, db, user_id=_current_user(request))
-        prompt_sources = await _get_prompt_sources(ws_id, db)
         from swarmer.github_app import get_workspace_github_app
         _ws_github_app = await get_workspace_github_app(ws_id, db, user_id=_current_user(request))
         return templates.TemplateResponse(
@@ -787,11 +756,9 @@ async def session_create(
                 "error": f"A session named '{name}' already exists in this workspace.",
                 "form": {
                     "name": name,
-                    "instruction_prompt": instruction_prompt,
                     "working_branch": wb,
                     "agent_tool": agent_tool,
                     "github_pat_id": github_pat_id,
-                    "prompt_id": prompt_id,
                     "mcp_server_ids": selected_mcp_ids,
                     "mcp_selection": form_data.get("mcp_selection"),
                 },
@@ -801,7 +768,6 @@ async def session_create(
                 "default_agent_tool": default_agent_tool,
                 "tool_image_available": dict(zip([t.name for t in _tools], _avail, strict=False)),
                 "mcp_servers": mcp_servers,
-                "prompt_sources": prompt_sources,
             },
             status_code=422,
         )
@@ -967,8 +933,6 @@ async def session_edit(
     request: Request,
     name: str = Form(...),
     github_pat_id: str = Form(""),
-    prompt_id: str = Form(""),
-    instruction_prompt: str = Form(""),
     mode: str = Form("prompt"),
     provider: str = Form(""),
     agent_tool: str = Form("opencode"),
@@ -993,30 +957,6 @@ async def session_edit(
     session.name = name.strip()
     session.github_pat_id = int(github_pat_id) if github_pat_id else None
 
-    if prompt_id:
-        try:
-            pid = int(prompt_id)
-            from swarmer.models.workspace_prompt import WorkspacePrompt, WorkspacePromptSource
-            prompt = await db.get(WorkspacePrompt, pid)
-            if not prompt:
-                flash(request, "Selected prompt not found.", "danger")
-                return RedirectResponse(url=f"/workspaces/{ws_id}/sessions/{sid}", status_code=302)
-
-            result = await db.execute(
-                select(WorkspacePromptSource).where(WorkspacePromptSource.id == prompt.source_id)
-            )
-            source = result.scalar_one_or_none()
-            if not source or source.workspace_id != ws_id:
-                flash(request, "Selected prompt does not belong to this workspace.", "danger")
-                return RedirectResponse(url=f"/workspaces/{ws_id}/sessions/{sid}", status_code=302)
-            session.prompt_id = pid
-        except ValueError:
-            flash(request, "Invalid prompt selection.", "danger")
-            return RedirectResponse(url=f"/workspaces/{ws_id}/sessions/{sid}", status_code=302)
-    else:
-        session.prompt_id = None
-
-    session.instruction_prompt = instruction_prompt.strip()
     if mode in ("tui", "server", "prompt"):
         session.mode = mode
     session.provider = provider.strip()
@@ -1280,6 +1220,87 @@ async def _resolve_schedule_provider(schedule_id: int, session: Session, db: Asy
     return (session.provider or "").strip()
 
 
+async def _build_run_context_snapshot(
+    session: Session,
+    db: AsyncSession,
+    manual_instruction_prompt: str | None,
+) -> dict:
+    """Capture the exact startup context and its sources before runtime setup."""
+    from swarmer.models.session_schedule import SessionSchedule
+
+    schedule = (
+        await db.get(SessionSchedule, session.active_schedule_id)
+        if session.active_schedule_id
+        else None
+    )
+    if schedule:
+        prompt_id = schedule.prompt_id if schedule.prompt_id is not None else session.prompt_id
+        additional = (
+            schedule.instruction_prompt.strip()
+            if schedule.instruction_prompt and schedule.instruction_prompt.strip()
+            else (session.instruction_prompt or "").strip()
+        )
+        startup_prompt = await _resolve_schedule_prompt(schedule.id, session, db)
+        trigger_type = schedule.trigger_type or "cron"
+        raw_event_context = session.event_context or ""
+        event_context_snapshot = raw_event_context if trigger_type == "event" else ""
+        if trigger_type == "event" and event_context_snapshot:
+            try:
+                event_info = _json_filter.loads(event_context_snapshot)
+                pr_num = event_info.get("pr_number")
+                condition = event_info.get("event_condition")
+                if pr_num and condition:
+                    schedule_label = f"PR #{pr_num} ({condition})"
+                elif pr_num:
+                    schedule_label = f"PR #{pr_num}"
+                else:
+                    schedule_label = condition or "GitHub Event"
+            except (TypeError, ValueError, AttributeError):
+                schedule_label = "GitHub Event"
+        elif trigger_type == "event":
+            schedule_label = schedule.label or schedule.trigger_label
+        else:
+            schedule_label = schedule.label or schedule.trigger_label
+    else:
+        prompt_id = session.prompt_id
+        additional = (
+            manual_instruction_prompt.strip()
+            if manual_instruction_prompt is not None
+            else (session.instruction_prompt or "").strip()
+        )
+        startup_prompt = await _resolve_manual_prompt(session, db, additional)
+        trigger_type = "event" if session.event_context else "manual"
+        event_context_snapshot = (session.event_context or "") if trigger_type == "event" else ""
+        schedule_label = ""
+
+    prompt_name = ""
+    prompt_content = ""
+    if prompt_id:
+        prompt = await db.get(WorkspacePrompt, prompt_id)
+        if prompt:
+            prompt_name = prompt.display_name
+            prompt_content = prompt.content
+
+    # AGENTS.md is the startup context for Prompt, TUI, and Chat. Include the
+    # repository section as it is also written into that file at launch time.
+    startup_context = (startup_prompt or "") + _build_repo_context(
+        list(session.repos or []), base_path="/sandbox"
+    )
+    return {
+        "context_captured": True,
+        "prompt_id": prompt_id,
+        "prompt_name": prompt_name,
+        "prompt_content": prompt_content,
+        "additional_instructions": additional,
+        "startup_prompt": startup_prompt or "",
+        "startup_context": startup_context,
+        "schedule_label": schedule_label,
+        "mode": session.mode or "prompt",
+        "trigger_type": trigger_type,
+        "event_context": event_context_snapshot,
+    }
+
+
 async def _do_launch(
     session: Session,
     ws: Workspace,
@@ -1300,6 +1321,37 @@ async def _do_launch(
             raise ValueError(
                 "A GitHub PAT is required for repos on github.com — add one in AI Tokens."
             )
+
+    # Queued launches already have a complete immutable snapshot. Reuse it so
+    # edits to a prompt, schedule, or repositories while waiting cannot change
+    # what this run will receive.
+    saved_snapshot = {}
+    if session.run_context_snapshot:
+        try:
+            saved_snapshot = _json_filter.loads(session.run_context_snapshot)
+        except (TypeError, ValueError):
+            saved_snapshot = {}
+    reuse_snapshot = bool(saved_snapshot.get("context_captured")) and (
+        session.queued_instruction_prompt is not None
+        or bool(session.queued_user_id)
+        or (
+            session.active_schedule_id is not None
+            and saved_snapshot.get("trigger_type") in ("cron", "event")
+        )
+    )
+    if reuse_snapshot:
+        run_context_snapshot = saved_snapshot
+        resolved_prompt = run_context_snapshot.get("startup_prompt", "")
+    else:
+        run_context_snapshot = await _build_run_context_snapshot(
+            session, db, manual_instruction_prompt
+        )
+        resolved_prompt = run_context_snapshot["startup_prompt"]
+
+    session.run_context_snapshot = _json_filter.dumps(run_context_snapshot)
+    # Make the launch intent durable before provider probing or any other slow
+    # runtime setup, so queueing and process restarts cannot lose its context.
+    await db.commit()
 
     if settings.max_concurrent_agents > 0:
         running = await _count_running_sessions(db)
@@ -1351,15 +1403,6 @@ async def _do_launch(
         session.workspace_id, db, user_id=user_id
     )
     mcp_servers = _select_session_mcp_servers(session, eligible_mcp_servers)
-
-    # Resolve prompt: if a schedule triggered this run, use its prompt config
-    # (falling back to session defaults for empty fields).
-    if session.active_schedule_id:
-        resolved_prompt = await _resolve_schedule_prompt(session.active_schedule_id, session, db)
-    elif manual_instruction_prompt is not None:
-        resolved_prompt = await _resolve_manual_prompt(session, db, manual_instruction_prompt)
-    else:
-        resolved_prompt = await _resolve_session_prompt(session, db)
 
     if session.active_schedule_id:
         session_provider = await _resolve_schedule_provider(session.active_schedule_id, session, db)
@@ -2566,7 +2609,9 @@ async def session_launch(
     if session.is_active:
         return RedirectResponse(url=f"/workspaces/{ws_id}/sessions/{sid}", status_code=302)
 
-    manual_instruction_prompt: str | None = None
+    # Browser launches are always manual. The form's blank value is an
+    # explicit no-instructions override; session defaults are schedule-only.
+    manual_instruction_prompt = instruction_prompt
     if launch_confirmed:
         # Validate all remembered selections before changing the session. Prompt
         # ownership is workspace-scoped and provider choices are checked against
@@ -2669,16 +2714,13 @@ async def session_launch(
             pass
 
     try:
-        if manual_instruction_prompt is None:
-            await _do_launch(session, ws, db, user_id=request.session.get("username", ""))
-        else:
-            await _do_launch(
-                session,
-                ws,
-                db,
-                user_id=request.session.get("username", ""),
-                manual_instruction_prompt=manual_instruction_prompt,
-            )
+        await _do_launch(
+            session,
+            ws,
+            db,
+            user_id=request.session.get("username", ""),
+            manual_instruction_prompt=manual_instruction_prompt,
+        )
         if session.phase == "queued":
             flash(request, f"Session queued — {session.status_detail}", "info")
     except Exception as exc:
@@ -2712,6 +2754,7 @@ async def session_stop(
         session.phase = "idle"
         session.status_detail = ""
         session.queued_instruction_prompt = None
+        session.run_context_snapshot = ""
         session.queued_user_id = ""
         await db.commit()
         return RedirectResponse(url=f"/workspaces/{ws_id}/sessions/{sid}", status_code=302)

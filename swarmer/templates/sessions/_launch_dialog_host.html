@@ -62,7 +62,11 @@
       if (event.target.closest('[data-launch-dialog-close]')) closeDialog();
       if (event.target.id === 'clear-launch-instructions') {
         const instructions = content.querySelector('#launch-instruction-prompt');
-        if (instructions) instructions.value = '';
+        if (instructions) {
+          instructions.value = '';
+          event.target.disabled = true;
+          instructions.focus();
+        }
       }
       if (backdrop.contains(event.target) && !dialog.contains(event.target)) closeDialog();
     });
@@ -95,6 +99,11 @@
       } else if (!event.shiftKey && document.activeElement === last) {
         event.preventDefault(); first.focus();
       }
+    });
+    document.addEventListener('input', function(event) {
+      if (event.target.id !== 'launch-instruction-prompt') return;
+      const clear = content.querySelector('#clear-launch-instructions');
+      if (clear) clear.disabled = !event.target.value;
     });
   })();
 </script>
