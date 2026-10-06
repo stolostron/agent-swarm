@@ -135,7 +135,7 @@ The `overlays/ephemeral/` directory is a template with three placeholders:
 
 When using a custom kustomize deployment, set `AGENT_IMAGE_OPENCODE` from
 `python3 scripts/resolve_agent_image.py` or provide an explicit full image reference. The
-resolver returns the latest stable SemVer tag from GitHub and does not change repository files.
+resolver reads the published `agent-containers` version from GitHub and does not change repository files.
 
 ## Teardown
 

@@ -55,7 +55,7 @@ Key variables:
 | `DATABASE_URL` | `sqlite+aiosqlite:///data/swarmer.db` | SQLite database path |
 | `K8S_IN_CLUSTER` | `false` | Set to `true` when running inside a pod |
 | `AGENT_IMAGE` | _(empty)_ | Fallback image used for session pods |
-| `AGENT_IMAGE_OPENCODE` | _(resolved at build/deploy)_ | Optional full OpenCode image override; empty resolves the latest stable GitHub release |
+| `AGENT_IMAGE_OPENCODE` | _(resolved at build/deploy)_ | Optional full OpenCode image override; empty uses the latest published `agent-containers` version |
 | `AGENT_IMAGE_PULL_SECRET` | _(empty)_ | Pull secret name in the workspace namespace |
 
 See [docs/USER_GUIDE.md](docs/USER_GUIDE.md) for the full environment variable reference.

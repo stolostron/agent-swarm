@@ -52,7 +52,7 @@ OPENSHIFT_OAUTH_URL="https://${OAUTH_HOST}"
 QUAY_REPOSITORY_PATH="quay.io/<namespace>" # set this to the repository prefix used for image pushes
 SWARMER_IMAGE="$(python3 scripts/image_release.py read-digest IMAGE_DIGEST --repository "$QUAY_REPOSITORY_PATH")"
 
-# Agent tool image — resolve the latest stable OpenCode SemVer image, or set a full
+# Agent tool image — resolve the latest published agent-containers image, or set a full
 # registry-qualified image reference here to use an explicit offline override.
 AGENT_IMAGE_OPENCODE="$(python3 scripts/resolve_agent_image.py)"
 
@@ -418,7 +418,7 @@ cp .env.example .env
 | `HOST` | `0.0.0.0` | Listen address |
 | `PORT` | `8080` | Listen port |
 | `AGENT_IMAGE` | _(empty)_ | Fallback image for session pods |
-| `AGENT_IMAGE_OPENCODE` | _(resolved during build/deploy)_ | Optional full OpenCode image override. An empty value resolves the latest stable OpenCode GitHub release; a non-empty value in `.env` is explicit and may remain stale until cleared. |
+| `AGENT_IMAGE_OPENCODE` | _(resolved during build/deploy)_ | Optional full OpenCode image override. An empty value uses the latest version published by `stolostron/agent-containers`; a non-empty value in `.env` is explicit and may remain stale until cleared. |
 | `DEFAULT_AGENT_TOOL` | `opencode` | Default agent tool when creating sessions |
 | `AGENT_IMAGE_PULL_SECRET` | _(empty)_ | Pull secret name in the workspace namespace |
 | `AGENT_IMAGE_PULL_POLICY` | `IfNotPresent` | Image pull policy for session pods |
@@ -481,10 +481,10 @@ Agent container images are built from the repository's Containerfiles:
 make image-build           # Build swarmer:local; does not require a committed version bump
 ```
 
-> **Note:** The default OpenCode agent reference is resolved from the latest stable
-> [`anomalyco/opencode`](https://github.com/anomalyco/opencode/releases) SemVer release and
-> uses the published `ghcr.io/anomalyco/opencode:<version>` image. A fresh Swarmer checkout
-> needs no local `agent-containers` repository. To pin or use a private image, set a full
+> **Note:** The default OpenCode agent reference is resolved from the `VERSION` file in
+> [`stolostron/agent-containers`](https://github.com/stolostron/agent-containers) and uses the
+> corresponding `quay.io/jpacker/opencode:<version>` image. A fresh Swarmer checkout needs no
+> local `agent-containers` repository. To pin or use a private image, set a full
 > reference with `AGENT_IMAGE_OPENCODE=registry.example.com/team/opencode:1.2.3`.
 
 **Pushing:**
@@ -514,9 +514,11 @@ When the publisher catches up multiple squash merges, each candidate digest is t
 
 `make sync-images` remains available for repositories that build a custom OpenCode image with
 `agent-containers`; it updates `.env` from `.push-defaults`. Normal Swarmer builds and deploys
-do not use that target. An explicit `AGENT_IMAGE_OPENCODE` value in `.env` overrides automatic
-GitHub release resolution (including when the value is stale), so clear it to resume automatic
-resolution. Invalid overrides or unavailable/invalid GitHub metadata stop the operation; no
+do not use that target. In `agent-containers`, update the shared tag default with
+`make set-image-tag IMAGE_TAG=<published-version>` when you want `make sync-images` to pin the
+new tag in `.env`. An explicit `AGENT_IMAGE_OPENCODE` value in `.env` overrides automatic
+version resolution (including when the value is stale), so clear it to resume automatic
+resolution. Invalid overrides or unavailable/invalid GitHub version data stop the operation; no
 fallback value is written to `.env` or tracked metadata.
 
 ```sh
@@ -967,7 +969,7 @@ Normal builds and deployments do not require `.push-defaults` or a local `agent-
 checkout. For a custom image built by `agent-containers`, `make sync-images` still reads
 `REGISTRY` and `IMAGE_TAG` from `.push-defaults` and writes the full image override to `.env`.
 Clear or update that `AGENT_IMAGE_OPENCODE` entry to stop pinning the custom image and resume
-automatic GitHub release resolution.
+automatic published-version resolution.
 
 If you choose to maintain this legacy custom-image workflow and `.push-defaults` is absent,
 create it with:

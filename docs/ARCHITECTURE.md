@@ -159,14 +159,14 @@ pod. TUI agent startup belongs in the WebSocket flow, not sandbox setup.
 
 ## Container Image and Version Flow
 
-Swarmer resolves its default runtime image from the latest stable OpenCode release on GitHub.
-`agent-containers` remains a separate project for building custom agent images, but Swarmer
-builds and deploys no longer require that repository to be checked out.
+Swarmer resolves its default runtime image from the version published by `stolostron/agent-containers`.
+The publisher commits the current image version to `VERSION`; Swarmer reads that raw file at
+build/deploy time and selects the corresponding Quay image tag.
 
 ```text
-GitHub anomalyco/opencode latest stable release tag
+stolostron/agent-containers main/VERSION
   -> scripts/resolve_agent_image.py validates SemVer
-  -> ghcr.io/anomalyco/opencode:<SemVer>
+  -> quay.io/jpacker/opencode:<SemVer>
   -> make image-build build arg / make deploy environment
   -> Settings.agent_image_opencode
   -> agent_tools/opencode.py:get_image()
@@ -175,9 +175,9 @@ GitHub anomalyco/opencode latest stable release tag
 
 ### OpenCode image selection
 
-- The resolver requests `https://api.github.com/repos/anomalyco/opencode/releases/latest`,
-  rejects malformed, draft, prerelease, or unavailable metadata, and prints a
-  registry-qualified SemVer reference. The default does not use an image digest.
+- The resolver reads `https://raw.githubusercontent.com/stolostron/agent-containers/main/VERSION`,
+  rejects malformed, prerelease, or unavailable version data, and prints the corresponding
+  registry-qualified Quay SemVer reference. The default does not use an image digest.
 - `AGENT_IMAGE_OPENCODE` may be set to a full registry-qualified `name:tag` or digest to
   override resolution. Make's command-line value takes precedence over `.env`; `.env` takes
   precedence over the process environment. Any non-empty value is an explicit override and
@@ -187,8 +187,9 @@ GitHub anomalyco/opencode latest stable release tag
   parsing. The resolved value is passed to the dashboard Containerfile as its runtime default
   and to the Deployment manifest for a deploy. Resolution never rewrites `.env`, `.push-defaults`,
   or other tracked metadata, so CI candidate builds leave repository metadata clean.
-- `make sync-images` remains an explicit compatibility helper for users who maintain a custom
-  image in `../agent-containers`; it is not required by builds or deployments.
+- `make sync-images` remains an explicit compatibility helper for users who want a pinned
+  image reference in `.env`; it reads `REGISTRY` and `IMAGE_TAG` from `.push-defaults` and is
+  not required by builds or deployments.
 
 ### Consumer: `agent-swarm`
 
