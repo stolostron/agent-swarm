@@ -21,6 +21,7 @@ import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.orm import selectinload
 
 from swarmer.database import Base
 
@@ -493,18 +494,31 @@ class TestStopQueuedSession:
         ws = await _create_workspace(client)
         s = await _create_session(client, ws["id"])
         await _set_phase(s["id"], "queued")
+        from swarmer.models.session import Session
+        async with _TestSession() as db:
+            session = await db.get(Session, s["id"])
+            session.queued_instruction_prompt = "run only"
+            await db.commit()
 
         resp = await client.post(
             f"/api/v1/workspaces/{ws['id']}/sessions/{s['id']}/stop"
         )
         assert resp.status_code == 200
         assert resp.json()["phase"] == "idle"
+        async with _TestSession() as db:
+            session = await db.get(Session, s["id"])
+            assert session.queued_instruction_prompt is None
 
     @pytest.mark.asyncio
     async def test_stop_queued_clears_status_detail(self, client):
         ws = await _create_workspace(client)
         s = await _create_session(client, ws["id"])
         await _set_phase(s["id"], "queued")
+        from swarmer.models.session import Session as SessionModel
+        async with _TestSession() as db:
+            session = await db.get(SessionModel, s["id"])
+            session.queued_instruction_prompt = "pending run"
+            await db.commit()
         async with _TestSession() as db:
             await db.execute(
                 text("UPDATE sessions SET status_detail='Waiting for capacity' WHERE id=:id"),
@@ -517,17 +531,28 @@ class TestStopQueuedSession:
         )
         assert resp.status_code == 200
         assert resp.json().get("status_detail", "") == ""
+        async with _TestSession() as db:
+            session = await db.get(SessionModel, s["id"])
+            assert session.queued_instruction_prompt is None
 
     @pytest.mark.asyncio
     async def test_stop_queued_does_not_set_stopped(self, client):
         ws = await _create_workspace(client)
         s = await _create_session(client, ws["id"])
         await _set_phase(s["id"], "queued")
+        from swarmer.models.session import Session as SessionModel
+        async with _TestSession() as db:
+            session = await db.get(SessionModel, s["id"])
+            session.queued_instruction_prompt = "discard on failure"
+            await db.commit()
 
         resp = await client.post(
             f"/api/v1/workspaces/{ws['id']}/sessions/{s['id']}/stop"
         )
         assert resp.json()["phase"] != "stopped"
+        async with _TestSession() as db:
+            session = await db.get(SessionModel, s["id"])
+            assert session.queued_instruction_prompt is None
 
     @pytest.mark.asyncio
     async def test_stop_queued_no_pod_name_in_response(self, client):
@@ -680,6 +705,11 @@ class TestProcessQueue:
         ws = await _create_workspace(client)
         s = await _create_session(client, ws["id"])
         await _set_phase(s["id"], "queued")
+        from swarmer.models.session import Session as SessionModel
+        async with _TestSession() as db:
+            session = await db.get(SessionModel, s["id"])
+            session.queued_instruction_prompt = "discard on failure"
+            await db.commit()
 
         async def failing_launch(session, ws, db, **kw):
             raise RuntimeError("K8s unavailable")
@@ -696,6 +726,7 @@ class TestProcessQueue:
             result = await db.execute(select(Session).where(Session.id == s["id"]))
             sess = result.scalar_one()
         assert sess.phase == "idle"
+        assert sess.queued_instruction_prompt is None
 
 
 # ===========================================================================
@@ -994,6 +1025,245 @@ class TestListPageLaunchModeCoercion:
         async with _TestSession() as db:
             sess = await db.get(Session, s["id"])
             assert sess.event_context == ""
+
+    @pytest.mark.asyncio
+    async def test_confirmed_launch_remembers_settings_but_not_instructions(self, client):
+        from swarmer.models.session import Session
+        from swarmer.models.workspace_prompt import (
+            WorkspacePrompt,
+            WorkspacePromptSource,
+        )
+
+        ws = await _create_workspace(client)
+        s = await _create_session(client, ws["id"], "remember-settings")
+
+        async with _TestSession() as db:
+            session = await db.get(Session, s["id"])
+            session.instruction_prompt = "scheduled/session default"
+            source = WorkspacePromptSource(
+                workspace_id=ws["id"], name="shared prompts", repo_url="https://example.com/prompts"
+            )
+            db.add(source)
+            await db.flush()
+            prompt = WorkspacePrompt(
+                source_id=source.id, filename="task.md", display_name="Task",
+                content="base content", content_hash="hash",
+            )
+            db.add(prompt)
+            await db.flush()
+            prompt_id = prompt.id
+            await db.commit()
+
+        captured = {}
+
+        async def _fake_launch(session, workspace, db, user_id="", manual_instruction_prompt=None):
+            captured["mode"] = session.mode
+            captured["instruction"] = manual_instruction_prompt
+
+        available = [{"type": "preset", "value": "claude", "available": True}]
+        with (
+            patch("swarmer.routers.sessions._get_provider_options", new=AsyncMock(return_value=available)),
+            patch("swarmer.routers.sessions._do_launch", new=_fake_launch),
+        ):
+            resp = await client.post(
+                f"/workspaces/{ws['id']}/sessions/{s['id']}/launch",
+                data={
+                    "launch_confirmed": "1",
+                    "mode": "tui",
+                    "provider": "claude",
+                    "prompt_id": str(prompt_id),
+                    "instruction_prompt": "this run only",
+                },
+                follow_redirects=False,
+            )
+        assert resp.status_code in (302, 303)
+        assert captured == {"mode": "tui", "instruction": "this run only"}
+        async with _TestSession() as db:
+            session = await db.get(Session, s["id"])
+            assert session.mode == "tui"
+            assert session.provider == "claude"
+            assert session.prompt_id == prompt_id
+            assert session.instruction_prompt == "scheduled/session default"
+
+    @pytest.mark.asyncio
+    async def test_confirmed_launch_rejects_foreign_workspace_prompt(self, client):
+        from swarmer.models.session import Session
+        from swarmer.models.workspace_prompt import (
+            WorkspacePrompt,
+            WorkspacePromptSource,
+        )
+
+        ws = await _create_workspace(client, "Prompt Owner")
+        other_ws = await _create_workspace(client, "Other Prompt Owner")
+        s = await _create_session(client, ws["id"], "foreign-prompt")
+        async with _TestSession() as db:
+            source = WorkspacePromptSource(
+                workspace_id=other_ws["id"], name="foreign", repo_url="https://example.com/repo"
+            )
+            db.add(source)
+            await db.flush()
+            prompt = WorkspacePrompt(
+                source_id=source.id, filename="prompt.md", display_name="Foreign",
+                content="private", content_hash="hash",
+            )
+            db.add(prompt)
+            await db.commit()
+            foreign_prompt_id = prompt.id
+
+        with patch("swarmer.routers.sessions._do_launch", new=AsyncMock()) as launch:
+            resp = await client.post(
+                f"/workspaces/{ws['id']}/sessions/{s['id']}/launch",
+                data={
+                    "launch_confirmed": "1", "mode": "prompt", "provider": "",
+                    "prompt_id": str(foreign_prompt_id), "instruction_prompt": "run text",
+                },
+                follow_redirects=False,
+            )
+        assert resp.status_code in (302, 303)
+        launch.assert_not_awaited()
+        async with _TestSession() as db:
+            session = await db.get(Session, s["id"])
+            assert session.prompt_id is None
+
+    @pytest.mark.asyncio
+    async def test_launch_dialog_renders_blank_run_instructions(self, client):
+        ws = await _create_workspace(client)
+        s = await _create_session(client, ws["id"], "dialog")
+        with patch("swarmer.routers.sessions._get_provider_options", new=AsyncMock(return_value=[])):
+            response = await client.get(
+                f"/workspaces/{ws['id']}/sessions/{s['id']}/launch-dialog?mode=server"
+            )
+        assert response.status_code == 200
+        assert "Launch mode" in response.text
+        assert "Prompt preview" in response.text
+        assert "Additional Instructions" in response.text
+        assert "this manual run only" in response.text
+        assert 'id="launch-instruction-prompt"' in response.text
+
+    @pytest.mark.asyncio
+    async def test_confirmed_launch_rejects_unavailable_provider(self, client):
+        from swarmer.models.session import Session
+
+        ws = await _create_workspace(client, "Unavailable Provider")
+        s = await _create_session(client, ws["id"], "unavailable-provider")
+        with (
+            patch(
+                "swarmer.routers.sessions._get_provider_options",
+                new=AsyncMock(return_value=[{"type": "preset", "value": "claude", "available": False}]),
+            ),
+            patch("swarmer.routers.sessions._do_launch", new=AsyncMock()) as launch,
+        ):
+            response = await client.post(
+                f"/workspaces/{ws['id']}/sessions/{s['id']}/launch",
+                data={
+                    "launch_confirmed": "1", "mode": "prompt", "provider": "claude",
+                    "prompt_id": "", "instruction_prompt": "run text",
+                },
+                follow_redirects=False,
+            )
+        assert response.status_code in (302, 303)
+        launch.assert_not_awaited()
+        async with _TestSession() as db:
+            session = await db.get(Session, s["id"])
+            assert session.provider == ""
+
+
+@pytest.mark.asyncio
+async def test_manual_prompt_override_blank_does_not_inherit_session_instructions(client, monkeypatch):
+    from swarmer.config import settings
+    from swarmer.models.session import Session
+    from swarmer.models.workspace import Workspace
+    from swarmer.routers.sessions import _do_launch
+
+    settings.max_concurrent_agents = 2
+    ws_data = await _create_workspace(client)
+    session_data = await _create_session(client, ws_data["id"], "queued-run")
+    captured = {}
+
+    async def _capture_launch(**kwargs):
+        captured.update(kwargs)
+
+    monkeypatch.setattr("swarmer.routers.sessions._count_running_sessions", AsyncMock(return_value=0))
+    monkeypatch.setattr("swarmer.openshell_client.provider_exists", AsyncMock(return_value=False))
+    monkeypatch.setattr("swarmer.routers.mcp_servers.get_enabled_mcp_servers", AsyncMock(return_value=[]))
+    monkeypatch.setattr("swarmer.routers.sessions._get_prompt_sources", AsyncMock(return_value=[]))
+    monkeypatch.setattr("swarmer.routers.sessions._do_launch_openshell", _capture_launch)
+
+    async with _TestSession() as db:
+        session = await db.get(Session, session_data["id"])
+        session.instruction_prompt = "stored session default"
+        session.queued_instruction_prompt = ""
+        await db.commit()
+
+    async with _TestSession() as db:
+        session = await db.get(Session, session_data["id"], options=[selectinload(Session.repos)])
+        workspace = await db.get(Workspace, ws_data["id"])
+        assert session.queued_instruction_prompt == ""
+        await _do_launch(session, workspace, db, manual_instruction_prompt="")
+        assert captured["resolved_prompt"] == ""
+        assert session.queued_instruction_prompt is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("instructions", ["", "manual queued text"])
+async def test_queued_manual_instruction_is_durable_and_preserves_blank(client, monkeypatch, instructions):
+    from swarmer.config import settings
+    from swarmer.models.session import Session
+    from swarmer.models.workspace import Workspace
+    from swarmer.routers.sessions import _do_launch
+
+    settings.max_concurrent_agents = 1
+    ws_data = await _create_workspace(client)
+    session_data = await _create_session(client, ws_data["id"], "queued-manual")
+    monkeypatch.setattr("swarmer.routers.sessions._count_running_sessions", AsyncMock(return_value=1))
+    async with _TestSession() as db:
+        session = await db.get(Session, session_data["id"], options=[selectinload(Session.repos)])
+        workspace = await db.get(Workspace, ws_data["id"])
+        await _do_launch(session, workspace, db, manual_instruction_prompt=instructions)
+        assert session.phase == "queued"
+
+    async with _TestSession() as db:
+        session = await db.get(Session, session_data["id"])
+        assert session.queued_instruction_prompt == instructions
+
+
+@pytest.mark.asyncio
+async def test_manual_and_scheduled_prompt_composition_are_separate(client):
+    from swarmer.models.session import Session
+    from swarmer.models.session_schedule import SessionSchedule
+    from swarmer.models.workspace_prompt import (
+        WorkspacePrompt,
+        WorkspacePromptSource,
+    )
+    from swarmer.routers.sessions import (
+        _resolve_manual_prompt,
+        _resolve_schedule_prompt,
+    )
+
+    ws = await _create_workspace(client, "Composition")
+    s = await _create_session(client, ws["id"], "composition")
+    async with _TestSession() as db:
+        session = await db.get(Session, s["id"])
+        source = WorkspacePromptSource(workspace_id=ws["id"], name="prompts", repo_url="https://example.com/repo")
+        db.add(source)
+        await db.flush()
+        prompt = WorkspacePrompt(
+            source_id=source.id, filename="base.md", display_name="Base",
+            content="base prompt", content_hash="hash",
+        )
+        db.add(prompt)
+        await db.flush()
+        session.prompt_id = prompt.id
+        session.instruction_prompt = "session default"
+        schedule = SessionSchedule(
+            session_id=session.id, prompt_id=None, cron_schedule="0 0 * * *",
+            label="nightly", instruction_prompt="scheduled instructions", enabled=True,
+        )
+        db.add(schedule)
+        await db.flush()
+        assert await _resolve_manual_prompt(session, db, "") == "base prompt"
+        assert await _resolve_manual_prompt(session, db, "manual run") == "manual run\n\nbase prompt"
+        assert await _resolve_schedule_prompt(schedule.id, session, db) == "scheduled instructions\n\nbase prompt"
 
 
 # ===========================================================================

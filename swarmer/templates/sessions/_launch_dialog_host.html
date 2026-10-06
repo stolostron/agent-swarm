@@ -1,0 +1,100 @@
+<div id="launch-dialog-backdrop" class="pf-v6-c-backdrop" hidden aria-hidden="true"
+     style="display:none; position:fixed; inset:0; z-index:9999; background:rgba(0,0,0,0.65); overflow-y:auto;">
+  <div class="pf-v6-c-bullseye" style="min-height:100%; padding:var(--pf-t--global--spacer--lg);">
+    <div id="launch-dialog" class="pf-v6-c-modal-box pf-m-lg" role="dialog"
+         aria-modal="true" aria-labelledby="launch-dialog-title" tabindex="-1"
+         style="max-height:calc(100vh - 3rem); overflow-y:auto;">
+      <div id="launch-dialog-content" aria-live="polite"></div>
+    </div>
+  </div>
+</div>
+<script>
+  (function() {
+    const backdrop = document.getElementById('launch-dialog-backdrop');
+    const dialog = document.getElementById('launch-dialog');
+    const content = document.getElementById('launch-dialog-content');
+    let opener = null;
+    function closeDialog() {
+      if (backdrop.hidden) return;
+      backdrop.hidden = true;
+      backdrop.setAttribute('aria-hidden', 'true');
+      backdrop.style.display = 'none';
+      content.replaceChildren();
+      if (opener && opener.isConnected) opener.focus();
+      else document.querySelector('[data-launch-dialog-url]')?.focus();
+      opener = null;
+    }
+    document.addEventListener('click', async function(event) {
+      const launchButton = event.target.closest('[data-launch-dialog-url]');
+      if (launchButton) {
+        event.preventDefault();
+        opener = launchButton;
+        try {
+          const response = await fetch(launchButton.dataset.launchDialogUrl, {
+            headers: {'HX-Request': 'true'}
+          });
+          if (!response.ok) throw new Error('Could not load launch settings.');
+          content.innerHTML = await response.text();
+          backdrop.hidden = false;
+          backdrop.setAttribute('aria-hidden', 'false');
+          backdrop.style.display = 'block';
+          const promptSelect = content.querySelector('#launch-prompt-id');
+          const updatePreview = function() {
+            const selected = promptSelect.options[promptSelect.selectedIndex];
+            const text = selected ? selected.dataset.content || '' : '';
+            const preview = content.querySelector('#launch-prompt-preview-content');
+            const empty = content.querySelector('#launch-no-prompt');
+            preview.textContent = text;
+            preview.hidden = !text;
+            empty.hidden = Boolean(text);
+          };
+          promptSelect.addEventListener('change', updatePreview);
+          updatePreview();
+          const initial = content.querySelector('[autofocus]') || dialog;
+          initial.focus();
+        } catch (error) {
+          if (opener && opener.isConnected) opener.focus();
+          opener = null;
+          window.alert(error.message || 'Could not load launch settings.');
+        }
+        return;
+      }
+      if (event.target.closest('[data-launch-dialog-close]')) closeDialog();
+      if (event.target.id === 'clear-launch-instructions') {
+        const instructions = content.querySelector('#launch-instruction-prompt');
+        if (instructions) instructions.value = '';
+      }
+      if (backdrop.contains(event.target) && !dialog.contains(event.target)) closeDialog();
+    });
+    document.addEventListener('submit', function(event) {
+      if (event.target.id !== 'launch-confirm-form') return;
+      const mode = event.target.querySelector('#launch-mode').value;
+      sessionStorage.setItem('switchToTab', mode === 'tui' ? 'terminal' : 'output');
+    });
+    document.addEventListener('keydown', function(event) {
+      if (backdrop.hidden) return;
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        closeDialog();
+        return;
+      }
+      if (event.key !== 'Tab') return;
+      const focusable = Array.from(dialog.querySelectorAll(
+        'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])'
+      )).filter(element => element.offsetParent !== null);
+      if (!focusable.length) {
+        event.preventDefault();
+        dialog.focus();
+        return;
+      }
+      const first = focusable[0], last = focusable[focusable.length - 1];
+      if (!focusable.includes(document.activeElement)) {
+        event.preventDefault(); first.focus();
+      } else if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault(); last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault(); first.focus();
+      }
+    });
+  })();
+</script>

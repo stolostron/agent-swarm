@@ -869,6 +869,40 @@ async def session_detail(
     )
 
 
+@router.get(
+    "/workspaces/{ws_id}/sessions/{sid}/launch-dialog",
+    dependencies=[Depends(require_auth)],
+    response_class=HTMLResponse,
+)
+async def session_launch_dialog(
+    ws_id: int,
+    sid: int,
+    request: Request,
+    mode: str = "prompt",
+    redirect_to: str = "",
+    db: AsyncSession = Depends(get_db),
+):
+    """Render the shared manual-launch confirmation dialog for a session."""
+    ws = await _get_workspace(ws_id, db)
+    session = await db.get(Session, sid, options=[selectinload(Session.prompt)])
+    if ws is None or session is None or session.workspace_id != ws_id or session.is_active:
+        return HTMLResponse("Session is unavailable for launch.", status_code=404)
+    selected_mode = mode if mode in ("tui", "server", "prompt") else "prompt"
+    return templates.TemplateResponse(
+        request,
+        "sessions/_launch_dialog.html",
+        {
+            "ws": ws,
+            "session": session,
+            "prompt_sources": await _get_prompt_sources(ws_id, db),
+            "provider_options": await _get_provider_options(ws_id, db, session.agent_tool),
+            "selected_provider": session.provider,
+            "selected_mode": selected_mode,
+            "redirect_to": "list" if redirect_to == "list" else "",
+        },
+    )
+
+
 # ============================================================
 # Edit
 # ============================================================
@@ -992,6 +1026,30 @@ async def _resolve_session_prompt(session: Session, db: AsyncSession) -> str:
     else:
         resolved_prompt = base_prompt
     return resolved_prompt
+
+
+def _compose_prompt(base_prompt: str, instruction_prompt: str | None) -> str:
+    """Compose a base prompt with an explicit instruction override.
+
+    ``None`` means use no additional instructions at this layer; ``""`` is an
+    explicit blank override and therefore intentionally contributes nothing.
+    """
+    additional = (instruction_prompt or "").strip()
+    if additional and base_prompt:
+        return additional + "\n\n" + base_prompt
+    return additional or base_prompt
+
+
+async def _resolve_manual_prompt(
+    session: Session, db: AsyncSession, instruction_prompt: str
+) -> str:
+    """Resolve the selected base prompt plus this manual run's instructions."""
+    base_prompt = ""
+    if session.prompt_id:
+        prompt = await db.get(WorkspacePrompt, session.prompt_id)
+        if prompt:
+            base_prompt = prompt.content
+    return _compose_prompt(base_prompt, instruction_prompt)
 
 
 async def _count_running_sessions(db: AsyncSession) -> int:
@@ -1151,7 +1209,13 @@ async def _resolve_schedule_provider(schedule_id: int, session: Session, db: Asy
     return (session.provider or "").strip()
 
 
-async def _do_launch(session: Session, ws: Workspace, db: AsyncSession, user_id: str = "") -> None:
+async def _do_launch(
+    session: Session,
+    ws: Workspace,
+    db: AsyncSession,
+    user_id: str = "",
+    manual_instruction_prompt: str | None = None,
+) -> None:
     """Core launch logic shared by the HTTP endpoint and the background scheduler."""
     if user_id == "unknown":
         raise ValueError("Session expired — please log in again")
@@ -1171,6 +1235,9 @@ async def _do_launch(session: Session, ws: Workspace, db: AsyncSession, user_id:
         if running >= settings.max_concurrent_agents:
             session.phase = "queued"
             session.status_detail = f"Waiting for capacity ({running}/{settings.max_concurrent_agents} active)"
+            session.queued_instruction_prompt = (
+                manual_instruction_prompt if not session.active_schedule_id else None
+            )
             await db.commit()
             return
 
@@ -1230,6 +1297,8 @@ async def _do_launch(session: Session, ws: Workspace, db: AsyncSession, user_id:
     # (falling back to session defaults for empty fields).
     if session.active_schedule_id:
         resolved_prompt = await _resolve_schedule_prompt(session.active_schedule_id, session, db)
+    elif manual_instruction_prompt is not None:
+        resolved_prompt = await _resolve_manual_prompt(session, db, manual_instruction_prompt)
     else:
         resolved_prompt = await _resolve_session_prompt(session, db)
 
@@ -1237,6 +1306,13 @@ async def _do_launch(session: Session, ws: Workspace, db: AsyncSession, user_id:
         session_provider = await _resolve_schedule_provider(session.active_schedule_id, session, db)
     else:
         session_provider = (session.provider or "").strip()
+
+    # Queued manual instructions are consumed exactly once when dispatch begins.
+    # Clearing and committing before runtime setup means a setup failure cannot
+    # leak the previous run's override into a later scheduled or manual launch.
+    if session.queued_instruction_prompt is not None:
+        session.queued_instruction_prompt = None
+        await db.commit()
 
     # Fetch workspace prompt sources for network policy scoping.
     # Agents inside the sandbox may curl raw.githubusercontent.com to fetch
@@ -2414,6 +2490,7 @@ async def session_launch(
     instruction_prompt: str = Form(""),
     mode: str = Form(""),
     provider: str = Form(""),
+    launch_confirmed: str = Form(""),
     redirect_to: str = Form(""),
     db: AsyncSession = Depends(get_db),
 ):
@@ -2429,6 +2506,48 @@ async def session_launch(
     if session.is_active:
         return RedirectResponse(url=f"/workspaces/{ws_id}/sessions/{sid}", status_code=302)
 
+    manual_instruction_prompt: str | None = None
+    if launch_confirmed:
+        # Validate all remembered selections before changing the session. Prompt
+        # ownership is workspace-scoped and provider choices are checked against
+        # the live availability snapshot used to render the dialog.
+        if mode not in ("tui", "server", "prompt"):
+            flash(request, "Select a valid launch mode.", "danger")
+            return RedirectResponse(url=f"/workspaces/{ws_id}/sessions/{sid}", status_code=302)
+        if prompt_id:
+            try:
+                pid = int(prompt_id)
+            except ValueError:
+                flash(request, "Invalid prompt selection.", "danger")
+                return RedirectResponse(url=f"/workspaces/{ws_id}/sessions/{sid}", status_code=302)
+            prompt = await db.get(WorkspacePrompt, pid)
+            source = await db.get(WorkspacePromptSource, prompt.source_id) if prompt else None
+            if prompt is None or source is None or source.workspace_id != ws_id:
+                flash(request, "Selected prompt does not belong to this workspace.", "danger")
+                return RedirectResponse(url=f"/workspaces/{ws_id}/sessions/{sid}", status_code=302)
+            session.prompt_id = pid
+        else:
+            session.prompt_id = None
+
+        options = await _get_provider_options(ws_id, db, session.agent_tool)
+        presets = [option for option in options if option.get("type") == "preset"]
+        if provider and not any(
+            option.get("value") == provider and option.get("available") for option in presets
+        ):
+            flash(request, "Selected AI provider is unavailable. Choose a configured provider.", "danger")
+            return RedirectResponse(url=f"/workspaces/{ws_id}/sessions/{sid}", status_code=302)
+        try:
+            tool = get_tool(session.agent_tool)
+        except ValueError:
+            tool = get_tool("opencode")
+        if mode == "server" and not tool.supports_server_mode():
+            flash(request, f"{tool.display_name} agent tool does not support Chat mode.", "danger")
+            return RedirectResponse(url=f"/workspaces/{ws_id}/sessions/{sid}", status_code=302)
+
+        session.mode = mode
+        session.provider = provider.strip()
+        manual_instruction_prompt = instruction_prompt
+
     # This is a manual UI-triggered launch, never a cron/event dispatch (those
     # go through scheduler.py / pr_watcher.py which set their own context) —
     # clear any stale event_context left over from a prior event-triggered run
@@ -2437,9 +2556,10 @@ async def session_launch(
     # Committed immediately rather than left pending on `session` so the
     # clear is durable even if _do_launch fails before its own next commit.
     session.event_context = ""
+    session.active_schedule_id = None
     await db.commit()
 
-    if save_config:
+    if save_config and not launch_confirmed:
         if name.strip():
             session.name = name.strip()
         session.github_pat_id = int(github_pat_id) if github_pat_id else None
@@ -2463,12 +2583,13 @@ async def session_launch(
                 session.prompt_id = None
         else:
             session.prompt_id = None
-        session.instruction_prompt = instruction_prompt.strip()
+        # Legacy launch forms may still submit stored settings, but run-specific
+        # launch instructions are never copied into scheduled/session defaults.
         if mode in ("tui", "server", "prompt"):
             session.mode = mode
         if provider.strip():
             session.provider = provider.strip()
-    else:
+    elif not launch_confirmed:
         # List-page launch: no explicit mode chosen — default to prompt so the
         # session runs once and exits rather than starting a TUI or server.
         session.mode = "prompt"
@@ -2483,7 +2604,16 @@ async def session_launch(
             pass
 
     try:
-        await _do_launch(session, ws, db, user_id=request.session.get("username", ""))
+        if manual_instruction_prompt is None:
+            await _do_launch(session, ws, db, user_id=request.session.get("username", ""))
+        else:
+            await _do_launch(
+                session,
+                ws,
+                db,
+                user_id=request.session.get("username", ""),
+                manual_instruction_prompt=manual_instruction_prompt,
+            )
         if session.phase == "queued":
             flash(request, f"Session queued — {session.status_detail}", "info")
     except Exception as exc:
@@ -2516,6 +2646,7 @@ async def session_stop(
     if session.phase == "queued":
         session.phase = "idle"
         session.status_detail = ""
+        session.queued_instruction_prompt = None
         await db.commit()
         return RedirectResponse(url=f"/workspaces/{ws_id}/sessions/{sid}", status_code=302)
 

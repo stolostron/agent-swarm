@@ -175,24 +175,18 @@
 
   {# Three launch pills — hidden when session is active #}
   <div id="launch-pills" style="display:{% if session.is_active %}none{% else %}flex{% endif %}; gap:var(--pf-t--global--spacer--sm); align-items:center;">
-    <form method="post" action="/workspaces/{{ ws.id }}/sessions/{{ session.id }}/launch">
-      <input type="hidden" name="mode" value="tui">
-      <button type="submit" class="pf-v6-c-label launch-pill-green" style="cursor:pointer; font-family:inherit; font-weight:700;">
-        <span class="pf-v6-c-label__content">&#9654; TERM.UI</span>
-      </button>
-    </form>
-    <form method="post" action="/workspaces/{{ ws.id }}/sessions/{{ session.id }}/launch">
-      <input type="hidden" name="mode" value="server">
-      <button type="submit" class="pf-v6-c-label launch-pill-green" style="cursor:pointer; font-family:inherit; font-weight:700;">
-        <span class="pf-v6-c-label__content">&#9654; CHAT</span>
-      </button>
-    </form>
-    <form method="post" action="/workspaces/{{ ws.id }}/sessions/{{ session.id }}/launch">
-      <input type="hidden" name="mode" value="prompt">
-      <button type="submit" class="pf-v6-c-label launch-pill-muted" style="cursor:pointer; font-family:inherit; font-weight:700;">
-        <span class="pf-v6-c-label__content">&#9654; PROMPT</span>
-      </button>
-    </form>
+    <button type="button" data-launch-dialog-url="/workspaces/{{ ws.id }}/sessions/{{ session.id }}/launch-dialog?mode=tui"
+            class="pf-v6-c-label launch-pill-green" style="cursor:pointer; font-family:inherit; font-weight:700;">
+      <span class="pf-v6-c-label__content">&#9654; TERM.UI</span>
+    </button>
+    <button type="button" data-launch-dialog-url="/workspaces/{{ ws.id }}/sessions/{{ session.id }}/launch-dialog?mode=server"
+            class="pf-v6-c-label launch-pill-green" style="cursor:pointer; font-family:inherit; font-weight:700;">
+      <span class="pf-v6-c-label__content">&#9654; CHAT</span>
+    </button>
+    <button type="button" data-launch-dialog-url="/workspaces/{{ ws.id }}/sessions/{{ session.id }}/launch-dialog?mode=prompt"
+            class="pf-v6-c-label launch-pill-muted" style="cursor:pointer; font-family:inherit; font-weight:700;">
+      <span class="pf-v6-c-label__content">&#9654; PROMPT</span>
+    </button>
   </div>
 
   {# Sandbox name — between Stop and Chat ↗ #}
@@ -221,6 +215,7 @@
     </form>
   </div>
 </div>
+{% include "sessions/_launch_dialog_host.html" %}
 
 {# ── Capacity bar — shown when concurrency limiting is enabled ── #}
 {% if capacity and capacity.max > 0 %}
@@ -913,29 +908,6 @@ function copyCommitMsg(btn) { _copyBlock('commit-msg', btn); }
   });
 
 })();
-
-// ── Launch pills delegated submit handler ──
-document.getElementById('launch-pills') && document.getElementById('launch-pills').addEventListener('submit', function(e) {
-  e.preventDefault();
-  const pillForm = e.target;
-  const mode = pillForm.querySelector('input[name=mode]').value;
-  const cfgForm = document.getElementById('cfg-edit-form');
-  const data = new FormData(cfgForm);
-  data.set('mode', mode);
-  data.set('save_config', '1');
-  const tempForm = document.createElement('form');
-  tempForm.method = 'POST';
-  tempForm.action = pillForm.action;
-  tempForm.style.display = 'none';
-  for (const [k, v] of data.entries()) {
-    const inp = document.createElement('input');
-    inp.type = 'hidden'; inp.name = k; inp.value = v;
-    tempForm.appendChild(inp);
-  }
-  document.body.appendChild(tempForm);
-  sessionStorage.setItem('switchToTab', mode === 'tui' ? 'terminal' : 'output');
-  tempForm.submit();
-});
 
     function togglePrompt() {
       const card = document.getElementById('prompt-card');

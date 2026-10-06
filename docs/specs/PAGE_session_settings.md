@@ -7,9 +7,10 @@ working branch, prompt, GitHub credential, and enabled MCP servers.
 
 ## Sources
 
-- Template: `swarmer/templates/sessions/detail.html`, `_provider_select.html`,
-  `_prompt_picker.html`, `_pat_select.html`
-- Router: `swarmer/routers/sessions.py:session_edit`
+- Templates: `swarmer/templates/sessions/detail.html`, `_provider_select.html`,
+  `_prompt_picker.html`, `_pat_select.html`, `_launch_dialog.html`
+- Router: `swarmer/routers/sessions.py:session_edit`, `session_launch_dialog`,
+  and `session_launch`
 - REST API: session `PUT`, `set-mode`, and `set-provider` operations
 - Runtime: `swarmer/agent_tools.py`, `swarmer/openshell_client.py`
 
@@ -19,6 +20,8 @@ working branch, prompt, GitHub credential, and enabled MCP servers.
 - Serialized save promise prevents overlapping configuration writes.
 - Jinja2 renders available tools/providers and disables active-session fields.
 - Agent tool strategy controls supported modes and launch command.
+- Manual launch selections are confirmed in a shared modal; cancel/dismiss does
+  not autosave dialog changes.
 
 ## Algorithm
 
@@ -54,11 +57,21 @@ deletion on stop, delete, and successful prompt completion.
 - Working branch may be explicit or generated at launch.
 - Prompt source and inline instruction can be combined according to launch
   prompt assembly rules.
+- `Session.instruction_prompt` remains the session default for scheduled/event
+  fallback. Additional Instructions entered in the launch dialog override that
+  default for the manual run only. Queued runs persist the nullable
+  `queued_instruction_prompt` until dispatch; NULL means no override, while an
+  empty string is an explicit blank override.
+- Confirming a manual launch saves prompt/provider/mode to the existing Session,
+  but never saves its run-only instruction text to Session or SessionSchedule.
 
 ## Acceptance checks
 
 - Active sessions cannot be changed through direct POST requests.
 - Invalid prompt IDs from another workspace are rejected.
+- Manual provider selections are checked against current workspace availability.
+- A blank manual instruction override does not inherit the session instruction
+  default, and scheduled prompt fallback remains unchanged.
 - Server mode rejects unsupported agent tools server-side.
 - Autosave reports failure without silently losing the selected value.
 - Agent Swarm provider creation is driven by persisted `Session.mcp_server_ids`,

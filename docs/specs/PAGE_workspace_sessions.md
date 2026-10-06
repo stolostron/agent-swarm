@@ -20,6 +20,8 @@ credential selection, and capacity.
 - Initial server-rendered HTML.
 - HTMX polling of `/workspaces/{ws_id}/sessions/rows` every three seconds.
 - PatternFly table, labels, empty state, and capacity indicator.
+- Launch opens the same confirmation dialog as session detail, in Prompt mode;
+  cancel, Escape, and backdrop dismissal do not persist selection changes.
 - Async SQLAlchemy queries for status and queue position.
 - REST list/create endpoints for non-browser clients.
 

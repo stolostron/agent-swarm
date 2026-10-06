@@ -305,6 +305,7 @@ async def stop_session(
     if session.phase == "queued":
         session.phase = "idle"
         session.status_detail = ""
+        session.queued_instruction_prompt = None
         await db.commit()
         await db.refresh(session)
         return session

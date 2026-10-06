@@ -7,8 +7,10 @@ Requires the dev server running at http://127.0.0.1:8091 with SWARMER_DEV_AUTH=1
 """
 
 import re
+from pathlib import Path
+
 import pytest
-from playwright.sync_api import sync_playwright, expect, Page
+from playwright.sync_api import Page, expect, sync_playwright
 
 BASE_URL = "http://127.0.0.1:8091"
 
@@ -275,3 +277,60 @@ class TestResponsiveDesign:
         expect(name_input).to_be_visible()
         page.close()
         context.close()
+
+
+class TestLaunchConfirmationDialog:
+    def test_escape_clear_backdrop_and_focus_management(self, page: Page):
+        page.goto(f"{BASE_URL}/workspaces")
+        page.route(
+            "**/launch-dialog*",
+            lambda route: route.fulfill(
+                status=200,
+                content_type="text/html",
+                body='''<form id="launch-confirm-form">
+                  <h2 id="launch-dialog-title">Launch session</h2>
+                  <label for="launch-mode">Launch mode</label>
+                  <select id="launch-mode" autofocus><option>Prompt</option></select>
+                  <select id="launch-prompt-id"><option data-content="">None</option></select>
+                  <pre id="launch-prompt-preview-content"></pre><span id="launch-no-prompt"></span>
+                  <textarea id="launch-instruction-prompt"></textarea>
+                  <button id="clear-launch-instructions" type="button">Clear</button>
+                  <button type="button" data-launch-dialog-close>Cancel</button>
+                  <button type="submit">Confirm launch</button>
+                </form>''',
+            ),
+        )
+        host = Path("swarmer/templates/sessions/_launch_dialog_host.html").read_text()
+        page.set_content(
+            '<button id="opener" data-launch-dialog-url="/launch-dialog?id=7">Launch</button>'
+            + host
+        )
+        launches = []
+        page.on("request", lambda request: launches.append(request.url) if request.method == "POST" else None)
+        opener = page.locator("#opener")
+        opener.click()
+        dialog = page.get_by_role("dialog", name="Launch session")
+        expect(dialog).to_be_visible()
+        expect(page.locator("#launch-instruction-prompt")).to_have_value("")
+        expect(page.locator("#launch-mode")).to_be_focused()
+
+        page.locator("#launch-instruction-prompt").fill("temporary")
+        page.get_by_role("button", name="Clear").click()
+        expect(page.locator("#launch-instruction-prompt")).to_have_value("")
+
+        page.get_by_role("button", name="Confirm launch").focus()
+        page.keyboard.press("Tab")
+        expect(page.locator("#launch-mode")).to_be_focused()
+        page.keyboard.press("Shift+Tab")
+        expect(page.get_by_role("button", name="Confirm launch")).to_be_focused()
+
+        page.keyboard.press("Escape")
+        expect(dialog).to_be_hidden()
+        expect(opener).to_be_focused()
+        assert launches == []
+
+        opener.click()
+        page.locator("#launch-dialog-backdrop").click(position={"x": 5, "y": 5})
+        expect(dialog).to_be_hidden()
+        expect(opener).to_be_focused()
+        assert launches == []
