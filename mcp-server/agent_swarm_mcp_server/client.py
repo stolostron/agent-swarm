@@ -263,9 +263,14 @@ class AgentSwarmClient:
         """Delete a non-running session."""
         return await self._delete(f"/api/v1/workspaces/{ws_id}/sessions/{sid}")
 
-    async def launch_session(self, ws_id: int, sid: int) -> dict:
-        """Launch an idle or stopped session."""
-        return await self._post(f"/api/v1/workspaces/{ws_id}/sessions/{sid}/launch")
+    async def launch_session(
+        self, ws_id: int, sid: int, instruction_prompt: str = ""
+    ) -> dict:
+        """Launch a session with optional run-only additional instructions."""
+        return await self._post(
+            f"/api/v1/workspaces/{ws_id}/sessions/{sid}/launch",
+            json={"instruction_prompt": instruction_prompt},
+        )
 
     async def stop_session(self, ws_id: int, sid: int) -> dict:
         """Stop an active session."""

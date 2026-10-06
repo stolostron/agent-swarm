@@ -155,6 +155,45 @@ class TestMigrateDbDropsLegacyColumns:
         finally:
             db_module._engine = orig_engine
 
+    @pytest.mark.asyncio
+    async def test_run_context_columns_added_to_existing_database(self):
+        """Older session/run tables gain the immutable context snapshot columns."""
+        async with _engine.begin() as conn:
+            for table, column in (
+                ("sessions", "run_context_snapshot"),
+                ("session_runs", "prompt_id"),
+                ("session_runs", "prompt_content"),
+                ("session_runs", "additional_instructions"),
+                ("session_runs", "startup_context"),
+                ("session_runs", "context_captured"),
+            ):
+                await conn.execute(text(f"ALTER TABLE {table} DROP COLUMN {column}"))
+
+        import swarmer.database as db_module
+
+        orig_engine = db_module._engine
+        db_module._engine = _engine
+        try:
+            await db_module.migrate_db()
+        finally:
+            db_module._engine = orig_engine
+
+        async with _engine.begin() as conn:
+            session_columns = {
+                row[1] for row in (await conn.execute(text("PRAGMA table_info(sessions)"))).fetchall()
+            }
+            run_columns = {
+                row[1] for row in (await conn.execute(text("PRAGMA table_info(session_runs)"))).fetchall()
+            }
+        assert "run_context_snapshot" in session_columns
+        assert {
+            "prompt_id",
+            "prompt_content",
+            "additional_instructions",
+            "startup_context",
+            "context_captured",
+        }.issubset(run_columns)
+
 
 class TestWorkspaceMemberBackfill:
     """ACM-41659 follow-up: migrate_db() must backfill workspace_members and

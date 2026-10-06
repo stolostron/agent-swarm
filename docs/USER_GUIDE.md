@@ -811,9 +811,10 @@ Workspace-level prompt library with git-backed folders:
 
 - Configure prompt sources (git URLs) per workspace
 - Recursive `.md` file caching from configured URL sources
-- Per-session prompt picker with live preview in the UI
-- Composable **Additional Instructions** layer: free-text instructions always prepended to the base prompt selected from the library
-- Prompts are injected into the agent command (prompt mode) or AGENTS.md (TUI/server modes)
+- Choose and preview a remembered prompt in the manual launch dialog
+- **Additional Instructions** apply to that manual launch only and are not reused; scheduled runs use their own configured instructions
+- TUI and Chat receive prompt context in `AGENTS.md` at startup, not as a chat message; Prompt mode receives the same composed startup context
+- Legacy session prompt defaults remain available as fallback for existing schedules
 
 ### Cron Scheduling
 

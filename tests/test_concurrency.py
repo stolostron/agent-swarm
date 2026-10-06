@@ -933,7 +933,7 @@ class TestListPageLaunchModeCoercion:
 
         launched_modes = []
 
-        async def _fake_do_launch(session, workspace, db, user_id=""):
+        async def _fake_do_launch(session, workspace, db, user_id="", manual_instruction_prompt=None):
             launched_modes.append(session.mode)
 
         with patch("swarmer.routers.sessions._do_launch", new=_fake_do_launch):
@@ -956,7 +956,7 @@ class TestListPageLaunchModeCoercion:
 
         launched_modes = []
 
-        async def _fake_do_launch(session, workspace, db, user_id=""):
+        async def _fake_do_launch(session, workspace, db, user_id="", manual_instruction_prompt=None):
             launched_modes.append(session.mode)
 
         with patch("swarmer.routers.sessions._do_launch", new=_fake_do_launch):
@@ -979,7 +979,7 @@ class TestListPageLaunchModeCoercion:
 
         launched_modes = []
 
-        async def _fake_do_launch(session, workspace, db, user_id=""):
+        async def _fake_do_launch(session, workspace, db, user_id="", manual_instruction_prompt=None):
             launched_modes.append(session.mode)
 
         with patch("swarmer.routers.sessions._do_launch", new=_fake_do_launch):
@@ -1011,7 +1011,7 @@ class TestListPageLaunchModeCoercion:
             sess.event_context = json.dumps({"pr_number": 104, "event_condition": "ci_fail_or_conflict"})
             await db.commit()
 
-        async def _fake_do_launch(session, workspace, db, user_id=""):
+        async def _fake_do_launch(session, workspace, db, user_id="", manual_instruction_prompt=None):
             pass
 
         with patch("swarmer.routers.sessions._do_launch", new=_fake_do_launch):
@@ -1138,7 +1138,7 @@ class TestListPageLaunchModeCoercion:
         assert "Launch mode" in response.text
         assert "Prompt preview" in response.text
         assert "Additional Instructions" in response.text
-        assert "this manual run only" in response.text
+        assert "this manual launch" in response.text
         assert 'id="launch-instruction-prompt"' in response.text
 
     @pytest.mark.asyncio
@@ -1262,6 +1262,76 @@ async def test_queued_manual_instruction_is_durable_and_preserves_blank(client, 
     async with _TestSession() as db:
         session = await db.get(Session, session_data["id"])
         assert session.queued_instruction_prompt == instructions
+
+
+@pytest.mark.asyncio
+async def test_queued_manual_launch_uses_launch_time_prompt_snapshot(client, monkeypatch):
+    """Prompt edits made while queued cannot alter the already-requested run."""
+    from swarmer.config import settings
+    from swarmer.models.session import Session
+    from swarmer.models.workspace import Workspace
+    from swarmer.models.workspace_prompt import WorkspacePrompt, WorkspacePromptSource
+    from swarmer.routers.sessions import _do_launch
+
+    settings.max_concurrent_agents = 1
+    ws_data = await _create_workspace(client, "Queued prompt snapshot")
+    session_data = await _create_session(client, ws_data["id"], "queued-snapshot")
+    async with _TestSession() as db:
+        session = await db.get(Session, session_data["id"])
+        source = WorkspacePromptSource(
+            workspace_id=ws_data["id"], name="prompts", repo_url="https://example.com/prompts"
+        )
+        db.add(source)
+        await db.flush()
+        prompt = WorkspacePrompt(
+            source_id=source.id,
+            filename="task.md",
+            display_name="Task",
+            content="original prompt content",
+            content_hash="original",
+        )
+        db.add(prompt)
+        await db.flush()
+        session.prompt_id = prompt.id
+        prompt_id = prompt.id
+        await db.commit()
+
+    monkeypatch.setattr(
+        "swarmer.routers.sessions._count_running_sessions",
+        AsyncMock(side_effect=[1, 0]),
+    )
+    async with _TestSession() as db:
+        session = await db.get(Session, session_data["id"], options=[selectinload(Session.repos)])
+        workspace = await db.get(Workspace, ws_data["id"])
+        await _do_launch(session, workspace, db, manual_instruction_prompt="queued instructions")
+        assert session.phase == "queued"
+
+    async with _TestSession() as db:
+        prompt = await db.get(WorkspacePrompt, prompt_id)
+        prompt.content = "edited prompt content"
+        await db.commit()
+
+    captured = {}
+
+    async def _capture_launch(**kwargs):
+        captured.update(kwargs)
+
+    monkeypatch.setattr("swarmer.openshell_client.provider_exists", AsyncMock(return_value=False))
+    monkeypatch.setattr("swarmer.routers.mcp_servers.get_enabled_mcp_servers", AsyncMock(return_value=[]))
+    monkeypatch.setattr("swarmer.routers.sessions._get_prompt_sources", AsyncMock(return_value=[]))
+    monkeypatch.setattr("swarmer.routers.sessions._do_launch_openshell", _capture_launch)
+
+    async with _TestSession() as db:
+        session = await db.get(Session, session_data["id"], options=[selectinload(Session.repos)])
+        workspace = await db.get(Workspace, ws_data["id"])
+        await _do_launch(
+            session,
+            workspace,
+            db,
+            manual_instruction_prompt=session.queued_instruction_prompt,
+        )
+
+    assert captured["resolved_prompt"] == "queued instructions\n\noriginal prompt content"
 
 
 @pytest.mark.asyncio

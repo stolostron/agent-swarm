@@ -297,6 +297,14 @@ async def migrate_db() -> None:
         "ALTER TABLE session_runs ADD COLUMN trigger_type VARCHAR(32) NOT NULL DEFAULT 'manual'",
         "ALTER TABLE session_runs ADD COLUMN event_context TEXT NOT NULL DEFAULT ''",
         "ALTER TABLE sessions ADD COLUMN event_context TEXT NOT NULL DEFAULT ''",
+        # ACM-47659: preserve exact launch-time startup context through queued
+        # dispatch/restarts, then snapshot it into immutable run history.
+        "ALTER TABLE sessions ADD COLUMN run_context_snapshot TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE session_runs ADD COLUMN prompt_id INTEGER",
+        "ALTER TABLE session_runs ADD COLUMN prompt_content TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE session_runs ADD COLUMN additional_instructions TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE session_runs ADD COLUMN startup_context TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE session_runs ADD COLUMN context_captured BOOLEAN NOT NULL DEFAULT 0",
         # ACM-42674 follow-up: in-process PR watcher state & ETag caching
         """CREATE TABLE IF NOT EXISTS pr_action_state (
             id INTEGER PRIMARY KEY AUTOINCREMENT,

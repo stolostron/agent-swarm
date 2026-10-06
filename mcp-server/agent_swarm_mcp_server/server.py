@@ -415,8 +415,12 @@ class AgentSwarmMCPServer:
         session = await self.client.update_session(workspace_id, session_id, **fields)
         return _fmt_session(session)
 
-    async def _launch_session(self, workspace_id: int, session_id: int) -> dict:
-        session = await self.client.launch_session(workspace_id, session_id)
+    async def _launch_session(
+        self, workspace_id: int, session_id: int, instruction_prompt: str = ""
+    ) -> dict:
+        session = await self.client.launch_session(
+            workspace_id, session_id, instruction_prompt=instruction_prompt
+        )
         return _fmt_session(session)
 
     async def _stop_session(self, workspace_id: int, session_id: int) -> dict:
@@ -992,32 +996,42 @@ class AgentSwarmMCPServer:
             prompt_id: int | None = None,
             instruction_prompt: str | None = None,
         ) -> dict:
-            """Set the prompt configuration for a session.
+            """Set a session's remembered prompt and legacy schedule defaults.
 
-            instruction_prompt (additional instructions) is prepended to the
-            git-referenced base prompt (prompt_id) at launch time.
-            Either or both can be set independently.
+            The selected base prompt is remembered for manual launches and is
+            inherited by schedules that do not select another prompt. The
+            session-level additional instructions are a legacy default used by
+            schedules that do not define their own; manual instructions belong
+            to an individual launch.
 
             Args:
                 workspace_id: The workspace id.
                 session_id: The session id.
                 prompt_id: Base prompt id from list_workspace_prompts.
-                instruction_prompt: Additional instructions prepended to base prompt.
+                instruction_prompt: Legacy additional-instruction default for schedules.
             """
             return await self._set_session_prompt(workspace_id, session_id, prompt_id, instruction_prompt)
 
         @mcp.tool()
-        async def launch_session(workspace_id: int, session_id: int) -> dict:
+        async def launch_session(
+            workspace_id: int,
+            session_id: int,
+            instruction_prompt: str = "",
+        ) -> dict:
             """Launch a session sandbox.
 
             Starts the agent tool in the configured mode. For prompt mode, the session
             runs once and exits — use wait_for_session to block until completion.
+            Additional instructions apply to this launch only. An omitted or empty
+            value launches without additional instructions; it does not change
+            remembered session settings or scheduled-run instructions.
 
             Args:
                 workspace_id: The workspace id.
                 session_id: The session id.
+                instruction_prompt: Run-only instructions prepended to the remembered base prompt.
             """
-            return await self._launch_session(workspace_id, session_id)
+            return await self._launch_session(workspace_id, session_id, instruction_prompt)
 
         @mcp.tool()
         async def stop_session(workspace_id: int, session_id: int) -> dict:

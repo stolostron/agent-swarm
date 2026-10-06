@@ -164,10 +164,6 @@
         </div>
       </div>
 
-      <div id="prompt-row">
-        {% include "sessions/_prompt_picker.html" with context %}
-      </div>
-
       <div id="provider-select-container" {% if _selected_tool == 'shell' %}style="display:none"{% endif %}>
         {% include "sessions/_provider_select.html" with context %}
       </div>

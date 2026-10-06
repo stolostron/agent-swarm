@@ -238,28 +238,6 @@
 </div>
 {% endif %}
 
-{# Compact summary row — visible when a prompt value exists #}
-<button id="prompt-compact" type="button" onclick="togglePrompt()"
-        class="pf-v6-c-button pf-m-link"
-        style="display:inline-flex; align-items:center; gap:var(--pf-t--global--spacer--xs); margin-bottom:var(--pf-t--global--spacer--md); padding:0; text-decoration:none;">
-  <span id="prompt-arrow" style="font-size:var(--pf-t--global--font--size--sm); line-height:1;">{% if session.instruction_prompt or session.prompt_id %}▶{% else %}▼{% endif %}</span>
-  <span style="font-size:var(--pf-t--global--font--size--lg); font-weight:var(--pf-t--global--font--weight--heading--bold);">Prompt</span>
-  {% if session.mode in ('tui', 'server') %}
-  <span style="font-size:var(--pf-t--global--font--size--sm); color:var(--pf-t--global--text--color--subtle); font-weight:normal; margin-left:var(--pf-t--global--spacer--xs);">— written as AGENTS.md at launch</span>
-  {% endif %}
-</button>
-{# Full prompt card — visible when no value exists, or after expand #}
-<div id="prompt-card" class="pf-v6-c-card" style="display:{% if session.instruction_prompt or session.prompt_id %}none{% else %}block{% endif %}; margin-bottom:var(--pf-t--global--spacer--md);">
-  <div class="pf-v6-c-card__body">
-    {% include "sessions/_prompt_picker.html" with context %}
-    {# Add form binding for the prompt_id select inside the partial #}
-    <script>
-      document.getElementById('prompt_id').setAttribute('form', 'cfg-edit-form');
-      document.getElementById('instruction_prompt').setAttribute('form', 'cfg-edit-form');
-    </script>
-  </div>
-</div>
-
 {% if session.run_started_at %}
 <div style="font-size:var(--pf-t--global--font--size--sm); color:var(--pf-t--global--text--color--subtle); margin-bottom:var(--pf-t--global--spacer--md);">
   Last run: {{ session.run_started_at.strftime('%b %d %Y %H:%M') }} UTC
@@ -909,34 +887,6 @@ function copyCommitMsg(btn) { _copyBlock('commit-msg', btn); }
 
 })();
 
-    function togglePrompt() {
-      const card = document.getElementById('prompt-card');
-      const arrow = document.getElementById('prompt-arrow');
-      if (card.style.display === 'none') {
-        card.style.display = 'block';
-        arrow.textContent = '▼';
-      } else {
-        card.style.display = 'none';
-        arrow.textContent = '▶';
-      }
-    }
-
-// Wire auto-save for the instruction prompt textarea.
-// It lives outside the cfg-edit-form DOM tree (associated via the HTML form=""
-// attribute), so the form.querySelectorAll() auto-save above doesn't find it.
-// The prompt_id <select> auto-save is handled inside _prompt_picker.html.
-(function () {
-  const instrTA = document.getElementById('instruction_prompt');
-  if (!instrTA) return;
-  let pending = false;
-  instrTA.addEventListener('input', () => { pending = true; });
-  instrTA.addEventListener('blur', async () => {
-    if (!pending) return;
-    pending = false;
-    if (window._cfgSave) await window._cfgSave();
-  });
-})();
-
 // ── History expandable rows ──
 function toggleHistoryRow(runId) {
   var toggleTd = document.getElementById('hist-toggle-' + runId);
@@ -993,10 +943,6 @@ document.addEventListener('htmx:afterSwap', function () {
       el.disabled = isBlocked;
     });
   }
-  const promptId = document.getElementById('prompt_id');
-  if (promptId) promptId.disabled = isBlocked;
-  const instrTA = document.getElementById('instruction_prompt');
-  if (instrTA) instrTA.disabled = isBlocked;
   const patSelect = document.getElementById('cfg-pat-select');
   if (patSelect) patSelect.disabled = isBlocked;
   const stopMsg = document.getElementById('cfg-stop-msg');

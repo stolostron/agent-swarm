@@ -202,6 +202,31 @@ class TestDoLaunchRoutesToOpenshell:
         mock_openshell.assert_called_once()
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("instruction_prompt", ["temporary override", "", None])
+    async def test_api_launch_instructions_are_run_only(self, client, instruction_prompt):
+        """REST launch overrides reach the launch path without changing legacy defaults."""
+        from swarmer.models.session import Session
+
+        ws = await _create_workspace(client, "Run-only API instructions")
+        session_data = await _create_session(client, ws["id"])
+        async with _TestSession() as db:
+            session = await db.get(Session, session_data["id"])
+            session.instruction_prompt = "legacy default for schedules"
+            await db.commit()
+
+        with patch("swarmer.routers.sessions._do_launch", new=AsyncMock()) as launch:
+            response = await client.post(
+                f"/api/v1/workspaces/{ws['id']}/sessions/{session_data['id']}/launch",
+                json={} if instruction_prompt is None else {"instruction_prompt": instruction_prompt},
+            )
+
+        assert response.status_code == 200, response.text
+        assert launch.await_args.kwargs["manual_instruction_prompt"] == (instruction_prompt or "")
+        async with _TestSession() as db:
+            session = await db.get(Session, session_data["id"])
+            assert session.instruction_prompt == "legacy default for schedules"
+
+    @pytest.mark.asyncio
     async def test_do_launch_does_not_create_k8s_pod(self, client):
         ws = await _create_workspace(client)
         s = await _create_session(client, ws["id"])

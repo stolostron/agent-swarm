@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import sys
 from datetime import datetime, timedelta, timezone
@@ -566,3 +567,104 @@ async def test_record_session_run_no_prompt_or_schedule():
         assert run is not None
         assert run.schedule_label == ""
         assert run.prompt_name == ""
+
+
+@pytest.mark.asyncio
+async def test_record_session_run_copies_immutable_startup_context():
+    """The run record must use its launch snapshot, not mutable session state."""
+    async with _TestSession() as db:
+        session = await _make_prompt_session(db)
+        session.mode = "server"
+        session.run_context_snapshot = json.dumps(
+            {
+                "context_captured": True,
+                "schedule_label": "",
+                "prompt_name": "Launch-time prompt",
+                "prompt_id": 42,
+                "prompt_content": "prompt content at launch",
+                "additional_instructions": "run-only instructions",
+                "startup_prompt": "run-only instructions\n\nprompt content at launch",
+                "startup_context": "run-only instructions\n\nprompt content at launch\n\nrepo table",
+                "mode": "server",
+                "trigger_type": "manual",
+                "event_context": "",
+            }
+        )
+
+        run = await record_session_run(
+            db,
+            session,
+            phase="stopped",
+            status_detail=STOPPED_BY_USER_DETAIL,
+            last_output="",
+            completed_at=datetime.now(timezone.utc),
+        )
+        await db.commit()
+        assert run is not None
+        await db.refresh(run)
+        assert run.context_captured is True
+        assert run.mode == "server"
+        assert run.prompt_name == "Launch-time prompt"
+        assert run.prompt_id == 42
+        assert run.prompt_content == "prompt content at launch"
+        assert run.additional_instructions == "run-only instructions"
+        assert run.startup_context.endswith("repo table")
+        assert session.run_context_snapshot == ""
+
+
+def test_run_history_expands_context_without_output_and_marks_legacy_context_unavailable():
+    from datetime import datetime, timezone
+    from types import SimpleNamespace
+
+    from jinja2 import Environment, FileSystemLoader
+
+    from swarmer.ansi import ansi_to_html
+
+    env = Environment(loader=FileSystemLoader("swarmer/templates"), autoescape=True)
+    env.filters["ansi_to_html"] = ansi_to_html
+    timestamp = datetime.now(timezone.utc)
+    captured = SimpleNamespace(
+        id=12,
+        phase="stopped",
+        status_detail="Stopped by user",
+        started_at=timestamp,
+        completed_at=timestamp,
+        run_duration="0s",
+        last_output="",
+        raw_output="",
+        schedule_label="",
+        prompt_name="Startup prompt",
+        prompt_id=12,
+        mode="tui",
+        trigger_type="manual",
+        event_context="",
+        event_info={},
+        context_captured=True,
+        prompt_content="prompt at launch",
+        additional_instructions="manual instructions",
+        startup_context="composed launch context",
+    )
+    legacy = SimpleNamespace(
+        **{
+            **captured.__dict__,
+            "id": 11,
+            "context_captured": False,
+            "prompt_name": "Legacy prompt label",
+            "prompt_id": None,
+            "prompt_content": "",
+            "additional_instructions": "",
+            "startup_context": "",
+            "mode": "prompt",
+        }
+    )
+
+    rendered = env.get_template("sessions/_run_history.html").render(
+        session_runs=[captured, legacy]
+    )
+
+    assert rendered.count("aria-label=\"Expand run") == 2
+    assert "prompt at launch" in rendered
+    assert "composed launch context" in rendered
+    assert "Later terminal or chat messages are not included." in rendered
+    assert "No output captured for this run." in rendered
+    assert "Startup context was not captured for this older run and is unavailable." in rendered

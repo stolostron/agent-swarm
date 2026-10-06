@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, func
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from swarmer.database import Base
@@ -26,9 +26,14 @@ class SessionRun(Base):
     # edited or deleted. Empty schedule_label means the run was not scheduled.
     schedule_label: Mapped[str] = mapped_column(String(255), nullable=False, default="", server_default="")
     prompt_name: Mapped[str] = mapped_column(String(255), nullable=False, default="", server_default="")
+    prompt_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     mode: Mapped[str] = mapped_column(String(16), nullable=False, default="prompt", server_default="prompt")
     trigger_type: Mapped[str] = mapped_column(String(32), nullable=False, default="manual", server_default="manual")
     event_context: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
+    prompt_content: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
+    additional_instructions: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
+    startup_context: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
+    context_captured: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="0")
     created_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, server_default=func.now()
     )
