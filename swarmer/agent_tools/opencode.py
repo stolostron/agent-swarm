@@ -189,13 +189,19 @@ class OpenCodeStrategy(AgentToolStrategy):
             "> /workspace/.local/state/opencode/model.json && "
         )
 
-    def build_main_cmd(self, session: "Session", model: str, resolved_prompt: str = "") -> str:
+    def build_main_cmd(
+        self,
+        session: "Session",
+        model: str,
+        resolved_prompt: str | None = None,
+    ) -> str:
         if session.mode == "server":
             return "opencode serve --hostname 0.0.0.0 --port 4096"
         elif session.mode == "tui":
             return "sleep infinity"
         else:
-            prompt_text = resolved_prompt or session.instruction_prompt or ""
+            prompt_text = session.instruction_prompt if resolved_prompt is None else resolved_prompt
+            prompt_text = prompt_text or ""
             base_parts = ["opencode", "run", "--model", model]
             prompt_parts = [prompt_text] if prompt_text else []
             return " ".join(shlex.quote(p) for p in base_parts + prompt_parts)

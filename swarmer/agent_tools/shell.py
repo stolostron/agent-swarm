@@ -98,12 +98,19 @@ class ShellStrategy(AgentToolStrategy):
         """Return an empty string — shell tool does not use an AI model."""
         return ""
 
-    def build_main_cmd(self, session: "Session", model: str, resolved_prompt: str = "") -> str:
+    def build_main_cmd(
+        self,
+        session: "Session",
+        model: str,
+        resolved_prompt: str | None = None,
+    ) -> str:
         """Return the raw command to execute.
 
         In prompt mode the command is the session's ``instruction_prompt``
         (or ``resolved_prompt`` if the caller has already resolved it from the
-        prompt library).  The command is treated as a shell one-liner and run
+        prompt library). ``None`` means no override was supplied; an explicit
+        blank override remains blank instead of falling back to the saved
+        instruction. The command is treated as a shell one-liner and run
         directly inside the sandbox via ``sh -c``.
 
         In TUI mode the sandbox stays alive (``sleep infinity``) so the user
@@ -131,7 +138,8 @@ class ShellStrategy(AgentToolStrategy):
             )
 
         # prompt mode: run the instruction as a shell command
-        cmd = (resolved_prompt or session.instruction_prompt or "").strip()
+        prompt = session.instruction_prompt if resolved_prompt is None else resolved_prompt
+        cmd = (prompt or "").strip()
         if not cmd:
             raise ValueError(
                 "Shell agent tool requires a non-empty instruction_prompt "

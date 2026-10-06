@@ -74,6 +74,12 @@ def test_prompt_uses_resolved_prompt_over_instruction():
     assert cmd == "primary command"
 
 
+def test_prompt_explicit_blank_override_does_not_run_saved_command():
+    session = _FakeSession(mode="prompt", instruction_prompt="saved command")
+    with pytest.raises(ValueError, match="non-empty instruction_prompt"):
+        _shell.build_main_cmd(session, model="", resolved_prompt="")
+
+
 def test_prompt_strips_whitespace():
     session = _FakeSession(mode="prompt", instruction_prompt="  echo hello  ")
     cmd = _shell.build_main_cmd(session, model="")

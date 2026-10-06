@@ -66,6 +66,17 @@ def test_opencode_prompt_resolved_prompt_overrides_instruction():
     assert "--continue" not in cmd
 
 
+def test_opencode_prompt_explicit_blank_override_does_not_use_saved_prompt():
+    session = _FakeSession(mode="prompt", instruction_prompt="saved prompt")
+    cmd = _opencode.build_main_cmd(
+        session,
+        model="google-vertex-anthropic/claude-sonnet-5@default",
+        resolved_prompt="",
+    )
+    assert cmd == "opencode run --model google-vertex-anthropic/claude-sonnet-5@default"
+    assert "saved prompt" not in cmd
+
+
 def test_opencode_prompt_is_single_command():
     """Result must be a single invocation, not a chain."""
     session = _FakeSession(mode="prompt", instruction_prompt="do something")
