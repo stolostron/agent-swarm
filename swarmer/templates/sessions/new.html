@@ -224,6 +224,7 @@
           <div class="pf-v6-c-check" style="margin-bottom:var(--pf-t--global--spacer--sm);">
             <input class="pf-v6-c-check__input" type="checkbox" name="mcp_selection"
                    value="inherit" id="mcp-inherit"
+                   data-mcp-selection-control
                    {{ 'checked' if form and form.mcp_selection == 'inherit' }}>
             <label class="pf-v6-c-check__label" for="mcp-inherit">Inherit eligible workspace MCP servers</label>
           </div>
@@ -232,6 +233,7 @@
           <div class="pf-v6-c-check" style="margin-bottom:var(--pf-t--global--spacer--xs);">
             <input class="pf-v6-c-check__input" type="checkbox"
                    name="mcp_server_ids" value="{{ srv.id }}"
+                   data-mcp-selection-control
                    id="mcp-{{ srv.id }}"
                     {{ 'checked' if form and srv.id in form.mcp_server_ids }}
                    {{ 'disabled' if srv.auth_status == 'expired' }}>
@@ -268,4 +270,19 @@
     Git repositories can be added from the session detail page after creation.
   </p>
 </form>
+<script>
+  document.querySelectorAll('[data-mcp-selection-control]').forEach(function (control) {
+    control.addEventListener('change', function () {
+      if (!control.checked) return;
+      if (control.name === 'mcp_selection') {
+        document.querySelectorAll('[name="mcp_server_ids"]').forEach(function (server) {
+          server.checked = false;
+        });
+      } else {
+        var inherit = document.querySelector('[name="mcp_selection"]');
+        if (inherit) inherit.checked = false;
+      }
+    });
+  });
+</script>
 {% endblock %}

@@ -450,6 +450,10 @@ def _apply_form_mcp_selection(
     selection = form_data.get("mcp_selection")
     if selection is not None and not isinstance(selection, str):
         raise HTTPException(status_code=422, detail="Invalid MCP selection")
+    if selection == "inherit" and selected_mcp_ids:
+        # A checked server is an explicit, narrower choice. Prefer it if a
+        # stale or non-JavaScript form also submits the inherit checkbox.
+        selection = None
     _apply_mcp_selection(
         session,
         None if selection == "inherit" else selected_mcp_ids,

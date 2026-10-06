@@ -868,6 +868,12 @@ function copyCommitMsg(btn) { _copyBlock('commit-msg', btn); }
     el.addEventListener('change', () => {
       mcpChangeVersion++;
       if (mcpSettingsChanged) mcpSettingsChanged.value = '1';
+      if (el.checked && el.name === 'mcp_selection') {
+        form.querySelectorAll('[name="mcp_server_ids"]').forEach(server => { server.checked = false; });
+      } else if (el.checked && el.name === 'mcp_server_ids') {
+        const inherit = form.querySelector('[name="mcp_selection"]');
+        if (inherit) inherit.checked = false;
+      }
     });
   });
 
