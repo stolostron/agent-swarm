@@ -989,6 +989,177 @@ class TestSessions:
         assert s["mode"] == "prompt"
         assert s["phase"] == "idle"
         assert s["working_branch"].startswith("swarmer/session-")
+        assert s["mcp_selection"] == "disabled"
+        assert s["mcp_server_ids"] == []
+        assert s["runtime_mcp_server_ids"] == []
+
+    @pytest.mark.asyncio
+    async def test_session_mcp_selection_create_and_update_contract(self, client):
+        ws = await _create_workspace(client)
+        inventory = await client.get(f"/api/v1/workspaces/{ws['id']}/mcp-servers")
+        assert inventory.status_code == 200
+        swarm_mcp = next(server for server in inventory.json() if server["slug"] == "agent-swarm")
+
+        inherited = await client.post(
+            f"/api/v1/workspaces/{ws['id']}/sessions",
+            json={"name": "inherited", "mcp_selection": "inherit"},
+        )
+        assert inherited.status_code == 201, inherited.text
+        assert inherited.json()["mcp_selection"] == "inherit"
+        assert inherited.json()["mcp_server_ids"] == []
+        assert inherited.json()["runtime_mcp_server_ids"] == [swarm_mcp["id"]]
+
+        conflict = await client.post(
+            f"/api/v1/workspaces/{ws['id']}/sessions",
+            json={"name": "ambiguous", "mcp_server_ids": [], "mcp_selection": "inherit"},
+        )
+        assert conflict.status_code == 422
+
+        empty_create = await client.post(
+            f"/api/v1/workspaces/{ws['id']}/sessions",
+            json={"name": "empty-create", "mcp_server_ids": []},
+        )
+        assert empty_create.status_code == 201, empty_create.text
+        assert empty_create.json()["mcp_selection"] == "disabled"
+        invalid_mode = await client.post(
+            f"/api/v1/workspaces/{ws['id']}/sessions",
+            json={"name": "invalid-mode", "mcp_selection": "selected"},
+        )
+        assert invalid_mode.status_code == 422
+
+        selected = await client.post(
+            f"/api/v1/workspaces/{ws['id']}/sessions",
+            json={"name": "selected", "mcp_server_ids": [swarm_mcp["id"]]},
+        )
+        assert selected.status_code == 201, selected.text
+        assert selected.json()["mcp_selection"] == "selected"
+        assert selected.json()["mcp_server_ids"] == [swarm_mcp["id"]]
+        assert selected.json()["runtime_mcp_server_ids"] == [swarm_mcp["id"]]
+
+        sid = selected.json()["id"]
+        unchanged = await client.put(
+            f"/api/v1/workspaces/{ws['id']}/sessions/{sid}",
+            json={"mcp_server_ids": None, "mcp_selection": None},
+        )
+        assert unchanged.json()["mcp_selection"] == "selected"
+        assert unchanged.json()["mcp_server_ids"] == [swarm_mcp["id"]]
+
+        disabled = await client.put(
+            f"/api/v1/workspaces/{ws['id']}/sessions/{sid}",
+            json={"mcp_server_ids": []},
+        )
+        assert disabled.json()["mcp_selection"] == "disabled"
+        assert disabled.json()["runtime_mcp_server_ids"] == []
+
+        restored = await client.put(
+            f"/api/v1/workspaces/{ws['id']}/sessions/{sid}",
+            json={"mcp_selection": "inherit"},
+        )
+        assert restored.json()["mcp_selection"] == "inherit"
+        assert restored.json()["runtime_mcp_server_ids"] == [swarm_mcp["id"]]
+
+    @pytest.mark.asyncio
+    async def test_invalid_mcp_selection_rejects_without_partial_session_update(self, client):
+        ws = await _create_workspace(client)
+        session = await _create_session(client, ws["id"])
+        response = await client.put(
+            f"/api/v1/workspaces/{ws['id']}/sessions/{session['id']}",
+            json={"name": "must-not-save", "mcp_server_ids": [987654]},
+        )
+        assert response.status_code == 422
+
+        current = await client.get(
+            f"/api/v1/workspaces/{ws['id']}/sessions/{session['id']}"
+        )
+        assert current.json()["name"] == "test-session"
+        assert current.json()["mcp_selection"] == "disabled"
+
+    @pytest.mark.asyncio
+    async def test_expired_mcp_is_configured_but_not_reported_as_runtime_access(self, client):
+        from datetime import datetime, timezone
+
+        from swarmer.models.mcp_server import McpServer
+
+        ws = await _create_workspace(client)
+        jira = await client.post(
+            f"/api/v1/workspaces/{ws['id']}/mcp-servers", json={"catalog_slug": "atlassian-jira"}
+        )
+        assert jira.status_code == 201, jira.text
+        async with _TestSession() as db:
+            server = await db.get(McpServer, jira.json()["id"])
+            server.jira_access_token_enc = "encrypted-token-placeholder"
+            server.token_expires_at = datetime.now(timezone.utc)
+            await db.commit()
+
+        response = await client.post(
+            f"/api/v1/workspaces/{ws['id']}/sessions",
+            json={"name": "expired-selection", "mcp_server_ids": [jira.json()["id"]]},
+        )
+        assert response.status_code == 201, response.text
+        body = response.json()
+        assert body["mcp_selection"] == "selected"
+        assert body["mcp_server_ids"] == [jira.json()["id"]]
+        assert body["runtime_mcp_server_ids"] == []
+
+        inventory = await client.get(f"/api/v1/workspaces/{ws['id']}/mcp-servers")
+        jira_meta = next(item for item in inventory.json() if item["id"] == jira.json()["id"])
+        assert jira_meta["auth_status"] == "expired"
+        assert "jira_access_token" not in jira_meta
+        assert "jira_email" not in jira_meta
+
+    @pytest.mark.asyncio
+    async def test_mcp_inventory_and_session_selection_enforce_server_visibility(self, client):
+        from swarmer.api.deps import get_current_user, require_api_auth
+        from swarmer.k8s_auth import TokenIdentity
+        from swarmer.main import app
+
+        ws = await _create_workspace(client)
+        jira = await client.post(
+            f"/api/v1/workspaces/{ws['id']}/mcp-servers", json={"catalog_slug": "atlassian-jira"}
+        )
+        assert jira.status_code == 201
+        await client.post(f"/api/v1/workspaces/{ws['id']}/members", json={"user_id": "stranger"})
+
+        app.dependency_overrides[require_api_auth] = lambda: TokenIdentity(
+            username="stranger", uid="uid-stranger"
+        )
+        app.dependency_overrides[get_current_user] = lambda: "stranger"
+        try:
+            inventory = await client.get(f"/api/v1/workspaces/{ws['id']}/mcp-servers")
+            assert inventory.status_code == 200
+            assert jira.json()["id"] not in {item["id"] for item in inventory.json()}
+
+            response = await client.post(
+                f"/api/v1/workspaces/{ws['id']}/sessions",
+                json={"name": "cannot-select-private", "mcp_server_ids": [jira.json()["id"]]},
+            )
+            assert response.status_code == 422
+        finally:
+            app.dependency_overrides[require_api_auth] = _override_require_api_auth
+            app.dependency_overrides[get_current_user] = _override_get_current_user
+
+    @pytest.mark.asyncio
+    async def test_background_mcp_eligibility_excludes_user_private_servers(self, client):
+        from swarmer.models.mcp_server import McpServer
+        from swarmer.routers.mcp_servers import get_enabled_mcp_servers
+
+        ws = await _create_workspace(client)
+        async with _TestSession() as db:
+            private = McpServer(
+                workspace_id=ws["id"], user_id="test-user", shared=False,
+                slug="private-active", display_name="Private Active",
+                server_url="", server_type="http",
+                jira_access_token_enc="encrypted-placeholder",
+            )
+            db.add(private)
+            await db.commit()
+            private_id = private.id
+
+            caller_servers = await get_enabled_mcp_servers(ws["id"], db, user_id="test-user")
+            background_servers = await get_enabled_mcp_servers(ws["id"], db)
+
+        assert private_id in {server.id for server in caller_servers}
+        assert private_id not in {server.id for server in background_servers}
 
     @pytest.mark.asyncio
     async def test_list_sessions(self, client):
@@ -2209,3 +2380,86 @@ async def test_secrets_context_handles_gateway_unreachable():
     assert ctx["vertex_provider_missing"] is False
     assert ctx["gemini_provider_missing"] is False
     assert ctx["openai_provider_missing"] is False
+
+
+class TestSessionMcpSelection:
+    @pytest.mark.asyncio
+    async def test_rejects_foreign_and_invisible_ids_without_partial_update(self, client):
+        from swarmer.models.mcp_server import McpServer
+
+        ws = await _create_workspace(client)
+        other_ws = await _create_workspace(client, "Other Workspace")
+        other_workspace_mcp = await client.post(
+            f"/api/v1/workspaces/{other_ws['id']}/mcp-servers",
+            json={"catalog_slug": "atlassian-jira"},
+        )
+        assert other_workspace_mcp.status_code == 201
+
+        async with _TestSession() as db:
+            invisible = McpServer(
+                workspace_id=ws["id"],
+                user_id="<OTHER_USER>",
+                shared=False,
+                slug="private-mcp",
+                display_name="Private MCP",
+                server_url="",
+                server_type="http",
+            )
+            db.add(invisible)
+            await db.commit()
+            invisible_id = invisible.id
+
+        base = f"/api/v1/workspaces/{ws['id']}"
+        for server_id in (other_workspace_mcp.json()["id"], invisible_id, 999999):
+            rejected = await client.post(
+                f"{base}/sessions",
+                json={"name": f"rejected-{server_id}", "mcp_server_ids": [server_id]},
+            )
+            assert rejected.status_code == 422
+
+        created = await client.post(f"{base}/sessions", json={"name": "unchanged"})
+        assert created.status_code == 201
+        rejected = await client.put(
+            f"{base}/sessions/{created.json()['id']}",
+            json={"name": "must-not-persist", "mcp_server_ids": [invisible_id]},
+        )
+        assert rejected.status_code == 422
+        readback = await client.get(f"{base}/sessions/{created.json()['id']}")
+        assert readback.status_code == 200
+        assert readback.json()["name"] == "unchanged"
+        assert readback.json()["mcp_selection"] == "disabled"
+
+    @pytest.mark.asyncio
+    async def test_mcp_inventory_is_visibility_scoped_and_redacted(self, client):
+        from swarmer.models.mcp_server import McpServer
+
+        ws = await _create_workspace(client)
+        async with _TestSession() as db:
+            own = McpServer(
+                workspace_id=ws["id"], user_id="test-user", shared=False,
+                slug="own-mcp", display_name="Own MCP",
+                server_url="https://<YOUR_USER>:<YOUR_PASSWORD>@example.com/mcp?access_token=<YOUR_TOKEN>#frag",
+                server_type="http",
+            )
+            private = McpServer(
+                workspace_id=ws["id"], user_id="<OTHER_USER>", shared=False,
+                slug="private-mcp", display_name="Private MCP",
+                server_url="", server_type="http",
+            )
+            shared = McpServer(
+                workspace_id=ws["id"], user_id="<OTHER_USER>", shared=True,
+                slug="shared-mcp", display_name="Shared MCP",
+                server_url="", server_type="http",
+            )
+            own.jira_access_token = "<YOUR_TOKEN>"
+            db.add_all([own, private, shared])
+            await db.commit()
+
+        response = await client.get(f"/api/v1/workspaces/{ws['id']}/mcp-servers")
+        assert response.status_code == 200, response.text
+        inventory = response.json()
+        assert {item["slug"] for item in inventory} == {"agent-swarm", "own-mcp", "shared-mcp"}
+        own_item = next(item for item in inventory if item["slug"] == "own-mcp")
+        assert own_item["server_url"] == "https://example.com/mcp"
+        assert not {"user_id", "jira_email", "jira_access_token", "jira_access_token_enc"}.intersection(own_item)
+        assert "YOUR_" not in json.dumps(inventory)

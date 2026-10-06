@@ -30,6 +30,7 @@ EXPECTED_TOOLS = {
     "add_repo_to_session",
     "remove_repo_from_session",
     "list_workspace_prompts",
+    "list_workspace_mcp_servers",
     "set_session_prompt",
     "launch_session",
     "stop_session",
@@ -78,7 +79,7 @@ def test_server_instantiates_with_config():
 
 
 def test_server_registers_all_expected_tools():
-    """Verify all 34 MCP tools are registered on the FastMCP instance.
+    """Verify all 35 MCP tools are registered on the FastMCP instance.
 
     This test catches regressions where a tool is removed, renamed, or
     fails to register due to an import/decorator error.
@@ -185,10 +186,24 @@ async def test_create_session_with_shell_tool():
     server.client.create_session.assert_awaited_once_with(
         1, "cron-report", mode="prompt", provider="", agent_tool="shell",
         instruction_prompt="python3 report.py", github_pat_id=None, prompt_id=None,
-        persist=False, working_branch=""
+        persist=False, working_branch="", mcp_server_ids=None, mcp_selection=None
     )
     assert result["agent_tool"] == "shell"
     assert result["name"] == "cron-report"
+
+
+def test_session_formatter_preserves_safe_mcp_selection_readback():
+    from agent_swarm_mcp_server.server import _fmt_session
+
+    result = _fmt_session({
+        "id": 5,
+        "mcp_selection": "selected",
+        "mcp_server_ids": [3],
+        "runtime_mcp_server_ids": [],
+    })
+    assert result["mcp_selection"] == "selected"
+    assert result["mcp_server_ids"] == [3]
+    assert result["runtime_mcp_server_ids"] == []
 
 
 @pytest.mark.asyncio
@@ -204,6 +219,35 @@ async def test_update_session_agent_tool():
     result = await server._update_session(1, 10, agent_tool="shell", instruction_prompt="echo hello")
     server.client.update_session.assert_awaited_once_with(1, 10, agent_tool="shell", instruction_prompt="echo hello")
     assert result["agent_tool"] == "shell"
+
+
+@pytest.mark.asyncio
+async def test_session_mcp_selection_is_propagated():
+    server = make_server()
+    server.client.create_session = AsyncMock(return_value={"id": 12, "name": "mcp-session"})
+    await server._create_session(
+        1, "mcp-session", mcp_server_ids=[5], mcp_selection=None
+    )
+    server.client.create_session.assert_awaited_once_with(
+        1, "mcp-session", mode="prompt", provider="", agent_tool="opencode",
+        instruction_prompt="", github_pat_id=None, prompt_id=None, persist=False,
+        working_branch="", mcp_server_ids=[5], mcp_selection=None,
+    )
+
+    server.client.update_session = AsyncMock(return_value={"id": 12, "name": "mcp-session"})
+    await server._update_session(1, 12, mcp_selection="inherit")
+    server.client.update_session.assert_awaited_once_with(
+        1, 12, mcp_selection="inherit"
+    )
+
+
+@pytest.mark.asyncio
+async def test_list_workspace_mcp_servers_uses_safe_inventory_api():
+    server = make_server()
+    inventory = [{"id": 5, "slug": "jira", "display_name": "Jira", "auth_status": "active"}]
+    server.client.list_mcp_servers = AsyncMock(return_value=inventory)
+    assert await server._list_workspace_mcp_servers(1) == inventory
+    server.client.list_mcp_servers.assert_awaited_once_with(1)
 
 
 # ------------------------------------------------------------------

@@ -424,18 +424,27 @@
               </div>
             </div>
 
-            {% if mcp_servers %}
             <div class="pf-v6-c-form__group" style="margin-bottom:var(--pf-t--global--spacer--md);">
               <label class="pf-v6-c-form__label" style="color:var(--pf-t--global--text--color--subtle); font-size:var(--pf-t--global--font--size--sm);">
                 <span class="pf-v6-c-form__label-text">MCP Servers</span>
               </label>
               <div class="pf-v6-c-form__group-control">
+                <div class="pf-v6-c-check" style="margin-bottom:var(--pf-t--global--spacer--sm);">
+                  <input class="pf-v6-c-check__input" type="checkbox" name="mcp_selection"
+                         value="inherit" id="mcp-detail-inherit" form="cfg-edit-form"
+                         {{ 'checked' if session.mcp_selection == 'inherit' }}
+                         {{ 'disabled' if session.is_active }}>
+                  <label class="pf-v6-c-check__label" for="mcp-detail-inherit" style="font-size:var(--pf-t--global--font--size--sm);">
+                    Inherit eligible workspace MCP servers
+                  </label>
+                </div>
+                {% if mcp_servers %}
                 {% for srv in mcp_servers %}
                 <div class="pf-v6-c-check" style="margin-bottom:var(--pf-t--global--spacer--xs);">
                   <input class="pf-v6-c-check__input" type="checkbox"
                          name="mcp_server_ids" value="{{ srv.id }}"
                          id="mcp-detail-{{ srv.id }}"
-                         {{ 'checked' if srv.auth_status != 'expired' and (srv.id in session.enabled_mcp_ids or not session.mcp_server_ids) }}
+                          {{ 'checked' if srv.auth_status != 'expired' and session.mcp_selection == 'selected' and srv.id in session.enabled_mcp_ids }}
                          {{ 'disabled' if srv.auth_status == 'expired' or session.is_active }}>
                   <label class="pf-v6-c-check__label" for="mcp-detail-{{ srv.id }}" style="font-size:var(--pf-t--global--font--size--sm);">
                     {{ srv.display_name }}
@@ -451,9 +460,11 @@
                   </label>
                 </div>
                 {% endfor %}
+                {% else %}
+                <span style="color:var(--pf-t--global--text--color--subtle); font-size:var(--pf-t--global--font--size--sm);">No eligible MCP servers are currently available.</span>
+                {% endif %}
               </div>
             </div>
-            {% endif %}
 
             <p style="color:var(--pf-t--global--text--color--subtle); font-size:var(--pf-t--global--font--size--sm); margin:0;{% if not session.is_active %} display:none;{% endif %}"
                id="cfg-stop-msg">Stop the session to edit settings.</p>

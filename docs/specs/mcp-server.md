@@ -137,8 +137,22 @@ github_pat_id = null
 prompt_id = null
 ```
 
-The session may also specify MCP server IDs at the REST layer. The MCP tool
-should expose that option when the client supports session MCP assignment.
+`create_session` and `update_session` expose the MCP selection contract through
+`mcp_server_ids` and `mcp_selection`. New sessions default to disabled; non-empty
+IDs select caller-visible workspace servers, and an empty list disables all.
+`mcp_selection: "inherit"` opts into currently enabled, authenticated, unexpired
+servers visible to the caller. Updates leave selection unchanged when fields are
+omitted or null; an empty list disables all, non-empty IDs replace the saved
+selection, and explicit inheritance restores it. Every ID must exist in the
+target workspace and be visible to the caller or the whole request is rejected.
+When selecting inheritance, omit `mcp_server_ids` or pass null; combining
+inheritance with an ID list is rejected.
+
+`list_workspace_mcp_servers` provides the caller-visible inventory using safe
+metadata only. Session results expose `mcp_selection` (`inherit`, `disabled`, or
+`selected`), saved caller-visible `mcp_server_ids`, and
+`runtime_mcp_server_ids` containing only servers currently eligible for access.
+Credentials and private server metadata are never included.
 
 Valid modes: `prompt`, `server`, `tui`.
 

@@ -236,6 +236,7 @@ class AgentSwarmClient:
         persist: bool = False,
         working_branch: str = "",
         mcp_server_ids: list[int] | None = None,
+        mcp_selection: str | None = None,
     ) -> dict:
         """Create a new agent session in a workspace."""
         body: dict[str, Any] = {
@@ -253,11 +254,17 @@ class AgentSwarmClient:
             body["prompt_id"] = prompt_id
         if mcp_server_ids is not None:
             body["mcp_server_ids"] = mcp_server_ids
+        if mcp_selection is not None:
+            body["mcp_selection"] = mcp_selection
         return await self._post(f"/api/v1/workspaces/{ws_id}/sessions", json=body)
 
     async def update_session(self, ws_id: int, sid: int, **fields: Any) -> dict:
         """Update configuration fields of an existing session."""
         return await self._put(f"/api/v1/workspaces/{ws_id}/sessions/{sid}", json=fields)
+
+    async def list_mcp_servers(self, ws_id: int) -> list[dict]:
+        """List caller-visible workspace MCP servers with safe metadata only."""
+        return await self._get(f"/api/v1/workspaces/{ws_id}/mcp-servers")
 
     async def delete_session(self, ws_id: int, sid: int) -> dict:
         """Delete a non-running session."""

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 import pytest
 import respx
 import httpx
@@ -69,6 +71,44 @@ async def test_create_session_sends_correct_body(client):
         assert body["mode"] == "prompt"
         assert body["agent_tool"] == "opencode"
     assert result["id"] == 5
+
+
+@pytest.mark.asyncio
+async def test_session_mcp_selection_is_propagated(client):
+    with respx.mock(base_url=BASE_URL) as mock:
+        create_route = mock.post("/api/v1/workspaces/1/sessions").mock(
+            return_value=httpx.Response(201, json={"id": 5})
+        )
+        update_route = mock.put("/api/v1/workspaces/1/sessions/5").mock(
+            return_value=httpx.Response(200, json={"id": 5})
+        )
+        await client.create_session(1, "selected", mcp_server_ids=[3])
+        create_body = json.loads(create_route.calls[0].request.content)
+        assert create_body["mcp_server_ids"] == [3]
+        assert "mcp_selection" not in create_body
+
+        await client.create_session(1, "inherited", mcp_selection="inherit")
+        inherit_body = json.loads(create_route.calls[1].request.content)
+        assert inherit_body["mcp_selection"] == "inherit"
+        assert "mcp_server_ids" not in inherit_body
+
+        await client.update_session(1, 5, mcp_server_ids=[])
+        disable_body = json.loads(update_route.calls[0].request.content)
+        assert disable_body["mcp_server_ids"] == []
+
+        await client.update_session(1, 5, mcp_selection="inherit")
+        inherit_update_body = json.loads(update_route.calls[1].request.content)
+        assert inherit_update_body["mcp_selection"] == "inherit"
+
+
+@pytest.mark.asyncio
+async def test_list_mcp_servers(client):
+    with respx.mock(base_url=BASE_URL) as mock:
+        mock.get("/api/v1/workspaces/1/mcp-servers").mock(
+            return_value=httpx.Response(200, json=[{"id": 2, "slug": "jira"}])
+        )
+        result = await client.list_mcp_servers(1)
+    assert result == [{"id": 2, "slug": "jira"}]
 
 
 @pytest.mark.asyncio

@@ -265,6 +265,27 @@ class Session(Base):
             return []
         return [int(x) for x in self.mcp_server_ids.split(",") if x.strip().isdigit()]
 
+    @property
+    def mcp_selection(self) -> str:
+        """Describe whether MCP access is inherited, disabled, or explicitly selected."""
+        if self.mcp_server_ids == "none":
+            return "disabled"
+        if not self.mcp_server_ids:
+            return "inherit"
+        return "selected"
+
+    @property
+    def configured_mcp_ids(self) -> list[int]:
+        """Return explicitly selected IDs; inherited and disabled have no stored IDs."""
+        if hasattr(self, "_configured_mcp_ids"):
+            return self._configured_mcp_ids
+        return self.enabled_mcp_ids if self.mcp_selection == "selected" else []
+
+    @property
+    def runtime_mcp_server_ids(self) -> list[int]:
+        """Eligible MCP IDs attached transiently while building API readback."""
+        return getattr(self, "_runtime_mcp_server_ids", [])
+
     @enabled_mcp_ids.setter
     def enabled_mcp_ids(self, ids: list[int]) -> None:
         self.mcp_server_ids = ",".join(str(i) for i in ids)

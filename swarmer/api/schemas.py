@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
-from pydantic import BaseModel, Field, field_validator
-from urllib.parse import urlparse
+from pydantic import AliasChoices, BaseModel, Field, field_validator
+from urllib.parse import urlparse, urlsplit, urlunsplit
 
 
 # ============================================================
@@ -274,7 +274,8 @@ class SessionCreate(BaseModel):
     github_pat_id: int | None = None
     prompt_id: int | None = None
     working_branch: str = ""
-    mcp_server_ids: list[int] = Field(default_factory=list)
+    mcp_server_ids: list[int] | None = None
+    mcp_selection: Literal["inherit", "disabled"] | None = None
 
 
 class SessionUpdate(BaseModel):
@@ -287,6 +288,7 @@ class SessionUpdate(BaseModel):
     prompt_id: int | None = None
     working_branch: str | None = None
     mcp_server_ids: list[int] | None = None
+    mcp_selection: Literal["inherit", "disabled"] | None = None
 
 
 class SessionOut(BaseModel):
@@ -300,6 +302,11 @@ class SessionOut(BaseModel):
     github_pat_id: int | None
     prompt_id: int | None
     working_branch: str
+    mcp_selection: str = "disabled"
+    mcp_server_ids: list[int] = Field(
+        default_factory=list, validation_alias=AliasChoices("configured_mcp_ids", "mcp_server_ids")
+    )
+    runtime_mcp_server_ids: list[int] = Field(default_factory=list)
     phase: str
     status_detail: str
     sandbox_name: str | None = None
@@ -546,6 +553,25 @@ class McpServerOut(BaseModel):
     auth_status_label: str
     created_at: datetime
     updated_at: datetime
+
+    @field_validator("server_url", mode="before")
+    @classmethod
+    def redact_server_url_credentials(cls, value: str) -> str:
+        """Expose endpoint metadata without URL userinfo, query strings, or fragments."""
+        if not value:
+            return ""
+        try:
+            parsed = urlsplit(value)
+            if parsed.scheme not in ("http", "https") or not parsed.hostname:
+                return ""
+            host = parsed.hostname
+            if ":" in host:
+                host = f"[{host}]"
+            if parsed.port is not None:
+                host = f"{host}:{parsed.port}"
+            return urlunsplit((parsed.scheme, host, parsed.path, "", ""))
+        except ValueError:
+            return ""
 
     model_config = {"from_attributes": True}
 
