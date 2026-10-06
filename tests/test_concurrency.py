@@ -1120,6 +1120,7 @@ class TestListPageLaunchModeCoercion:
                 follow_redirects=False,
             )
         assert resp.status_code in (302, 303)
+        assert resp.headers["location"] == f"/workspaces/{ws['id']}/sessions/{s['id']}"
         launch.assert_not_awaited()
         async with _TestSession() as db:
             session = await db.get(Session, s["id"])
@@ -1162,6 +1163,7 @@ class TestListPageLaunchModeCoercion:
                 follow_redirects=False,
             )
         assert response.status_code in (302, 303)
+        assert response.headers["location"] == f"/workspaces/{ws['id']}/sessions/{s['id']}"
         launch.assert_not_awaited()
         async with _TestSession() as db:
             session = await db.get(Session, s["id"])

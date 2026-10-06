@@ -2513,18 +2513,18 @@ async def session_launch(
         # the live availability snapshot used to render the dialog.
         if mode not in ("tui", "server", "prompt"):
             flash(request, "Select a valid launch mode.", "danger")
-            return RedirectResponse(url=f"/workspaces/{ws_id}/sessions/{sid}", status_code=302)
+            return RedirectResponse(url=f"/workspaces/{ws.id}/sessions/{session.id}", status_code=302)
         if prompt_id:
             try:
                 pid = int(prompt_id)
             except ValueError:
                 flash(request, "Invalid prompt selection.", "danger")
-                return RedirectResponse(url=f"/workspaces/{ws_id}/sessions/{sid}", status_code=302)
+                return RedirectResponse(url=f"/workspaces/{ws.id}/sessions/{session.id}", status_code=302)
             prompt = await db.get(WorkspacePrompt, pid)
             source = await db.get(WorkspacePromptSource, prompt.source_id) if prompt else None
             if prompt is None or source is None or source.workspace_id != ws_id:
                 flash(request, "Selected prompt does not belong to this workspace.", "danger")
-                return RedirectResponse(url=f"/workspaces/{ws_id}/sessions/{sid}", status_code=302)
+                return RedirectResponse(url=f"/workspaces/{ws.id}/sessions/{session.id}", status_code=302)
             session.prompt_id = pid
         else:
             session.prompt_id = None
@@ -2535,14 +2535,14 @@ async def session_launch(
             option.get("value") == provider and option.get("available") for option in presets
         ):
             flash(request, "Selected AI provider is unavailable. Choose a configured provider.", "danger")
-            return RedirectResponse(url=f"/workspaces/{ws_id}/sessions/{sid}", status_code=302)
+            return RedirectResponse(url=f"/workspaces/{ws.id}/sessions/{session.id}", status_code=302)
         try:
             tool = get_tool(session.agent_tool)
         except ValueError:
             tool = get_tool("opencode")
         if mode == "server" and not tool.supports_server_mode():
             flash(request, f"{tool.display_name} agent tool does not support Chat mode.", "danger")
-            return RedirectResponse(url=f"/workspaces/{ws_id}/sessions/{sid}", status_code=302)
+            return RedirectResponse(url=f"/workspaces/{ws.id}/sessions/{session.id}", status_code=302)
 
         session.mode = mode
         session.provider = provider.strip()
