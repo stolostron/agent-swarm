@@ -2529,17 +2529,22 @@ async def session_launch(
         else:
             session.prompt_id = None
 
-        options = await _get_provider_options(ws_id, db, session.agent_tool)
-        presets = [option for option in options if option.get("type") == "preset"]
-        if provider and not any(
-            option.get("value") == provider and option.get("available") for option in presets
-        ):
-            flash(request, "Selected AI provider is unavailable. Choose a configured provider.", "danger")
-            return RedirectResponse(url=f"/workspaces/{ws.id}/sessions/{session.id}", status_code=302)
         try:
             tool = get_tool(session.agent_tool)
         except ValueError:
             tool = get_tool("opencode")
+        if tool.requires_ai_model():
+            options = await _get_provider_options(ws_id, db, session.agent_tool)
+            presets = [option for option in options if option.get("type") == "preset"]
+            if provider and not any(
+                option.get("value") == provider and option.get("available") for option in presets
+            ):
+                flash(request, "Selected AI provider is unavailable. Choose a configured provider.", "danger")
+                return RedirectResponse(url=f"/workspaces/{ws.id}/sessions/{session.id}", status_code=302)
+        else:
+            # Non-AI tools can submit a stale hidden value from a session that
+            # previously used an AI tool; ignore it and clear the saved value.
+            provider = ""
         if mode == "server" and not tool.supports_server_mode():
             flash(request, f"{tool.display_name} agent tool does not support Chat mode.", "danger")
             return RedirectResponse(url=f"/workspaces/{ws.id}/sessions/{session.id}", status_code=302)

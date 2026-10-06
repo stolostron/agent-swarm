@@ -1169,6 +1169,41 @@ class TestListPageLaunchModeCoercion:
             session = await db.get(Session, s["id"])
             assert session.provider == ""
 
+    @pytest.mark.asyncio
+    async def test_confirmed_shell_launch_ignores_stale_provider(self, client):
+        from swarmer.models.session import Session
+
+        ws = await _create_workspace(client, "Shell with stale provider")
+        s = await _create_session(client, ws["id"], "shell-stale-provider")
+        async with _TestSession() as db:
+            session = await db.get(Session, s["id"])
+            session.agent_tool = "shell"
+            session.provider = "claude"
+            await db.commit()
+
+        with (
+            patch(
+                "swarmer.routers.sessions._get_provider_options",
+                new=AsyncMock(),
+            ) as provider_options,
+            patch("swarmer.routers.sessions._do_launch", new=AsyncMock()) as launch,
+        ):
+            response = await client.post(
+                f"/workspaces/{ws['id']}/sessions/{s['id']}/launch",
+                data={
+                    "launch_confirmed": "1", "mode": "prompt", "provider": "claude",
+                    "prompt_id": "", "instruction_prompt": "run text",
+                },
+                follow_redirects=False,
+            )
+
+        assert response.status_code in (302, 303)
+        provider_options.assert_not_awaited()
+        launch.assert_awaited_once()
+        async with _TestSession() as db:
+            session = await db.get(Session, s["id"])
+            assert session.provider == ""
+
 
 @pytest.mark.asyncio
 async def test_manual_prompt_override_blank_does_not_inherit_session_instructions(client, monkeypatch):
