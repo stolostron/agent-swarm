@@ -1146,6 +1146,54 @@ class TestSessions:
             app.dependency_overrides[get_current_user] = _override_get_current_user
 
     @pytest.mark.asyncio
+    async def test_workspace_members_cannot_mutate_shared_mcp_servers(self, client):
+        from swarmer.api.deps import get_current_user, require_api_auth
+        from swarmer.k8s_auth import TokenIdentity
+        from swarmer.main import app
+        from swarmer.models.mcp_server import McpServer
+
+        ws = await _create_workspace(client)
+        response = await client.post(
+            f"/api/v1/workspaces/{ws['id']}/mcp-servers",
+            json={"catalog_slug": "atlassian-jira"},
+        )
+        assert response.status_code == 201, response.text
+        server_id = response.json()["id"]
+        async with _TestSession() as db:
+            server = await db.get(McpServer, server_id)
+            original_config = (server.jira_server_url, server.jira_email)
+        await client.post(
+            f"/api/v1/workspaces/{ws['id']}/members", json={"user_id": "stranger"}
+        )
+
+        app.dependency_overrides[require_api_auth] = lambda: TokenIdentity(
+            username="stranger", uid="uid-stranger"
+        )
+        app.dependency_overrides[get_current_user] = lambda: "stranger"
+        try:
+            config_response = await client.post(
+                f"/api/v1/workspaces/{ws['id']}/mcp-servers/{server_id}/save",
+                json={
+                    "jira_server_url": "",
+                    "jira_access_token": "",
+                    "jira_email": "",
+                },
+            )
+            toggle_response = await client.post(
+                f"/api/v1/workspaces/{ws['id']}/mcp-servers/{server_id}/toggle"
+            )
+        finally:
+            app.dependency_overrides[require_api_auth] = _override_require_api_auth
+            app.dependency_overrides[get_current_user] = _override_get_current_user
+
+        assert config_response.status_code == 403
+        assert toggle_response.status_code == 403
+        async with _TestSession() as db:
+            server = await db.get(McpServer, server_id)
+            assert (server.jira_server_url, server.jira_email) == original_config
+            assert server.enabled is True
+
+    @pytest.mark.asyncio
     async def test_background_mcp_eligibility_includes_workspace_mcp_by_default(self, client):
         from swarmer.models.mcp_server import McpServer
         from swarmer.routers.mcp_servers import get_enabled_mcp_servers
