@@ -9,8 +9,12 @@ from sqlalchemy import or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from swarmer.database import get_db
-from swarmer.api.deps import get_current_user, get_workspace_or_404, require_api_auth
+from swarmer.api.deps import (
+    get_current_user,
+    get_workspace_or_404,
+    require_api_auth,
+    require_human_api_auth,
+)
 from swarmer.api.schemas import (
     McpHealthOut,
     McpServerAddFromCatalog,
@@ -18,6 +22,8 @@ from swarmer.api.schemas import (
     McpServerSaveConfig,
     MessageOut,
 )
+from swarmer.database import get_db
+from swarmer.k8s_auth import TokenIdentity
 from swarmer.mcp_catalog import get_catalog_entry
 from swarmer.models.mcp_server import McpServer
 from swarmer.models.workspace import Workspace
@@ -59,6 +65,21 @@ async def _get_visible_server_or_404(
     return server
 
 
+async def _require_workspace_manager(
+    db: AsyncSession, ws: Workspace, identity: TokenIdentity,
+) -> None:
+    """Require a human workspace owner or global admin for shared mutations."""
+    from swarmer import workspace_acl
+
+    if not await workspace_acl.can_manage_members(
+        db, ws, identity.username, identity.groups
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only workspace managers can update shared MCP servers.",
+        )
+
+
 @router.get("", response_model=list[McpServerOut])
 async def list_mcp_servers(
     ws_id: int,
@@ -94,6 +115,7 @@ async def add_from_catalog(
         server_type=entry.get("server_type", "http"),
         jira_server_url=entry.get("default_jira_server_url", ""),
         user_id=user,
+        shared=True,
     )
     db.add(server)
     try:
@@ -116,9 +138,10 @@ async def save_config(
     body: McpServerSaveConfig,
     ws: Workspace = Depends(get_workspace_or_404),
     db: AsyncSession = Depends(get_db),
-    user: str = Depends(get_current_user),
+    identity: TokenIdentity = Depends(require_human_api_auth),
 ):
-    server = await _get_visible_server_or_404(ws_id, server_id, user, db)
+    await _require_workspace_manager(db, ws, identity)
+    server = await _get_visible_server_or_404(ws_id, server_id, identity.username, db)
 
     jira_server_url = body.jira_server_url.strip().rstrip("/")
     jira_access_token = body.jira_access_token.strip()
@@ -130,6 +153,7 @@ async def save_config(
         raise HTTPException(status_code=422, detail="API token is required")
 
     server.jira_server_url = jira_server_url
+    server.shared = True
     if jira_access_token:
         server.jira_access_token = jira_access_token
     server.jira_email = jira_email
@@ -189,11 +213,13 @@ async def toggle_server(
     server_id: int,
     ws: Workspace = Depends(get_workspace_or_404),
     db: AsyncSession = Depends(get_db),
-    user: str = Depends(get_current_user),
+    identity: TokenIdentity = Depends(require_human_api_auth),
 ):
-    server = await _get_visible_server_or_404(ws_id, server_id, user, db)
+    await _require_workspace_manager(db, ws, identity)
+    server = await _get_visible_server_or_404(ws_id, server_id, identity.username, db)
 
     server.enabled = not server.enabled
+    server.shared = True
     await db.commit()
     await db.refresh(server)
     return server

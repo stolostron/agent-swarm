@@ -156,6 +156,45 @@ class TestMigrateDbDropsLegacyColumns:
             db_module._engine = orig_engine
 
     @pytest.mark.asyncio
+    async def test_migrate_db_marks_existing_mcp_servers_shared(self):
+        """Existing user-owned MCP records become workspace-shared."""
+        from swarmer.models.mcp_server import McpServer
+        from swarmer.models.workspace import Workspace
+
+        async with _TestSession() as session:
+            workspace = Workspace(
+                display_name="MCP migration workspace",
+                namespace="mcp-migration-workspace",
+            )
+            session.add(workspace)
+            await session.flush()
+            server = McpServer(
+                workspace_id=workspace.id,
+                user_id="test-user",
+                shared=False,
+                slug="legacy-private-mcp",
+                display_name="Legacy MCP",
+                server_url="",
+                server_type="http",
+            )
+            session.add(server)
+            await session.commit()
+            server_id = server.id
+
+        import swarmer.database as db_module
+
+        orig_engine = db_module._engine
+        db_module._engine = _engine
+        try:
+            await db_module.migrate_db()
+        finally:
+            db_module._engine = orig_engine
+
+        async with _TestSession() as session:
+            server = await session.get(McpServer, server_id)
+            assert server.shared is True
+
+    @pytest.mark.asyncio
     async def test_run_context_columns_added_to_existing_database(self):
         """Older session/run tables gain the immutable context snapshot columns."""
         async with _engine.begin() as conn:

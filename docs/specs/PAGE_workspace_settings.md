@@ -35,7 +35,8 @@ security behavior.
 - GitHub PAT/App: provide repository discovery and session authentication;
   private keys remain encrypted and never enter a sandbox.
 - MCP servers: store endpoint/auth metadata, test health, enable/disable, and
-  expose only active configurations to session setup.
+  expose only active configurations to session setup. Server records and their
+  credentials are shared with sessions in the workspace, including background runs.
 - Environment variables: store workspace-scoped encrypted values and inject
   them through the approved sandbox mechanism.
 - Prompts: manage git-backed prompt sources, refresh them, browse repositories
@@ -54,5 +55,7 @@ security behavior.
   credentials after persistence.
 - Validate workspace ownership on every child resource operation.
 - A session receives only explicitly selected MCP servers and credentials.
+- MCP server credentials are available to workspace sessions and background jobs;
+  tokens remain encrypted at rest and are never returned in API responses.
 - Gateway configuration replacement must preserve all intended fields and must
   be connection-tested before reporting success.

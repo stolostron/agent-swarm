@@ -17,7 +17,7 @@ class McpServer(Base):
     )
     user_id: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
     shared: Mapped[bool] = mapped_column(
-        nullable=False, default=False, server_default="0"
+        nullable=False, default=True, server_default="1"
     )
     slug: Mapped[str] = mapped_column(Text, nullable=False)
     display_name: Mapped[str] = mapped_column(Text, nullable=False)

@@ -53,7 +53,17 @@ def test_intentional_empty_mcp_selection_disables_mcp_access():
     assert session.mcp_selection == "disabled"
 
 
-def test_explicit_server_selection_overrides_inherit_and_limits_launch_access():
+def test_new_session_form_with_no_checked_mcps_disables_mcp_access():
+    session = Session(mcp_server_ids="")
+
+    _apply_form_mcp_selection(
+        session, FormData([]), [], creating=True
+    )
+
+    assert session.mcp_selection == "disabled"
+
+
+def test_explicit_server_selection_limits_launch_access():
     selected_server = SimpleNamespace(
         id=23, slug="jira", enabled=True, auth_status="active"
     )
@@ -62,11 +72,7 @@ def test_explicit_server_selection_overrides_inherit_and_limits_launch_access():
     )
     session = Session(mcp_server_ids="")
     form_data = FormData(
-        [
-            ("mcp_settings_changed", "1"),
-            ("mcp_selection", "inherit"),
-            ("mcp_server_ids", "23"),
-        ]
+        [("mcp_settings_changed", "1"), ("mcp_server_ids", "23")]
     )
 
     _apply_form_mcp_selection(

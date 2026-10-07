@@ -89,6 +89,9 @@ async def migrate_db() -> None:
         "ALTER TABLE github_pats ADD COLUMN shared BOOLEAN NOT NULL DEFAULT 1",
         "ALTER TABLE mcp_servers ADD COLUMN user_id VARCHAR(255) NOT NULL DEFAULT ''",
         "ALTER TABLE mcp_servers ADD COLUMN shared BOOLEAN NOT NULL DEFAULT 1",
+        # Workspace MCP servers and their credentials are available to all
+        # workspace sessions, including scheduled/background runs.
+        "UPDATE mcp_servers SET shared = 1 WHERE shared = 0",
         # ACM-47170: enroll the internal Agent Swarm MCP in every existing
         # workspace. INSERT OR IGNORE is safe on repeated application and uses
         # the (workspace_id, slug) uniqueness constraint as the idempotency key.

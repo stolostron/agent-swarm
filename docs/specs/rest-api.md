@@ -326,6 +326,10 @@ inheritance with an ID list is rejected.
 The workspace MCP inventory is available from `GET /api/v1/workspaces/{ws_id}/mcp-servers`
 and contains caller-visible safe metadata only. Endpoint URLs omit userinfo,
 query strings, and fragments; credentials and ownership identifiers are never returned.
+The session UI uses only explicit per-server checkboxes, unchecked by default for
+new sessions. The API inheritance mode remains supported for existing clients
+and legacy sessions. Configured workspace MCP servers and credentials are shared
+with sessions in the workspace, including scheduled/background sessions.
 
 #### `GET /api/v1/workspaces/{ws_id}/sessions/{sid}`
 

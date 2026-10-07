@@ -408,16 +408,9 @@
                 <span class="pf-v6-c-form__label-text">MCP Servers</span>
               </label>
               <div class="pf-v6-c-form__group-control">
-                <div class="pf-v6-c-check" style="margin-bottom:var(--pf-t--global--spacer--sm);">
-                  <input class="pf-v6-c-check__input" type="checkbox" name="mcp_selection"
-                         data-mcp-selection-control
-                         value="inherit" id="mcp-detail-inherit" form="cfg-edit-form"
-                         {{ 'checked' if session.mcp_selection == 'inherit' }}
-                         {{ 'disabled' if session.is_active }}>
-                  <label class="pf-v6-c-check__label" for="mcp-detail-inherit" style="font-size:var(--pf-t--global--font--size--sm);">
-                    Inherit eligible workspace MCP servers
-                  </label>
-                </div>
+                <p style="color:var(--pf-t--global--text--color--subtle); font-size:var(--pf-t--global--font--size--sm); margin:0 0 var(--pf-t--global--spacer--sm) 0;">
+                  Select the workspace MCP servers this session can use. Leave all unchecked to disable MCP access.
+                </p>
                 {% if mcp_servers %}
                 {% for srv in mcp_servers %}
                 <div class="pf-v6-c-check" style="margin-bottom:var(--pf-t--global--spacer--xs);">
@@ -425,7 +418,7 @@
                          name="mcp_server_ids" value="{{ srv.id }}"
                          data-mcp-selection-control
                          id="mcp-detail-{{ srv.id }}"
-                          {{ 'checked' if srv.auth_status != 'expired' and session.mcp_selection == 'selected' and srv.id in session.enabled_mcp_ids }}
+                         {{ 'checked' if srv.auth_status != 'expired' and (session.mcp_selection == 'inherit' or (session.mcp_selection == 'selected' and srv.id in session.enabled_mcp_ids)) }}
                          {{ 'disabled' if srv.auth_status == 'expired' or session.is_active }}>
                   <label class="pf-v6-c-check__label" for="mcp-detail-{{ srv.id }}" style="font-size:var(--pf-t--global--font--size--sm);">
                     {{ srv.display_name }}
@@ -846,12 +839,6 @@ function copyCommitMsg(btn) { _copyBlock('commit-msg', btn); }
     el.addEventListener('change', () => {
       mcpChangeVersion++;
       if (mcpSettingsChanged) mcpSettingsChanged.value = '1';
-      if (el.checked && el.name === 'mcp_selection') {
-        form.querySelectorAll('[name="mcp_server_ids"]').forEach(server => { server.checked = false; });
-      } else if (el.checked && el.name === 'mcp_server_ids') {
-        const inherit = form.querySelector('[name="mcp_selection"]');
-        if (inherit) inherit.checked = false;
-      }
     });
   });
 
