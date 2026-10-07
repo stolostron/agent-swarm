@@ -231,9 +231,10 @@ async def delete_mcp_server(
     server_id: int,
     ws: Workspace = Depends(get_workspace_or_404),
     db: AsyncSession = Depends(get_db),
-    user: str = Depends(get_current_user),
+    identity: TokenIdentity = Depends(require_human_api_auth),
 ):
-    server = await _get_visible_server_or_404(ws_id, server_id, user, db)
+    await _require_workspace_manager(db, ws, identity)
+    server = await _get_visible_server_or_404(ws_id, server_id, identity.username, db)
 
     name = server.display_name
     await db.delete(server)
