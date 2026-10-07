@@ -1182,16 +1182,24 @@ class TestSessions:
             toggle_response = await client.post(
                 f"/api/v1/workspaces/{ws['id']}/mcp-servers/{server_id}/toggle"
             )
+            delete_response = await client.delete(
+                f"/api/v1/workspaces/{ws['id']}/mcp-servers/{server_id}"
+            )
         finally:
             app.dependency_overrides[require_api_auth] = _override_require_api_auth
             app.dependency_overrides[get_current_user] = _override_get_current_user
 
         assert config_response.status_code == 403
         assert toggle_response.status_code == 403
+        assert delete_response.status_code == 403
         async with _TestSession() as db:
             server = await db.get(McpServer, server_id)
             assert (server.jira_server_url, server.jira_email) == original_config
             assert server.enabled is True
+        owner_delete_response = await client.delete(
+            f"/api/v1/workspaces/{ws['id']}/mcp-servers/{server_id}"
+        )
+        assert owner_delete_response.status_code == 200
 
     @pytest.mark.asyncio
     async def test_background_mcp_eligibility_includes_workspace_mcp_by_default(self, client):
