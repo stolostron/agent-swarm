@@ -83,8 +83,11 @@ Until resolved, clients must not rely on `persist` being accepted or stored.
 ### 5.2 Session MCP server assignment
 
 REST and MCP create/update schemas expose MCP selection and the MCP inventory.
-New session creation defaults to disabled; inheritance requires the explicit
-`mcp_selection: "inherit"` opt-in.
+New session creation defaults to disabled; the UI uses explicit per-server
+checkboxes, unchecked by default. The REST/MCP contract retains the explicit
+`mcp_selection: "inherit"` option for compatibility. Workspace MCP servers and
+their configured credentials are always shared with sessions in that workspace,
+including scheduled/background runs.
 
 ### 5.3 Schedule provider on create
 

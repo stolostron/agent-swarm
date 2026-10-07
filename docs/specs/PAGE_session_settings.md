@@ -22,6 +22,9 @@ working branch, prompt, GitHub credential, and enabled MCP servers.
 - Agent tool strategy controls supported modes and launch command.
 - Manual launch selections are confirmed in a shared modal; cancel/dismiss does
   not autosave dialog changes.
+- MCP selection uses explicit per-server checkboxes, unchecked on new sessions;
+  unchecking all disables MCP access. Legacy inherited sessions display their
+  currently eligible MCPs as checked, and editing that selection makes it explicit.
 
 ## Algorithm
 
@@ -74,5 +77,7 @@ deletion on stop, delete, and successful prompt completion.
   default, and scheduled prompt fallback remains unchanged.
 - Server mode rejects unsupported agent tools server-side.
 - Autosave reports failure without silently losing the selected value.
+- Workspace MCP credentials are shared with scheduled/background sessions;
+  only explicitly selected servers are attached to a newly created session.
 - Agent Swarm provider creation is driven by persisted `Session.mcp_server_ids`,
   not by the local OpenCode configuration.

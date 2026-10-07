@@ -148,6 +148,14 @@ target workspace and be visible to the caller or the whole request is rejected.
 When selecting inheritance, omit `mcp_server_ids` or pass null; combining
 inheritance with an ID list is rejected.
 
+The session UI presents only explicit per-server checkboxes, unchecked by default
+for new sessions; leaving all unchecked disables MCP access. For legacy sessions
+using inheritance, the UI shows currently eligible inherited servers as checked.
+Changing those checkboxes saves an explicit selection. The API/MCP inheritance
+contract remains supported for compatibility. MCP servers and configured MCP
+credentials are shared with all sessions in their workspace, including background
+and scheduled runs.
+
 `list_workspace_mcp_servers` provides the caller-visible inventory using safe
 metadata only. Session results expose `mcp_selection` (`inherit`, `disabled`, or
 `selected`), saved caller-visible `mcp_server_ids`, and

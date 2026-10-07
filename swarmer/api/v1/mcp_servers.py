@@ -94,6 +94,7 @@ async def add_from_catalog(
         server_type=entry.get("server_type", "http"),
         jira_server_url=entry.get("default_jira_server_url", ""),
         user_id=user,
+        shared=True,
     )
     db.add(server)
     try:
@@ -130,6 +131,7 @@ async def save_config(
         raise HTTPException(status_code=422, detail="API token is required")
 
     server.jira_server_url = jira_server_url
+    server.shared = True
     if jira_access_token:
         server.jira_access_token = jira_access_token
     server.jira_email = jira_email
@@ -194,6 +196,7 @@ async def toggle_server(
     server = await _get_visible_server_or_404(ws_id, server_id, user, db)
 
     server.enabled = not server.enabled
+    server.shared = True
     await db.commit()
     await db.refresh(server)
     return server

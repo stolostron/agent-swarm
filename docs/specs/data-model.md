@@ -230,7 +230,7 @@ Unique key: `(workspace_id, name)`.
 | `agent_tool` | `opencode` or `shell` |
 | `instruction_prompt` | Additional instructions or shell command |
 | `working_branch` | Git branch/ref used by the agent |
-| `mcp_server_ids` | Comma-separated selected MCP IDs; empty means inherited, `none` means explicitly disabled |
+| `mcp_server_ids` | Comma-separated selected MCP IDs; empty retains legacy/API inheritance, `none` means explicitly disabled; new sessions without selections store `none` |
 | `phase` | Runtime lifecycle state |
 | `sandbox_name` | OpenShell sandbox name |
 | `service_url` | Exposed server-mode service URL |
@@ -332,7 +332,7 @@ Unique key: `(workspace_id, slug)`.
 | Column | Description |
 |---|---|
 | `id`, `workspace_id` | Identity and scope |
-| `user_id`, `shared` | Visibility and ownership |
+| `user_id`, `shared` | Owner metadata and workspace visibility; MCP servers are shared by default and existing unshared rows are migrated to shared |
 | `slug`, `display_name` | Catalog and display identity |
 | `server_url`, `server_type` | Connection metadata |
 | `enabled` | Whether available to sessions |
