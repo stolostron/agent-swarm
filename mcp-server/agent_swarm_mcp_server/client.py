@@ -336,6 +336,62 @@ class AgentSwarmClient:
         """List prompt sources in a workspace."""
         return await self._get(f"/api/v1/workspaces/{ws_id}/prompts")
 
+    async def create_prompt_source(
+        self,
+        ws_id: int,
+        name: str,
+        repo_url: str,
+        branch: str = "main",
+        folder_path: str = ".",
+        github_pat_id: int | None = None,
+    ) -> dict:
+        """Create a workspace prompt source and trigger its initial sync."""
+        body: dict[str, Any] = {
+            "name": name,
+            "repo_url": repo_url,
+            "branch": branch,
+            "folder_path": folder_path,
+        }
+        if github_pat_id is not None:
+            body["github_pat_id"] = github_pat_id
+        return await self._post(f"/api/v1/workspaces/{ws_id}/prompts", json=body)
+
+    async def update_prompt_source(
+        self,
+        ws_id: int,
+        source_id: int,
+        *,
+        name: str | None = None,
+        repo_url: str | None = None,
+        branch: str | None = None,
+        folder_path: str | None = None,
+        github_pat_id: int | None = None,
+    ) -> dict:
+        """Partially update source settings without triggering a sync."""
+        fields = {
+            "name": name,
+            "repo_url": repo_url,
+            "branch": branch,
+            "folder_path": folder_path,
+            "github_pat_id": github_pat_id,
+        }
+        body = {key: value for key, value in fields.items() if value is not None}
+        return await self._put(
+            f"/api/v1/workspaces/{ws_id}/prompts/{source_id}", json=body
+        )
+
+    async def delete_prompt_source(self, ws_id: int, source_id: int) -> dict:
+        """Delete one prompt source from the specified workspace."""
+        return await self._delete(
+            f"/api/v1/workspaces/{ws_id}/prompts/{source_id}"
+        )
+
+    async def refresh_prompt_source(self, ws_id: int, source_id: int) -> dict:
+        """Refresh one prompt source in the specified workspace."""
+        return await self._post(
+            f"/api/v1/workspaces/{ws_id}/prompts/{source_id}/refresh"
+        )
+
     # ==================================================================
     # Session Schedules
     # ==================================================================

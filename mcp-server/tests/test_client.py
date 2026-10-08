@@ -214,6 +214,93 @@ async def test_list_prompt_sources(client):
 
 
 @pytest.mark.asyncio
+async def test_prompt_source_crud_and_refresh_use_workspace_scoped_paths(client):
+    source = {
+        "id": 7,
+        "workspace_id": 3,
+        "name": "Team prompts",
+        "repo_url": "https://github.com/example/prompts",
+        "branch": "main",
+        "folder_path": ".",
+        "github_pat_id": 12,
+        "last_synced_at": "2026-10-08T12:00:00",
+        "sync_error": "",
+        "prompts": [],
+    }
+    with respx.mock(base_url=BASE_URL) as mock:
+        create_route = mock.post("/api/v1/workspaces/3/prompts").mock(
+            return_value=httpx.Response(201, json=source)
+        )
+        update_route = mock.put("/api/v1/workspaces/3/prompts/7").mock(
+            return_value=httpx.Response(200, json={**source, "name": "Renamed"})
+        )
+        delete_route = mock.delete("/api/v1/workspaces/3/prompts/7").mock(
+            return_value=httpx.Response(200, json={"detail": "Prompt source deleted."})
+        )
+        refresh_route = mock.post("/api/v1/workspaces/3/prompts/7/refresh").mock(
+            return_value=httpx.Response(200, json=source)
+        )
+
+        created = await client.create_prompt_source(
+            3, "Team prompts", "https://github.com/example/prompts", github_pat_id=12
+        )
+        create_body = json.loads(create_route.calls[0].request.content)
+        assert create_body == {
+            "name": "Team prompts",
+            "repo_url": "https://github.com/example/prompts",
+            "branch": "main",
+            "folder_path": ".",
+            "github_pat_id": 12,
+        }
+        assert created["id"] == 7
+
+        updated = await client.update_prompt_source(3, 7, name="Renamed")
+        update_body = json.loads(update_route.calls[0].request.content)
+        assert update_body == {"name": "Renamed"}
+        assert updated["name"] == "Renamed"
+
+        deleted = await client.delete_prompt_source(3, 7)
+        assert deleted == {"detail": "Prompt source deleted."}
+
+        refreshed = await client.refresh_prompt_source(3, 7)
+        assert refreshed["id"] == 7
+
+    assert create_route.called and update_route.called
+    assert delete_route.called and refresh_route.called
+
+
+@pytest.mark.asyncio
+async def test_update_prompt_source_omits_null_fields_including_pat(client):
+    with respx.mock(base_url=BASE_URL) as mock:
+        route = mock.put("/api/v1/workspaces/5/prompts/19").mock(
+            return_value=httpx.Response(200, json={"id": 19})
+        )
+        await client.update_prompt_source(
+            5, 19, name="Updated", repo_url=None, github_pat_id=None
+        )
+        assert json.loads(route.calls[0].request.content) == {"name": "Updated"}
+
+
+@pytest.mark.asyncio
+async def test_prompt_source_not_found_and_refresh_errors_are_surfaced(client):
+    with respx.mock(base_url=BASE_URL) as mock:
+        mock.put("/api/v1/workspaces/5/prompts/99").mock(
+            return_value=httpx.Response(404, json={"detail": "Prompt source not found"})
+        )
+        mock.post("/api/v1/workspaces/5/prompts/99/refresh").mock(
+            return_value=httpx.Response(502, json={"detail": "GitHub sync unavailable"})
+        )
+
+        with pytest.raises(AgentSwarmAPIError, match="404") as missing:
+            await client.update_prompt_source(5, 99, name="missing")
+        assert missing.value.detail == "Prompt source not found"
+
+        with pytest.raises(AgentSwarmAPIError, match="502") as failed_refresh:
+            await client.refresh_prompt_source(5, 99)
+        assert failed_refresh.value.detail == "GitHub sync unavailable"
+
+
+@pytest.mark.asyncio
 async def test_401_raises_api_error_with_message(client):
     with respx.mock(base_url=BASE_URL) as mock:
         mock.get("/api/v1/workspaces").mock(

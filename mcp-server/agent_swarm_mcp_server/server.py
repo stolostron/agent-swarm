@@ -50,6 +50,41 @@ def _fmt_schedule(sc: dict) -> dict:
     }
 
 
+def _fmt_prompt_source(source: dict) -> dict:
+    """Return source settings and prompt metadata without prompt bodies or secrets."""
+    sync_error = source.get("sync_error") or ""
+    last_synced_at = source.get("last_synced_at")
+    prompts = [
+        {
+            "id": prompt.get("id"),
+            "display_name": prompt.get("display_name"),
+            "filename": prompt.get("filename"),
+        }
+        for prompt in source.get("prompts") or []
+    ]
+    if sync_error:
+        sync_status = "failed"
+    elif last_synced_at:
+        sync_status = "synced"
+    else:
+        sync_status = "not_synced"
+
+    return {
+        "id": source.get("id"),
+        "workspace_id": source.get("workspace_id"),
+        "name": source.get("name"),
+        "repo_url": source.get("repo_url"),
+        "branch": source.get("branch"),
+        "folder_path": source.get("folder_path"),
+        "github_pat_id": source.get("github_pat_id"),
+        "last_synced_at": last_synced_at,
+        "sync_error": sync_error,
+        "sync_status": sync_status,
+        "prompt_count": len(prompts),
+        "prompts": prompts,
+    }
+
+
 def _fmt_session(s: dict, repos: list[dict] | None = None) -> dict:
     result = {
         "id": s.get("id"),
@@ -416,6 +451,63 @@ class AgentSwarmMCPServer:
                     "source_id": source.get("id"),
                 })
         return prompts
+
+    async def _list_prompt_sources(self, workspace_id: int) -> list[dict]:
+        sources = await self.client.list_prompt_sources(workspace_id)
+        return [_fmt_prompt_source(source) for source in sources]
+
+    async def _create_prompt_source(
+        self,
+        workspace_id: int,
+        name: str,
+        repo_url: str,
+        branch: str = "main",
+        folder_path: str = ".",
+        github_pat_id: int | None = None,
+    ) -> dict:
+        source = await self.client.create_prompt_source(
+            workspace_id,
+            name,
+            repo_url,
+            branch=branch,
+            folder_path=folder_path,
+            github_pat_id=github_pat_id,
+        )
+        return _fmt_prompt_source(source)
+
+    async def _update_prompt_source(
+        self,
+        workspace_id: int,
+        source_id: int,
+        *,
+        name: str | None = None,
+        repo_url: str | None = None,
+        branch: str | None = None,
+        folder_path: str | None = None,
+        github_pat_id: int | None = None,
+    ) -> dict:
+        source = await self.client.update_prompt_source(
+            workspace_id,
+            source_id,
+            name=name,
+            repo_url=repo_url,
+            branch=branch,
+            folder_path=folder_path,
+            github_pat_id=github_pat_id,
+        )
+        return _fmt_prompt_source(source)
+
+    async def _delete_prompt_source(self, workspace_id: int, source_id: int) -> dict:
+        result = await self.client.delete_prompt_source(workspace_id, source_id)
+        return {
+            "source_id": source_id,
+            "deleted": True,
+            "message": result.get("detail", "Prompt source deleted."),
+        }
+
+    async def _refresh_prompt_source(self, workspace_id: int, source_id: int) -> dict:
+        source = await self.client.refresh_prompt_source(workspace_id, source_id)
+        return _fmt_prompt_source(source)
 
     async def _set_session_prompt(
         self,
@@ -1031,6 +1123,105 @@ class AgentSwarmMCPServer:
                 workspace_id: The workspace id.
             """
             return await self._list_workspace_prompts(workspace_id)
+
+        @mcp.tool()
+        async def list_prompt_sources(workspace_id: int) -> list[dict]:
+            """List configured prompt repositories and safe sync metadata.
+
+            Prompt sources are repository settings; use list_workspace_prompts to
+            browse the selectable prompt files synchronized from those sources.
+            PAT values and prompt contents are never returned.
+
+            Args:
+                workspace_id: The workspace id.
+            """
+            return await self._list_prompt_sources(workspace_id)
+
+        @mcp.tool()
+        async def create_prompt_source(
+            workspace_id: int,
+            name: str,
+            repo_url: str,
+            branch: str = "main",
+            folder_path: str = ".",
+            github_pat_id: int | None = None,
+        ) -> dict:
+            """Create a prompt repository and report the initial sync result.
+
+            A non-empty sync_error means the initial sync failed, including when
+            the REST request itself succeeded. PAT values are never returned.
+
+            Args:
+                workspace_id: The workspace id.
+                name: Display name for this prompt source.
+                repo_url: Git repository URL.
+                branch: Branch to read. Defaults to main.
+                folder_path: Folder containing prompts. Defaults to ".".
+                github_pat_id: Optional ID of a configured GitHub PAT.
+            """
+            return await self._create_prompt_source(
+                workspace_id, name, repo_url, branch, folder_path, github_pat_id
+            )
+
+        @mcp.tool()
+        async def update_prompt_source(
+            workspace_id: int,
+            source_id: int,
+            name: str | None = None,
+            repo_url: str | None = None,
+            branch: str | None = None,
+            folder_path: str | None = None,
+            github_pat_id: int | None = None,
+        ) -> dict:
+            """Partially update source settings without refreshing the source.
+
+            Omitted values remain unchanged. A null github_pat_id does not clear
+            the existing credential; this API does not support clearing it here.
+            Call refresh_prompt_source explicitly after repository setting changes.
+
+            Args:
+                workspace_id: The workspace id.
+                source_id: The source id from list_prompt_sources.
+                name: Optional new display name.
+                repo_url: Optional new repository URL.
+                branch: Optional branch name.
+                folder_path: Optional prompt folder path.
+                github_pat_id: Optional configured PAT ID; null leaves it unchanged.
+            """
+            return await self._update_prompt_source(
+                workspace_id,
+                source_id,
+                name=name,
+                repo_url=repo_url,
+                branch=branch,
+                folder_path=folder_path,
+                github_pat_id=github_pat_id,
+            )
+
+        @mcp.tool()
+        async def delete_prompt_source(workspace_id: int, source_id: int) -> dict:
+            """Delete one prompt source from the specified workspace.
+
+            Args:
+                workspace_id: The workspace id.
+                source_id: The source id from list_prompt_sources.
+            """
+            return await self._delete_prompt_source(workspace_id, source_id)
+
+        @mcp.tool()
+        async def refresh_prompt_source(workspace_id: int, source_id: int) -> dict:
+            """Refresh one selected prompt source from its configured repository.
+
+            Returns safe source and prompt metadata plus sync_status and
+            sync_error. A non-empty sync_error means refresh failed even if the
+            REST endpoint returned successfully. Missing-source and authorization
+            errors are surfaced from the REST API.
+
+            Args:
+                workspace_id: The workspace id.
+                source_id: The source id selected from list_prompt_sources.
+            """
+            return await self._refresh_prompt_source(workspace_id, source_id)
 
         @mcp.tool()
         async def list_workspace_mcp_servers(workspace_id: int) -> list[dict]:
