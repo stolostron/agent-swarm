@@ -389,10 +389,10 @@ class TestLaunchConfirmationDialog:
             assert '{% include "sessions/_launch_dialog_host.html" %}' in template_path.read_text()
 
         host = Path("swarmer/templates/sessions/_launch_dialog_host.html").read_text()
-        host_script_match = re.search(r"<script>(.*?)</script>", host, re.DOTALL)
+        host_script_match = re.search(r"<script>(.*?)</script>", host, re.DOTALL | re.IGNORECASE)
         assert host_script_match
         host_script = host_script_match.group(1)
-        host_markup = re.sub(r"<script>.*?</script>", "", host, flags=re.DOTALL)
+        host_markup = re.sub(r"<script>.*?</script>", "", host, flags=re.DOTALL | re.IGNORECASE)
         list_url = "/workspaces/42/sessions/314/launch-dialog?mode=prompt&redirect_to=list"
         detail_url = "/workspaces/42/sessions/314/launch-dialog?mode=prompt"
 
