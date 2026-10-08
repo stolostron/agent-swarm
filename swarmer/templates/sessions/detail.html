@@ -930,22 +930,19 @@ function toggleHistoryRow(runId) {
 }
 
 function switchHistoryOutput(runId, type) {
-  var processed = document.getElementById('hist-out-processed-' + runId);
-  var raw       = document.getElementById('hist-out-raw-' + runId);
-  var btnP      = document.getElementById('hist-btn-processed-' + runId);
-  var btnR      = document.getElementById('hist-btn-raw-' + runId);
-  if (!processed || !raw) return;
-  if (type === 'processed') {
-    processed.style.display = 'block';
-    raw.style.display = 'none';
-    if (btnP) { btnP.classList.add('selected'); }
-    if (btnR) { btnR.classList.remove('selected'); }
-  } else {
-    raw.style.display = 'block';
-    processed.style.display = 'none';
-    if (btnR) { btnR.classList.add('selected'); }
-    if (btnP) { btnP.classList.remove('selected'); }
-  }
+  var row = document.getElementById('hist-expand-' + runId);
+  if (!row) return;
+  var selectedView = row.querySelector('[data-history-view="' + type + '"]');
+  if (!selectedView) return;
+
+  row.querySelectorAll('[data-history-view]').forEach(function(view) {
+    view.hidden = view !== selectedView;
+  });
+  row.querySelectorAll('[data-history-view-button]').forEach(function(button) {
+    var selected = button.dataset.historyViewButton === type;
+    button.classList.toggle('selected', selected);
+    button.setAttribute('aria-pressed', selected ? 'true' : 'false');
+  });
 }
 
 function showRename() {

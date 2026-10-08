@@ -90,20 +90,29 @@
       role="row" style="display:none;">
     <td class="pf-v6-c-table__td pf-v6-c-table__toggle" style="padding:0; border-bottom:none;"></td>
     <td class="pf-v6-c-table__td" colspan="4" style="padding:0;">
-      {# Header bar: completed timestamp left, log-pills right #}
+      {# Header bar: view controls left, completed timestamp right #}
       <div style="display:flex; align-items:center; gap:var(--pf-t--global--spacer--sm);
                   width:100%; box-sizing:border-box;
                   padding:var(--pf-t--global--spacer--sm) var(--pf-t--global--spacer--md);
                   border-bottom:1px solid var(--pf-t--global--border--color--default);
                   background:var(--pf-t--global--background--color--secondary--default);">
+        <div role="group" aria-label="Views for run {{ run.id }}"
+             style="display:flex; align-items:center; gap:var(--pf-t--global--spacer--xs);">
+          <button id="hist-btn-output-{{ run.id }}" type="button"
+                  class="log-pill selected" aria-pressed="true"
+                  data-history-view-button="output"
+                  onclick="switchHistoryOutput({{ run.id }}, 'output')">Output</button>
         {% if _has_raw %}
-          <button id="hist-btn-processed-{{ run.id }}"
-                  class="log-pill selected"
-                  onclick="switchHistoryOutput({{ run.id }}, 'processed')">Output</button>
-          <button id="hist-btn-raw-{{ run.id }}"
-                  class="log-pill"
+          <button id="hist-btn-raw-{{ run.id }}" type="button"
+                  class="log-pill" aria-pressed="false"
+                  data-history-view-button="raw"
                   onclick="switchHistoryOutput({{ run.id }}, 'raw')">Raw Log</button>
         {% endif %}
+          <button id="hist-btn-context-{{ run.id }}" type="button"
+                  class="log-pill" aria-pressed="false"
+                  data-history-view-button="context"
+                  onclick="switchHistoryOutput({{ run.id }}, 'context')">Context</button>
+        </div>
         <span style="{% if not _has_raw %}margin-left:0;{% else %}margin-left:var(--pf-t--global--spacer--sm);{% endif %}
                      font-size:var(--pf-t--global--font--size--xs);
                      color:var(--pf-t--global--text--color--subtle);
@@ -112,64 +121,58 @@
           {%- if run.status_detail %} &middot; {{ run.status_detail }}{% endif %}
         </span>
       </div>
-      {% if _is_event %}
-      <div style="padding:var(--pf-t--global--spacer--sm) var(--pf-t--global--spacer--md); background:var(--pf-t--global--background--color--secondary--default); border-bottom:1px solid var(--pf-t--global--border--color--default); font-size:var(--pf-t--global--font--size--xs); font-family:monospace; color:var(--pf-t--global--text--color--subtle);">
-        <strong style="color:var(--pf-t--global--text--color--regular);">⚡ Event Context:</strong>
-        {% if run.event_info.repo %}Repo: {{ run.event_info.repo }} | {% endif %}
-        {% if run.event_info.pr_number %}PR: #{{ run.event_info.pr_number }} | {% endif %}
-        {% if run.event_info.head_sha %}Head SHA: {{ run.event_info.head_sha[:8] }} | {% endif %}
-         {% if run.event_info.event_condition %}Condition: {{ run.event_info.event_condition }} | {% endif %}
-        {% if run.event_info.title %}Title: {{ run.event_info.title }}{% endif %}
-      </div>
-      {% endif %}
-      <section aria-label="Startup context" style="padding:var(--pf-t--global--spacer--md); border-bottom:1px solid var(--pf-t--global--border--color--default);">
-        <h4 style="margin:0 0 var(--pf-t--global--spacer--sm); font-size:var(--pf-t--global--font--size--md);">Startup context</h4>
-        {% if run.context_captured %}
-          <div style="margin-bottom:var(--pf-t--global--spacer--sm);">
-            <strong>Prompt{% if run.prompt_name %}: {{ run.prompt_name }}{% endif %}</strong>
-            {% if run.prompt_id is not none %}
-            <pre class="last-output" style="padding:var(--pf-t--global--spacer--sm); margin:var(--pf-t--global--spacer--xs) 0 0; max-height:220px; overflow:auto; white-space:pre-wrap;">{{ run.prompt_content }}</pre>
-            {% else %}
-            <div style="font-size:var(--pf-t--global--font--size--sm); color:var(--pf-t--global--text--color--subtle);">No base prompt selected.</div>
-            {% endif %}
-          </div>
-          <div style="margin-bottom:var(--pf-t--global--spacer--sm);">
-            <strong>Additional Instructions</strong>
-            <pre class="last-output" style="padding:var(--pf-t--global--spacer--sm); margin:var(--pf-t--global--spacer--xs) 0 0; max-height:220px; overflow:auto; white-space:pre-wrap;">{{ run.additional_instructions or '(none)' }}</pre>
-          </div>
-          {% if run.mode in ('tui', 'server') %}
-          <div style="font-size:var(--pf-t--global--font--size--xs); color:var(--pf-t--global--text--color--subtle); margin-bottom:var(--pf-t--global--spacer--xs);">TUI and Chat use this startup context from AGENTS.md. Later terminal or chat messages are not included.</div>
-          {% endif %}
-          <strong>Composed startup context</strong>
-          <pre class="last-output" style="padding:var(--pf-t--global--spacer--sm); margin:var(--pf-t--global--spacer--xs) 0 0; max-height:400px; overflow:auto; white-space:pre-wrap;">{{ run.startup_context }}</pre>
+      <div id="hist-view-output-{{ run.id }}" data-history-view="output">
+        {% if run.last_output %}
+        <pre id="hist-out-output-{{ run.id }}"
+             class="last-output"
+             style="padding:var(--pf-t--global--spacer--md); margin:0;
+                    max-height:400px; overflow:auto;">{{ run.last_output | ansi_to_html }}</pre>
         {% else %}
-          <div style="font-size:var(--pf-t--global--font--size--sm); color:var(--pf-t--global--text--color--subtle);">Startup context was not captured for this older run and is unavailable.</div>
+        <div style="padding:var(--pf-t--global--spacer--md); color:var(--pf-t--global--text--color--subtle);">No output captured for this run.</div>
         {% endif %}
-      </section>
-      {% if run.event_context %}
-      <section aria-label="Event context" style="padding:var(--pf-t--global--spacer--md); border-bottom:1px solid var(--pf-t--global--border--color--default);">
-        <strong>Event context</strong>
-        <pre class="last-output" style="padding:var(--pf-t--global--spacer--sm); margin:var(--pf-t--global--spacer--xs) 0 0; max-height:300px; overflow:auto; white-space:pre-wrap;">{{ run.event_context }}</pre>
-      </section>
-      {% endif %}
-      {# Output content #}
-      <div style="padding:var(--pf-t--global--spacer--sm) var(--pf-t--global--spacer--md); border-bottom:1px solid var(--pf-t--global--border--color--default);">
-        <strong>Run output</strong>
       </div>
-      {% if run.last_output or run.raw_output %}
-      <pre id="hist-out-processed-{{ run.id }}"
-           class="last-output"
-           style="padding:var(--pf-t--global--spacer--md); margin:0;
-                  max-height:400px; overflow:auto; display:block;">{{ run.last_output | ansi_to_html }}</pre>
       {% if _has_raw %}
-      <pre id="hist-out-raw-{{ run.id }}"
-           class="last-output"
-           style="padding:var(--pf-t--global--spacer--md); margin:0;
-                  max-height:400px; overflow:auto; display:none;">{{ run.raw_output | ansi_to_html }}</pre>
+      <div id="hist-view-raw-{{ run.id }}" data-history-view="raw" hidden>
+        <pre id="hist-out-raw-{{ run.id }}"
+             class="last-output"
+             style="padding:var(--pf-t--global--spacer--md); margin:0;
+                    max-height:400px; overflow:auto;">{{ run.raw_output | ansi_to_html }}</pre>
+      </div>
       {% endif %}
-      {% else %}
-      <div style="padding:var(--pf-t--global--spacer--md); color:var(--pf-t--global--text--color--subtle);">No output captured for this run.</div>
-      {% endif %}
+      <div id="hist-view-context-{{ run.id }}" data-history-view="context" hidden>
+        <section aria-label="Startup context" style="padding:var(--pf-t--global--spacer--md); border-bottom:1px solid var(--pf-t--global--border--color--default);">
+          <h4 style="display:flex; align-items:baseline; flex-wrap:wrap; gap:var(--pf-t--global--spacer--sm); margin:0 0 var(--pf-t--global--spacer--sm); font-size:var(--pf-t--global--font--size--md);">
+            Startup context
+            {% if run.prompt_name %}<span style="font-size:var(--pf-t--global--font--size--sm); color:var(--pf-t--global--text--color--subtle);">{{ run.prompt_name }}</span>{% endif %}
+          </h4>
+          {% if run.context_captured %}
+            {% if run.mode in ('tui', 'server') %}
+            <div style="font-size:var(--pf-t--global--font--size--xs); color:var(--pf-t--global--text--color--subtle); margin-bottom:var(--pf-t--global--spacer--xs);">TUI and Chat use this startup context from AGENTS.md. Later terminal or chat messages are not included.</div>
+            {% endif %}
+            <pre class="last-output" style="padding:var(--pf-t--global--spacer--sm); margin:var(--pf-t--global--spacer--xs) 0 0; max-height:400px; overflow:auto; white-space:pre-wrap;">{{ run.startup_context }}</pre>
+          {% else %}
+            <div style="font-size:var(--pf-t--global--font--size--sm); color:var(--pf-t--global--text--color--subtle);">Startup context was not captured for this older run and is unavailable.</div>
+          {% endif %}
+        </section>
+        {% if _is_event %}
+        <section aria-label="Event details" style="padding:var(--pf-t--global--spacer--md); border-bottom:1px solid var(--pf-t--global--border--color--default);">
+          <strong>Event details</strong>
+          <div style="margin-top:var(--pf-t--global--spacer--xs); font-size:var(--pf-t--global--font--size--xs); font-family:monospace; color:var(--pf-t--global--text--color--subtle);">
+            {% if run.event_info.repo %}Repo: {{ run.event_info.repo }} | {% endif %}
+            {% if run.event_info.pr_number %}PR: #{{ run.event_info.pr_number }} | {% endif %}
+            {% if run.event_info.head_sha %}Head SHA: {{ run.event_info.head_sha[:8] }} | {% endif %}
+            {% if run.event_info.event_condition %}Condition: {{ run.event_info.event_condition }} | {% endif %}
+            {% if run.event_info.title %}Title: {{ run.event_info.title }}{% endif %}
+          </div>
+        </section>
+        {% endif %}
+        {% if run.event_context %}
+        <section aria-label="Event context" style="padding:var(--pf-t--global--spacer--md);">
+          <strong>Event context</strong>
+          <pre class="last-output" style="padding:var(--pf-t--global--spacer--sm); margin:var(--pf-t--global--spacer--xs) 0 0; max-height:300px; overflow:auto; white-space:pre-wrap;">{{ run.event_context }}</pre>
+        </section>
+        {% endif %}
+      </div>
     </td>
   </tr>
   {% endfor %}
