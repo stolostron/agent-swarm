@@ -466,6 +466,18 @@ class AgentSwarmMCPServer:
             "raw_output": result.get("raw_output", ""),
         }
 
+    async def _list_session_runs(
+        self, workspace_id: int, session_id: int, limit: int = 20
+    ) -> list[dict]:
+        """List metadata-only summaries; run detail is fetched separately."""
+        return await self.client.list_session_runs(workspace_id, session_id, limit)
+
+    async def _get_session_run(
+        self, workspace_id: int, session_id: int, run_id: int
+    ) -> dict:
+        """Return complete stored content without local truncation."""
+        return await self.client.get_session_run(workspace_id, session_id, run_id)
+
     async def _wait_for_session(
         self,
         workspace_id: int,
@@ -1107,6 +1119,44 @@ class AgentSwarmMCPServer:
                 session_id: The session id.
             """
             return await self._get_session_output(workspace_id, session_id)
+
+        @mcp.tool()
+        async def list_session_runs(
+            workspace_id: int,
+            session_id: int,
+            limit: int = 20,
+        ) -> list[dict]:
+            """List recent historical run metadata without output or log content.
+
+            Results are ordered by completion time descending, then run ID
+            descending. Use get_session_run to retrieve all content for one run.
+
+            Args:
+                workspace_id: The workspace id.
+                session_id: The session id.
+                limit: Maximum summaries to return (1-100, default 20).
+            """
+            return await self._list_session_runs(workspace_id, session_id, limit)
+
+        @mcp.tool()
+        async def get_session_run(
+            workspace_id: int,
+            session_id: int,
+            run_id: int,
+        ) -> dict:
+            """Retrieve a historical run's complete stored output and context.
+
+            Returns processed output, raw logs, prompt identity/content, additional
+            instructions, composed startup context, context availability, and
+            separate event context. Legacy runs report unavailable context. The
+            response is not truncated; use the returned complete strings as-is.
+
+            Args:
+                workspace_id: The workspace id.
+                session_id: The session id.
+                run_id: The historical run id from list_session_runs.
+            """
+            return await self._get_session_run(workspace_id, session_id, run_id)
 
         @mcp.tool()
         async def wait_for_session(

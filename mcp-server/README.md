@@ -10,6 +10,12 @@ An MCP server that exposes Agent Swarm session management as tools for AI agents
 4. **Launch** it in prompt mode (`launch_session`)
 5. **Wait** for completion (`wait_for_session`) → returns output
 
+To inspect older executions, call `list_session_runs` for bounded metadata and
+then `get_session_run` with a selected run ID. The detail tool returns the full
+stored processed output, raw log, launch-time prompt and startup context, and
+separate event context. Older records without a captured context snapshot are
+explicitly marked unavailable; current session settings are never substituted.
+
 ## Tools
 
 | Tool | Purpose |
@@ -43,6 +49,8 @@ An MCP server that exposes Agent Swarm session management as tools for AI agents
 | `stop_session` | Abort a running session |
 | `get_session_status` | Check phase and run duration |
 | `get_session_output` | Retrieve captured output |
+| `list_session_runs` | List bounded, metadata-only summaries of historical runs |
+| `get_session_run` | Retrieve all stored output, logs, prompt, and context for one run |
 | `wait_for_session` | Poll until terminal state, return output |
 | `list_github_pats` | List GitHub PATs for private repo access |
 | `list_session_schedules` | List schedules configured for a session |

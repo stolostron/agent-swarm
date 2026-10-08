@@ -11,6 +11,7 @@ expandable output.
 - Template: `swarmer/templates/sessions/_run_history.html`
 - Router: `swarmer/routers/sessions.py:session_detail`
 - REST API: `GET /api/v1/workspaces/{ws_id}/sessions/{sid}/runs`
+- MCP history: `list_session_runs` followed by `get_session_run`
 - Model: `swarmer/models/session_run.py`
 
 ## Methods and tooling
@@ -49,3 +50,12 @@ expandable output.
 - Event context is bounded and does not expose secrets.
 - The newest 100 records are deterministic and ordered by `completed_at` and
   `id`, descending.
+- The existing REST `/runs` response remains unchanged for the session UI.
+- `GET /runs/summaries?limit=N` returns at most 100 metadata-only summaries,
+  ordered by completion time descending then run ID descending.
+- `GET /runs/{run_id}` validates the run belongs to the requested session and
+  returns complete stored output and context. The workspace dependency preserves
+  workspace-scoped authorization; normal output secret redaction remains applied
+  before stored run data is returned.
+- MCP `list_session_runs` accepts a limit from 1 to 100 (default 20), and
+  `get_session_run` returns the same full detail payload without truncation.

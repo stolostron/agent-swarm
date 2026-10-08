@@ -1394,6 +1394,139 @@ class TestSessions:
         assert runs[0]["run_duration"]
 
     @pytest.mark.asyncio
+    async def test_session_run_summaries_are_bounded_metadata_and_tie_sorted(self, client):
+        from datetime import datetime, timedelta, timezone
+
+        from swarmer.models.session import Session
+        from swarmer.models.session_run import SessionRun
+
+        ws = await _create_workspace(client)
+        session_out = await _create_session(client, ws["id"])
+        completed = datetime.now(timezone.utc)
+        async with _TestSession() as db:
+            session = await db.get(Session, session_out["id"])
+            db.add_all([
+                SessionRun(
+                    id=301, session_id=session.id, phase="succeeded", status_detail="",
+                    started_at=completed - timedelta(minutes=1), completed_at=completed,
+                    last_output="must not appear in summaries", raw_output="raw secret",
+                    mode="prompt", trigger_type="event", prompt_name="Review",
+                    prompt_content="private prompt", startup_context="private context",
+                    context_captured=True,
+                ),
+                SessionRun(
+                    id=302, session_id=session.id, phase="failed", status_detail="failed",
+                    started_at=completed - timedelta(minutes=2), completed_at=completed,
+                    last_output="also omitted", raw_output="", mode="tui",
+                    trigger_type="manual", prompt_name="Legacy", context_captured=False,
+                ),
+                SessionRun(
+                    id=303, session_id=session.id, phase="stopped", status_detail="stopped",
+                    started_at=completed - timedelta(hours=1),
+                    completed_at=completed - timedelta(hours=1), last_output="older",
+                    raw_output="", mode="prompt", trigger_type="cron",
+                    prompt_name="Daily", context_captured=False,
+                ),
+            ])
+            await db.commit()
+
+        url = f"/api/v1/workspaces/{ws['id']}/sessions/{session_out['id']}/runs/summaries"
+        response = await client.get(url, params={"limit": 2})
+        assert response.status_code == 200
+        summaries = response.json()
+        assert [item["id"] for item in summaries] == [302, 301]
+        assert summaries[0]["status"] == "failed"
+        assert summaries[0]["context_available"] is False
+        assert summaries[1]["source"] == "event"
+        assert summaries[1]["prompt_name"] == "Review"
+        assert summaries[1]["context_available"] is True
+        assert "last_output" not in summaries[1]
+        assert "raw_output" not in summaries[1]
+        assert "prompt_content" not in summaries[1]
+        assert (await client.get(url, params={"limit": 101})).status_code == 422
+
+    @pytest.mark.asyncio
+    async def test_get_session_run_returns_complete_content_and_legacy_context_state(self, client):
+        from datetime import datetime, timedelta, timezone
+
+        from swarmer.models.session import Session
+        from swarmer.models.session_run import SessionRun
+
+        ws = await _create_workspace(client)
+        session_out = await _create_session(client, ws["id"])
+        started = datetime.now(timezone.utc) - timedelta(minutes=2)
+        completed = datetime.now(timezone.utc)
+        processed = "processed-output\n" * 20_000
+        raw = "raw-log\n" * 20_000
+        context = "composed-startup-context\n" * 10_000
+        async with _TestSession() as db:
+            session = await db.get(Session, session_out["id"])
+            run = SessionRun(
+                session_id=session.id, phase="succeeded", status_detail="Completed",
+                started_at=started, completed_at=completed, last_output=processed,
+                raw_output=raw, mode="prompt", trigger_type="event",
+                schedule_label="PR event", prompt_name="Review", prompt_id=77,
+                event_context='{"pr_number": 12}', prompt_content="prompt body",
+                additional_instructions="review only", startup_context=context,
+                context_captured=True,
+            )
+            legacy = SessionRun(
+                session_id=session.id, phase="failed", status_detail="old failure",
+                started_at=started, completed_at=completed - timedelta(seconds=1),
+                last_output="legacy", raw_output="", mode="prompt",
+                trigger_type="manual", context_captured=False,
+            )
+            db.add_all([run, legacy])
+            await db.commit()
+            run_id, legacy_id = run.id, legacy.id
+
+        base = f"/api/v1/workspaces/{ws['id']}/sessions/{session_out['id']}/runs"
+        response = await client.get(f"{base}/{run_id}")
+        assert response.status_code == 200
+        detail = response.json()
+        assert detail["last_output"] == processed
+        assert detail["raw_output"] == raw
+        assert detail["prompt_id"] == 77
+        assert detail["prompt_name"] == "Review"
+        assert detail["prompt_content"] == "prompt body"
+        assert detail["additional_instructions"] == "review only"
+        assert detail["startup_context"] == context
+        assert detail["context_captured"] is True
+        assert detail["context_available"] is True
+        assert detail["event_context"] == '{"pr_number": 12}'
+        assert detail["event_info"] == {"pr_number": 12}
+
+        legacy_response = await client.get(f"{base}/{legacy_id}")
+        assert legacy_response.status_code == 200
+        assert legacy_response.json()["context_captured"] is False
+        assert legacy_response.json()["context_available"] is False
+        assert legacy_response.json()["startup_context"] == ""
+
+        other_session = await _create_session(client, ws["id"], name="another-session")
+        mismatched = await client.get(
+            f"/api/v1/workspaces/{ws['id']}/sessions/{other_session['id']}/runs/{run_id}"
+        )
+        assert mismatched.status_code == 404
+        missing = await client.get(f"{base}/999999")
+        assert missing.status_code == 404
+
+        private_ws = await _create_workspace(client, name="Other Owner Workspace")
+        private_session = await _create_session(client, private_ws["id"])
+        from swarmer.models.workspace import Workspace
+
+        async with _TestSession() as db:
+            workspace = await db.get(Workspace, private_ws["id"])
+            workspace.owner_id = "another-user"
+            await db.commit()
+
+        private_base = (
+            f"/api/v1/workspaces/{private_ws['id']}/sessions/"
+            f"{private_session['id']}/runs"
+        )
+        assert (await client.get(f"{private_base}/summaries")).status_code == 404
+        assert (await client.get(f"{private_base}/{run_id}")).status_code == 404
+
+    @pytest.mark.asyncio
     async def test_clear_output(self, client):
         ws = await _create_workspace(client)
         s = await _create_session(client, ws["id"])

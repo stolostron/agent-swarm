@@ -36,6 +36,8 @@ EXPECTED_TOOLS = {
     "stop_session",
     "get_session_status",
     "get_session_output",
+    "list_session_runs",
+    "get_session_run",
     "wait_for_session",
     "list_github_pats",
     # ACM-35377: schedule management tools
@@ -177,6 +179,32 @@ async def test_launch_session_passes_run_only_instructions():
         1, 7, instruction_prompt="run-only context"
     )
     assert result["phase"] == "pending"
+
+
+@pytest.mark.asyncio
+async def test_session_run_tools_delegate_and_return_complete_detail():
+    server = make_server()
+    content = "entire run output " * 10_000
+    summary = {"id": 19, "status": "succeeded", "context_available": True}
+    detail = {
+        "id": 19,
+        "last_output": content,
+        "raw_output": "raw console output",
+        "prompt_content": "captured prompt",
+        "startup_context": "captured context",
+        "event_context": '{"pr_number": 12}',
+    }
+    server.client.list_session_runs.return_value = [summary]
+    server.client.get_session_run.return_value = detail
+
+    summaries = await server._list_session_runs(4, 7, limit=12)
+    result = await server._get_session_run(4, 7, 19)
+
+    server.client.list_session_runs.assert_awaited_once_with(4, 7, 12)
+    server.client.get_session_run.assert_awaited_once_with(4, 7, 19)
+    assert summaries == [summary]
+    assert result == detail
+    assert len(result["last_output"]) == len(content)
 
 
 # ------------------------------------------------------------------

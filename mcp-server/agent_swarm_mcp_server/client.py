@@ -287,6 +287,21 @@ class AgentSwarmClient:
         """Fetch execution logs / output of a session."""
         return await self._get(f"/api/v1/workspaces/{ws_id}/sessions/{sid}/output")
 
+    async def list_session_runs(
+        self, ws_id: int, sid: int, limit: int = 20
+    ) -> list[dict]:
+        """Fetch bounded metadata-only summaries of historical session runs."""
+        return await self._get(
+            f"/api/v1/workspaces/{ws_id}/sessions/{sid}/runs/summaries",
+            params={"limit": limit},
+        )
+
+    async def get_session_run(self, ws_id: int, sid: int, run_id: int) -> dict:
+        """Fetch a run's full stored outputs and immutable launch context."""
+        return await self._get(
+            f"/api/v1/workspaces/{ws_id}/sessions/{sid}/runs/{run_id}"
+        )
+
     # ==================================================================
     # Repos
     # ==================================================================
