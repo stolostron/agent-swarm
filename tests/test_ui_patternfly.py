@@ -8,6 +8,7 @@ Requires the dev server running at http://127.0.0.1:8091 with SWARMER_DEV_AUTH=1
 
 import re
 from pathlib import Path
+from urllib.parse import parse_qs
 
 import pytest
 from playwright.sync_api import Page, expect, sync_playwright
@@ -334,3 +335,145 @@ class TestLaunchConfirmationDialog:
         expect(dialog).to_be_hidden()
         expect(opener).to_be_focused()
         assert launches == []
+
+    @pytest.mark.parametrize(
+        ("width", "height"),
+        [(375, 667), (667, 375), (1280, 800)],
+        ids=["mobile-portrait", "mobile-landscape", "desktop"],
+    )
+    def test_overflow_scroll_and_actions_from_list_and_detail(self, page: Page, width: int, height: int):
+        page.set_viewport_size({"width": width, "height": height})
+        page.route(
+            "**/launch-dialog*",
+            lambda route: route.fulfill(
+                status=200,
+                content_type="text/html",
+                body='''<form method="post" action="/launch-session" id="launch-confirm-form" class="pf-v6-c-form">
+                  <div class="pf-v6-c-modal-box__header"><h2 class="pf-v6-c-modal-box__title" id="launch-dialog-title">Launch session</h2></div>
+                  <div class="pf-v6-c-modal-box__body">
+                    <label for="launch-mode">Launch mode</label>
+                    <select id="launch-mode" name="mode" autofocus>
+                      <option value="prompt">Prompt</option><option value="tui">TUI</option><option value="server">Chat</option>
+                    </select>
+                    <select id="launch-prompt-id" name="prompt_id">
+                      <option value="prompt-1">First prompt</option><option value="prompt-2">Second prompt</option>
+                    </select>
+                    <label><input type="radio" name="provider" value="provider-a">Provider A</label>
+                    <label><input type="radio" name="provider" value="provider-b" checked>Provider B</label>
+                    <textarea id="launch-instruction-prompt" name="instruction_prompt"></textarea>
+                    <div style="height:1500px" aria-label="Overflowing launch settings"></div>
+                  </div>
+                  <div class="pf-v6-c-modal-box__footer">
+                    <button type="button" class="pf-v6-c-button pf-m-secondary" data-launch-dialog-close>Cancel</button>
+                    <button type="submit" class="pf-v6-c-button pf-m-primary">Confirm launch</button>
+                  </div>
+                </form>''',
+            ),
+        )
+        submissions = []
+
+        def capture_submission(route):
+            submissions.append(parse_qs(route.request.post_data or ""))
+            route.fulfill(status=204)
+
+        page.route("**/launch-session", capture_submission)
+        page.goto(f"{BASE_URL}/workspaces")
+        stylesheet = page.locator('link[href*="patternfly.min.css"]')
+        expect(stylesheet).to_have_count(1)
+        assert stylesheet.evaluate("link => link.sheet !== null"), "PatternFly stylesheet did not load"
+
+        # Both real page templates include this shared host. Exercise the matching
+        # list/detail trigger URLs against the same rendered PatternFly dialog.
+        for template in ("list.html", "detail.html"):
+            template_path = Path("swarmer/templates/sessions") / template
+            assert '{% include "sessions/_launch_dialog_host.html" %}' in template_path.read_text()
+
+        host = Path("swarmer/templates/sessions/_launch_dialog_host.html").read_text()
+        host_script_match = re.search(r"<script>(.*?)</script>", host, re.DOTALL)
+        assert host_script_match
+        host_script = host_script_match.group(1)
+        host_markup = re.sub(r"<script>.*?</script>", "", host, flags=re.DOTALL)
+        list_url = "/workspaces/42/sessions/314/launch-dialog?mode=prompt&redirect_to=list"
+        detail_url = "/workspaces/42/sessions/314/launch-dialog?mode=prompt"
+
+        page.evaluate(
+            """({markup, script, listUrl, detailUrl}) => {
+              document.body.replaceChildren();
+              for (const [id, text, launchUrl] of [
+                ['list-opener', 'Launch from session list', listUrl],
+                ['detail-opener', 'Launch from session detail', detailUrl],
+              ]) {
+                const opener = document.createElement('button');
+                opener.id = id;
+                opener.textContent = text;
+                opener.dataset.launchDialogUrl = launchUrl;
+                document.body.append(opener);
+              }
+              document.body.insertAdjacentHTML('beforeend', markup);
+              const hostScript = document.createElement('script');
+              hostScript.textContent = script;
+              document.body.append(hostScript);
+            }""",
+            {"markup": host_markup, "script": host_script, "listUrl": list_url, "detailUrl": detail_url},
+        )
+        dialog = page.get_by_role("dialog", name="Launch session")
+        backdrop = page.locator("#launch-dialog-backdrop")
+
+        for entrypoint, opener_id in (("session list", "list-opener"), ("session detail", "detail-opener")):
+            opener = page.locator(f"#{opener_id}")
+
+            opener.click()
+            expect(dialog).to_be_visible()
+            assert backdrop.evaluate("element => element.scrollHeight > element.clientHeight"), (
+                f"{entrypoint} dialog should overflow the {width}x{height} viewport"
+            )
+            box = dialog.bounding_box()
+            page.mouse.move(box["x"] + box["width"] / 2, min(box["y"] + 100, height - 2))
+            page.mouse.wheel(0, 500)
+            assert backdrop.evaluate("element => element.scrollTop") > 0, (
+                f"{entrypoint} dialog did not scroll through the backdrop at {width}x{height}"
+            )
+            page.mouse.wheel(0, 10000)
+            cancel = page.get_by_role("button", name="Cancel")
+            confirm = page.get_by_role("button", name="Confirm launch")
+            for action in (cancel, confirm):
+                action_box = action.bounding_box()
+                assert action_box["y"] >= 0 and action_box["y"] + action_box["height"] <= height, (
+                    f"{action.inner_text()} is not reachable after scrolling at {width}x{height}"
+                )
+            cancel.click()
+            expect(dialog).to_be_hidden()
+            expect(opener).to_be_focused()
+            assert submissions == []
+
+            opener.click()
+            page.keyboard.press("Escape")
+            expect(dialog).to_be_hidden()
+            expect(opener).to_be_focused()
+            assert submissions == []
+
+            opener.click()
+            backdrop.click(position={"x": 2, "y": height - 2})
+            expect(dialog).to_be_hidden()
+            expect(opener).to_be_focused()
+            assert submissions == []
+
+            opener.click()
+            page.locator("#launch-mode").select_option("server")
+            page.locator("#launch-prompt-id").select_option("prompt-2")
+            page.locator("input[name='provider'][value='provider-a']").check()
+            page.locator("#launch-instruction-prompt").fill("launch-specific instructions")
+            page.mouse.move(box["x"] + box["width"] / 2, min(box["y"] + 100, height - 2))
+            page.mouse.wheel(0, 10000)
+            confirm_box = confirm.bounding_box()
+            assert confirm_box["y"] >= 0 and confirm_box["y"] + confirm_box["height"] <= height
+            with page.expect_response("**/launch-session") as submitted:
+                confirm.click()
+            assert submitted.value.request.method == "POST"
+            assert len(submissions) == (1 if entrypoint == "session list" else 2)
+            assert submissions[-1] == {
+                "mode": ["server"],
+                "prompt_id": ["prompt-2"],
+                "provider": ["provider-a"],
+                "instruction_prompt": ["launch-specific instructions"],
+            }
