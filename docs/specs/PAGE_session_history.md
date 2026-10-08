@@ -19,7 +19,15 @@ expandable output.
   for stable ordering when completion times tie.
 - PatternFly expandable table and client-side row toggles.
 - Every row expands, including runs with neither output nor event context.
-- Output/Raw Log toggles are client-side.
+- Each expanded run has independent Output, optional Raw Log, and Context views;
+  Output is selected by default and Context is always available.
+- Raw Log is available only when raw output is non-empty and differs from the
+  processed output. Empty output is represented within its Output view.
+- Context shows the immutable composed startup context, its selected prompt
+  name, and identifiable event details. Older records without a captured
+  context show the unavailable message instead of rebuilding from current
+  settings.
+- View controls expose their selected state through `aria-pressed`.
 - ANSI output is rendered through the shared output filter.
 
 ## Algorithm

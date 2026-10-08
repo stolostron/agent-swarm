@@ -612,7 +612,7 @@ async def test_record_session_run_copies_immutable_startup_context():
         assert session.run_context_snapshot == ""
 
 
-def test_run_history_expands_context_without_output_and_marks_legacy_context_unavailable():
+def test_run_history_views_include_output_raw_and_context_independently():
     from datetime import datetime, timezone
     from types import SimpleNamespace
 
@@ -642,7 +642,7 @@ def test_run_history_expands_context_without_output_and_marks_legacy_context_una
         context_captured=True,
         prompt_content="prompt at launch",
         additional_instructions="manual instructions",
-        startup_context="composed launch context",
+        startup_context="composed <script>alert(1)</script> launch context",
     )
     legacy = SimpleNamespace(
         **{
@@ -654,17 +654,74 @@ def test_run_history_expands_context_without_output_and_marks_legacy_context_una
             "prompt_content": "",
             "additional_instructions": "",
             "startup_context": "",
+            "last_output": None,
+            "raw_output": None,
             "mode": "prompt",
+        }
+    )
+    with_raw = SimpleNamespace(
+        **{
+            **captured.__dict__,
+            "id": 13,
+            "last_output": "processed <script>alert(2)</script> output",
+            "raw_output": "raw <script>alert(3)</script> output",
+            "mode": "server",
+            "trigger_type": "event",
+            "event_context": "event payload",
+            "event_info": {
+                "repo": "stolostron/agent-swarm",
+                "pr_number": 42,
+                "head_sha": "1234567890abcdef",
+                "event_condition": "opened",
+                "title": "Example event",
+            },
+        }
+    )
+    identical_raw = SimpleNamespace(
+        **{
+            **captured.__dict__,
+            "id": 14,
+            "last_output": "identical output",
+            "raw_output": "identical output",
         }
     )
 
     rendered = env.get_template("sessions/_run_history.html").render(
-        session_runs=[captured, legacy]
+        session_runs=[captured, legacy, with_raw, identical_raw]
     )
 
-    assert rendered.count("aria-label=\"Expand run") == 2
-    assert "prompt at launch" in rendered
-    assert "composed launch context" in rendered
-    assert "Later terminal or chat messages are not included." in rendered
+    assert rendered.count("aria-label=\"Expand run") == 4
+    assert 'id="hist-btn-output-12" type="button"' in rendered
+    assert 'id="hist-btn-context-12" type="button"' in rendered
+    assert 'id="hist-btn-raw-12"' not in rendered
+    assert 'id="hist-btn-raw-11"' not in rendered
+    assert 'id="hist-btn-raw-13" type="button"' in rendered
+    assert 'id="hist-btn-raw-14"' not in rendered
+    assert rendered.count('aria-pressed="true"') == 4
+    assert rendered.count('aria-pressed="false"') == 5
+    assert 'onclick="switchHistoryOutput(12, \'output\')">Output</button>' in rendered
+    assert 'onclick="switchHistoryOutput(13, \'raw\')">Raw Log</button>' in rendered
+    assert 'onclick="switchHistoryOutput(13, \'context\')">Context</button>' in rendered
+
+    assert 'id="hist-view-output-12" data-history-view="output"' in rendered
+    assert 'id="hist-view-context-12" data-history-view="context" hidden' in rendered
+    assert 'id="hist-view-raw-13" data-history-view="raw" hidden' in rendered
+    assert 'id="hist-view-output-13" data-history-view="output"' in rendered
+    assert 'id="hist-view-context-13" data-history-view="context" hidden' in rendered
+    assert "processed &lt;script&gt;alert(2)&lt;/script&gt; output" in rendered
+    assert "raw &lt;script&gt;alert(3)&lt;/script&gt; output" in rendered
     assert "No output captured for this run." in rendered
+
+    assert "Startup context\n            <span" in rendered
+    assert "Startup prompt</span>" in rendered
+    assert "composed &lt;script&gt;alert(1)&lt;/script&gt; launch context" in rendered
+    assert "prompt at launch" not in rendered
+    assert "Additional Instructions" not in rendered
+    assert "Composed startup context" not in rendered
+    assert "manual instructions" not in rendered
+    assert "Later terminal or chat messages are not included." in rendered
     assert "Startup context was not captured for this older run and is unavailable." in rendered
+    assert 'aria-label="Event details"' in rendered
+    assert "Example event" in rendered
+    assert 'aria-label="Event context"' in rendered
+    assert "event payload" in rendered
