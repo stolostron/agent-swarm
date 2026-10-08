@@ -308,9 +308,13 @@ async def list_workspaces(
         select(Workspace).options(selectinload(Workspace.gateway)).order_by(Workspace.display_name)
     )
     workspaces = result.scalars().all()
-    accessible = await filter_accessible_workspaces(db, workspaces, identity)
     if identity.is_session:
-        accessible = [w for w in accessible if w.id == identity.workspace_id]
+        # Session credentials are already bound to a single workspace. Apply
+        # that scope directly instead of filtering the session username
+        # through the human-user ownership/member ACL.
+        accessible = [w for w in workspaces if w.id == identity.workspace_id]
+    else:
+        accessible = await filter_accessible_workspaces(db, workspaces, identity)
     missing_map = await get_missing_provider_names_bulk([w.id for w in accessible], db)
     output = []
     for workspace in accessible:
