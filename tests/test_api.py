@@ -149,6 +149,25 @@ class TestWorkspaces:
         assert names == {"Alpha", "Beta"}
 
     @pytest.mark.asyncio
+    async def test_session_lists_only_its_bound_workspace(self, client):
+        from swarmer.api.deps import require_api_auth
+        from swarmer.k8s_auth import TokenIdentity
+        from swarmer.main import app
+
+        bound = await _create_workspace(client, "Session Workspace")
+        other = await _create_workspace(client, "Other Workspace")
+        app.dependency_overrides[require_api_auth] = lambda: TokenIdentity(
+            username="session:123", session_id=123, workspace_id=bound["id"]
+        )
+
+        resp = await client.get("/api/v1/workspaces")
+        assert resp.status_code == 200
+        assert resp.json() == [bound]
+
+        other_resp = await client.get(f"/api/v1/workspaces/{other['id']}")
+        assert other_resp.status_code == 404
+
+    @pytest.mark.asyncio
     async def test_get_workspace(self, client):
         ws = await _create_workspace(client)
         resp = await client.get(f"/api/v1/workspaces/{ws['id']}")

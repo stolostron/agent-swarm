@@ -169,6 +169,24 @@ def make_server() -> AgentSwarmMCPServer:
 
 
 @pytest.mark.asyncio
+async def test_list_workspaces_returns_session_workspace_without_error():
+    server = make_server()
+    workspace = {
+        "id": 17,
+        "display_name": "Session workspace",
+        "namespace": "session-workspace",
+        "description": "Bound to this session",
+        "owner_id": "workspace-owner",
+    }
+    server.client.list_workspaces.return_value = [workspace]
+
+    result = await server._list_workspaces()
+
+    assert result == [{**workspace, "gateway": None}]
+    server.client.list_workspaces.assert_awaited_once_with()
+
+
+@pytest.mark.asyncio
 async def test_launch_session_passes_run_only_instructions():
     server = make_server()
     server.client.launch_session.return_value = {"id": 7, "phase": "pending"}
