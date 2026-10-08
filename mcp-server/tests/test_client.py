@@ -167,6 +167,26 @@ async def test_get_session_output(client):
 
 
 @pytest.mark.asyncio
+async def test_session_run_history_client_methods(client):
+    large_content = "complete stored output " * 10_000
+    detail = {"id": 19, "last_output": large_content, "raw_output": "raw"}
+    with respx.mock(base_url=BASE_URL) as mock:
+        summaries_route = mock.get(
+            "/api/v1/workspaces/1/sessions/5/runs/summaries",
+            params={"limit": "7"},
+        ).mock(return_value=httpx.Response(200, json=[{"id": 19, "status": "succeeded"}]))
+        detail_route = mock.get(
+            "/api/v1/workspaces/1/sessions/5/runs/19"
+        ).mock(return_value=httpx.Response(200, json=detail))
+        summaries = await client.list_session_runs(1, 5, limit=7)
+        result = await client.get_session_run(1, 5, 19)
+    assert summaries_route.called
+    assert summaries == [{"id": 19, "status": "succeeded"}]
+    assert detail_route.called
+    assert result["last_output"] == large_content
+
+
+@pytest.mark.asyncio
 async def test_add_repo(client):
     with respx.mock(base_url=BASE_URL) as mock:
         route = mock.post("/api/v1/workspaces/1/sessions/5/repos").mock(

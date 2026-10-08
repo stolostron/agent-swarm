@@ -354,6 +354,31 @@ class SessionRunOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class SessionRunSummaryOut(BaseModel):
+    """Metadata-only listing item for historical runs."""
+
+    id: int
+    session_id: int
+    status: str
+    status_detail: str
+    started_at: datetime
+    completed_at: datetime
+    run_duration: str
+    mode: str
+    source: str
+    schedule_label: str = ""
+    prompt_name: str = ""
+    context_available: bool
+
+
+class SessionRunDetailOut(SessionRunOut):
+    """Complete stored run details, including launch and event context."""
+
+    source: str
+    context_available: bool
+    event_info: dict[str, Any] = Field(default_factory=dict)
+
+
 class SessionLaunchRequest(BaseModel):
     pr_context: dict[str, Any] | None = None
     event_context: str | None = None

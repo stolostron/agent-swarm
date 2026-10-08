@@ -7,7 +7,7 @@ import logging
 import re
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -29,6 +29,8 @@ from swarmer.api.schemas import (
     SessionOut,
     SessionOutput,
     SessionRunOut,
+    SessionRunSummaryOut,
+    SessionRunDetailOut,
     SessionUpdate,
     SetModeRequest,
     SetNameRequest,
@@ -517,6 +519,86 @@ async def list_session_runs(
         .limit(100)
     )
     return list(result.scalars().all())
+
+
+@router.get("/{sid}/runs/summaries", response_model=list[SessionRunSummaryOut])
+async def list_session_run_summaries(
+    ws_id: int,
+    sid: int,
+    limit: int = Query(default=20, ge=1, le=100),
+    ws: Workspace = Depends(get_workspace_or_404),
+    db: AsyncSession = Depends(get_db),
+) -> list[SessionRunSummaryOut]:
+    """Return bounded run metadata without output or context content."""
+    await _get_session_or_404(ws_id, sid, db)
+    result = await db.execute(
+        select(SessionRun)
+        .where(SessionRun.session_id == sid)
+        .order_by(SessionRun.completed_at.desc(), SessionRun.id.desc())
+        .limit(limit)
+    )
+    return [
+        SessionRunSummaryOut(
+            id=run.id,
+            session_id=run.session_id,
+            status=run.phase,
+            status_detail=run.status_detail,
+            started_at=run.started_at,
+            completed_at=run.completed_at,
+            run_duration=run.run_duration,
+            mode=run.mode,
+            source=run.trigger_type,
+            schedule_label=run.schedule_label,
+            prompt_name=run.prompt_name,
+            context_available=run.context_captured,
+        )
+        for run in result.scalars().all()
+    ]
+
+
+@router.get("/{sid}/runs/{run_id}", response_model=SessionRunDetailOut)
+async def get_session_run(
+    ws_id: int,
+    sid: int,
+    run_id: int,
+    ws: Workspace = Depends(get_workspace_or_404),
+    db: AsyncSession = Depends(get_db),
+) -> SessionRunDetailOut:
+    """Return all stored content and immutable context for one run."""
+    await _get_session_or_404(ws_id, sid, db)
+    result = await db.execute(
+        select(SessionRun).where(
+            SessionRun.id == run_id,
+            SessionRun.session_id == sid,
+        )
+    )
+    run = result.scalar_one_or_none()
+    if run is None:
+        raise HTTPException(status_code=404, detail="Session run not found")
+    return SessionRunDetailOut(
+        id=run.id,
+        session_id=run.session_id,
+        phase=run.phase,
+        status_detail=run.status_detail,
+        started_at=run.started_at,
+        completed_at=run.completed_at,
+        run_duration=run.run_duration,
+        last_output=run.last_output,
+        raw_output=run.raw_output,
+        schedule_label=run.schedule_label,
+        prompt_name=run.prompt_name,
+        prompt_id=run.prompt_id,
+        mode=run.mode,
+        trigger_type=run.trigger_type,
+        event_context=run.event_context,
+        prompt_content=run.prompt_content,
+        additional_instructions=run.additional_instructions,
+        startup_context=run.startup_context,
+        context_captured=run.context_captured,
+        source=run.trigger_type,
+        context_available=run.context_captured,
+        event_info=run.event_info,
+    )
 
 
 # ---------- Inline edits ----------
