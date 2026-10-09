@@ -30,6 +30,11 @@ EXPECTED_TOOLS = {
     "add_repo_to_session",
     "remove_repo_from_session",
     "list_workspace_prompts",
+    "list_prompt_sources",
+    "create_prompt_source",
+    "update_prompt_source",
+    "delete_prompt_source",
+    "refresh_prompt_source",
     "list_workspace_mcp_servers",
     "set_session_prompt",
     "launch_session",
@@ -81,7 +86,7 @@ def test_server_instantiates_with_config():
 
 
 def test_server_registers_all_expected_tools():
-    """Verify all 35 MCP tools are registered on the FastMCP instance.
+    """Verify every expected MCP tool is registered on the FastMCP instance.
 
     This test catches regressions where a tool is removed, renamed, or
     fails to register due to an import/decorator error.
@@ -340,6 +345,176 @@ async def test_list_workspace_prompts_flattens_sources():
     assert result[0]["id"] == 10
     assert result[2]["source_name"] == "Start Work Prompts"
     assert result[2]["id"] == 20
+
+
+@pytest.mark.asyncio
+async def test_prompt_source_tools_return_safe_metadata_and_sync_status():
+    server = make_server()
+    source = {
+        "id": 7,
+        "workspace_id": 3,
+        "name": "Team prompts",
+        "repo_url": "https://github.com/example/prompts",
+        "branch": "main",
+        "folder_path": ".",
+        "github_pat_id": 12,
+        "github_pat": {"pat": "do-not-return"},
+        "last_synced_at": "2026-10-08T12:00:00",
+        "sync_error": "",
+        "prompts": [{
+            "id": 23,
+            "display_name": "Release notes",
+            "filename": "release-notes.md",
+            "content": "do-not-return-prompt-content",
+            "content_hash": "private-hash",
+        }],
+    }
+    server.client.list_prompt_sources.return_value = [source]
+
+    result = await server._list_prompt_sources(3)
+
+    server.client.list_prompt_sources.assert_awaited_once_with(3)
+    assert result == [{
+        "id": 7,
+        "workspace_id": 3,
+        "name": "Team prompts",
+        "repo_url": "https://github.com/example/prompts",
+        "branch": "main",
+        "folder_path": ".",
+        "github_pat_id": 12,
+        "last_synced_at": "2026-10-08T12:00:00",
+        "sync_error": "",
+        "sync_status": "synced",
+        "prompt_count": 1,
+        "prompts": [{
+            "id": 23,
+            "display_name": "Release notes",
+            "filename": "release-notes.md",
+        }],
+    }]
+    assert "do-not-return" not in str(result)
+    assert "content_hash" not in str(result)
+
+
+@pytest.mark.asyncio
+async def test_create_prompt_source_formats_initial_sync_failure():
+    server = make_server()
+    server.client.create_prompt_source.return_value = {
+        "id": 8,
+        "workspace_id": 3,
+        "name": "Broken source",
+        "repo_url": "https://github.com/example/missing",
+        "branch": "main",
+        "folder_path": ".",
+        "github_pat_id": None,
+        "last_synced_at": None,
+        "sync_error": "Repository not found",
+        "prompts": [],
+    }
+
+    result = await server._create_prompt_source(
+        3, "Broken source", "https://github.com/example/missing"
+    )
+
+    server.client.create_prompt_source.assert_awaited_once_with(
+        3,
+        "Broken source",
+        "https://github.com/example/missing",
+        branch="main",
+        folder_path=".",
+        github_pat_id=None,
+    )
+    assert result["sync_status"] == "failed"
+    assert result["sync_error"] == "Repository not found"
+
+
+@pytest.mark.asyncio
+async def test_prompt_source_update_is_partial_and_delete_confirms_scope():
+    server = make_server()
+    server.client.update_prompt_source.return_value = {
+        "id": 4,
+        "workspace_id": 2,
+        "name": "Renamed",
+        "repo_url": "https://github.com/example/prompts",
+        "branch": "main",
+        "folder_path": ".",
+        "github_pat_id": 5,
+        "last_synced_at": "2026-10-08T12:00:00",
+        "sync_error": "",
+        "prompts": [],
+    }
+    updated = await server._update_prompt_source(2, 4, name="Renamed")
+    server.client.update_prompt_source.assert_awaited_once_with(
+        2,
+        4,
+        name="Renamed",
+        repo_url=None,
+        branch=None,
+        folder_path=None,
+        github_pat_id=None,
+    )
+    assert updated["name"] == "Renamed"
+    assert updated["github_pat_id"] == 5
+
+    server.client.delete_prompt_source.return_value = {
+        "detail": "Prompt source deleted."
+    }
+    deleted = await server._delete_prompt_source(2, 4)
+    server.client.delete_prompt_source.assert_awaited_once_with(2, 4)
+    assert deleted == {
+        "source_id": 4,
+        "deleted": True,
+        "message": "Prompt source deleted.",
+    }
+
+
+@pytest.mark.asyncio
+async def test_refresh_prompt_source_reports_sync_error_and_surfaces_api_error():
+    server = make_server()
+    server.client.refresh_prompt_source.return_value = {
+        "id": 9,
+        "workspace_id": 6,
+        "name": "Refresh me",
+        "repo_url": "https://github.com/example/prompts",
+        "branch": "main",
+        "folder_path": ".",
+        "github_pat_id": None,
+        "last_synced_at": "2026-10-08T11:00:00",
+        "sync_error": "",
+        "prompts": [{
+            "id": 10,
+            "display_name": "Release notes",
+            "filename": "release-notes.md",
+            "content": "prompt body is not returned",
+        }],
+    }
+
+    result = await server._refresh_prompt_source(6, 9)
+    server.client.refresh_prompt_source.assert_awaited_once_with(6, 9)
+    assert result["sync_status"] == "synced"
+    assert result["prompt_count"] == 1
+    assert result["prompts"] == [{
+        "id": 10,
+        "display_name": "Release notes",
+        "filename": "release-notes.md",
+    }]
+
+    server.client.refresh_prompt_source.return_value.update({
+        "last_synced_at": "2026-10-08T12:00:00",
+        "sync_error": "GitHub rate limit exceeded",
+        "prompts": [],
+    })
+    failed_sync = await server._refresh_prompt_source(6, 9)
+    assert failed_sync["sync_status"] == "failed"
+    assert failed_sync["sync_error"] == "GitHub rate limit exceeded"
+
+    from agent_swarm_mcp_server.client import AgentSwarmAPIError
+
+    server.client.refresh_prompt_source.side_effect = AgentSwarmAPIError(
+        404, "Prompt source not found"
+    )
+    with pytest.raises(AgentSwarmAPIError, match="Prompt source not found"):
+        await server._refresh_prompt_source(6, 999)
 
 
 # ------------------------------------------------------------------

@@ -42,6 +42,11 @@ explicitly marked unavailable; current session settings are never substituted.
 | `delete_session` | Delete a session |
 | `add_repo_to_session` | Attach a git repository |
 | `remove_repo_from_session` | Detach a git repository |
+| `list_prompt_sources` | List configured prompt repositories and safe sync metadata |
+| `create_prompt_source` | Add a prompt repository and report its initial sync result |
+| `update_prompt_source` | Partially update a source's repository settings without syncing |
+| `delete_prompt_source` | Delete a prompt source from a workspace |
+| `refresh_prompt_source` | Refresh one selected source and report its sync result |
 | `list_workspace_prompts` | Browse the workspace prompt library |
 | `list_workspace_mcp_servers` | List caller-visible workspace MCP servers with safe metadata |
 | `set_session_prompt` | Set base prompt and/or additional instructions |
@@ -63,6 +68,28 @@ explicitly marked unavailable; current session settings are never substituted.
 | `test_workspace_gateway` | Test connectivity/auth to an OpenShell gateway |
 | `parse_gateway_command` | Parse a pasted `openshell gateway add ...` command or JSON metadata |
 | `parse_gateway_token` | Parse a pasted OIDC token/credential payload |
+
+### Prompt sources and selectable prompts
+
+Prompt sources are workspace-scoped repository settings. Use
+`list_prompt_sources(workspace_id)` to inspect each source's ID, repository,
+branch, folder, configured PAT ID, last sync, sync error, and prompt summaries.
+Only a PAT ID is exposed; PAT values and prompt contents are never returned.
+Create, partially update, and delete sources with the corresponding
+`*_prompt_source` tools. An update changes only supplied fields; a null or
+omitted `github_pat_id` leaves the current credential unchanged. Updating source
+settings does not sync the repository automatically.
+
+After repository changes are pushed—or after changing a source's repository,
+branch, or folder—call `refresh_prompt_source(workspace_id, source_id)` for that
+single source. Check `sync_status` and `sync_error`: a non-empty `sync_error`
+means sync failed even when the REST request succeeded. REST authorization,
+missing-source, and other API errors are surfaced to the caller.
+
+`list_workspace_prompts(workspace_id)` is separate: it lists selectable prompt
+files synchronized from configured sources. Use a prompt's ID with
+`set_session_prompt` or `create_session`; source IDs are used for management and
+refresh, not as selectable prompt IDs.
 
 ### Session MCP access
 

@@ -221,11 +221,49 @@ trailing `.git` suffix before comparison.
 
 | Tool | Purpose |
 |---|---|
+| `list_prompt_sources` | List workspace repository settings and safe sync/prompt metadata |
+| `create_prompt_source` | Create a source and return initial sync status/error |
+| `update_prompt_source` | Partially update source settings without automatic refresh |
+| `delete_prompt_source` | Delete a source from the specified workspace |
+| `refresh_prompt_source` | Refresh one source and return safe prompt/sync metadata |
 | `list_workspace_prompts` | Flatten prompt sources into selectable prompt summaries |
 | `set_session_prompt` | Set base prompt ID and/or additional instructions |
 
-The base prompt must belong to the target workspace. Additional instructions
-are prepended to the base prompt at launch time.
+Prompt sources are workspace-scoped repository settings. `list_prompt_sources`
+returns the source ID, name, repository URL, branch, folder, configured PAT ID,
+last sync time, sync error, prompt count, and safe prompt summaries. Prompt
+summaries contain only IDs, display names, and filenames; PAT values and prompt
+contents are never returned.
+
+`create_prompt_source` accepts `workspace_id`, `name`, `repo_url`, `branch`
+(default `main`), `folder_path` (default `.`), and optional `github_pat_id`.
+The REST API performs the initial sync. Results include `sync_status` and
+`sync_error`; any non-empty `sync_error` means sync failed, even when REST
+returned HTTP 200.
+
+`update_prompt_source` accepts `workspace_id`, `source_id`, and optional
+`name`, `repo_url`, `branch`, `folder_path`, and `github_pat_id`. Only supplied
+non-null fields are sent, so omitted fields remain unchanged and null
+`github_pat_id` does not clear the configured credential. Updating settings does
+not automatically refresh a source. Call `refresh_prompt_source` explicitly
+after changing source settings or pushing repository changes. Delete and refresh
+operations use both workspace and source IDs, preserving REST authorization and
+404 behavior for missing or cross-workspace sources. API/authorization failures
+are surfaced as `AgentSwarmAPIError` rather than converted to successful empty
+results.
+
+`refresh_prompt_source(workspace_id, source_id)` refreshes only the selected
+source. Its result contains safe source metadata, prompt summaries/count,
+`sync_status`, and `sync_error`. A non-empty error means the source failed to
+sync even when the REST response is successful. It does not refresh other
+sources or change historical session snapshots.
+
+Source settings are distinct from selectable prompts. `list_workspace_prompts`
+continues to return flattened prompt-file summaries; use a prompt ID from that
+tool with `set_session_prompt` or `create_session`. Use a source ID only for
+source management and refresh. The base prompt must belong to the target
+workspace. Additional instructions are prepended to the base prompt at launch
+time.
 
 ### 6.6 GitHub PAT and schedule tools
 
@@ -289,6 +327,10 @@ MCP results should be concise but preserve machine-useful fields:
 - Phase and trigger values remain exact enum strings.
 - Empty optional values remain empty strings or null according to REST output.
 - Do not return secret values when formatting PATs, gateways, or credentials.
+- Prompt-source results include configured PAT IDs but never PAT values or
+  prompt contents; they include safe prompt IDs, display names, and filenames.
+- A prompt-source `sync_status` is `failed` whenever `sync_error` is non-empty,
+  regardless of the REST HTTP status.
 - Repository lists returned by `get_session` include `id`, `repo_url`, `branch`,
   and `local_path`.
 
