@@ -191,13 +191,23 @@ CUSTOM_PROVIDER_PROFILES: list[dict] = [
 
 
 def _set_workspace(request) -> None:
-    """Set the 0.0.88+ workspace field when the installed proto supports it."""
+    """Set the workspace selector used by the installed OpenShell protobuf."""
     try:
-        request.workspace = _OPENSHELL_WORKSPACE
+        request.workspace_scope.workspace = _OPENSHELL_WORKSPACE
     except (AttributeError, ValueError):
-        # Keep unit-test stubs and older clients importable while the deployment
-        # is upgraded. The pinned dependency is current OpenShell.
-        pass
+        try:
+            request.workspace = _OPENSHELL_WORKSPACE
+        except (AttributeError, ValueError):
+            # Older SDK messages do not scope requests by workspace.
+            pass
+
+
+def _set_sandbox(request, sandbox_name: str) -> None:
+    """Set the sandbox resource name across OpenShell protobuf generations."""
+    try:
+        request.sandbox = sandbox_name
+    except (AttributeError, ValueError):
+        request.name = sandbox_name
 
 
 def _sdk_call(client, method_name: str, *args, **kwargs):
@@ -1001,7 +1011,7 @@ async def approve_draft_policy_chunks(
         try:
             dp = client._stub.GetDraftPolicy(
                 (lambda req: (_set_workspace(req), req)[1])(
-                    openshell_pb2.GetDraftPolicyRequest(name=sandbox_name)
+                    openshell_pb2.GetDraftPolicyRequest(sandbox=sandbox_name)
                 ), timeout=10
             )
             pending = [c for c in dp.chunks if c.status == "pending"]
@@ -1037,12 +1047,11 @@ async def approve_draft_policy_chunks(
             approved_count = 0
             for chunk in to_approve:
                 try:
+                    req = openshell_pb2.ApproveDraftChunkRequest(chunk_id=chunk.id)
+                    _set_sandbox(req, sandbox_name)
+                    _set_workspace(req)
                     client._stub.ApproveDraftChunk(
-                        (lambda req: (_set_workspace(req), req)[1])(
-                            openshell_pb2.ApproveDraftChunkRequest(
-                                name=sandbox_name, chunk_id=chunk.id
-                            )
-                        ), timeout=10
+                        req, timeout=10
                     )
                     approved_count += 1
                 except Exception as exc:
@@ -1084,7 +1093,7 @@ async def get_draft_chunks(sandbox_name: str, client=None) -> list[dict]:
         try:
             dp = client._stub.GetDraftPolicy(
                 (lambda req: (_set_workspace(req), req)[1])(
-                    openshell_pb2.GetDraftPolicyRequest(name=sandbox_name)
+                    openshell_pb2.GetDraftPolicyRequest(sandbox=sandbox_name)
                 ), timeout=10
             )
             result = []
@@ -1217,7 +1226,7 @@ async def undo_chunks_by_rule_name(
             try:
                 history = client._stub.GetDraftHistory(
                     (lambda req: (_set_workspace(req), req)[1])(
-                        openshell_pb2.GetDraftHistoryRequest(name=sandbox_name)
+                        openshell_pb2.GetDraftHistoryRequest(sandbox=sandbox_name)
                     ),
                     timeout=10,
                 )
@@ -1243,12 +1252,11 @@ async def undo_chunks_by_rule_name(
         undone = 0
         for chunk_id in ids_to_undo:
             try:
+                req = openshell_pb2.UndoDraftChunkRequest(chunk_id=chunk_id)
+                _set_sandbox(req, sandbox_name)
+                _set_workspace(req)
                 client._stub.UndoDraftChunk(
-                    (lambda req: (_set_workspace(req), req)[1])(
-                        openshell_pb2.UndoDraftChunkRequest(
-                            name=sandbox_name, chunk_id=chunk_id
-                        )
-                    ),
+                    req,
                     timeout=10,
                 )
                 undone += 1
@@ -1304,7 +1312,28 @@ def _build_provider_profile(p: dict, resource_version: int = 0):
                 m.secret = mat.get("secret", False)
         profile.credentials.append(c)
     for ep in p.get("endpoints", []):
-        ParseDict(ep, profile.endpoints.add())
+        endpoint = dict(ep)
+        enum_aliases = {
+            "access": {
+                "read-only": "NETWORK_ACCESS_PRESET_READ_ONLY",
+                "read-write": "NETWORK_ACCESS_PRESET_READ_WRITE",
+                "full": "NETWORK_ACCESS_PRESET_FULL",
+            },
+            "enforcement": {
+                "enforce": "NETWORK_ENFORCEMENT_MODE_ENFORCE",
+                "audit": "NETWORK_ENFORCEMENT_MODE_AUDIT",
+            },
+            "tls": {
+                "skip": "NETWORK_TLS_MODE_SKIP",
+                "terminate": "NETWORK_TLS_MODE_TERMINATE",
+                "passthrough": "NETWORK_TLS_MODE_PASSTHROUGH",
+            },
+        }
+        for field, aliases in enum_aliases.items():
+            value = endpoint.get(field)
+            if isinstance(value, str) and value.lower() in aliases:
+                endpoint[field] = aliases[value.lower()]
+        ParseDict(endpoint, profile.endpoints.add())
     for bn in p.get("binaries", []):
         ParseDict(bn, profile.binaries.add())
     return profile
@@ -1883,7 +1912,6 @@ async def get_sandbox_provider_environment(sandbox_id: str, client=None) -> dict
 
 def exec_interactive(
     sandbox_name: str,
-    sandbox_id: str,
     command: list[str],
     cols: int,
     rows: int,
@@ -1908,7 +1936,7 @@ def exec_interactive(
 
     def _request_generator():
         req = openshell_pb2.ExecSandboxRequest(
-            sandbox_id=sandbox_id,
+            sandbox=sandbox_name,
             command=command,
             workdir="/sandbox",
             tty=True,
@@ -1944,7 +1972,7 @@ async def expose_service(
     def _do():
         req = openshell_pb2.ExposeServiceRequest(
             sandbox=sandbox_name,
-            service=service_name,
+            name=service_name,
             target_port=target_port,
             domain=True,
         )
@@ -1984,7 +2012,7 @@ async def delete_service(
     def _do():
         req = openshell_pb2.DeleteServiceRequest(
             sandbox=sandbox_name,
-            service=service_name,
+            name=service_name,
         )
         _set_workspace(req)
         client._stub.DeleteService(req, timeout=client._timeout)
