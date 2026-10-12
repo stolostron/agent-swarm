@@ -41,8 +41,8 @@ TOKEN_DURATION ?= 8h
 AC_DEFAULTS ?= .push-defaults
 
 # OpenShell gateway
-OPENSHELL_VERSION        ?= 0.0.116
-AGENT_SANDBOX_VERSION    ?= v1.0.1
+OPENSHELL_VERSION        ?= 0.1.3
+AGENT_SANDBOX_VERSION    ?= v1.0.6
 OPENSHELL_NAMESPACE      ?= openshell
 OPENSHELL_TLS_DIR        ?= auth/openshell
 # Default size of the workspace PVC (backing each sandbox's /sandbox mount) at the

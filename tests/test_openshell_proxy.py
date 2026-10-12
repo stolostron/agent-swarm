@@ -247,7 +247,7 @@ class TestExposeService:
         args = sdk_client._stub.ExposeService.call_args
         req = args[0][0]  # first positional arg
         assert req.sandbox == "sandbox-test-abc"
-        assert req.service == "agent"
+        assert req.name == "agent"
         assert req.target_port == 4096
         assert req.domain is True
 
@@ -265,7 +265,7 @@ class TestExposeService:
         args = sdk_client._stub.DeleteService.call_args
         req = args[0][0]
         assert req.sandbox == "sandbox-test-abc"
-        assert req.service == "agent"
+        assert req.name == "agent"
 
 
 @_requires_sdk
@@ -276,7 +276,6 @@ class TestExecInteractive:
         with patch.object(oc, "_get_client", return_value=sdk_client):
             stream, input_q = oc.exec_interactive(
                 sandbox_name="sandbox-test",
-                sandbox_id="abc123",
                 command=["sh", "-c", "opencode"],
                 cols=80,
                 rows=24,
@@ -301,7 +300,6 @@ class TestExecInteractive:
         with patch.object(oc, "_get_client", return_value=sdk_client):
             stream, input_q = oc.exec_interactive(
                 sandbox_name="sandbox-test",
-                sandbox_id="abc123",
                 command=["sh", "-c", "opencode --continue"],
                 cols=120,
                 rows=40,
@@ -311,7 +309,7 @@ class TestExecInteractive:
 
         assert len(received_msgs) == 1
         start_msg = received_msgs[0]
-        assert start_msg.start.sandbox_id == "abc123"
+        assert start_msg.start.sandbox == "sandbox-test"
         assert start_msg.start.tty is True
         assert start_msg.start.cols == 120
         assert start_msg.start.rows == 40
@@ -1534,7 +1532,7 @@ class TestTuiWsOpenshell:
     """
 
     def test_exec_interactive_stdin_queued(self):
-        """The first message in the stream is always the start message with sandbox_id."""
+        """The first message in the stream identifies the sandbox by name."""
         from openshell._proto import openshell_pb2 as pb
 
         received = []
@@ -1553,7 +1551,6 @@ class TestTuiWsOpenshell:
 
         stream, input_q = oc.exec_interactive(
             sandbox_name="sandbox-x",
-            sandbox_id="id-x",
             command=["sh", "-c", "opencode"],
             cols=80,
             rows=24,
@@ -1562,10 +1559,10 @@ class TestTuiWsOpenshell:
         input_q.put(None)  # unblock generator if it ever resumes
 
         assert len(received) == 1
-        assert received[0].start.sandbox_id == "id-x"
+        assert received[0].start.sandbox == "sandbox-x"
 
     def test_exec_interactive_resize_queued(self):
-        """The first message in the stream carries the correct sandbox_id and tty flags."""
+        """The first message in the stream carries the sandbox name and tty flags."""
         from openshell._proto import openshell_pb2 as pb
 
         received = []
@@ -1582,7 +1579,6 @@ class TestTuiWsOpenshell:
 
         stream, input_q = oc.exec_interactive(
             sandbox_name="sandbox-x",
-            sandbox_id="id-x",
             command=["sh", "-c", "opencode"],
             cols=80,
             rows=24,
@@ -1590,7 +1586,7 @@ class TestTuiWsOpenshell:
         )
         input_q.put(None)  # unblock generator if it ever resumes
 
-        assert received[0].start.sandbox_id == "id-x"
+        assert received[0].start.sandbox == "sandbox-x"
 
 
 # ===========================================================================

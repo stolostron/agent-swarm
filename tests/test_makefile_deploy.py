@@ -22,17 +22,17 @@ def _load_e2e_script():
 
 
 def test_makefile_agent_sandbox_version_default():
-    """Ensure default AGENT_SANDBOX_VERSION is v1.0.1+ and OPENSHELL_VERSION is 0.0.116+."""
+    """Ensure default Agent Sandbox and OpenShell versions meet supported minimums."""
     with open(MAKEFILE_PATH, "r", encoding="utf-8") as f:
         content = f.read()
 
     as_match = re.search(r"^AGENT_SANDBOX_VERSION\s*\?=\s*(v[0-9]+\.[0-9]+\.[0-9]+)", content, re.MULTILINE)
     assert as_match, "AGENT_SANDBOX_VERSION not found in Makefile"
-    assert as_match.group(1) == "v1.0.1"
+    assert as_match.group(1) == "v1.0.6"
 
     os_match = re.search(r"^OPENSHELL_VERSION\s*\?=\s*([0-9]+\.[0-9]+\.[0-9]+)", content, re.MULTILINE)
     assert os_match, "OPENSHELL_VERSION not found in Makefile"
-    assert os_match.group(1) == "0.0.116"
+    assert os_match.group(1) == "0.1.3"
 
 
 def test_makefile_manifest_fallback_present():

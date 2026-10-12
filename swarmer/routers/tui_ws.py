@@ -204,7 +204,6 @@ async def _run_openshell_tui(
     try:
         response_stream, input_q = openshell_client.exec_interactive(
             sandbox_name=sandbox_name,
-            sandbox_id=sandbox_id,
             command=command,
             cols=cols,
             rows=rows,
