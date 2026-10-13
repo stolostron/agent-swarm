@@ -49,8 +49,8 @@ async def session_tui(
         await websocket.close(code=4002, reason="Session not found")
         return
 
-    if session.mode != "tui":
-        await websocket.close(code=4003, reason="Session is not running in TUI mode")
+    if session.mode not in ("tui", "server"):
+        await websocket.close(code=4003, reason="Session is not running in an interactive mode")
         return
 
     if session.phase != "running" or not session.sandbox_name:
@@ -64,12 +64,13 @@ async def session_tui(
     from swarmer.agent_tools.registry import get as get_tool
     tool = get_tool(session.agent_tool)
 
+    # OpenCode V2: the TUI client takes no --model flag (model selection comes
+    # from the session's opencode.json / the running session itself). A plain
+    # `opencode` in $HOME discovers the service registration written by
+    # `opencode serve --service` and attaches to that shared backend, so a
+    # dropped WebSocket reconnects to the same live session. `--continue`
+    # resumes the last session when one exists.
     tui_cmd_parts = [tool.get_tui_binary()]
-    # session.provider is a family preset name ("claude"/"gemini"/"openai", ACM-37232);
-    # resolve it to a concrete provider/model@version ID for the CLI flag.
-    _tui_model = tool.resolve_build_model(session.provider) if session.provider else ""
-    if _tui_model:
-        tui_cmd_parts.extend(["--model", _tui_model])
     cmd_base = " ".join(shlex.quote(p) for p in tui_cmd_parts)
     tui_shell = (
         f"export HOME=/sandbox PATH=\"/sandbox/.local/bin:$PATH\" && "
@@ -194,9 +195,6 @@ async def _run_openshell_tui(
     # OPENCODE_CONFIG is the env-var equivalent of --config (there is no CLI flag).
     if session.agent_tool == "opencode":
         tui_env["OPENCODE_CONFIG"] = "/sandbox/opencode.json"
-        from swarmer.config import settings
-        if settings.opencode_experimental_plan_mode:
-            tui_env["OPENCODE_EXPERIMENTAL_PLAN_MODE"] = "true"
     tui_env.update(provider_env)
 
     command = ["sh", "-c", tui_shell]

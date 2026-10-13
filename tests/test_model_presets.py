@@ -68,6 +68,14 @@ class TestResolvePreset:
             "small": "openai/gpt-6-luna",
         }
 
+    def test_claude_preset_defaults_use_v2_vertex_provider(self):
+        """OpenCode V2 uses the canonical google-vertex provider ID."""
+        assert _opencode.resolve_preset("claude") == {
+            "plan": "google-vertex/claude-opus-4-6@default",
+            "build": "google-vertex/claude-sonnet-5@default",
+            "small": "google-vertex/claude-haiku-4-5@20251001",
+        }
+
     def test_resolve_unknown_preset_returns_none(self):
         assert _opencode.resolve_preset("google/gemini-3.5-flash") is None
         assert _opencode.resolve_preset("") is None
@@ -77,7 +85,7 @@ class TestResolvePreset:
         assert _opencode.is_preset("claude") is True
         assert _opencode.is_preset("gemini") is True
         assert _opencode.is_preset("openai") is True
-        assert _opencode.is_preset("google-vertex-anthropic/claude-sonnet-5@default") is False
+        assert _opencode.is_preset("google-vertex/claude-sonnet-5@default") is False
 
 
 class TestResolveBuildModel:
@@ -87,8 +95,15 @@ class TestResolveBuildModel:
         assert _opencode.resolve_build_model("openai") == settings.openai_preset_build_model
 
     def test_raw_model_passes_through_unchanged(self):
-        raw = "google-vertex-anthropic/claude-opus-4-6@default"
+        raw = "google-vertex/claude-opus-4-6@default"
         assert _opencode.resolve_build_model(raw) == raw
+
+    def test_legacy_vertex_model_is_normalized(self):
+        """V1 google-vertex-anthropic IDs are normalized to the V2 canonical ID."""
+        assert (
+            _opencode.resolve_build_model("google-vertex-anthropic/claude-opus-4-6@default")
+            == "google-vertex/claude-opus-4-6@default"
+        )
 
     def test_empty_string_passes_through(self):
         assert _opencode.resolve_build_model("") == ""
@@ -218,61 +233,70 @@ class TestBuildConfigDataPresets:
         data = _opencode.build_config_data(model="claude")
         config = json.loads(data["opencode.json"])
         assert config["model"] == settings.claude_preset_build_model
-        assert config["small_model"] == settings.claude_preset_small_model
-        assert config["agent"]["plan"]["model"] == settings.claude_preset_plan_model
+        # V2 native shape: the V1 small_model becomes agents.title.model.
+        assert config["agents"]["title"]["model"] == settings.claude_preset_small_model
+        assert config["agents"]["plan"]["model"] == settings.claude_preset_plan_model
 
     def test_gemini_preset_resolves_all_three_roles(self, monkeypatch):
         monkeypatch.setattr(settings, "opencode_experimental_plan_mode", True)
         data = _opencode.build_config_data(model="gemini")
         config = json.loads(data["opencode.json"])
         assert config["model"] == settings.gemini_preset_build_model
-        assert config["small_model"] == settings.gemini_preset_small_model
-        assert config["agent"]["plan"]["model"] == settings.gemini_preset_plan_model
+        assert config["agents"]["title"]["model"] == settings.gemini_preset_small_model
+        assert config["agents"]["plan"]["model"] == settings.gemini_preset_plan_model
 
     def test_plan_stanza_omitted_when_plan_mode_disabled(self, monkeypatch):
         monkeypatch.setattr(settings, "opencode_experimental_plan_mode", False)
         data = _opencode.build_config_data(model="claude")
         config = json.loads(data["opencode.json"])
-        assert "agent" not in config
-        # model/small_model are still resolved from the preset regardless.
+        assert "plan" not in config["agents"]
+        # model/title are still resolved from the preset regardless.
         assert config["model"] == settings.claude_preset_build_model
 
-    def test_claude_preset_enables_vertex_anthropic_provider(self, monkeypatch):
+    def test_claude_preset_enables_vertex_provider(self, monkeypatch):
         monkeypatch.setattr(settings, "opencode_experimental_plan_mode", True)
         data = _opencode.build_config_data(model="claude")
         config = json.loads(data["opencode.json"])
-        assert "google-vertex-anthropic" in config["enabled_providers"]
+        # V2 canonical provider ID (V1 google-vertex-anthropic is rejected by V2).
+        assert "google-vertex" in config["enabled_providers"]
         assert "google" in config["enabled_providers"]
 
-    def test_gemini_preset_does_not_enable_vertex_anthropic(self, monkeypatch):
+    def test_gemini_preset_does_not_enable_vertex(self, monkeypatch):
         monkeypatch.setattr(settings, "opencode_experimental_plan_mode", True)
         data = _opencode.build_config_data(model="gemini")
         config = json.loads(data["opencode.json"])
         assert config["enabled_providers"] == ["google"]
 
-    def test_openai_preset_resolves_and_sets_plan_default_variant(
+    def test_openai_preset_resolves_and_sets_plan_mode(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setattr(settings, "opencode_experimental_plan_mode", True)
         data = _opencode.build_config_data(model="openai")
         config = json.loads(data["opencode.json"])
         assert config["model"] == settings.openai_preset_build_model
-        assert config["small_model"] == settings.openai_preset_small_model
+        assert config["agents"]["title"]["model"] == settings.openai_preset_small_model
         assert config["enabled_providers"] == ["openai"]
-        assert config["agent"]["plan"]["model"] == settings.openai_preset_plan_model
-        assert config["agent"]["plan"]["mode"] == "primary"
-        assert config["agent"]["plan"]["variant"] == "default"
-        assert config["agent"]["build"]["mode"] == "primary"
+        assert config["agents"]["plan"]["model"] == settings.openai_preset_plan_model
+        assert config["agents"]["plan"]["mode"] == "primary"
+        assert config["agents"]["build"]["mode"] == "primary"
 
     def test_non_preset_model_unaffected(self):
         """A raw provider/model string (e.g. from a session created before
         presets existed) keeps the pre-existing pro->flash / opus-sonnet->haiku
         small-model derivation logic."""
+        data = _opencode.build_config_data(model="google-vertex/claude-sonnet-5@default")
+        config = json.loads(data["opencode.json"])
+        assert config["model"] == "google-vertex/claude-sonnet-5@default"
+        assert config["agents"]["title"]["model"] == "google-vertex/claude-haiku-4-5@20251001"
+        assert "plan" not in config["agents"]
+
+    def test_legacy_vertex_model_normalized_in_config(self):
+        """Legacy V1 IDs stored on pre-upgrade sessions are normalized."""
         data = _opencode.build_config_data(model="google-vertex-anthropic/claude-sonnet-5@default")
         config = json.loads(data["opencode.json"])
-        assert config["model"] == "google-vertex-anthropic/claude-sonnet-5@default"
-        assert config["small_model"] == "google-vertex-anthropic/claude-haiku-4-5@20251001"
-        assert "agent" not in config
+        assert config["model"] == "google-vertex/claude-sonnet-5@default"
+        assert config["agents"]["title"]["model"] == "google-vertex/claude-haiku-4-5@20251001"
+        assert "google-vertex-anthropic" not in data["opencode.json"]
 
     def test_empty_model_falls_back_to_gemini_default(self):
         data = _opencode.build_config_data(model="")
@@ -283,5 +307,5 @@ class TestBuildConfigDataPresets:
     def test_raw_openai_model_enables_only_openai_provider(self):
         data = _opencode.build_config_data(model="openai/gpt-5.3-codex@default")
         config = json.loads(data["opencode.json"])
-        assert config["small_model"] == settings.openai_preset_small_model
+        assert config["agents"]["title"]["model"] == settings.openai_preset_small_model
         assert config["enabled_providers"] == ["openai"]

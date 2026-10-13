@@ -516,7 +516,7 @@ async def provider_options_partial(
 
 def _session_mode_label(session: Session) -> str:
     """Return a human-readable mode label for the session."""
-    return {"tui": "TUI", "server": "Server", "prompt": "Prompt"}.get(session.mode, session.mode)
+    return {"tui": "TUI", "server": "Chat", "prompt": "Prompt"}.get(session.mode, session.mode)
 
 
 def _session_mode_badge_class(session: Session) -> str:
@@ -794,9 +794,11 @@ async def session_detail(
 
     status_detail = ""
 
-    # Generate one-time TUI token
+    # Generate one-time TUI token — interactive OpenCode sessions (tui and
+    # server mode) both expose a Terminal tab that attaches to the shared
+    # V2 service, so both need a token. Shell sessions only have TUI mode.
     tui_token = None
-    if session.mode == "tui" and session.phase == "running":
+    if session.mode in ("tui", "server") and session.phase == "running":
         tui_token = str(uuid.uuid4())
         tokens = list(request.session.get("tui_tokens", []))
         tokens.append(tui_token)
@@ -1124,7 +1126,7 @@ def _build_expected_hosts(model: str, repos_data: list[dict], tool_name: str, mo
 
     # AI provider endpoints based on model prefix
     provider = model.split("/")[0] if "/" in model else ""
-    if provider in ("google", "vertexai", "google-vertex-anthropic"):
+    if provider in ("google", "vertexai", "google-vertex", "google-vertex-anthropic"):
         hosts.add("generativelanguage.googleapis.com")
         hosts.add("aiplatform.googleapis.com")
         hosts.add("*-aiplatform.googleapis.com")
@@ -1480,6 +1482,7 @@ async def _do_launch_openshell(
     if not _preferred_provider and requested_provider and "/" in requested_provider:
         _raw_provider = requested_provider.split("/", 1)[0]
         _raw_provider_family = {
+            "google-vertex": "claude",
             "google-vertex-anthropic": "claude",
             "google": "gemini",
             "openai": "openai",
@@ -1583,11 +1586,6 @@ async def _do_launch_openshell(
     # OPENCODE_CONFIG env var (there is no --config CLI flag).
     if tool.name == "opencode":
         env_vars["OPENCODE_CONFIG"] = "/sandbox/opencode.json"
-        # Enables the opencode plan agent so a preset's PLAN model (written into
-        # opencode.json's agent.plan.model by build_config_data()) is actually
-        # used (ACM-37232). Without this flag the plan agent/tool never engages.
-        if settings.opencode_experimental_plan_mode:
-            env_vars["OPENCODE_EXPERIMENTAL_PLAN_MODE"] = "true"
 
     # 1b. Create/update gateway providers for each available credential.
     #     Must happen BEFORE sandbox creation: provider names go into SandboxSpec.providers
@@ -1769,7 +1767,11 @@ async def _do_launch_openshell(
         config_data = tool.build_config_data(secret=oc_secret, mcp_servers=mcp_servers, model=raw_model)
         config_json = config_data.get(f"{tool.name}.json", "{}")
         try:
-            mcp_patch = _json.loads(config_json).get("mcp", {})
+            mcp_section = _json.loads(config_json).get("mcp", {})
+            # V2-native shape nests servers under "mcp.servers"; fall back to
+            # the flat V1 slug→config map for older generated configs.
+            if isinstance(mcp_section, dict):
+                mcp_patch = mcp_section.get("servers", mcp_section)
         except Exception:
             pass
 
@@ -1993,15 +1995,15 @@ async def _setup_openshell_sandbox(
             return
 
         # Write a schema-valid tool config to /sandbox/{tool}.json.
-        # The container image ships an opencode.json with an outdated LSP schema
-        # (missing required 'extensions' field). Always overwrite it with a valid
-        # config that includes enabled_providers and any MCP config.
+        # The container image ships a baked opencode.json; always overwrite it
+        # with the session-resolved config (enabled providers, model, agents,
+        # and any MCP servers).
         from swarmer.agent_tools.registry import get as _get_tool
         _tool = _get_tool(tool_name)
-        # mcp_patch is already the extracted "mcp" dict (keys are server slugs, values
-        # are the per-server config dicts).  Do NOT call .get("mcp", {}) again here —
-        # that double-nesting always returns {} and silently drops MCP config from the
-        # written agent config JSON (ACM-34954).
+        # mcp_patch is the extracted "mcp.servers" dict (keys are server slugs,
+        # values are the per-server config dicts).  Do NOT call .get("mcp", {})
+        # again here — that double-nesting always returns {} and silently drops
+        # MCP config from the written agent config JSON (ACM-34954).
         _mcp_list = [
             type("_MCP", (), {"slug": k, **v})()
             for k, v in (mcp_patch or {}).items()
@@ -2024,6 +2026,33 @@ async def _setup_openshell_sandbox(
                 tool_name=tool_name,
                 config_json=_config_json,
             )
+
+        # OpenCode V2 interactive sessions (server + tui) run one persistent
+        # shared service. `serve --service` takes its password from
+        # ~/.config/opencode/service.json (env vars are ignored in service
+        # mode), so pre-write that file with a deterministic per-session
+        # password. The chat proxy re-derives the same value (via
+        # swarmer.crypto.opencode_service_password) to authenticate proxied
+        # requests, and TUI clients read the password from the service
+        # registration the server writes at startup.
+        if tool_name == "opencode" and mode in ("server", "tui"):
+            from swarmer.crypto import opencode_service_password as _oc_password
+
+            _svc_config = _json_filter.dumps({
+                "hostname": "0.0.0.0",
+                "port": 4096,
+                "password": _oc_password(session_id),
+            }, indent=2)
+            if oc_client is not None:
+                await openshell_client.write_file(
+                    ref.name, "/sandbox/.config/opencode/service.json",
+                    _svc_config, client=oc_client,
+                )
+            else:
+                await openshell_client.write_file(
+                    ref.name, "/sandbox/.config/opencode/service.json",
+                    _svc_config,
+                )
 
         # Share/state dir setup runs FIRST so the $HOME/.local/share/<tool> symlink
         # is in place before model_setup_cmd writes the model config through it.
@@ -2197,7 +2226,9 @@ async def _setup_openshell_sandbox(
                 # (require_auth) with access to the workspace can set instruction_prompt.
                 agent_cmd = f"export HOME=/sandbox PATH=\"/sandbox/.local/bin:$PATH\" && cd /sandbox && {main_cmd}"
             else:
-                _tool_bin = {"opencode": "opencode run"}.get(tool_name, "opencode run")
+                # --standalone gives the one-shot run a private V2 server
+                # instead of leaving a background service daemon behind.
+                _tool_bin = {"opencode": "opencode run --standalone"}.get(tool_name, "opencode run")
                 if agents_md:
                     # Read the full AGENTS.md (prompt + repo context) as the CLI argument.
                     _model_arg = shlex.quote(model) if model else ""
@@ -2391,7 +2422,16 @@ async def _run_openshell_agent(
         oc_client = client
         if oc_client is _CLIENT_UNSET:
             oc_client = await openshell_client.get_client_for_workspace(workspace_id)
-        if mode != "server":
+        # OpenCode V2 unification: both server and TUI interactive sessions run
+        # the same persistent shared service (`opencode serve --service`,
+        # started via start_agent below). The web console reaches it through
+        # the chat proxy, and TUI clients attach by discovering the service
+        # registration. Because exposure is what makes the session reachable,
+        # both modes stay "pending" until expose_service() stores the URL.
+        # Shell-tool TUI sessions have no service to expose, so they flip to
+        # running immediately (the TUI WebSocket execs bash directly).
+        _runs_shared_service = agent_tool == "opencode" and mode in ("server", "tui")
+        if not _runs_shared_service:
             # Server mode stays "pending" until expose_service succeeds and the
             # service_url is stored — the Chat tab only becomes accessible then.
             await _update_db(phase="running")
@@ -2515,21 +2555,24 @@ async def _run_openshell_agent(
                 active_schedule_id=None,
             )
         else:
-            if mode == "server":
-                # Launch server agent as a background nohup process so exec() returns
-                # immediately; the sandbox stays alive serving HTTP.
-                # Provider env vars (GOOGLE_API_KEY etc.) are inherited from the
-                # sandbox environment automatically — no explicit injection needed.
+            # Interactive modes (server + tui for opencode, tui for shell):
+            # launch the main command as a background nohup process so exec()
+            # returns immediately; the sandbox stays alive running the service.
+            # For opencode this is `opencode serve --service` — the persistent
+            # V2 backend shared by the chat proxy and reconnecting TUI clients.
+            # For shell TUI sessions the main command is a no-op keeper
+            # (`sleep infinity`); the interactive shell is started by the TUI
+            # WebSocket handler on connect.
+            if _runs_shared_service or mode == "server":
                 if oc_client is not None:
                     await openshell_client.start_agent(sandbox_name, cmd, env=env_vars or {}, client=oc_client)
                 else:
                     await openshell_client.start_agent(sandbox_name, cmd, env=env_vars or {})
 
-            # TUI mode: the sandbox is ready; the TUI WebSocket handler starts the
-            # agent interactively via exec_interactive when the user connects.
-
-            # For server mode, expose the agent HTTP port so the chat proxy can reach it
-            if mode == "server":
+            # Expose the agent HTTP port so the chat proxy can reach it.
+            # With the unified V2 backend this applies to TUI sessions too —
+            # both the Chat tab and the Terminal tab talk to the same service.
+            if _runs_shared_service:
                 from swarmer.agent_tools.registry import get as _get_tool
                 _tool = _get_tool(agent_tool)
                 port = _tool.get_server_port() or 4096

@@ -60,9 +60,11 @@ class Settings(BaseSettings):
     # "plan" = interactive/stronger-reasoning model (used by the opencode plan agent)
     # "build" = opencode run / coding agent model (also the model shown as "current")
     # "small" = title generation / housekeeping model
-    claude_preset_plan_model: str = "google-vertex-anthropic/claude-opus-4-6@default"
-    claude_preset_build_model: str = "google-vertex-anthropic/claude-sonnet-5@default"
-    claude_preset_small_model: str = "google-vertex-anthropic/claude-haiku-4-5@20251001"
+    # OpenCode V2: Vertex models use the canonical "google-vertex" provider ID
+    # (the V1 "google-vertex-anthropic" ID is rejected by V2).
+    claude_preset_plan_model: str = "google-vertex/claude-opus-4-6@default"
+    claude_preset_build_model: str = "google-vertex/claude-sonnet-5@default"
+    claude_preset_small_model: str = "google-vertex/claude-haiku-4-5@20251001"
     gemini_preset_plan_model: str = "google/gemini-3.7-flash"
     gemini_preset_build_model: str = "google/gemini-3.7-flash"
     gemini_preset_small_model: str = "google/gemini-3.5-flash-lite"

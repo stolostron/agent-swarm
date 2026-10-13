@@ -721,10 +721,12 @@ Persistent execution: the agent runs in server mode with an HTTP API.
 
 ##### TUI Mode
 
-Persistent terminal: the pod runs `sleep infinity` and the user connects via a full browser terminal.
+Persistent terminal: the sandbox runs the OpenCode V2 shared service (the same backend as Chat mode) and the user attaches an interactive TUI session through a full browser terminal.
 
 - `restartPolicy: Always` — pod runs indefinitely
 - xterm.js browser terminal connected via WebSocket PTY proxy (`kubectl exec` under the hood)
+- The TUI client attaches to the session's persistent OpenCode server, so a dropped browser connection can reconnect to the same live session
+- Shell-tool TUI sessions instead keep the sandbox alive with `sleep infinity` and exec an interactive bash on connect
 - OSC 52 clipboard support — clipboard copy operations in the pod reach the user's browser clipboard
 - One-time UUID auth tokens prevent unauthorized WebSocket connections
 
@@ -765,16 +767,16 @@ Go-based AI coding agent ([opencode.ai](https://opencode.ai)).
 
 | Provider | Credential Required | Model Format |
 |---|---|---|
-| Google Vertex AI (Anthropic Claude) | ADC JSON + GCP Project | `google-vertex-anthropic/claude-sonnet-5@default` |
+| Google Vertex AI (Anthropic Claude) | ADC JSON + GCP Project | `google-vertex/claude-sonnet-5@default` |
 | Google Gemini (AI Studio) | Google API Key | `google/gemini-3.7-flash` |
 
-**Model format:** `provider/model@version` (e.g., `google-vertex-anthropic/claude-sonnet-5@default`)
+**Model format:** `provider/model@version` (e.g., `google-vertex/claude-sonnet-5@default`)
 
 **Modes:**
 
 - **Prompt** — one-shot: `opencode run --model <model> --continue <prompt>` (falls back without `--continue`)
 - **Server** — HTTP API: `opencode serve --hostname 0.0.0.0 --port 4096`
-- **TUI** — interactive terminal: `opencode` (launched via `sleep infinity` pod, user attaches)
+- **TUI** — interactive terminal: `opencode` (attaches to the session's persistent OpenCode V2 shared service — same backend as Chat mode)
 
 Config written to `/workspace/.config/opencode/opencode.json` at pod startup.
 

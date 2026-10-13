@@ -349,6 +349,14 @@ class TestSessionOk:
         s = self._make_session(service_url="https://agent.openshell.example.com")
         assert _session_ok(ws, s, 1) is None
 
+    def test_session_ok_accepts_tui_mode_with_service_url(self):
+        """OpenCode V2 unification: TUI sessions run the same shared service
+        and are proxied when a service URL is present."""
+        from swarmer.routers.chat_proxy import _session_ok
+        ws = self._make_ws()
+        s = self._make_session(service_url="https://agent.openshell.example.com", mode="tui")
+        assert _session_ok(ws, s, 1) is None
+
     def test_session_ok_rejects_neither(self):
         from swarmer.routers.chat_proxy import _session_ok
         ws = self._make_ws()
@@ -585,8 +593,9 @@ class TestServerModeExposeService:
         expose_mock.assert_called_once_with("sandbox-test-abc", "agent", 4096)
 
     @pytest.mark.asyncio
-    async def test_tui_mode_does_not_call_expose_service(self, client):
-        """TUI mode should NOT call expose_service."""
+    async def test_tui_mode_calls_expose_service(self, client):
+        """OpenCode V2 unification: TUI mode runs the shared service and
+        exposes it, exactly like server mode."""
         from swarmer.routers.sessions import _run_openshell_agent
 
         expose_mock = AsyncMock(return_value="https://agent.sandbox.example.com")
@@ -602,17 +611,19 @@ class TestServerModeExposeService:
 
         with patch("swarmer.openshell_client.start_agent", start_mock), \
              patch("swarmer.openshell_client.expose_service", expose_mock), \
-             patch("swarmer.database.get_db", _test_get_db):
+             patch("swarmer.database.get_db", _test_get_db), \
+             patch("swarmer.routers.sessions.asyncio.sleep", AsyncMock()):
             await _run_openshell_agent(
                 session_id=s["id"],
                 workspace_id=ws["id"],
                 sandbox_name="sandbox-test-abc",
-                cmd=["opencode"],
+                cmd=["opencode", "serve", "--service"],
                 mode="tui",
                 agent_tool="opencode",
             )
 
-        expose_mock.assert_not_called()
+        start_mock.assert_called_once()
+        expose_mock.assert_called_once_with("sandbox-test-abc", "agent", 4096)
 
     @pytest.mark.asyncio
     async def test_server_mode_stores_service_url(self, client):
@@ -1346,6 +1357,11 @@ class TestRestartGitHubAppIATRefresh:
             patch("swarmer.github_auth.mint_installation_token", new=mock_mint),
             patch("swarmer.github_auth.start_token_refresh_loop", new=mock_start_loop),
             patch("swarmer.session_auth.start_token_refresh_loop", new=mock_agent_swarm_loop),
+            # OpenCode V2 unification: TUI sessions are re-exposed like server
+            # sessions after a restart.
+            patch("swarmer.openshell_client.expose_service", new=AsyncMock(
+                return_value="https://agent.sandbox.example.com"
+            )),
             patch("swarmer.database.get_db", new=_override_get_db),
         ):
             from swarmer.main import _restart_server_sessions
@@ -1464,6 +1480,11 @@ class TestRestartGitHubAppIATRefresh:
         with (
             patch("swarmer.openshell_client.list_sandboxes", new=AsyncMock(return_value=["sandbox-tui3"])),
             patch("swarmer.github_auth.mint_installation_token", new=AsyncMock(side_effect=Exception("github down"))),
+            # OpenCode V2 unification: TUI sessions are re-exposed like server
+            # sessions after a restart.
+            patch("swarmer.openshell_client.expose_service", new=AsyncMock(
+                return_value="https://agent.sandbox.example.com"
+            )),
             patch("swarmer.database.get_db", new=_override_get_db),
         ):
             from swarmer.main import _restart_server_sessions

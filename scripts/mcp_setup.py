@@ -50,9 +50,13 @@ def _parse_pasted_token_or_json(raw: str) -> tuple[str, str | None]:
     if raw.startswith("{"):
         try:
             data = json.loads(raw)
-            # Check for nested opencode.json format
+            # Check for nested opencode.json format — accept both the V2
+            # native shape (mcp.servers.<slug>) and the V1 flat map
+            # (mcp.<slug>).
             mcp = data.get("mcp", {})
             aswarm = mcp.get("agent-swarm", {})
+            if not aswarm and isinstance(mcp.get("servers"), dict):
+                aswarm = mcp["servers"].get("agent-swarm", {})
             env = aswarm.get("environment", {})
             if "AGENT_SWARM_API_TOKEN" in env:
                 return env["AGENT_SWARM_API_TOKEN"].strip(), env.get("AGENT_SWARM_API_URL")
@@ -95,16 +99,15 @@ def _auto_detect_url(namespace: str, config_path: Path) -> str:
     except Exception:
         pass
 
-    # Try existing opencode.json
+    # Try existing opencode.json (V2 mcp.servers shape, with V1 flat fallback)
     if config_path.exists():
         try:
             cfg = json.loads(config_path.read_text())
-            existing_url = (
-                cfg.get("mcp", {})
-                .get("agent-swarm", {})
-                .get("environment", {})
-                .get("AGENT_SWARM_API_URL")
-            )
+            mcp = cfg.get("mcp", {})
+            aswarm = mcp.get("agent-swarm", {})
+            if not aswarm and isinstance(mcp.get("servers"), dict):
+                aswarm = mcp["servers"].get("agent-swarm", {})
+            existing_url = (aswarm.get("environment", {}) or {}).get("AGENT_SWARM_API_URL")
             if existing_url:
                 return existing_url.rstrip("/")
         except Exception:
@@ -180,12 +183,12 @@ def main() -> None:
     # 2. Resolve URL
     api_url = (url_override or _auto_detect_url(args.namespace, config_path)).rstrip("/")
 
-    # 3. Build MCP configuration block
+    # 3. Build MCP configuration block (OpenCode V2 native shape: servers
+    # nest under "mcp.servers" and are connected by default).
     verify_ssl = "false" if args.insecure else "true"
     mcp_agent_swarm = {
         "type": "local",
         "command": ["agent-swarm-mcp-server"],
-        "enabled": True,
         "environment": {
             "AGENT_SWARM_API_URL": api_url,
             "AGENT_SWARM_VERIFY_SSL": verify_ssl,
@@ -211,7 +214,7 @@ def main() -> None:
         print_snippet = json.loads(json.dumps(mcp_agent_swarm))
         if "AGENT_SWARM_API_TOKEN" in print_snippet.get("environment", {}):
             print_snippet["environment"]["AGENT_SWARM_API_TOKEN"] = "<YOUR_TOKEN>"
-        print(json.dumps({"mcp": {"agent-swarm": print_snippet}}, indent=2))
+        print(json.dumps({"mcp": {"servers": {"agent-swarm": print_snippet}}}, indent=2))
         print("\nRun 'make mcp-setup' to apply this configuration to opencode.json.")
         return
 
@@ -237,7 +240,14 @@ def main() -> None:
     if "mcp" not in config_data or not isinstance(config_data["mcp"], dict):
         config_data["mcp"] = {}
 
-    config_data["mcp"]["agent-swarm"] = mcp_agent_swarm
+    mcp = config_data["mcp"]
+    if not isinstance(mcp.get("servers"), dict):
+        # Normalize a V1 flat slug→config map (or an empty section) into the
+        # V2 native "mcp.servers" shape.
+        mcp = {"servers": dict(mcp)}
+        config_data["mcp"] = mcp
+
+    mcp["servers"]["agent-swarm"] = mcp_agent_swarm
 
     config_path.write_text(json.dumps(config_data, indent=2) + "\n")
 

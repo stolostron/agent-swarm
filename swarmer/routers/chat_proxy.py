@@ -230,6 +230,11 @@ def _proxy_compat_script(prefix: str) -> str:
         'try{'
         f'var __swProxy="{prefix}";'
         'localStorage.setItem("opencode.settings.dat:defaultServerUrl",location.origin+__swProxy);'
+        # OpenCode V2 registers a service worker at /sw.js, which would escape
+        # the proxy prefix and cache Swarmer-origin responses. Neutralize
+        # registration with a never-settling promise (registration is
+        # fire-and-forget in the V2 bundle).
+        'if(navigator.serviceWorker){navigator.serviceWorker.register=function(){return new Promise(function(){})}}'
         'var __origPush=history.pushState.bind(history);'
         'var __origReplace=history.replaceState.bind(history);'
         'function __swPrefixUrl(u){'
@@ -339,20 +344,32 @@ def _rewrite_js(content: bytes, prefix: str) -> bytes:
     except Exception:
         return content
 
-    # Vite's __vitePreload base path function.  Vite uses a single-char variable
-    # name that may vary across builds (t, e, n, r, ...).  Use a regex so the
-    # rewrite is robust across minification variants.
+    # Vite/Rolldown preload base-path function. V1 builds use double quotes
+    # (function(t){return"/"+t}); the V2 bundle uses a backtick template
+    # literal (function(e){return`/`+e}). Match both so dynamic imports and
+    # lazy chunks resolve through the proxy prefix.
     text = re.sub(
-        r'function\((\w)\)\{return"/"\+\1\}',
+        r'function\((\w)\)\{return["\'`]/["\'`]\+\1\}',
         lambda m: f'function({m.group(1)}){{return"{prefix}/"+{m.group(1)}}}',
         text,
     )
 
-    # OpenCode's SolidJS router reads window.location.pathname directly and
-    # does not configure a router base. Strip the Swarmer proxy prefix so its
-    # routes (/, /new-session, and /:dir/session/:id) still match.
-    clean_prefix = prefix.rstrip("/")
-    route_prefix = json.dumps(clean_prefix)
+    # OpenCode V2's router reads window.location.pathname+window.location.search
+    # directly and does not configure a router base. Strip the Swarmer proxy
+    # prefix so its routes (/, /new-session, /:dir/session/:id) still match.
+    route_prefix = json.dumps(prefix)
+    route_iife = (
+        "(function(){var p=window.location.pathname,s=" + route_prefix + ";"
+        "var r=p.indexOf(s)===0?p.slice(s.length):p;"
+        'return r||"/"})()'
+    )
+    text = text.replace(
+        "window.location.pathname+window.location.search",
+        route_iife + "+window.location.search",
+    )
+
+    # OpenCode V1 (SolidJS router) base-path form — kept for compatibility with
+    # images still shipping the V1 web UI during a rolling upgrade.
     route_pattern = re.compile(
         r'''const r=window\.location\.pathname\.replace\([^)]*\)\+window\.location\.search'''
     )
@@ -366,20 +383,28 @@ def _rewrite_js(content: bytes, prefix: str) -> bytes:
     )
     text = route_pattern.sub(route_replacement, text, count=1)
 
-    # Rewrite every quoted absolute asset reference. OpenCode's bundle has
-    # multiple worker, sprite, image, and media assets; limiting this to one
-    # worker filename leaves other runtime dependencies at the Swarmer root.
+    # Rewrite every quoted absolute asset reference. OpenCode V2 serves its
+    # bundle from /_assets/ (plus /icons/); V1 used /assets/. All quote styles
+    # (", ', `) are matched so worker, sprite, image, and media assets stay
+    # behind the Swarmer proxy prefix.
     clean_prefix = prefix.rstrip("/")
     text = re.sub(
-        r"(?P<quote>[\"'`])/(?P<asset>assets/)",
+        r"(?P<quote>[\"'`])/(?P<asset>(?:_?assets|icons)/)",
         lambda match: f"{match.group('quote')}{clean_prefix}/{match.group('asset')}",
         text,
     )
 
-    # OpenCode's server URL fallback returns location.origin when not on
-    # opencode.ai.  This adds the Swarmer root as the "canonical local server",
-    # conflicting with the defaultServerUrl we set in localStorage.  Rewrite it
-    # to include the proxy prefix so there is exactly one server in the list.
+    # OpenCode V2 resolves its API base through a currentServerUrl() helper
+    # that returns location.origin. Rewrite it to include the proxy prefix so
+    # there is exactly one server in the UI's list, pointed at the proxy.
+    text = re.sub(
+        r"function\s*\w*\s*\(\)\{return location\.origin\}",
+        lambda m: f'function(){{return location.origin+"{prefix}"}}',
+        text,
+        count=1,
+    )
+
+    # OpenCode V1's server URL fallback — kept for rolling-upgrade compat.
     text = text.replace(
         'location.hostname.includes("opencode.ai")?"http://localhost:4096":location.origin',
         f'location.hostname.includes("opencode.ai")?"http://localhost:4096":location.origin+"{prefix}"',
@@ -428,11 +453,42 @@ def _session_ok(ws_obj, session, ws_id: int) -> tuple[str, int] | None:
     """Return (error_message, status_code) if the session can't be proxied, else None."""
     if ws_obj is None or session is None or session.workspace_id != ws_id:
         return ("Not found", 404)
-    if session.mode != "server" or not session.is_active:
-        return ("Session is not running in server mode", 503)
+    # OpenCode V2 unification: server and TUI interactive sessions run the
+    # same persistent service, so both are proxied. service_url is only
+    # stored for sessions that exposed a service, so shell TUI sessions and
+    # stopped sessions are still rejected here.
+    if session.mode not in ("server", "tui") or not session.is_active:
+        return ("Session is not running", 503)
     if not session.service_url:
         return ("Session has no service URL yet", 503)
     return None
+
+
+def _opencode_auth_token(session_id: int) -> str:
+    """Basic-auth token for the session's OpenCode V2 sandbox server.
+
+    OpenCode V2 requires server auth. `serve --service` takes its password
+    from the sandbox's ~/.config/opencode/service.json, which Swarmer
+    pre-writes with a deterministic per-session value
+    (swarmer.crypto.opencode_service_password). The V2 server accepts the
+    token via the `auth_token` query parameter — checked before the
+    Authorization header — so it composes with the OpenShell gateway's own
+    Bearer header that the proxy must preserve for gateway routing.
+    """
+    import base64
+
+    from swarmer.crypto import opencode_service_password
+
+    password = opencode_service_password(session_id)
+    return base64.b64encode(f"opencode:{password}".encode()).decode()
+
+
+def _with_auth_token(url: str, token: str) -> str:
+    """Append the OpenCode V2 auth_token query parameter to an upstream URL."""
+    from urllib.parse import quote
+
+    sep = "&" if "?" in url else "?"
+    return f"{url}{sep}auth_token={quote(token)}"
 
 
 # ── Entry point: /chat (no trailing slash) ────────────────────────────────────
@@ -487,6 +543,10 @@ async def _chat_http_proxy(
     upstream_url = f"{upstream_base}/{path}"
     if query:
         upstream_url += f"?{query}"
+    # Authenticate to the OpenCode V2 server (its auth_token query parameter
+    # is evaluated before the Authorization header, which carries the
+    # OpenShell gateway Bearer token used for gateway routing).
+    upstream_url = _with_auth_token(upstream_url, _opencode_auth_token(sid))
 
     fwd_headers = {k: v for k, v in request.headers.items() if k.lower() not in _HOP_BY_HOP}
     # Set the virtual host so the OpenShell gateway routes to the right sandbox.
@@ -680,7 +740,7 @@ async def chat_ws_proxy(
         ws_obj is None
         or session is None
         or session.workspace_id != ws_id
-        or session.mode != "server"
+        or session.mode not in ("server", "tui")
         or not session.is_active
         or not session.service_url
     ):
@@ -697,6 +757,7 @@ async def chat_ws_proxy(
     upstream_url = upstream_base.replace("http://", "ws://").replace("https://", "wss://") + f"/{path}"
     if query:
         upstream_url += f"?{query}"
+    upstream_url = _with_auth_token(upstream_url, _opencode_auth_token(sid))
 
     _ws_ssl = _openshell_ssl_context(gw_config) if upstream_url.startswith("wss://") else None
     _ws_extra_headers = {"Host": virtual_host} if virtual_host else {}

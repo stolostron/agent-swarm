@@ -48,6 +48,28 @@ def derive_session_secret(key_file: str) -> str:
     return _session_secret
 
 
+def opencode_service_password(session_id: int) -> str:
+    """Deterministic per-session password for the sandbox OpenCode V2 server.
+
+    OpenCode V2's ``serve --service`` mode takes its password from the
+    sandbox's ``~/.config/opencode/service.json`` (env vars are ignored in
+    service mode), so Swarmer pre-writes that file with this value. Being
+    deterministic (HMAC of the Swarmer secret key over the session ID) means
+    the chat proxy can re-derive it after a Swarmer restart without storing
+    it in the database.
+    """
+    import hashlib
+    import hmac
+
+    if _session_secret is None:
+        raise RuntimeError("crypto not initialized")
+    return hmac.new(
+        _session_secret.encode(),
+        f"opencode-server:{session_id}".encode(),
+        hashlib.sha256,
+    ).hexdigest()
+
+
 def encrypt(plaintext: str) -> str:
     if _fernet is None:
         raise RuntimeError("crypto not initialized")

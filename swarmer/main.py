@@ -204,7 +204,8 @@ async def _restart_prompt_pollers() -> None:
                 # Reconstruct the same AGENTS.md-reading command used at initial launch
                 # (ACM-35060).  build_main_cmd would embed a CLI arg that is unavailable
                 # at restart time; AGENTS.md already exists in the sandbox from launch.
-                _tool_bin = {"opencode": "opencode run"}.get(s.agent_tool, "opencode run")
+                # --standalone gives the one-shot run a private V2 server.
+                _tool_bin = {"opencode": "opencode run --standalone"}.get(s.agent_tool, "opencode run --standalone")
                 _model_arg = _shlex.quote(_model) if _model else ""
                 _main_cmd = f"HOME=/sandbox {_tool_bin} --model {_model_arg} \"$(</sandbox/AGENTS.md)\""
             asyncio.create_task(
@@ -223,9 +224,9 @@ async def _restart_server_sessions() -> None:
     still active after a restart.
 
     For each server/TUI-mode session that was running/pending with a live sandbox:
-    - server mode: re-call expose_service() to get a fresh service_url (handles
-      gateway restarts). Sessions whose sandbox has disappeared are moved to
-      'stopped'.
+    - server mode and opencode TUI mode: re-call expose_service() to get a fresh
+      service_url (handles gateway restarts). Sessions whose sandbox has
+      disappeared are moved to 'stopped'.
     - server/TUI mode: if the session is using a workspace GitHub App (no PAT
       assigned), restart the background IAT refresh loop. Swarmer's own restart
       does not affect the sandbox or the OpenShell provider — the previously
@@ -294,7 +295,11 @@ async def _restart_server_sessions() -> None:
                 s.run_completed_at = datetime.now(timezone.utc)
                 continue
 
-            if s.mode == "server":
+            # OpenCode V2 unification: server and TUI interactive sessions run
+            # the same persistent shared service, so both need a fresh
+            # service_url after a Swarmer restart. Shell TUI sessions expose
+            # no service and are skipped by the service_url check.
+            if s.mode == "server" or (s.mode == "tui" and s.agent_tool == "opencode"):
                 # Sandbox is alive — re-expose the service to get a fresh URL.
                 try:
                     _tool = _get_tool(s.agent_tool)
@@ -303,7 +308,7 @@ async def _restart_server_sessions() -> None:
                     s.service_url = service_url
                     s.phase = "running"
                     log.info(
-                        "restart: server-mode session %d re-connected to sandbox %s at %s",
+                        "restart: interactive session %d re-connected to sandbox %s at %s",
                         s.id, sandbox_name, service_url,
                     )
                 except Exception:

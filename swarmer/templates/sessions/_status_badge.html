@@ -2,6 +2,7 @@
 <div id="session-status"
   data-sandbox="{{ session.sandbox_name or '' }}"
   data-mode="{{ session.mode }}"
+  data-tool="{{ session.agent_tool }}"
   {% if session.phase in ('queued', 'pending', 'running') or session.sandbox_name %}
   hx-get="/workspaces/{{ ws.id }}/sessions/{{ session.id }}/status"
   hx-trigger="every 5s"

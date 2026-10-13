@@ -146,10 +146,11 @@ class TestMcpSetupScript:
             main()
 
         updated_data = json.loads(config_file.read_text())
-        assert "jira-mcp-server" in updated_data["mcp"]
-        assert "agent-swarm" in updated_data["mcp"]
-        aswarm = updated_data["mcp"]["agent-swarm"]
-        assert aswarm["enabled"] is True
+        servers = updated_data["mcp"]["servers"]
+        assert "jira-mcp-server" in servers
+        assert "agent-swarm" in servers
+        aswarm = servers["agent-swarm"]
+        assert "enabled" not in aswarm  # V2 shape: no V1 enabled flag
         assert aswarm["environment"]["AGENT_SWARM_API_URL"] == "https://swarmer.test.example.com"
         assert aswarm["environment"]["AGENT_SWARM_API_TOKEN"] == "test-token-value-xyz"
         assert aswarm["environment"]["AGENT_SWARM_VERIFY_SSL"] == "true"
@@ -171,7 +172,7 @@ class TestMcpSetupScript:
             main()
 
         updated_data = json.loads(config_file.read_text())
-        aswarm = updated_data["mcp"]["agent-swarm"]
+        aswarm = updated_data["mcp"]["servers"]["agent-swarm"]
         assert aswarm["environment"]["AGENT_SWARM_VERIFY_SSL"] == "false"
 
     def test_mcp_setup_print_only(self, capsys, tmp_path):

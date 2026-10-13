@@ -174,18 +174,22 @@ async def run_smoke_test(model: str) -> bool:
     # ── 6. model.json ────────────────────────────────────────────────────────
     print("\n[6] Model configuration")
     try:
+        # OpenCode V2: model selection lives in opencode.json ("model" field)
+        # and per-session in the V2 database — the V1 model.json preselection
+        # file has no V2 equivalent, so build_model_setup_cmd() is a no-op.
         model_setup_cmd = tool.build_model_setup_cmd(model).replace("/workspace/", "/sandbox/")
         clean_cmd = model_setup_cmd.rstrip().rstrip("&").rstrip()
-        r = xec(clean_cmd)
-        r2 = xec(["cat", "/sandbox/.local/state/opencode/model.json"])
-        model_id = model.split("/", 1)[-1]
-        has_model = bool(r2.stdout and model_id in r2.stdout)
-        ok = step("model.json written", has_model,
-                  r2.stdout.strip()[:80] if has_model
-                  else f"exit={r.exit_code} stderr={r.stderr.strip()!r}")
+        r = xec(clean_cmd) if clean_cmd else None
+        config_data = tool.build_config_data(model=model)
+        cfg_preview = json.loads(config_data.get("opencode.json", "{}"))
+        has_model = cfg_preview.get("model", "") == model
+        ok = step("model set in opencode.json (V2)", has_model,
+                  cfg_preview.get("model", "(missing)")
+                  if has_model
+                  else f"cmd_exit={getattr(r, 'exit_code', 'n/a')} model={cfg_preview.get('model', '(missing)')}")
         all_passed = all_passed and ok
     except Exception as exc:
-        step("model.json", False, str(exc))
+        step("model config", False, str(exc))
         all_passed = False
 
     # ── 7. auth.json ─────────────────────────────────────────────────────────
@@ -286,20 +290,43 @@ async def run_smoke_test(model: str) -> bool:
         all_passed = all_passed and ok_exit
 
         # OpenCode stores the response in its SQLite DB, not stdout.
-        # Query it via Python after the run completes.
+        # Query it via Python after the run completes (V2 session_message,
+        # with the V1 part/message schema as fallback).
         db_reader = b"""
 import sqlite3, json
 conn = sqlite3.connect('/sandbox/.opencode/opencode.db')
 conn.execute('PRAGMA wal_checkpoint(FULL)')
-# Get assistant message text parts only
-rows = conn.execute('''
-    SELECT p.data FROM part p
-    JOIN message m ON p.message_id = m.id
-    WHERE json_extract(m.data, '$.role') = 'assistant'
-      AND json_extract(p.data, '$.type') = 'text'
-    ORDER BY p.time_created
-''').fetchall()
-texts = [json.loads(r[0]).get('text', '') for r in rows if r[0]]
+texts = []
+# OpenCode V2: session_message holds the full message payload
+try:
+    rows = conn.execute('''
+        SELECT data FROM session_message
+        WHERE type = 'assistant'
+        ORDER BY time_created ASC, seq ASC
+    ''').fetchall()
+    for (d,) in rows:
+        try:
+            msg = json.loads(d)
+        except Exception:
+            continue
+        for part in (msg.get('content') or []):
+            if isinstance(part, dict) and part.get('type') == 'text':
+                texts.append(part.get('text', ''))
+except Exception:
+    pass
+# V1 fallback: part/message join
+if not texts:
+    try:
+        rows = conn.execute('''
+            SELECT p.data FROM part p
+            JOIN message m ON p.message_id = m.id
+            WHERE json_extract(m.data, '$.role') = 'assistant'
+              AND json_extract(p.data, '$.type') = 'text'
+            ORDER BY p.time_created
+        ''').fetchall()
+        texts = [json.loads(r[0]).get('text', '') for r in rows if r[0]]
+    except Exception:
+        pass
 result = '\\n'.join(t for t in texts if t.strip())
 # Also check for errors
 err_rows = conn.execute(
@@ -394,7 +421,7 @@ conn.close()
 
 
 async def run_vertex_smoke_test(
-    opencode_model: str = "google-vertex-anthropic/claude-sonnet-5@default",
+    opencode_model: str = "google-vertex/claude-sonnet-5@default",
     agent_tool: str = "opencode",
 ) -> bool:
     """E2e smoke test for the google-vertex-ai provider (ADC / VertexAI Anthropic Claude).
@@ -634,12 +661,35 @@ async def run_vertex_smoke_test(
         ok_exit = step(f"{agent_tool} exits 0", r.exit_code == 0, f"exit={r.exit_code}")
         all_passed = all_passed and ok_exit
 
-        # OpenCode writes to SQLite DB
+        # OpenCode writes to SQLite DB (V2 session_message first, V1 schemas
+        # kept as fallbacks)
         db_reader = b"""
 import sqlite3, json
 conn = sqlite3.connect('/sandbox/.opencode/opencode.db')
 conn.execute('PRAGMA wal_checkpoint(FULL)')
-# Try part table first (older schema)
+# OpenCode V2: session_message holds the full message payload
+try:
+    rows = conn.execute('''
+        SELECT data FROM session_message
+        WHERE type = 'assistant'
+        ORDER BY time_created ASC, seq ASC
+    ''').fetchall()
+    texts = []
+    for (d,) in rows:
+        try:
+            msg = json.loads(d)
+        except Exception:
+            continue
+        for part in (msg.get('content') or []):
+            if isinstance(part, dict) and part.get('type') == 'text':
+                texts.append(part.get('text', ''))
+    if texts:
+        print('\\n'.join(t for t in texts if t.strip())[:2000])
+        conn.close()
+        exit(0)
+except Exception:
+    pass
+# Try part table next (V1 schema)
 try:
     rows = conn.execute('''
         SELECT p.data FROM part p
@@ -707,6 +757,18 @@ conn.close()
 import sqlite3, json
 conn = sqlite3.connect('/sandbox/.opencode/opencode.db')
 conn.execute('PRAGMA wal_checkpoint(FULL)')
+print('=== session_message (V2) ===')
+try:
+    for row in conn.execute('SELECT id, type, data FROM session_message ORDER BY time_created LIMIT 10').fetchall():
+        mid, mtype, d = row
+        try:
+            msg = json.loads(d)
+            texts = [p.get('text', '') for p in (msg.get('content') or []) if isinstance(p, dict) and p.get('type') == 'text']
+            print(f'  {mid}: type={mtype} text_len={sum(len(t) for t in texts)}')
+        except Exception:
+            print(f'  {mid}: type={mtype} raw={str(d)[:100]}')
+except Exception as exc:
+    print(f'  (unavailable: {exc})')
 print('=== messages ===')
 for row in conn.execute('SELECT id, data FROM message ORDER BY created').fetchall():
     mid, d = row

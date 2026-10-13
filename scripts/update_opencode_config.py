@@ -20,24 +20,35 @@ def update_opencode_json(api_url: str, config_path: str = "opencode.json") -> No
     if "$schema" not in data:
         data["$schema"] = "https://opencode.ai/config.json"
 
-    mcp_key = "mcpServers" if "mcpServers" in data else "mcp"
-    if mcp_key not in data or not isinstance(data[mcp_key], dict):
-        data[mcp_key] = {}
+    # OpenCode V2 native shape nests servers under "mcp.servers"; the flat V1
+    # slug→config map (and the pre-V1 "mcpServers" key) are still accepted when
+    # reading an existing config and normalized to the V2 shape on write.
+    mcp = data.get("mcp") if isinstance(data.get("mcp"), dict) else None
+    if mcp is None and isinstance(data.get("mcpServers"), dict):
+        mcp = data.pop("mcpServers")
+    if mcp is None:
+        mcp = {}
+    if isinstance(mcp.get("servers"), dict):
+        servers = mcp["servers"]
+    else:
+        servers = dict(mcp)
+        mcp = {"servers": servers}
+    data["mcp"] = mcp
 
-    mcp = data[mcp_key]
-    if "agent-swarm" not in mcp or not isinstance(mcp["agent-swarm"], dict):
-        mcp["agent-swarm"] = {
+    if "agent-swarm" not in servers or not isinstance(servers["agent-swarm"], dict):
+        servers["agent-swarm"] = {
             "type": "local",
             "command": ["agent-swarm-mcp-server"],
-            "enabled": True,
             "environment": {
                 "AGENT_SWARM_API_URL": api_url,
                 "AGENT_SWARM_VERIFY_SSL": "true",
             },
         }
     else:
-        as_m = mcp["agent-swarm"]
-        as_m["enabled"] = True
+        as_m = servers["agent-swarm"]
+        # V1 configs carried an "enabled" flag; V2 inverts it into "disabled"
+        # and connects servers by default, so drop it on migration.
+        as_m.pop("enabled", None)
         if "environment" not in as_m or not isinstance(as_m["environment"], dict):
             as_m["environment"] = {}
         as_m["environment"]["AGENT_SWARM_API_URL"] = api_url

@@ -114,15 +114,19 @@ async def token_page(request: Request) -> HTMLResponse:
 
     mcp_config = {
         "mcp": {
-            "agent-swarm": {
-                "type": "local",
-                "command": ["agent-swarm-mcp-server"],
-                "enabled": True,
-                "environment": {
-                    "AGENT_SWARM_API_URL": base_url,
-                    "AGENT_SWARM_VERIFY_SSL": "true",
-                    "AGENT_SWARM_API_TOKEN": token,
-                },
+            # OpenCode V2 native shape: servers nest under "mcp.servers" and
+            # are connected by default (V2 inverts V1's "enabled" into
+            # "disabled").
+            "servers": {
+                "agent-swarm": {
+                    "type": "local",
+                    "command": ["agent-swarm-mcp-server"],
+                    "environment": {
+                        "AGENT_SWARM_API_URL": base_url,
+                        "AGENT_SWARM_VERIFY_SSL": "true",
+                        "AGENT_SWARM_API_TOKEN": token,
+                    },
+                }
             }
         }
     }

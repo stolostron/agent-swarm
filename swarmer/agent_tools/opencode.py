@@ -17,6 +17,19 @@ if TYPE_CHECKING:
 # IDs, sourced from Settings so they can be reconfigured without code changes.
 _PRESET_NAMES = ("claude", "gemini", "openai")
 
+# OpenCode V2 retired the V1 "google-vertex-anthropic" provider ID in favour of
+# the canonical "google-vertex" ID (V2 rejects the legacy ID outright). Sessions
+# and schedules created before the V2 upgrade may still carry legacy IDs, so
+# they are normalized at resolve time instead of requiring a DB migration.
+_LEGACY_VERTEX_PREFIX = "google-vertex-anthropic/"
+
+
+def normalize_model_id(model: str) -> str:
+    """Map legacy V1 provider IDs to their V2 canonical equivalents."""
+    if model.startswith(_LEGACY_VERTEX_PREFIX):
+        return "google-vertex/" + model[len(_LEGACY_VERTEX_PREFIX):]
+    return model
+
 
 class OpenCodeStrategy(AgentToolStrategy):
 
@@ -52,6 +65,10 @@ class OpenCodeStrategy(AgentToolStrategy):
             }
         return None
 
+    def resolve_build_model(self, model: str) -> str:
+        """Resolve presets to their BUILD model and normalize legacy provider IDs."""
+        return normalize_model_id(super().resolve_build_model(model))
+
     def build_config_data(
         self,
         secret: "OpencodeSecret | None" = None,
@@ -62,7 +79,6 @@ class OpenCodeStrategy(AgentToolStrategy):
         preset = self.resolve_preset(model)
         _plan_model = ""
         _plan_mode = ""
-        _plan_variant = ""
         _build_mode = ""
         if preset:
             # Preset selected — plan/build/small all come from the configured mapping.
@@ -71,22 +87,23 @@ class OpenCodeStrategy(AgentToolStrategy):
             _plan_model = preset["plan"]
             if model == "openai":
                 _plan_mode = "primary"
-                _plan_variant = "default"
                 _build_mode = "primary"
         else:
             # Raw provider/model string (not a preset) — derive small_model from the
             # chosen model: swap pro→flash / opus/sonnet→haiku within same provider.
             # Fall back to fixed defaults if the model is unrecognised. Kept for
             # backward compatibility with sessions created before presets existed.
-            _model = model or "google/gemini-3.7-flash"
+            # Legacy "google-vertex-anthropic/..." IDs are normalized to the V2
+            # canonical "google-vertex" provider ID.
+            _model = normalize_model_id(model or "google/gemini-3.7-flash")
             _small_model = "google/gemini-3.5-flash-lite"
             if "/" in _model:
                 _provider, _mid = _model.split("/", 1)
                 # Strip @version suffix for comparison
                 _mid_base = _mid.split("@")[0]
-                if _provider == "google-vertex-anthropic":
+                if _provider == "google-vertex":
                     # Claude on Vertex: use haiku as the small model
-                    _small_model = "google-vertex-anthropic/claude-haiku-4-5@20251001"
+                    _small_model = "google-vertex/claude-haiku-4-5@20251001"
                 elif _provider == "openai":
                     _small_model = settings.openai_preset_small_model
                 elif "pro" in _mid_base:
@@ -99,55 +116,50 @@ class OpenCodeStrategy(AgentToolStrategy):
             if not (_candidate and "/" in _candidate):
                 continue
             _provider = _candidate.split("/")[0]
-            if _provider in ("google", "google-vertex-anthropic", "openai") and _provider not in _enabled_providers:
+            if _provider in ("google", "google-vertex", "openai") and _provider not in _enabled_providers:
                 _enabled_providers.append(_provider)
 
         config: dict = {
             "$schema": "https://opencode.ai/config.json",
             "enabled_providers": _enabled_providers,
             "model": _model,
-            "small_model": _small_model,
-            "lsp": {
-                "go": {"command": ["gopls"], "extensions": []},
-                "python": {"command": ["pyright-langserver", "--stdio"], "extensions": []},
-            },
-            "server": {
-                "hostname": "0.0.0.0",
-                "port": 4096,
+            "agents": {
+                # V2 native shape: the V1 top-level "small_model" becomes the
+                # model selection for the built-in (hidden) "title" agent.
+                "title": {"model": _small_model},
             },
         }
 
-        # Plan mode (ACM-37232): presets define a stronger-reasoning PLAN model.
-        # Only takes effect at runtime when OPENCODE_EXPERIMENTAL_PLAN_MODE=true
-        # is also set in the sandbox environment (see routers/sessions.py).
-        if _build_mode:
-            config["agent"] = {"build": {"mode": _build_mode}}
+        # Plan agent (ACM-37232): V2 ships a built-in "plan" primary agent, so
+        # a preset's stronger-reasoning PLAN model only needs to be assigned to
+        # it (the V1 OPENCODE_EXPERIMENTAL_PLAN_MODE env-var toggle is gone).
         if _plan_model and settings.opencode_experimental_plan_mode:
             _plan_cfg: dict[str, str] = {"model": _plan_model}
             if _plan_mode:
                 _plan_cfg["mode"] = _plan_mode
-            if _plan_variant:
-                _plan_cfg["variant"] = _plan_variant
-            config.setdefault("agent", {})["plan"] = _plan_cfg
+            config["agents"]["plan"] = _plan_cfg
+        if _build_mode:
+            config["agents"]["build"] = {"mode": _build_mode}
 
         if mcp_servers:
-            mcp_config = {}
+            # V2 native MCP shape: servers are grouped under "mcp.servers" and
+            # connected by default (V2 inverts V1's "enabled" into "disabled").
+            mcp_servers_cfg = {}
             for srv in mcp_servers:
                 entry = get_catalog_entry(srv.slug) or {}
                 command = getattr(srv, "command", None) or entry.get("command", srv.slug)
                 environment = getattr(srv, "environment", None) or entry.get("environment", {})
-                mcp_config[srv.slug] = {
+                mcp_servers_cfg[srv.slug] = {
                     "type": "local",
                     "command": command if isinstance(command, list) else [command],
-                    "enabled": True,
                     "environment": environment or {
                         "JIRA_SERVER_URL": "{env:JIRA_SERVER_URL}",
                         "JIRA_ACCESS_TOKEN": "{env:JIRA_ACCESS_TOKEN}",
                         "JIRA_EMAIL": "{env:JIRA_EMAIL}",
                     },
                 }
-            if mcp_config:
-                config["mcp"] = mcp_config
+            if mcp_servers_cfg:
+                config["mcp"] = {"servers": mcp_servers_cfg}
 
         return {
             "opencode.json": json.dumps(config, indent=2),
@@ -168,26 +180,18 @@ class OpenCodeStrategy(AgentToolStrategy):
 
     def build_share_setup_cmd(self) -> str:
         return (
-            "mkdir -p /workspace/.opencode /workspace/.local/share && "
+            "mkdir -p /workspace/.opencode /workspace/.local/share /workspace/.config/opencode && "
             "rm -rf /workspace/.local/share/opencode && "
             "ln -sf /workspace/.opencode /workspace/.local/share/opencode && "
             "find /workspace/.opencode -name '*.db-wal' -o -name '*.db-shm' | xargs rm -f 2>/dev/null; "
         )
 
     def build_model_setup_cmd(self, model: str) -> str:
-        if "/" not in model:
-            return ""
-        provider_id, model_id = model.split("/", 1)
-        model_json = json.dumps({
-            "recent": [{"providerID": provider_id, "modelID": model_id}],
-            "favorite": [],
-            "variant": {f"{provider_id}/{model_id}": "default"},
-        })
-        return (
-            "mkdir -p /workspace/.local/state/opencode && "
-            f"printf '%s' {shlex.quote(model_json)} "
-            "> /workspace/.local/state/opencode/model.json && "
-        )
+        # OpenCode V2 stores model selection in opencode.json (the "model"
+        # field, set by build_config_data) and per-session in its own database.
+        # The V1 ~/.local/state/opencode/model.json preselection file has no
+        # V2 equivalent, so no model setup command is needed.
+        return ""
 
     def build_main_cmd(
         self,
@@ -195,19 +199,32 @@ class OpenCodeStrategy(AgentToolStrategy):
         model: str,
         resolved_prompt: str | None = None,
     ) -> str:
-        if session.mode == "server":
-            return "opencode serve --hostname 0.0.0.0 --port 4096"
-        elif session.mode == "tui":
-            return "sleep infinity"
+        if session.mode in ("server", "tui"):
+            # OpenCode V2 unified backend: one persistent shared service powers
+            # both the web console (proxied by Swarmer's Chat tab) and the
+            # reconnecting TUI (which auto-discovers the service registration
+            # written to ~/.local/state/opencode/service.json).
+            #
+            # The server password comes from /sandbox/.config/opencode/service.json,
+            # pre-written by Swarmer at sandbox setup — service mode ignores the
+            # OPENCODE_PASSWORD env var. The port must be passed explicitly:
+            # --service would otherwise default to the channel port (49374).
+            return "opencode serve --service --hostname 0.0.0.0 --port 4096"
         else:
             prompt_text = session.instruction_prompt if resolved_prompt is None else resolved_prompt
             prompt_text = prompt_text or ""
-            base_parts = ["opencode", "run", "--model", model]
+            # --standalone gives the one-shot run a private server instead of
+            # leaving a background service daemon behind in a prompt sandbox.
+            base_parts = ["opencode", "run", "--standalone", "--model", normalize_model_id(model)]
             prompt_parts = [prompt_text] if prompt_text else []
             return " ".join(shlex.quote(p) for p in base_parts + prompt_parts)
 
     def is_valid_model(self, model: str) -> bool:
-        return model in _PRESET_NAMES or model.startswith(("google/", "google-vertex-anthropic/", "openai/"))
+        # The legacy google-vertex-anthropic prefix stays valid input: it is
+        # normalized to google-vertex at resolve time.
+        return model in _PRESET_NAMES or model.startswith((
+            "google/", "google-vertex/", "google-vertex-anthropic/", "openai/",
+        ))
 
     def get_model_options(
         self,
