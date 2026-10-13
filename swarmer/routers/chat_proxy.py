@@ -464,6 +464,15 @@ def _session_ok(ws_obj, session, ws_id: int) -> tuple[str, int] | None:
     return None
 
 
+async def _workspace_accessible(db: AsyncSession, ws_obj: Workspace, auth_session) -> bool:
+    """Check the authenticated Console identity against the workspace ACL."""
+    from swarmer.workspace_acl import user_can_access_workspace
+
+    username = auth_session.get("username", "")
+    groups = auth_session.get("groups", [])
+    return await user_can_access_workspace(db, ws_obj, username, groups)
+
+
 def _opencode_auth_token(session_id: int) -> str:
     """Basic-auth token for the session's OpenCode V2 sandbox server.
 
@@ -515,14 +524,6 @@ async def _proxy_root(
     request: Request,
     db: AsyncSession = Depends(get_db),
 ) -> Response:
-    ws_obj, session = await _load(ws_id, sid, db)
-    err = _session_ok(ws_obj, session, ws_id)
-    if err:
-        msg, code = err
-        return Response(msg, status_code=code, media_type="text/plain")
-
-    assert session is not None  # _session_ok returns error if session is None
-
     # Proxy the root path directly to OpenCode's native web UI running
     # inside the sandbox.  _rewrite_html() will inject a <base> tag and
     # rewrite absolute asset paths so they load through the /chat/{path}
@@ -542,6 +543,8 @@ async def _chat_http_proxy(
     from starlette.responses import StreamingResponse
 
     ws_obj, session = await _load(ws_id, sid, db)
+    if ws_obj is not None and not await _workspace_accessible(db, ws_obj, request.session):
+        return Response("Not found", status_code=404, media_type="text/plain")
     err = _session_ok(ws_obj, session, ws_id)
     if err:
         msg, code = err
@@ -762,9 +765,12 @@ async def chat_ws_proxy(
 
     ws_obj: Workspace | None = None
     session: Session | None = None
+    allowed = False
     async for db in get_db():
         ws_obj = await db.get(Workspace, ws_id)
         session = await db.get(Session, sid)
+        if ws_obj is not None:
+            allowed = await _workspace_accessible(db, ws_obj, websocket.session)
         break
 
     if (
@@ -774,6 +780,7 @@ async def chat_ws_proxy(
         or session.mode not in ("server", "tui")
         or not session.is_active
         or not session.service_url
+        or not allowed
     ):
         await websocket.close(code=4004, reason="Session unavailable")
         return

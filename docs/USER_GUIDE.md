@@ -725,7 +725,7 @@ Persistent terminal: the sandbox runs the OpenCode V2 shared service (the same b
 
 - `restartPolicy: Always` — pod runs indefinitely
 - xterm.js browser terminal connected via WebSocket PTY proxy (`kubectl exec` under the hood)
-- The TUI client attaches to the session's persistent OpenCode server, so a dropped browser connection can reconnect to the same live session
+- The TUI client attaches to the session's persistent OpenCode server, so a dropped browser connection can reconnect to that service. It resumes the saved Chat conversation only when Chat was selected and its conversation ID was persisted; otherwise TUI starts without `--session`.
 - Shell-tool TUI sessions instead keep the sandbox alive with `sleep infinity` and exec an interactive bash on connect
 - OSC 52 clipboard support — clipboard copy operations in the pod reach the user's browser clipboard
 - One-time UUID auth tokens prevent unauthorized WebSocket connections
@@ -775,8 +775,14 @@ Go-based AI coding agent ([opencode.ai](https://opencode.ai)).
 **Modes:**
 
 - **Prompt** — one-shot: `opencode run --standalone --model <model> <prompt>`
-- **Server** — HTTP API: `opencode serve --hostname 0.0.0.0 --port 4096`
+- **Server** — HTTP API: `opencode serve --service --hostname 0.0.0.0 --port 4096`
 - **TUI** — interactive terminal: `opencode` (attaches to the session's persistent OpenCode V2 shared service — same backend as Chat mode)
+
+Swarmer prepares the shared service password in the sandbox's
+`~/.config/opencode/service.json` before startup. The server and TUI use this
+same per-session password; the Chat proxy supplies OpenCode authentication
+automatically while preserving the OpenShell gateway authentication. No
+separate user-managed OpenCode password is required.
 
 At startup, the generated config is written to `/sandbox/opencode.json` and supplied to OpenCode via `OPENCODE_CONFIG`.
 

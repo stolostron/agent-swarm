@@ -11,6 +11,8 @@ Covers:
 """
 
 import asyncio
+import base64
+import json
 import os
 import sys
 from unittest.mock import AsyncMock, MagicMock, patch, call
@@ -190,6 +192,15 @@ async def client():
 
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        from itsdangerous import TimestampSigner
+        from swarmer.crypto import derive_session_secret
+
+        session_data = {"authenticated": True, "username": "test-user", "groups": []}
+        encoded_session = base64.b64encode(json.dumps(session_data).encode("utf-8"))
+        ac.cookies.set(
+            "swarmer_session",
+            TimestampSigner(derive_session_secret("auth/secret.key")).sign(encoded_session).decode("utf-8"),
+        )
         yield ac
 
     app.dependency_overrides.clear()
@@ -429,6 +440,57 @@ class TestChatHttpProxy:
         assert "agent.openshell.internal" in headers.get("host", ""), (
             f"Expected virtual host in Host header, got headers: {headers}"
         )
+
+    @pytest.mark.asyncio
+    async def test_proxy_rejects_user_without_workspace_access(self, client):
+        ws = await _create_workspace(client)
+        s = await _create_session(client, ws["id"], mode="server", agent_tool="opencode")
+
+        async with _TestSession() as db:
+            from swarmer.models.session import Session as _Session
+            from swarmer.models.workspace import Workspace as _Workspace
+
+            workspace = await db.get(_Workspace, ws["id"])
+            workspace.owner_id = "another-user"
+            session_obj = await db.get(_Session, s["id"])
+            session_obj.phase = "running"
+            session_obj.service_url = "http://agent.openshell.internal:4096"
+            await db.commit()
+
+        with patch("swarmer.openshell_client.resolve_gateway_config", new=AsyncMock()) as resolve_gateway:
+            resp = await client.get(f"/workspaces/{ws['id']}/sessions/{s['id']}/chat/api")
+
+        assert resp.status_code == 404
+        resolve_gateway.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_websocket_proxy_rejects_user_without_workspace_access(self, client):
+        ws = await _create_workspace(client)
+        s = await _create_session(client, ws["id"], mode="server", agent_tool="opencode")
+
+        async with _TestSession() as db:
+            from swarmer.models.session import Session as _Session
+            from swarmer.models.workspace import Workspace as _Workspace
+
+            workspace = await db.get(_Workspace, ws["id"])
+            workspace.owner_id = "another-user"
+            session_obj = await db.get(_Session, s["id"])
+            session_obj.phase = "running"
+            session_obj.service_url = "http://agent.openshell.internal:4096"
+            await db.commit()
+
+        websocket = MagicMock()
+        websocket.session = {"authenticated": True, "username": "test-user", "groups": []}
+        websocket.accept = AsyncMock()
+        websocket.close = AsyncMock()
+        from swarmer.routers.chat_proxy import chat_ws_proxy
+
+        with patch("swarmer.routers.chat_proxy.get_db", _override_get_db), \
+             patch("swarmer.openshell_client.resolve_gateway_config", new=AsyncMock()) as resolve_gateway:
+            await chat_ws_proxy(websocket, ws["id"], s["id"], "event")
+
+        websocket.close.assert_awaited_once_with(code=4004, reason="Session unavailable")
+        resolve_gateway.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_proxy_sets_sandbox_directory_header(self, client):
