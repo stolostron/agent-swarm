@@ -709,7 +709,7 @@ One-shot execution: runs the agent with a prompt, streams output, and the pod ex
 - Auto-cleaned by the log poller background task
 - If `persist=False`, the PVC is deleted on successful completion
 - Supports cron scheduling for recurring runs (see [Cron Scheduling](#cron-scheduling))
-- Command: runs with `--continue` flag (falls back to without if session state does not exist)
+- OpenCode prompt runs use `--standalone` for a one-shot run without leaving a background service
 
 ##### Server Mode
 
@@ -774,19 +774,18 @@ Go-based AI coding agent ([opencode.ai](https://opencode.ai)).
 
 **Modes:**
 
-- **Prompt** — one-shot: `opencode run --model <model> --continue <prompt>` (falls back without `--continue`)
+- **Prompt** — one-shot: `opencode run --standalone --model <model> <prompt>`
 - **Server** — HTTP API: `opencode serve --hostname 0.0.0.0 --port 4096`
 - **TUI** — interactive terminal: `opencode` (attaches to the session's persistent OpenCode V2 shared service — same backend as Chat mode)
 
-Config written to `/workspace/.config/opencode/opencode.json` at pod startup.
+At startup, the generated config is written to `/sandbox/opencode.json` and supplied to OpenCode via `OPENCODE_CONFIG`.
 
 #### Model Selection
 
 - The primary UX is two family-level **presets** — **Claude** and **Gemini** — selected via
   radio pills at the top of the Model field. Each preset maps to three roles configured in
   `Settings` (`swarmer/config.py`), so they can be changed without code changes:
-  - **plan** — stronger-reasoning model used by the opencode plan agent (requires
-    `OPENCODE_EXPERIMENTAL_PLAN_MODE=true`, enabled by default)
+  - **plan** — stronger-reasoning model assigned to the generated V2 `plan` agent configuration
   - **build** — the model used for `opencode run` / the coding agent (this is what session.model
     resolves to for policy/network purposes)
   - **small** — title generation / housekeeping model
