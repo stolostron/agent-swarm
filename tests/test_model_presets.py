@@ -26,7 +26,7 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from swarmer.agent_tools.opencode import OpenCodeStrategy  # noqa: E402
+from swarmer.agent_tools.opencode import OpenCodeStrategy, normalize_model_id  # noqa: E402
 from swarmer.config import settings  # noqa: E402
 
 _opencode = OpenCodeStrategy()
@@ -40,9 +40,9 @@ class TestResolvePreset:
     def test_resolve_claude_preset(self):
         mapping = _opencode.resolve_preset("claude")
         assert mapping == {
-            "plan": settings.claude_preset_plan_model,
-            "build": settings.claude_preset_build_model,
-            "small": settings.claude_preset_small_model,
+            "plan": normalize_model_id(settings.claude_preset_plan_model),
+            "build": normalize_model_id(settings.claude_preset_build_model),
+            "small": normalize_model_id(settings.claude_preset_small_model),
         }
 
     def test_resolve_gemini_preset(self):
@@ -90,7 +90,7 @@ class TestResolvePreset:
 
 class TestResolveBuildModel:
     def test_preset_resolves_to_build_model(self):
-        assert _opencode.resolve_build_model("claude") == settings.claude_preset_build_model
+        assert _opencode.resolve_build_model("claude") == normalize_model_id(settings.claude_preset_build_model)
         assert _opencode.resolve_build_model("gemini") == settings.gemini_preset_build_model
         assert _opencode.resolve_build_model("openai") == settings.openai_preset_build_model
 
@@ -232,10 +232,10 @@ class TestBuildConfigDataPresets:
         monkeypatch.setattr(settings, "opencode_experimental_plan_mode", True)
         data = _opencode.build_config_data(model="claude")
         config = json.loads(data["opencode.json"])
-        assert config["model"] == settings.claude_preset_build_model
+        assert config["model"] == normalize_model_id(settings.claude_preset_build_model)
         # V2 native shape: the V1 small_model becomes agents.title.model.
-        assert config["agents"]["title"]["model"] == settings.claude_preset_small_model
-        assert config["agents"]["plan"]["model"] == settings.claude_preset_plan_model
+        assert config["agents"]["title"]["model"] == normalize_model_id(settings.claude_preset_small_model)
+        assert config["agents"]["plan"]["model"] == normalize_model_id(settings.claude_preset_plan_model)
 
     def test_gemini_preset_resolves_all_three_roles(self, monkeypatch):
         monkeypatch.setattr(settings, "opencode_experimental_plan_mode", True)
@@ -251,7 +251,7 @@ class TestBuildConfigDataPresets:
         config = json.loads(data["opencode.json"])
         assert "plan" not in config["agents"]
         # model/title are still resolved from the preset regardless.
-        assert config["model"] == settings.claude_preset_build_model
+        assert config["model"] == normalize_model_id(settings.claude_preset_build_model)
 
     def test_claude_preset_enables_vertex_provider(self, monkeypatch):
         monkeypatch.setattr(settings, "opencode_experimental_plan_mode", True)

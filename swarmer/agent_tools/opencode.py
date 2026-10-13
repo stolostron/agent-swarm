@@ -47,9 +47,9 @@ class OpenCodeStrategy(AgentToolStrategy):
     def resolve_preset(self, preset: str) -> dict[str, str] | None:
         if preset == "claude":
             return {
-                "plan": settings.claude_preset_plan_model,
-                "build": settings.claude_preset_build_model,
-                "small": settings.claude_preset_small_model,
+                "plan": normalize_model_id(settings.claude_preset_plan_model),
+                "build": normalize_model_id(settings.claude_preset_build_model),
+                "small": normalize_model_id(settings.claude_preset_small_model),
             }
         if preset == "gemini":
             return {
