@@ -14,6 +14,15 @@ router = APIRouter()
 log = logging.getLogger(__name__)
 
 
+def _build_tui_shell(binary: str, opencode_session_id: str | None = None) -> str:
+    """Build a TUI reconnect command without selecting an unrelated latest chat."""
+    cmd_parts = [binary]
+    if opencode_session_id:
+        cmd_parts.extend(("--session", opencode_session_id))
+    cmd = " ".join(shlex.quote(part) for part in cmd_parts)
+    return f'export HOME=/sandbox PATH="/sandbox/.local/bin:$PATH" && exec {cmd}'
+
+
 @router.websocket("/ws/{ws_id}/sessions/{sid}/tui")
 async def session_tui(
     websocket: WebSocket,
@@ -64,17 +73,13 @@ async def session_tui(
     from swarmer.agent_tools.registry import get as get_tool
     tool = get_tool(session.agent_tool)
 
-    # OpenCode V2: the TUI client takes no --model flag (model selection comes
-    # from the session's opencode.json / the running session itself). A plain
-    # `opencode` in $HOME discovers the service registration written by
-    # `opencode serve --service` and attaches to that shared backend, so a
-    # dropped WebSocket reconnects to the same live session. `--continue`
-    # resumes the last session when one exists.
-    tui_cmd_parts = [tool.get_tui_binary()]
-    cmd_base = " ".join(shlex.quote(p) for p in tui_cmd_parts)
-    tui_shell = (
-        f"export HOME=/sandbox PATH=\"/sandbox/.local/bin:$PATH\" && "
-        f"{{ {cmd_base} --continue || exec {cmd_base}; }}"
+    # OpenCode V2 shares its server between Chat and TUI. Resume only the
+    # conversation most recently selected through Chat. If none is recorded,
+    # open the TUI without --continue, which avoids attaching to an unrelated
+    # most-recent conversation.
+    tui_shell = _build_tui_shell(
+        tool.get_tui_binary(),
+        session.opencode_session_id if session.agent_tool == "opencode" else None,
     )
 
     loop = asyncio.get_running_loop()

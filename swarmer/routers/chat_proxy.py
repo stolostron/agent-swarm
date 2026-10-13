@@ -491,6 +491,22 @@ def _with_auth_token(url: str, token: str) -> str:
     return f"{url}{sep}auth_token={quote(token)}"
 
 
+def _selected_opencode_session_id(path: str, method: str, response_body: bytes) -> str | None:
+    """Return the Chat conversation selected by this OpenCode API request."""
+    match = re.search(r"(?:^|/)session/([^/]+)(?:/|$)", path)
+    if match and match.group(1) != "status":
+        return match.group(1)
+
+    if method.upper() != "POST" or path.strip("/") != "session":
+        return None
+    try:
+        payload = json.loads(response_body)
+    except (TypeError, ValueError):
+        return None
+    session_id = payload.get("id") if isinstance(payload, dict) else None
+    return session_id if isinstance(session_id, str) and session_id else None
+
+
 # ── Entry point: /chat (no trailing slash) ────────────────────────────────────
 
 async def _proxy_root(
@@ -591,7 +607,9 @@ async def _chat_http_proxy(
         or path.endswith("/event")
     )
 
-    log.debug("chat proxy: %s %s → %s (sse=%s)", request.method, path, upstream_url, is_sse)
+    # Never log upstream_url: OpenCode V2 auth is carried in its query string
+    # to coexist with the OpenShell gateway's Authorization bearer header.
+    log.debug("chat proxy: %s %s (sse=%s)", request.method, path, is_sse)
 
     _tls_kwargs = _openshell_httpx_kwargs(gw_config)
 
@@ -609,7 +627,7 @@ async def _chat_http_proxy(
                     async for chunk in resp.aiter_bytes():
                         yield chunk
             except Exception as exc:
-                log.warning("SSE stream error for session %d: %s", sid, exc)
+                log.warning("SSE stream error for session %d (%s)", sid, type(exc).__name__)
             finally:
                 await client.aclose()
 
@@ -631,18 +649,31 @@ async def _chat_http_proxy(
                 timeout=httpx.Timeout(connect=5.0, read=25.0, write=10.0, pool=5.0),
             )
     except Exception as exc:
-        log.warning("chat proxy: upstream error %s for session %d url=%s: %s",
-                    type(exc).__name__, sid, upstream_url, exc, exc_info=True)
+        log.warning("chat proxy: upstream error %s for session %d",
+                    type(exc).__name__, sid)
         return Response(
-            f"Could not connect to session ({virtual_host}): {type(exc).__name__}: {exc}",
+            f"Could not connect to session ({virtual_host}): {type(exc).__name__}",
             status_code=503, media_type="text/plain",
         )
 
-    log.debug("chat proxy: %s %s → %d", request.method, upstream_url, upstream_resp.status_code)
+    selected_session_id = (
+        _selected_opencode_session_id(path, request.method, upstream_resp.content)
+        if upstream_resp.status_code < 400
+        else None
+    )
+    if selected_session_id and session.opencode_session_id != selected_session_id:
+        session.opencode_session_id = selected_session_id
+        try:
+            await db.commit()
+        except Exception as exc:
+            await db.rollback()
+            log.warning("chat proxy: could not persist selected OpenCode session for session %d (%s)",
+                        sid, type(exc).__name__)
+
+    log.debug("chat proxy: %s %s → %d", request.method, path, upstream_resp.status_code)
     if upstream_resp.status_code >= 400:
-        log.warning("chat proxy: upstream %d for session %d: %s %s — body: %.200s",
-                    upstream_resp.status_code, sid, request.method, upstream_url,
-                    upstream_resp.text)
+        log.warning("chat proxy: upstream %d for session %d: %s %s",
+                    upstream_resp.status_code, sid, request.method, path)
 
     content_type = upstream_resp.headers.get("content-type", "")
     content = upstream_resp.content
@@ -806,7 +837,7 @@ async def chat_ws_proxy(
                     await task
 
     except Exception as exc:
-        log.warning("Chat WS proxy error for session %d: %s", sid, exc)
+        log.warning("Chat WS proxy error for session %d (%s)", sid, type(exc).__name__)
     finally:
         with contextlib.suppress(Exception):
             await websocket.close()

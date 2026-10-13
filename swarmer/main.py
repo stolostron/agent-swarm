@@ -313,13 +313,14 @@ async def _restart_server_sessions() -> None:
                     )
                 except Exception:
                     log.warning(
-                        "restart: could not re-expose service for session %d sandbox %s — marking stopped",
+                        "restart: could not re-expose service for session %d sandbox %s; "
+                        "leaving the live session intact for a later reconnect attempt",
                         s.id, sandbox_name, exc_info=True,
                     )
-                    s.phase = "stopped"
-                    s.sandbox_name = None
-                    s.service_url = None
-                    s.run_completed_at = datetime.now(timezone.utc)
+                    # The sandbox is known to be live. Exposure can fail
+                    # transiently (for example during a gateway restart), so
+                    # keep its identity and active phase; a later startup
+                    # reconciliation can retry without orphaning the session.
                     continue
 
             await _restart_github_app_iat_refresh(s, db)

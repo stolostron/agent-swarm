@@ -1822,6 +1822,7 @@ async def _do_launch_openshell(
 
     # Mark pending and commit — HTTP handler returns immediately; browser unblocks.
     session.phase = "pending"
+    session.opencode_session_id = None
     session.last_output = ""
     session.raw_output = ""
     session.status_detail = ""   # clear stale status from any previous run
@@ -2840,6 +2841,7 @@ async def session_stop(
             flash(request, f"Sandbox deletion failed: {exc}", "warning")
         session.sandbox_name = None
         session.service_url = None
+        session.opencode_session_id = None
 
     # Clean up GitHub credentials providers AFTER sandbox deletion — the Gateway
     # rejects DeleteProvider with FAILED_PRECONDITION if the sandbox is still attached.

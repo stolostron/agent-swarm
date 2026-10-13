@@ -55,6 +55,11 @@ def _redact_secret(value: str) -> str:
     return f"(set, len={len(value)})"
 
 
+def _config_model_matches(tool, model: str, config: dict) -> bool:
+    """Compare the generated model with the same resolved value used at launch."""
+    return config.get("model", "") == tool.resolve_build_model(model)
+
+
 async def run_smoke_test(model: str) -> bool:
     from swarmer.crypto import init_crypto
     from swarmer.openshell_client import (
@@ -182,7 +187,7 @@ async def run_smoke_test(model: str) -> bool:
         r = xec(clean_cmd) if clean_cmd else None
         config_data = tool.build_config_data(model=model)
         cfg_preview = json.loads(config_data.get("opencode.json", "{}"))
-        has_model = cfg_preview.get("model", "") == model
+        has_model = _config_model_matches(tool, model, cfg_preview)
         ok = step("model set in opencode.json (V2)", has_model,
                   cfg_preview.get("model", "(missing)")
                   if has_model

@@ -107,6 +107,7 @@ async def migrate_db() -> None:
         "ALTER TABLE sessions DROP COLUMN resume",
         "ALTER TABLE sessions ADD COLUMN sandbox_name VARCHAR(255)",
         "ALTER TABLE sessions ADD COLUMN service_url VARCHAR(512)",
+        "ALTER TABLE sessions ADD COLUMN opencode_session_id VARCHAR(128)",
         "ALTER TABLE sessions ADD COLUMN policy_chunks TEXT NOT NULL DEFAULT ''",
         "ALTER TABLE sessions ADD COLUMN custom_policies TEXT NOT NULL DEFAULT ''",
         # ACM-35375: drop columns removed from Session model in ACM-34863 (K8s cleanup)

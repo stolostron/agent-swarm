@@ -142,6 +142,26 @@ class TestMigrateDbDropsLegacyColumns:
             await session.commit()
 
     @pytest.mark.asyncio
+    async def test_opencode_session_id_added_to_existing_schema(self):
+        """Existing databases gain the stored Chat conversation selector."""
+        async with _engine.begin() as conn:
+            await conn.execute(text("ALTER TABLE sessions DROP COLUMN opencode_session_id"))
+
+        import swarmer.database as db_module
+
+        orig_engine = db_module._engine
+        db_module._engine = _engine
+        try:
+            await db_module.migrate_db()
+        finally:
+            db_module._engine = orig_engine
+
+        async with _engine.begin() as conn:
+            result = await conn.execute(text("PRAGMA table_info(sessions)"))
+            cols = [row[1] for row in result.fetchall()]
+        assert "opencode_session_id" in cols
+
+    @pytest.mark.asyncio
     async def test_migrate_db_idempotent_on_fresh_schema(self):
         """migrate_db() must not raise when run against a fresh schema
         (columns already absent — 'no such column' suppressed)."""
