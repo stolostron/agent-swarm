@@ -32,7 +32,7 @@ def test_makefile_agent_sandbox_version_default():
 
     os_match = re.search(r"^OPENSHELL_VERSION\s*\?=\s*([0-9]+\.[0-9]+\.[0-9]+)", content, re.MULTILINE)
     assert os_match, "OPENSHELL_VERSION not found in Makefile"
-    assert os_match.group(1) == "0.1.3"
+    assert os_match.group(1) == "0.0.116"
 
 
 def test_makefile_manifest_fallback_present():
