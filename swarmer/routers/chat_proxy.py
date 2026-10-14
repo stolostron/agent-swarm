@@ -502,11 +502,12 @@ def _with_auth_token(url: str, token: str) -> str:
 
 def _selected_opencode_session_id(path: str, method: str, response_body: bytes) -> str | None:
     """Return the Chat conversation selected by this OpenCode API request."""
-    match = re.search(r"(?:^|/)session/([^/]+)(?:/|$)", path)
-    if match and match.group(1) != "status":
+    normalized_path = path.strip("/")
+    match = re.fullmatch(r"session/([^/]+)", normalized_path)
+    if method.upper() == "GET" and match and match.group(1) != "status":
         return match.group(1)
 
-    if method.upper() != "POST" or path.strip("/") != "session":
+    if method.upper() != "POST" or normalized_path != "session":
         return None
     try:
         payload = json.loads(response_body)
@@ -514,6 +515,16 @@ def _selected_opencode_session_id(path: str, method: str, response_body: bytes) 
         return None
     session_id = payload.get("id") if isinstance(payload, dict) else None
     return session_id if isinstance(session_id, str) and session_id else None
+
+
+def _deleted_opencode_session_id(path: str, method: str) -> str | None:
+    """Return the conversation deleted by this OpenCode API request, if any."""
+    if method.upper() != "DELETE":
+        return None
+    match = re.fullmatch(r"session/([^/]+)", path.strip("/"))
+    if not match or match.group(1) == "status":
+        return None
+    return match.group(1)
 
 
 # ── Entry point: /chat (no trailing slash) ────────────────────────────────────
@@ -659,19 +670,26 @@ async def _chat_http_proxy(
             status_code=503, media_type="text/plain",
         )
 
-    selected_session_id = (
-        _selected_opencode_session_id(path, request.method, upstream_resp.content)
-        if upstream_resp.status_code < 400
-        else None
-    )
-    if selected_session_id and session.opencode_session_id != selected_session_id:
-        session.opencode_session_id = selected_session_id
-        try:
-            await db.commit()
-        except Exception as exc:
-            await db.rollback()
-            log.warning("chat proxy: could not persist selected OpenCode session for session %d (%s)",
-                        sid, type(exc).__name__)
+    if upstream_resp.status_code < 400:
+        selected_session_id = _selected_opencode_session_id(
+            path, request.method, upstream_resp.content
+        )
+        deleted_session_id = _deleted_opencode_session_id(path, request.method)
+        selection_changed = False
+        if deleted_session_id and deleted_session_id == session.opencode_session_id:
+            session.opencode_session_id = None
+            selection_changed = True
+        elif selected_session_id and session.opencode_session_id != selected_session_id:
+            session.opencode_session_id = selected_session_id
+            selection_changed = True
+
+        if selection_changed:
+            try:
+                await db.commit()
+            except Exception as exc:
+                await db.rollback()
+                log.warning("chat proxy: could not persist selected OpenCode session for session %d (%s)",
+                            sid, type(exc).__name__)
 
     log.debug("chat proxy: %s %s → %d", request.method, path, upstream_resp.status_code)
     if upstream_resp.status_code >= 400:

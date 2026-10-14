@@ -546,6 +546,100 @@ class TestChatHttpProxy:
             assert session_obj.opencode_session_id == "ses_selected_chat"
 
     @pytest.mark.asyncio
+    async def test_proxy_clears_selected_opencode_session_id_after_delete(self, client):
+        """Deleting the selected conversation prevents TUI from reconnecting to it."""
+        ws = await _create_workspace(client)
+        s = await _create_session(client, ws["id"], mode="server", agent_tool="opencode")
+
+        async with _TestSession() as db:
+            from swarmer.models.session import Session as _Session
+            session_obj = await db.get(_Session, s["id"])
+            session_obj.phase = "running"
+            session_obj.sandbox_name = "sandbox-test-abc"
+            session_obj.service_url = "http://agent.openshell.internal:4096"
+            session_obj.opencode_session_id = "ses_selected_chat"
+            await db.commit()
+
+        mock_cls, mock_instance = self._make_mock_client(status=204, content=b"")
+        with patch("swarmer.routers.chat_proxy.httpx.AsyncClient", mock_cls):
+            resp = await client.delete(
+                f"/workspaces/{ws['id']}/sessions/{s['id']}/chat/session/ses_selected_chat"
+            )
+
+        assert resp.status_code == 204
+        mock_instance.request.assert_called_once()
+        assert mock_instance.request.call_args.kwargs["method"] == "DELETE"
+        async with _TestSession() as db:
+            from swarmer.models.session import Session as _Session
+            session_obj = await db.get(_Session, s["id"])
+            assert session_obj.opencode_session_id is None
+
+    @pytest.mark.asyncio
+    async def test_proxy_does_not_select_session_for_nested_request(self, client):
+        """A message/action request must not overwrite the selected conversation."""
+        ws = await _create_workspace(client)
+        s = await _create_session(client, ws["id"], mode="server", agent_tool="opencode")
+
+        async with _TestSession() as db:
+            from swarmer.models.session import Session as _Session
+            session_obj = await db.get(_Session, s["id"])
+            session_obj.phase = "running"
+            session_obj.sandbox_name = "sandbox-test-abc"
+            session_obj.service_url = "http://agent.openshell.internal:4096"
+            session_obj.opencode_session_id = "ses_current_chat"
+            await db.commit()
+
+        mock_cls, _mock_instance = self._make_mock_client(
+            content=b'{"id":"ses_other_chat"}',
+            content_type="application/json",
+        )
+        with patch("swarmer.routers.chat_proxy.httpx.AsyncClient", mock_cls):
+            resp = await client.post(
+                f"/workspaces/{ws['id']}/sessions/{s['id']}/chat/session/ses_other_chat/message",
+                json={"parts": []},
+            )
+
+        assert resp.status_code == 200
+        async with _TestSession() as db:
+            from swarmer.models.session import Session as _Session
+            session_obj = await db.get(_Session, s["id"])
+            assert session_obj.opencode_session_id == "ses_current_chat"
+
+    @pytest.mark.asyncio
+    async def test_proxy_preserves_selected_id_for_failed_or_unrelated_delete(self, client):
+        """Only a successful deletion of the selected conversation clears it."""
+        ws = await _create_workspace(client)
+        s = await _create_session(client, ws["id"], mode="server", agent_tool="opencode")
+
+        async with _TestSession() as db:
+            from swarmer.models.session import Session as _Session
+            session_obj = await db.get(_Session, s["id"])
+            session_obj.phase = "running"
+            session_obj.sandbox_name = "sandbox-test-abc"
+            session_obj.service_url = "http://agent.openshell.internal:4096"
+            session_obj.opencode_session_id = "ses_selected_chat"
+            await db.commit()
+
+        mock_cls, _mock_instance = self._make_mock_client(status=404, content=b"not found")
+        with patch("swarmer.routers.chat_proxy.httpx.AsyncClient", mock_cls):
+            resp = await client.delete(
+                f"/workspaces/{ws['id']}/sessions/{s['id']}/chat/session/ses_selected_chat"
+            )
+        assert resp.status_code == 404
+
+        mock_cls, _mock_instance = self._make_mock_client(status=204, content=b"")
+        with patch("swarmer.routers.chat_proxy.httpx.AsyncClient", mock_cls):
+            resp = await client.delete(
+                f"/workspaces/{ws['id']}/sessions/{s['id']}/chat/session/ses_other_chat"
+            )
+        assert resp.status_code == 204
+
+        async with _TestSession() as db:
+            from swarmer.models.session import Session as _Session
+            session_obj = await db.get(_Session, s["id"])
+            assert session_obj.opencode_session_id == "ses_selected_chat"
+
+    @pytest.mark.asyncio
     async def test_proxy_logs_and_errors_do_not_include_auth_token(self, client, caplog):
         """OpenCode's query auth remains private in debug/error paths."""
         ws = await _create_workspace(client)
