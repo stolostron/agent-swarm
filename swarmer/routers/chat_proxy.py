@@ -230,6 +230,11 @@ def _proxy_compat_script(prefix: str) -> str:
         'try{'
         f'var __swProxy="{prefix}";'
         'localStorage.setItem("opencode.settings.dat:defaultServerUrl",location.origin+__swProxy);'
+        # OpenCode V2 registers a service worker at /sw.js, which would escape
+        # the proxy prefix and cache Swarmer-origin responses. Neutralize
+        # registration with a never-settling promise (registration is
+        # fire-and-forget in the V2 bundle).
+        'if(navigator.serviceWorker){navigator.serviceWorker.register=function(){return new Promise(function(){})}}'
         'var __origPush=history.pushState.bind(history);'
         'var __origReplace=history.replaceState.bind(history);'
         'function __swPrefixUrl(u){'
@@ -339,20 +344,32 @@ def _rewrite_js(content: bytes, prefix: str) -> bytes:
     except Exception:
         return content
 
-    # Vite's __vitePreload base path function.  Vite uses a single-char variable
-    # name that may vary across builds (t, e, n, r, ...).  Use a regex so the
-    # rewrite is robust across minification variants.
+    # Vite/Rolldown preload base-path function. V1 builds use double quotes
+    # (function(t){return"/"+t}); the V2 bundle uses a backtick template
+    # literal (function(e){return`/`+e}). Match both so dynamic imports and
+    # lazy chunks resolve through the proxy prefix.
     text = re.sub(
-        r'function\((\w)\)\{return"/"\+\1\}',
+        r'function\((\w)\)\{return["\'`]/["\'`]\+\1\}',
         lambda m: f'function({m.group(1)}){{return"{prefix}/"+{m.group(1)}}}',
         text,
     )
 
-    # OpenCode's SolidJS router reads window.location.pathname directly and
-    # does not configure a router base. Strip the Swarmer proxy prefix so its
-    # routes (/, /new-session, and /:dir/session/:id) still match.
-    clean_prefix = prefix.rstrip("/")
-    route_prefix = json.dumps(clean_prefix)
+    # OpenCode V2's router reads window.location.pathname+window.location.search
+    # directly and does not configure a router base. Strip the Swarmer proxy
+    # prefix so its routes (/, /new-session, /:dir/session/:id) still match.
+    route_prefix = json.dumps(prefix)
+    route_iife = (
+        "(function(){var p=window.location.pathname,s=" + route_prefix + ";"
+        "var r=p.indexOf(s)===0?p.slice(s.length):p;"
+        'return r||"/"})()'
+    )
+    text = text.replace(
+        "window.location.pathname+window.location.search",
+        route_iife + "+window.location.search",
+    )
+
+    # OpenCode V1 (SolidJS router) base-path form — kept for compatibility with
+    # images still shipping the V1 web UI during a rolling upgrade.
     route_pattern = re.compile(
         r'''const r=window\.location\.pathname\.replace\([^)]*\)\+window\.location\.search'''
     )
@@ -366,20 +383,28 @@ def _rewrite_js(content: bytes, prefix: str) -> bytes:
     )
     text = route_pattern.sub(route_replacement, text, count=1)
 
-    # Rewrite every quoted absolute asset reference. OpenCode's bundle has
-    # multiple worker, sprite, image, and media assets; limiting this to one
-    # worker filename leaves other runtime dependencies at the Swarmer root.
+    # Rewrite every quoted absolute asset reference. OpenCode V2 serves its
+    # bundle from /_assets/ (plus /icons/); V1 used /assets/. All quote styles
+    # (", ', `) are matched so worker, sprite, image, and media assets stay
+    # behind the Swarmer proxy prefix.
     clean_prefix = prefix.rstrip("/")
     text = re.sub(
-        r"(?P<quote>[\"'`])/(?P<asset>assets/)",
+        r"(?P<quote>[\"'`])/(?P<asset>(?:_?assets|icons)/)",
         lambda match: f"{match.group('quote')}{clean_prefix}/{match.group('asset')}",
         text,
     )
 
-    # OpenCode's server URL fallback returns location.origin when not on
-    # opencode.ai.  This adds the Swarmer root as the "canonical local server",
-    # conflicting with the defaultServerUrl we set in localStorage.  Rewrite it
-    # to include the proxy prefix so there is exactly one server in the list.
+    # OpenCode V2 resolves its API base through a currentServerUrl() helper
+    # that returns location.origin. Rewrite it to include the proxy prefix so
+    # there is exactly one server in the UI's list, pointed at the proxy.
+    text = re.sub(
+        r"function\s*\w*\s*\(\)\{return location\.origin\}",
+        lambda m: f'function(){{return location.origin+"{prefix}"}}',
+        text,
+        count=1,
+    )
+
+    # OpenCode V1's server URL fallback — kept for rolling-upgrade compat.
     text = text.replace(
         'location.hostname.includes("opencode.ai")?"http://localhost:4096":location.origin',
         f'location.hostname.includes("opencode.ai")?"http://localhost:4096":location.origin+"{prefix}"',
@@ -428,11 +453,78 @@ def _session_ok(ws_obj, session, ws_id: int) -> tuple[str, int] | None:
     """Return (error_message, status_code) if the session can't be proxied, else None."""
     if ws_obj is None or session is None or session.workspace_id != ws_id:
         return ("Not found", 404)
-    if session.mode != "server" or not session.is_active:
-        return ("Session is not running in server mode", 503)
+    # OpenCode V2 unification: server and TUI interactive sessions run the
+    # same persistent service, so both are proxied. service_url is only
+    # stored for sessions that exposed a service, so shell TUI sessions and
+    # stopped sessions are still rejected here.
+    if session.mode not in ("server", "tui") or not session.is_active:
+        return ("Session is not running", 503)
     if not session.service_url:
         return ("Session has no service URL yet", 503)
     return None
+
+
+async def _workspace_accessible(db: AsyncSession, ws_obj: Workspace, auth_session) -> bool:
+    """Check the authenticated Console identity against the workspace ACL."""
+    from swarmer.workspace_acl import user_can_access_workspace
+
+    username = auth_session.get("username", "")
+    groups = auth_session.get("groups", [])
+    return await user_can_access_workspace(db, ws_obj, username, groups)
+
+
+def _opencode_auth_token(session_id: int) -> str:
+    """Basic-auth token for the session's OpenCode V2 sandbox server.
+
+    OpenCode V2 requires server auth. `serve --service` takes its password
+    from the sandbox's ~/.config/opencode/service.json, which Swarmer
+    pre-writes with a deterministic per-session value
+    (swarmer.crypto.opencode_service_password). The V2 server accepts the
+    token via the `auth_token` query parameter — checked before the
+    Authorization header — so it composes with the OpenShell gateway's own
+    Bearer header that the proxy must preserve for gateway routing.
+    """
+    import base64
+
+    from swarmer.crypto import opencode_service_password
+
+    password = opencode_service_password(session_id)
+    return base64.b64encode(f"opencode:{password}".encode()).decode()
+
+
+def _with_auth_token(url: str, token: str) -> str:
+    """Append the OpenCode V2 auth_token query parameter to an upstream URL."""
+    from urllib.parse import quote
+
+    sep = "&" if "?" in url else "?"
+    return f"{url}{sep}auth_token={quote(token)}"
+
+
+def _selected_opencode_session_id(path: str, method: str, response_body: bytes) -> str | None:
+    """Return the Chat conversation selected by this OpenCode API request."""
+    normalized_path = path.strip("/")
+    match = re.fullmatch(r"session/([^/]+)", normalized_path)
+    if method.upper() == "GET" and match and match.group(1) != "status":
+        return match.group(1)
+
+    if method.upper() != "POST" or normalized_path != "session":
+        return None
+    try:
+        payload = json.loads(response_body)
+    except (TypeError, ValueError):
+        return None
+    session_id = payload.get("id") if isinstance(payload, dict) else None
+    return session_id if isinstance(session_id, str) and session_id else None
+
+
+def _deleted_opencode_session_id(path: str, method: str) -> str | None:
+    """Return the conversation deleted by this OpenCode API request, if any."""
+    if method.upper() != "DELETE":
+        return None
+    match = re.fullmatch(r"session/([^/]+)", path.strip("/"))
+    if not match or match.group(1) == "status":
+        return None
+    return match.group(1)
 
 
 # ── Entry point: /chat (no trailing slash) ────────────────────────────────────
@@ -443,14 +535,6 @@ async def _proxy_root(
     request: Request,
     db: AsyncSession = Depends(get_db),
 ) -> Response:
-    ws_obj, session = await _load(ws_id, sid, db)
-    err = _session_ok(ws_obj, session, ws_id)
-    if err:
-        msg, code = err
-        return Response(msg, status_code=code, media_type="text/plain")
-
-    assert session is not None  # _session_ok returns error if session is None
-
     # Proxy the root path directly to OpenCode's native web UI running
     # inside the sandbox.  _rewrite_html() will inject a <base> tag and
     # rewrite absolute asset paths so they load through the /chat/{path}
@@ -470,6 +554,8 @@ async def _chat_http_proxy(
     from starlette.responses import StreamingResponse
 
     ws_obj, session = await _load(ws_id, sid, db)
+    if ws_obj is not None and not await _workspace_accessible(db, ws_obj, request.session):
+        return Response("Not found", status_code=404, media_type="text/plain")
     err = _session_ok(ws_obj, session, ws_id)
     if err:
         msg, code = err
@@ -487,6 +573,10 @@ async def _chat_http_proxy(
     upstream_url = f"{upstream_base}/{path}"
     if query:
         upstream_url += f"?{query}"
+    # Authenticate to the OpenCode V2 server (its auth_token query parameter
+    # is evaluated before the Authorization header, which carries the
+    # OpenShell gateway Bearer token used for gateway routing).
+    upstream_url = _with_auth_token(upstream_url, _opencode_auth_token(sid))
 
     fwd_headers = {k: v for k, v in request.headers.items() if k.lower() not in _HOP_BY_HOP}
     # Set the virtual host so the OpenShell gateway routes to the right sandbox.
@@ -531,7 +621,9 @@ async def _chat_http_proxy(
         or path.endswith("/event")
     )
 
-    log.debug("chat proxy: %s %s → %s (sse=%s)", request.method, path, upstream_url, is_sse)
+    # Never log upstream_url: OpenCode V2 auth is carried in its query string
+    # to coexist with the OpenShell gateway's Authorization bearer header.
+    log.debug("chat proxy: %s %s (sse=%s)", request.method, path, is_sse)
 
     _tls_kwargs = _openshell_httpx_kwargs(gw_config)
 
@@ -549,7 +641,7 @@ async def _chat_http_proxy(
                     async for chunk in resp.aiter_bytes():
                         yield chunk
             except Exception as exc:
-                log.warning("SSE stream error for session %d: %s", sid, exc)
+                log.warning("SSE stream error for session %d (%s)", sid, type(exc).__name__)
             finally:
                 await client.aclose()
 
@@ -571,18 +663,38 @@ async def _chat_http_proxy(
                 timeout=httpx.Timeout(connect=5.0, read=25.0, write=10.0, pool=5.0),
             )
     except Exception as exc:
-        log.warning("chat proxy: upstream error %s for session %d url=%s: %s",
-                    type(exc).__name__, sid, upstream_url, exc, exc_info=True)
+        log.warning("chat proxy: upstream error %s for session %d",
+                    type(exc).__name__, sid)
         return Response(
-            f"Could not connect to session ({virtual_host}): {type(exc).__name__}: {exc}",
+            f"Could not connect to session ({virtual_host}): {type(exc).__name__}",
             status_code=503, media_type="text/plain",
         )
 
-    log.debug("chat proxy: %s %s → %d", request.method, upstream_url, upstream_resp.status_code)
+    if upstream_resp.status_code < 400:
+        selected_session_id = _selected_opencode_session_id(
+            path, request.method, upstream_resp.content
+        )
+        deleted_session_id = _deleted_opencode_session_id(path, request.method)
+        selection_changed = False
+        if deleted_session_id and deleted_session_id == session.opencode_session_id:
+            session.opencode_session_id = None
+            selection_changed = True
+        elif selected_session_id and session.opencode_session_id != selected_session_id:
+            session.opencode_session_id = selected_session_id
+            selection_changed = True
+
+        if selection_changed:
+            try:
+                await db.commit()
+            except Exception as exc:
+                await db.rollback()
+                log.warning("chat proxy: could not persist selected OpenCode session for session %d (%s)",
+                            sid, type(exc).__name__)
+
+    log.debug("chat proxy: %s %s → %d", request.method, path, upstream_resp.status_code)
     if upstream_resp.status_code >= 400:
-        log.warning("chat proxy: upstream %d for session %d: %s %s — body: %.200s",
-                    upstream_resp.status_code, sid, request.method, upstream_url,
-                    upstream_resp.text)
+        log.warning("chat proxy: upstream %d for session %d: %s %s",
+                    upstream_resp.status_code, sid, request.method, path)
 
     content_type = upstream_resp.headers.get("content-type", "")
     content = upstream_resp.content
@@ -671,18 +783,22 @@ async def chat_ws_proxy(
 
     ws_obj: Workspace | None = None
     session: Session | None = None
+    allowed = False
     async for db in get_db():
         ws_obj = await db.get(Workspace, ws_id)
         session = await db.get(Session, sid)
+        if ws_obj is not None:
+            allowed = await _workspace_accessible(db, ws_obj, websocket.session)
         break
 
     if (
         ws_obj is None
         or session is None
         or session.workspace_id != ws_id
-        or session.mode != "server"
+        or session.mode not in ("server", "tui")
         or not session.is_active
         or not session.service_url
+        or not allowed
     ):
         await websocket.close(code=4004, reason="Session unavailable")
         return
@@ -697,6 +813,7 @@ async def chat_ws_proxy(
     upstream_url = upstream_base.replace("http://", "ws://").replace("https://", "wss://") + f"/{path}"
     if query:
         upstream_url += f"?{query}"
+    upstream_url = _with_auth_token(upstream_url, _opencode_auth_token(sid))
 
     _ws_ssl = _openshell_ssl_context(gw_config) if upstream_url.startswith("wss://") else None
     _ws_extra_headers = {"Host": virtual_host} if virtual_host else {}
@@ -745,7 +862,7 @@ async def chat_ws_proxy(
                     await task
 
     except Exception as exc:
-        log.warning("Chat WS proxy error for session %d: %s", sid, exc)
+        log.warning("Chat WS proxy error for session %d (%s)", sid, type(exc).__name__)
     finally:
         with contextlib.suppress(Exception):
             await websocket.close()

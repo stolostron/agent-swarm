@@ -95,6 +95,8 @@ class Session(Base):
     # Runtime state — managed by dashboard
     sandbox_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     service_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    # The OpenCode conversation selected in Chat, shared with reconnecting TUI clients.
+    opencode_session_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
     last_output: Mapped[str] = mapped_column(Text, nullable=False, default="")
     raw_output: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
     status_detail: Mapped[str] = mapped_column(String(255), nullable=False, default="", server_default="")

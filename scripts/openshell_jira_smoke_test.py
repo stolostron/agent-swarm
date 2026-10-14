@@ -318,18 +318,21 @@ async def run_jira_smoke_test(model: str) -> bool:
         config_json = config_data.get("opencode.json", "{}")
         await _write_agent_config(sandbox_name, "opencode", config_json)
 
-        # Read it back from the sandbox and verify the mcp key is present
+        # Read it back from the sandbox and verify the mcp.servers key is present
         r = xec("cat /sandbox/opencode.json", timeout=10)
         import json as _json
         try:
             written = _json.loads(r.stdout)
             has_mcp = "mcp" in written
-            has_jira = "atlassian-jira" in written.get("mcp", {})
+            # OpenCode V2 native shape: servers nest under "mcp.servers"
+            mcp_section = written.get("mcp", {})
+            servers = mcp_section.get("servers", mcp_section) if isinstance(mcp_section, dict) else {}
+            has_jira = "atlassian-jira" in servers
             ok = step("opencode.json has 'mcp' section", has_mcp,
                       f"keys: {list(written.keys())}" if not has_mcp else "")
             all_passed = all_passed and ok
-            ok = step("opencode.json mcp has 'atlassian-jira' entry", has_jira,
-                      str(list(written.get("mcp", {}).keys())) if not has_jira else "")
+            ok = step("opencode.json mcp.servers has 'atlassian-jira' entry", has_jira,
+                      str(list(servers.keys())) if not has_jira else "")
             all_passed = all_passed and ok
         except Exception as parse_exc:
             step("Parse opencode.json", False, str(parse_exc))

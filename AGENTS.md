@@ -166,7 +166,7 @@ Use placeholder patterns instead: `<YOUR_PROJECT>`, `example.com`, `your-registr
    - `tui` mode: sandbox runs `sleep infinity`; browser connects via xterm.js → WebSocket → OpenShell `exec_interactive()` PTY
    - Stopping always calls `openshell_client.delete_sandbox()` (and `delete_service()` for server mode)
 
-6. **OpenCode model format quirk**: Model strings use `provider/model@version` format (e.g., `google-vertex-anthropic/claude-sonnet-5@default`). The `@version` suffix is part of the model ID; Haiku uses a date suffix (e.g., `@20251001`).
+6. **OpenCode model format quirk**: Model strings use `provider/model@version` format (e.g., `google-vertex/claude-sonnet-5@default`). The `@version` suffix is part of the model ID; Haiku uses a date suffix (e.g., `@20251001`). OpenCode V2 uses the canonical `google-vertex` provider ID for all Vertex models (Claude and Gemini); the V1 `google-vertex-anthropic` prefix is normalized automatically at resolve time.
 
 7. **TUI auth tokens**: TUI WebSocket connections use one-time UUID tokens stored in the HTTP session. Tokens are generated on the session detail page and consumed on WebSocket connect. Invalid/reused tokens are rejected with close code 4001.
 

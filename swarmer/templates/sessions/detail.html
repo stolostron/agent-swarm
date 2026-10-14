@@ -2,7 +2,7 @@
 {% block title %}{{ session.name }} — {{ ws.display_name }} — Agent Swarm{% endblock %}
 
 {% block head %}
-{% if session.mode == 'tui' and session.phase == 'running' %}
+{% if session.mode in ('tui', 'server') and session.phase == 'running' %}
 <link rel="stylesheet"
       href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.css">
 {% endif %}
@@ -198,11 +198,11 @@
     {{ session.sandbox_name or '' }}
   </span>
 
-  {# Chat ↗ — only in server mode while running #}
+  {# Chat ↗ — interactive OpenCode sessions (tui + server) while running #}
   <a href="/workspaces/{{ ws.id }}/sessions/{{ session.id }}/chat"
      target="_blank" rel="noopener"
      class="pf-v6-c-button pf-m-primary pf-m-small"
-     style="{% if not (session.mode == 'server' and session.phase == 'running') %}display:none{% endif %}"
+     style="{% if not (session.mode in ('tui', 'server') and session.agent_tool == 'opencode' and session.phase == 'running') %}display:none{% endif %}"
      id="server-chat-btn">Chat ↗</a>
 
   <div style="margin-left:auto;">
@@ -253,7 +253,7 @@
         <span class="pf-v6-c-tabs__item-text">Details</span>
       </button>
     </li>
-    {% if session.mode == 'tui' %}
+    {% if session.mode in ('tui', 'server') %}
     <li class="pf-v6-c-tabs__item" id="tab-terminal">
       <button class="pf-v6-c-tabs__link" role="tab" aria-selected="false" aria-controls="panel-terminal" tabindex="-1" onclick="switchTab('terminal')">
         <span class="pf-v6-c-tabs__item-text">Terminal</span>
@@ -479,9 +479,9 @@
 </div>{# /panel-details #}
 
 {# ════════════════════════════════════════════════════════════
-   Tab panel: Terminal (TUI mode only)
+   Tab panel: Terminal (interactive sessions — tui and server modes)
    ════════════════════════════════════════════════════════════ #}
-{% if session.mode == 'tui' %}
+{% if session.mode in ('tui', 'server') %}
 <div id="panel-terminal" class="pf-v6-c-tab-content" role="tabpanel" aria-labelledby="tab-terminal" hidden style="margin-top:var(--pf-t--global--spacer--lg);">
   {% if session.phase == 'running' and tui_token %}
   <div class="pf-v6-c-card">
@@ -1006,11 +1006,12 @@ document.addEventListener('htmx:afterSwap', function () {
     sandboxDisplay.style.display = sandboxName ? '' : 'none';
   }
 
-  // Chat ↗ button: only in server mode while running
+  // Chat ↗ button: interactive OpenCode sessions (tui + server) while running
   const chatBtn = document.getElementById('server-chat-btn');
   const liveMode = statusDiv ? (statusDiv.dataset.mode || '') : '';
+  const liveTool = statusDiv ? (statusDiv.dataset.tool || '') : '';
   if (chatBtn) {
-    chatBtn.style.display = (liveMode === 'server' && isRunning) ? '' : 'none';
+    chatBtn.style.display = ((liveMode === 'server' || liveMode === 'tui') && liveTool === 'opencode' && isRunning) ? '' : 'none';
   }
 
 });
@@ -1023,10 +1024,10 @@ document.addEventListener('htmx:afterSwap', function () {
     var badge = document.querySelector('#session-status .pf-v6-c-label');
     if (badge && badge.classList.contains('pf-m-green')) {
       clearInterval(reloadPoll);
-      sessionStorage.setItem('switchToTab', _sessionMode === 'tui' ? 'terminal' : 'output');
-      // For TUI, delay reload so the in-container startup script finishes before
-      // the WebSocket exec tries to launch opencode.
-      var delay = _sessionMode === 'tui' ? 4000 : 0;
+      sessionStorage.setItem('switchToTab', 'terminal');
+      // Delay reload so the in-container service startup finishes before
+      // the WebSocket exec tries to attach the TUI to it.
+      var delay = 4000;
       setTimeout(function() { window.location.reload(); }, delay);
     }
   }, 2000);
@@ -1193,7 +1194,7 @@ document.addEventListener('htmx:afterSwap', function () {
 }());
 </script>
 
-{% if session.mode == 'tui' and session.phase == 'running' and tui_token %}
+{% if session.mode in ('tui', 'server') and session.phase == 'running' and tui_token %}
 <script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.min.js"></script>
 <script>
 function initTerminal() {

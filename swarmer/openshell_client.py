@@ -1724,8 +1724,12 @@ async def start_agent(
 async def read_opencode_response(sandbox_name: str, client=None) -> str:
     """Read the last assistant message from OpenCode's SQLite DB.
 
-    OpenCode stores conversation history in /sandbox/.opencode/opencode.db rather
-    than writing to stdout. This extracts the most recent assistant text parts.
+    OpenCode V2 stores messages in the ``session_message`` table with the full
+    payload (including the ``content`` list of text parts) in ``data``. V1
+    stored parts in ``part`` joined to ``message``; that query is kept as a
+    fallback for sandboxes still running a V1 image. Both read
+    /sandbox/.opencode/opencode.db — the same file V2 writes through the
+    ~/.local/share/opencode symlink.
     """
 
     if client is None:
@@ -1734,9 +1738,23 @@ async def read_opencode_response(sandbox_name: str, client=None) -> str:
     # Write the reader script via stdin (no newlines in command arg) then execute it.
     reader = b"""
 import sqlite3, json
-try:
-    conn = sqlite3.connect('/sandbox/.opencode/opencode.db')
-    conn.execute('PRAGMA wal_checkpoint(FULL)')
+def read_v2(conn):
+    rows = conn.execute('''
+        SELECT data FROM session_message
+        WHERE type = 'assistant'
+        ORDER BY time_created ASC, seq ASC
+    ''').fetchall()
+    texts = []
+    for (data,) in rows:
+        try:
+            msg = json.loads(data)
+        except Exception:
+            continue
+        for part in (msg.get('content') or []):
+            if isinstance(part, dict) and part.get('type') == 'text':
+                texts.append(part.get('text', ''))
+    return texts
+def read_v1(conn):
     rows = conn.execute('''
         SELECT p.data FROM part p
         JOIN message m ON p.message_id = m.id
@@ -1744,7 +1762,20 @@ try:
           AND json_extract(p.data, '$.type') = 'text'
         ORDER BY p.time_created ASC
     ''').fetchall()
-    texts = [json.loads(r[0]).get('text', '') for r in rows if r[0]]
+    return [json.loads(r[0]).get('text', '') for r in rows if r[0]]
+try:
+    conn = sqlite3.connect('/sandbox/.opencode/opencode.db')
+    conn.execute('PRAGMA wal_checkpoint(FULL)')
+    texts = []
+    try:
+        texts = read_v2(conn)
+    except Exception:
+        texts = []
+    if not texts:
+        try:
+            texts = read_v1(conn)
+        except Exception:
+            texts = []
     out = '\\n'.join(t for t in texts if t.strip())
     print(out[:64000] if out else '', end='')
     conn.close()
@@ -1979,7 +2010,9 @@ async def expose_service(
         _set_workspace(req)
         resp = client._stub.ExposeService(req, timeout=client._timeout)
         url = resp.url
-        log.info("expose_service %s/%s → %s", sandbox_name, service_name, url)
+        # The returned URL embeds the gateway hostname; it is stored on the
+        # session row but must never be written to log output.
+        log.info("expose_service %s/%s", sandbox_name, service_name)
         # The gateway returns the internal cluster port (e.g. 8080) but in local
         # dev with kubectl port-forward the gateway is accessible on a different
         # port (e.g. 17670). Rewrite to the configured gateway port so Swarmer

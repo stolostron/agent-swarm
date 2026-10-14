@@ -204,7 +204,8 @@ async def _restart_prompt_pollers() -> None:
                 # Reconstruct the same AGENTS.md-reading command used at initial launch
                 # (ACM-35060).  build_main_cmd would embed a CLI arg that is unavailable
                 # at restart time; AGENTS.md already exists in the sandbox from launch.
-                _tool_bin = {"opencode": "opencode run"}.get(s.agent_tool, "opencode run")
+                # --standalone gives the one-shot run a private V2 server.
+                _tool_bin = {"opencode": "opencode run --standalone"}.get(s.agent_tool, "opencode run --standalone")
                 _model_arg = _shlex.quote(_model) if _model else ""
                 _main_cmd = f"HOME=/sandbox {_tool_bin} --model {_model_arg} \"$(</sandbox/AGENTS.md)\""
             asyncio.create_task(
@@ -223,9 +224,9 @@ async def _restart_server_sessions() -> None:
     still active after a restart.
 
     For each server/TUI-mode session that was running/pending with a live sandbox:
-    - server mode: re-call expose_service() to get a fresh service_url (handles
-      gateway restarts). Sessions whose sandbox has disappeared are moved to
-      'stopped'.
+    - server mode and opencode TUI mode: re-call expose_service() to get a fresh
+      service_url (handles gateway restarts). Sessions whose sandbox has
+      disappeared are moved to 'stopped'.
     - server/TUI mode: if the session is using a workspace GitHub App (no PAT
       assigned), restart the background IAT refresh loop. Swarmer's own restart
       does not affect the sandbox or the OpenShell provider — the previously
@@ -294,7 +295,11 @@ async def _restart_server_sessions() -> None:
                 s.run_completed_at = datetime.now(timezone.utc)
                 continue
 
-            if s.mode == "server":
+            # OpenCode V2 unification: server and TUI interactive sessions run
+            # the same persistent shared service, so both need a fresh
+            # service_url after a Swarmer restart. Shell TUI sessions expose
+            # no service and are skipped by the service_url check.
+            if s.mode == "server" or (s.mode == "tui" and s.agent_tool == "opencode"):
                 # Sandbox is alive — re-expose the service to get a fresh URL.
                 try:
                     _tool = _get_tool(s.agent_tool)
@@ -302,20 +307,25 @@ async def _restart_server_sessions() -> None:
                     service_url = await openshell_client.expose_service(sandbox_name, "agent", port, client=oc_client)
                     s.service_url = service_url
                     s.phase = "running"
+                    # The service URL embeds the gateway hostname; keep it out
+                    # of log output (it is persisted on the session row).
                     log.info(
-                        "restart: server-mode session %d re-connected to sandbox %s at %s",
-                        s.id, sandbox_name, service_url,
+                        "restart: interactive session %d re-connected to sandbox %s",
+                        s.id, sandbox_name,
                     )
                 except Exception:
                     log.warning(
-                        "restart: could not re-expose service for session %d sandbox %s — marking stopped",
+                        "restart: could not re-expose service for session %d sandbox %s; "
+                        "leaving the live session intact for a later reconnect attempt",
                         s.id, sandbox_name, exc_info=True,
                     )
-                    s.phase = "stopped"
-                    s.sandbox_name = None
-                    s.service_url = None
-                    s.run_completed_at = datetime.now(timezone.utc)
-                    continue
+                    # The sandbox is known to be live. Exposure can fail
+                    # transiently (for example during a gateway restart), so
+                    # keep its identity and active phase; a later startup
+                    # reconciliation can retry without orphaning the session.
+                    # Fall through: the sandbox survives without a fresh
+                    # service_url, so its credential-refresh loops must still
+                    # be restored or its tokens would silently expire.
 
             await _restart_github_app_iat_refresh(s, db)
             await _restart_agent_swarm_token_refresh(s, db, client=oc_client)

@@ -236,7 +236,8 @@ def test_session_modes(guide_content):
 
 def test_agent_tool_model_formats(guide_content):
     assert "provider/model@version" in guide_content or "provider/model" in guide_content
-    assert "google-vertex-anthropic/" in guide_content
+    # OpenCode V2 canonical Vertex provider ID.
+    assert "google-vertex/" in guide_content
     assert "claude-sonnet" in guide_content.lower()
 
 

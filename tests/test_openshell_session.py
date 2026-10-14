@@ -2066,8 +2066,10 @@ class TestRunOpenshellAgent:
         mock_exec.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_tui_mode_does_not_call_start_agent(self, client):
-        """TUI mode skips start_agent — the WebSocket handler starts the agent interactively."""
+    async def test_tui_mode_starts_shared_service(self, client):
+        """OpenCode V2 unification: TUI mode starts the shared service and
+        exposes it, exactly like server mode — the TUI WebSocket client
+        attaches to this persistent backend and can reconnect to it."""
         ws = await _create_workspace(client)
         s = await _create_session(client, ws["id"], mode="tui")
 
@@ -2078,14 +2080,58 @@ class TestRunOpenshellAgent:
             )
             await db.commit()
 
+        mock_expose = AsyncMock(return_value="https://agent.sandbox.example.com")
         with patch("swarmer.database.get_db", new=_make_test_db_provider()), \
-             patch("swarmer.openshell_client.start_agent", new=AsyncMock()) as mock_start:
+             patch("swarmer.openshell_client.start_agent", new=AsyncMock()) as mock_start, \
+             patch("swarmer.openshell_client.expose_service", new=mock_expose), \
+             patch("swarmer.routers.sessions.asyncio.sleep", new=AsyncMock()):
             from swarmer.routers.sessions import _run_openshell_agent
             await _run_openshell_agent(
-                s["id"], ws["id"], "sandbox-tui", ["sh", "-c", "sleep infinity"], "tui", "opencode"
+                s["id"], ws["id"], "sandbox-tui", ["sh", "-c", "opencode serve --service"], "tui", "opencode"
+            )
+
+        mock_start.assert_called_once()
+        mock_expose.assert_called_once_with("sandbox-tui", "agent", 4096)
+
+        async with _TestSession() as db:
+            from sqlalchemy import select
+            from swarmer.models.session import Session
+            sess = (await db.execute(select(Session).where(Session.id == s["id"]))).scalar_one()
+            assert sess.phase == "running"
+            assert sess.service_url == "https://agent.sandbox.example.com"
+
+    @pytest.mark.asyncio
+    async def test_shell_tui_mode_does_not_call_start_agent(self, client):
+        """Shell-tool TUI sessions have no service to start or expose — the
+        WebSocket handler execs bash directly and the session flips to
+        running immediately."""
+        ws = await _create_workspace(client)
+        s = await _create_session(client, ws["id"], mode="tui", agent_tool="shell")
+
+        async with _TestSession() as db:
+            await db.execute(
+                text("UPDATE sessions SET sandbox_name='sandbox-shell', phase='pending' WHERE id=:id"),
+                {"id": s["id"]},
+            )
+            await db.commit()
+
+        mock_expose = AsyncMock(return_value="https://agent.sandbox.example.com")
+        with patch("swarmer.database.get_db", new=_make_test_db_provider()), \
+             patch("swarmer.openshell_client.start_agent", new=AsyncMock()) as mock_start, \
+             patch("swarmer.openshell_client.expose_service", new=mock_expose):
+            from swarmer.routers.sessions import _run_openshell_agent
+            await _run_openshell_agent(
+                s["id"], ws["id"], "sandbox-shell", ["sh", "-c", "sleep infinity"], "tui", "shell"
             )
 
         mock_start.assert_not_called()
+        mock_expose.assert_not_called()
+
+        async with _TestSession() as db:
+            from sqlalchemy import select
+            from swarmer.models.session import Session
+            sess = (await db.execute(select(Session).where(Session.id == s["id"]))).scalar_one()
+            assert sess.phase == "running"
 
     @pytest.mark.asyncio
     async def test_exception_sets_phase_failed(self, client):
@@ -2769,11 +2815,18 @@ class TestMcpPatchInjection:
         assert "mcp" in written, (
             f"opencode.json must contain 'mcp' key when mcp_patch is non-empty; got keys: {list(written.keys())}"
         )
-        assert "atlassian-jira" in written["mcp"], (
-            f"'atlassian-jira' entry missing from mcp section; got: {written['mcp']}"
+        # OpenCode V2 native shape: servers nest under "mcp.servers" and are
+        # connected by default (the V1 "enabled" flag is inverted to
+        # "disabled" in V2 and must not be emitted).
+        servers = written["mcp"]["servers"]
+        assert "atlassian-jira" in servers, (
+            f"'atlassian-jira' entry missing from mcp.servers; got: {servers}"
         )
-        assert written["mcp"]["atlassian-jira"]["command"] == ["jira-mcp-server"], (
+        assert servers["atlassian-jira"]["command"] == ["jira-mcp-server"], (
             "Jira MCP command must be ['jira-mcp-server']"
+        )
+        assert "enabled" not in servers["atlassian-jira"], (
+            "V2 configs must not carry the V1 'enabled' flag"
         )
 
 # ---------------------------------------------------------------------------

@@ -30,6 +30,20 @@ def _bin(path: str) -> dict:
     return {"path": path, "harness": True}
 
 
+# opencode ships as a native binary installed via npm. V2 (@opencode/cli)
+# installs it at .../node_modules/@opencode/cli-linux-x64/bin/opencode (copied
+# to the global bin by the Containerfile); V1 (opencode-ai) used
+# .../node_modules/opencode-linux-x64/bin/opencode. Both generations are listed
+# so OPA binary matching survives a rolling agent-image upgrade.
+_OPENCODE_BINARIES = [
+    _bin("/usr/local/share/npm-global/lib/node_modules/@opencode/cli-linux-x64/bin/opencode"),
+    _bin("/usr/local/share/npm-global/lib/node_modules/@opencode/cli/bin/opencode.exe"),
+    _bin("/usr/local/share/npm-global/lib/node_modules/opencode-linux-x64/bin/opencode"),
+    _bin("/usr/local/share/npm-global/bin/opencode"),
+    _bin("/usr/local/share/npm-global/lib/node_modules/opencode-ai/bin/opencode.exe"),
+]
+
+
 # ── Static base policy sections ───────────────────────────────────────────────
 
 # Filesystem policy applied to every sandbox regardless of agent tool.
@@ -341,11 +355,6 @@ def _build_github_api_block(org: str, name: str) -> dict:
 
 def _build_google_cloud_provider_block(agent_tool: str) -> dict:
     """Return the network policy block to add when the google-cloud provider is active."""
-    binaries = [
-        _bin("/usr/local/share/npm-global/lib/node_modules/opencode-linux-x64/bin/opencode"),
-        _bin("/usr/local/share/npm-global/bin/opencode"),
-        _bin("/usr/local/share/npm-global/lib/node_modules/opencode-ai/bin/opencode.exe"),
-    ]
     return {
         "name": "google-cloud-provider",
         "endpoints": [
@@ -354,7 +363,7 @@ def _build_google_cloud_provider_block(agent_tool: str) -> dict:
             _endpoint("aiplatform.*.rep.googleapis.com"),
             _endpoint("api.github.com"),
         ],
-        "binaries": binaries,
+        "binaries": list(_OPENCODE_BINARIES),
     }
 
 
@@ -371,8 +380,11 @@ def _endpoint(host: str) -> dict:
 
 
 def _build_agent_api_block(agent_tool: str, model: str) -> dict:
+    # OpenCode V2 canonical provider ID is "google-vertex" (the V1
+    # "google-vertex-anthropic" prefix is normalized before reaching here, but
+    # is still accepted for sessions launched by older Swarmer versions).
     _provider = model.split("/")[0] if "/" in model else ""
-    _is_vertex = _provider in ("google-vertex-anthropic", "vertexai")
+    _is_vertex = _provider in ("google-vertex", "google-vertex-anthropic", "vertexai")
     _is_openai = _provider == "openai"
 
     endpoints = [
@@ -390,16 +402,9 @@ def _build_agent_api_block(agent_tool: str, model: str) -> dict:
     block = {
         "name": "agent-api",
         "endpoints": endpoints,
-        # opencode ships as a native binary installed via npm.
-        # The npm wrapper at /usr/local/share/npm-global/bin/opencode invokes
-        # the actual native binary at .../opencode-linux-x64/bin/opencode
-        # (copied to opencode.exe by the Containerfile).  OPA sees the native
-        # binary path, so both paths must be listed with harness=True.
-        "binaries": [
-            _bin("/usr/local/share/npm-global/lib/node_modules/opencode-linux-x64/bin/opencode"),
-            _bin("/usr/local/share/npm-global/bin/opencode"),
-            _bin("/usr/local/share/npm-global/lib/node_modules/opencode-ai/bin/opencode.exe"),
-        ],
+        # opencode ships as a native binary installed via npm — see
+        # _OPENCODE_BINARIES for the V1/V2 path rationale.
+        "binaries": list(_OPENCODE_BINARIES),
     }
     return {"agent_api": block}
 

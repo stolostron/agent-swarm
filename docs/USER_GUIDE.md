@@ -709,7 +709,7 @@ One-shot execution: runs the agent with a prompt, streams output, and the pod ex
 - Auto-cleaned by the log poller background task
 - If `persist=False`, the PVC is deleted on successful completion
 - Supports cron scheduling for recurring runs (see [Cron Scheduling](#cron-scheduling))
-- Command: runs with `--continue` flag (falls back to without if session state does not exist)
+- OpenCode prompt runs use `--standalone` for a one-shot run without leaving a background service
 
 ##### Server Mode
 
@@ -721,10 +721,12 @@ Persistent execution: the agent runs in server mode with an HTTP API.
 
 ##### TUI Mode
 
-Persistent terminal: the pod runs `sleep infinity` and the user connects via a full browser terminal.
+Persistent terminal: the sandbox runs the OpenCode V2 shared service (the same backend as Chat mode) and the user attaches an interactive TUI session through a full browser terminal.
 
 - `restartPolicy: Always` — pod runs indefinitely
 - xterm.js browser terminal connected via WebSocket PTY proxy (`kubectl exec` under the hood)
+- The TUI client attaches to the session's persistent OpenCode server, so a dropped browser connection can reconnect to that service. It resumes the saved Chat conversation only when Chat was selected and its conversation ID was persisted; otherwise TUI starts without `--session`.
+- Shell-tool TUI sessions instead keep the sandbox alive with `sleep infinity` and exec an interactive bash on connect
 - OSC 52 clipboard support — clipboard copy operations in the pod reach the user's browser clipboard
 - One-time UUID auth tokens prevent unauthorized WebSocket connections
 
@@ -765,26 +767,31 @@ Go-based AI coding agent ([opencode.ai](https://opencode.ai)).
 
 | Provider | Credential Required | Model Format |
 |---|---|---|
-| Google Vertex AI (Anthropic Claude) | ADC JSON + GCP Project | `google-vertex-anthropic/claude-sonnet-5@default` |
+| Google Vertex AI (Anthropic Claude) | ADC JSON + GCP Project | `google-vertex/claude-sonnet-5@default` |
 | Google Gemini (AI Studio) | Google API Key | `google/gemini-3.7-flash` |
 
-**Model format:** `provider/model@version` (e.g., `google-vertex-anthropic/claude-sonnet-5@default`)
+**Model format:** `provider/model@version` (e.g., `google-vertex/claude-sonnet-5@default`)
 
 **Modes:**
 
-- **Prompt** — one-shot: `opencode run --model <model> --continue <prompt>` (falls back without `--continue`)
-- **Server** — HTTP API: `opencode serve --hostname 0.0.0.0 --port 4096`
-- **TUI** — interactive terminal: `opencode` (launched via `sleep infinity` pod, user attaches)
+- **Prompt** — one-shot: `opencode run --standalone --model <model> <prompt>`
+- **Server** — HTTP API: `opencode serve --service --hostname 0.0.0.0 --port 4096`
+- **TUI** — interactive terminal: `opencode` (attaches to the session's persistent OpenCode V2 shared service — same backend as Chat mode)
 
-Config written to `/workspace/.config/opencode/opencode.json` at pod startup.
+Swarmer prepares the shared service password in the sandbox's
+`~/.config/opencode/service.json` before startup. The server and TUI use this
+same per-session password; the Chat proxy supplies OpenCode authentication
+automatically while preserving the OpenShell gateway authentication. No
+separate user-managed OpenCode password is required.
+
+At startup, the generated config is written to `/sandbox/opencode.json` and supplied to OpenCode via `OPENCODE_CONFIG`.
 
 #### Model Selection
 
 - The primary UX is two family-level **presets** — **Claude** and **Gemini** — selected via
   radio pills at the top of the Model field. Each preset maps to three roles configured in
   `Settings` (`swarmer/config.py`), so they can be changed without code changes:
-  - **plan** — stronger-reasoning model used by the opencode plan agent (requires
-    `OPENCODE_EXPERIMENTAL_PLAN_MODE=true`, enabled by default)
+  - **plan** — stronger-reasoning model assigned to the generated V2 `plan` agent configuration
   - **build** — the model used for `opencode run` / the coding agent (this is what session.model
     resolves to for policy/network purposes)
   - **small** — title generation / housekeeping model

@@ -103,12 +103,16 @@ refresh loops -> start `scheduler.py` and `pr_watcher.py` background tasks.
 5. `openshell_client.create_sandbox()` creates the sandbox and applies policy/providers.
 6. Clone `SessionRepo` entries and write tool config plus `/sandbox/AGENTS.md`.
 7. Run the selected mode:
-   - **prompt:** start a detached one-shot agent, stream output, record `SessionRun`, and
-     delete the sandbox after successful completion.
-   - **server:** start OpenCode server on port 4096, call `expose_service()`, store the
-     virtual URL, and serve it through `chat_proxy.py`.
-   - **tui:** keep the sandbox alive with `sleep infinity`; `tui_ws.py` launches the
-     agent through `exec_interactive()` when the browser connects.
+   - **prompt:** start a detached one-shot agent (`opencode run --standalone`), stream
+     output, record `SessionRun`, and delete the sandbox after successful completion.
+   - **server** and **tui (OpenCode):** start the persistent OpenCode V2 shared service
+     (`opencode serve --service` on port 4096), call `expose_service()`, and store the
+     virtual URL. The Chat tab serves it through `chat_proxy.py` (which authenticates
+     with a deterministic per-session `auth_token`), and the Terminal tab's TUI client
+     discovers the service registration and attaches to the same live session — so a
+     dropped connection reconnects without losing work.
+   - **tui (shell):** keep the sandbox alive; `tui_ws.py` launches an interactive shell
+     through `exec_interactive()` when the browser connects.
 
 ### Authentication and authorization
 
