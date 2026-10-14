@@ -31,7 +31,7 @@ requiring the browser to reach the internal OpenShell virtual hostname.
 
 ## Acceptance checks
 
-- Chat is unavailable for prompt/TUI/non-running sessions.
+- Chat is unavailable for prompt-mode and non-running sessions.
 - The internal virtual hostname is never presented as a required DNS target.
 - WebSocket chat connections survive proxy path rewriting.
 - Proxy responses do not leak gateway credentials or internal configuration.

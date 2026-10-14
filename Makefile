@@ -801,8 +801,13 @@ _kind-deploy-resolved:
 	    -f Containerfile -t "$(LOCAL_IMAGE_REF)" .; \
 	  echo "Loading $(LOCAL_IMAGE_REF) into kind cluster '$(KIND_CLUSTER)'..."; \
 	  if [ "$(CONTAINER_CMD)" = "podman" ]; then \
-	    podman tag $(LOCAL_IMAGE_REF) docker.io/library/$(LOCAL_IMAGE_REF); \
-	    podman save docker.io/library/$(LOCAL_IMAGE_REF) | kind load image-archive /dev/stdin --name $(KIND_CLUSTER); \
+	    KIND_LOAD_REF=$$(case "$(IMAGE)" in \
+	      *.*/*|*:*/*|localhost/*) echo "$(LOCAL_IMAGE_REF)" ;; \
+	      */*) echo "docker.io/$(LOCAL_IMAGE_REF)" ;; \
+	      *) echo "docker.io/library/$(LOCAL_IMAGE_REF)" ;; \
+	    esac); \
+	    podman tag "$(LOCAL_IMAGE_REF)" "$$KIND_LOAD_REF"; \
+	    podman save "$$KIND_LOAD_REF" | kind load image-archive /dev/stdin --name $(KIND_CLUSTER); \
 	  else \
 	    kind load docker-image $(LOCAL_IMAGE_REF) --name $(KIND_CLUSTER); \
 	  fi; \
