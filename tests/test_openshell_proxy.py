@@ -127,6 +127,16 @@ _requires_sdk = pytest.mark.skipif(
 )
 
 
+def _proto_resource(message, *field_names):
+    """Read resource identifiers across OpenShell protobuf field generations."""
+    for field_name in field_names:
+        try:
+            return getattr(message, field_name)
+        except AttributeError:
+            continue
+    raise AssertionError(f"None of the protobuf fields exist: {field_names!r}")
+
+
 # ---------------------------------------------------------------------------
 # Shared DB + app fixtures
 # ---------------------------------------------------------------------------
@@ -258,8 +268,8 @@ class TestExposeService:
         sdk_client._stub.ExposeService.assert_called_once()
         args = sdk_client._stub.ExposeService.call_args
         req = args[0][0]  # first positional arg
-        assert req.sandbox == "sandbox-test-abc"
-        assert req.name == "agent"
+        assert _proto_resource(req, "sandbox", "sandbox_id", "name") == "sandbox-test-abc"
+        assert _proto_resource(req, "name", "service") == "agent"
         assert req.target_port == 4096
         assert req.domain is True
 
@@ -276,8 +286,8 @@ class TestExposeService:
         sdk_client._stub.DeleteService.assert_called_once()
         args = sdk_client._stub.DeleteService.call_args
         req = args[0][0]
-        assert req.sandbox == "sandbox-test-abc"
-        assert req.name == "agent"
+        assert _proto_resource(req, "sandbox", "sandbox_id", "name") == "sandbox-test-abc"
+        assert _proto_resource(req, "name", "service") == "agent"
 
 
 @_requires_sdk
@@ -321,7 +331,7 @@ class TestExecInteractive:
 
         assert len(received_msgs) == 1
         start_msg = received_msgs[0]
-        assert start_msg.start.sandbox == "sandbox-test"
+        assert _proto_resource(start_msg.start, "sandbox", "sandbox_id", "name") == "sandbox-test"
         assert start_msg.start.tty is True
         assert start_msg.start.cols == 120
         assert start_msg.start.rows == 40
@@ -1903,7 +1913,7 @@ class TestTuiWsOpenshell:
         assert "--continue" not in fallback
 
     def test_exec_interactive_stdin_queued(self):
-        """The first message in the stream identifies the sandbox by name."""
+        """The first message in the stream identifies the sandbox across SDK versions."""
         from openshell._proto import openshell_pb2 as pb
 
         received = []
@@ -1930,7 +1940,7 @@ class TestTuiWsOpenshell:
         input_q.put(None)  # unblock generator if it ever resumes
 
         assert len(received) == 1
-        assert received[0].start.sandbox == "sandbox-x"
+        assert _proto_resource(received[0].start, "sandbox", "sandbox_id", "name") == "sandbox-x"
 
     def test_exec_interactive_resize_queued(self):
         """The first message in the stream carries the sandbox name and tty flags."""
@@ -1957,7 +1967,7 @@ class TestTuiWsOpenshell:
         )
         input_q.put(None)  # unblock generator if it ever resumes
 
-        assert received[0].start.sandbox == "sandbox-x"
+        assert _proto_resource(received[0].start, "sandbox", "sandbox_id", "name") == "sandbox-x"
 
 
 # ===========================================================================
