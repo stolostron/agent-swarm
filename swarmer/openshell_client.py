@@ -2010,7 +2010,9 @@ async def expose_service(
         _set_workspace(req)
         resp = client._stub.ExposeService(req, timeout=client._timeout)
         url = resp.url
-        log.info("expose_service %s/%s → %s", sandbox_name, service_name, url)
+        # The returned URL embeds the gateway hostname; it is stored on the
+        # session row but must never be written to log output.
+        log.info("expose_service %s/%s", sandbox_name, service_name)
         # The gateway returns the internal cluster port (e.g. 8080) but in local
         # dev with kubectl port-forward the gateway is accessible on a different
         # port (e.g. 17670). Rewrite to the configured gateway port so Swarmer

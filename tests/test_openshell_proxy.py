@@ -13,6 +13,7 @@ Covers:
 import asyncio
 import base64
 import json
+import logging
 import os
 import sys
 from unittest.mock import AsyncMock, MagicMock, patch, call
@@ -748,6 +749,58 @@ class TestServerModeExposeService:
         expose_mock.assert_called_once_with("sandbox-test-abc", "agent", 4096)
 
     @pytest.mark.asyncio
+    async def test_tui_mode_exposure_does_not_log_service_url(self, client, caplog):
+        """Regression (No-Sensitive-Data-In-Logs): initial OpenCode TUI
+        exposure must not write the service URL or gateway hostname to logs.
+
+        The real expose_service() wrapper runs against a fake stub client so
+        its own logging is exercised rather than bypassed by an AsyncMock.
+        """
+        from swarmer.routers.sessions import _run_openshell_agent
+
+        # A distinctive hostname that must never reach log output. The URL
+        # carries no explicit port so the gateway port-rewrite path is a no-op
+        # and the returned URL is stored verbatim.
+        service_url = "https://secret-gateway-host.sandbox.example.com"
+        stub_client = MagicMock()
+        expose_resp = MagicMock()
+        expose_resp.url = service_url
+        stub_client._stub.ExposeService.return_value = expose_resp
+        stub_client._timeout = 30
+
+        ws = await _create_workspace(client)
+        s = await _create_session(client, ws["id"], mode="tui")
+        async with _TestSession() as db:
+            from swarmer.models.session import Session as _Session
+            session_obj = await db.get(_Session, s["id"])
+            session_obj.sandbox_name = "sandbox-test-abc"
+            await db.commit()
+
+        with patch.dict(sys.modules, {"openshell": _sdk_stub, "openshell._proto": _proto_stub}), \
+             patch("swarmer.openshell_client.start_agent", AsyncMock()), \
+             patch("swarmer.openshell_client.get_client_for_workspace", AsyncMock(return_value=None)), \
+             patch("swarmer.openshell_client._get_client", return_value=stub_client), \
+             patch("swarmer.database.get_db", _test_get_db), \
+             patch("swarmer.routers.sessions.asyncio.sleep", AsyncMock()):
+            with caplog.at_level(logging.INFO):
+                await _run_openshell_agent(
+                    session_id=s["id"],
+                    workspace_id=ws["id"],
+                    sandbox_name="sandbox-test-abc",
+                    cmd=["opencode", "serve", "--service"],
+                    mode="tui",
+                    agent_tool="opencode",
+                )
+
+        assert "secret-gateway-host" not in caplog.text
+        assert service_url not in caplog.text
+        # The URL is still delivered to the session row for the chat proxy.
+        async with _TestSession() as db:
+            from swarmer.models.session import Session as _Session
+            updated = await db.get(_Session, s["id"])
+            assert updated.service_url == service_url
+
+    @pytest.mark.asyncio
     async def test_server_mode_stores_service_url(self, client):
         """service_url is persisted in the session after expose_service."""
         from swarmer.routers.sessions import _run_openshell_agent
@@ -1315,6 +1368,42 @@ class TestRestartServerSessions:
             from swarmer.main import _restart_server_sessions
             await _restart_server_sessions()
 
+        async with _TestSession() as db:
+            from swarmer.models.session import Session as _Session
+            session_obj = await db.get(_Session, s["id"])
+            assert session_obj.phase == "running"
+            assert session_obj.service_url == fresh_url
+
+    @pytest.mark.asyncio
+    async def test_restart_reconciliation_does_not_log_service_url(self, client, caplog):
+        """Regression (No-Sensitive-Data-In-Logs): restart reconciliation of an
+        OpenCode TUI session must not write the re-exposed service URL or
+        gateway hostname to logs."""
+        ws = await _create_workspace(client)
+        s = await _create_session(client, ws["id"], mode="tui", agent_tool="opencode")
+
+        async with _TestSession() as db:
+            from swarmer.models.session import Session as _Session
+            session_obj = await db.get(_Session, s["id"])
+            session_obj.phase = "running"
+            session_obj.sandbox_name = "sandbox-abc"
+            session_obj.service_url = "http://old-service-url:4096"
+            await db.commit()
+
+        fresh_url = "https://fresh-secret-gateway-host.sandbox.example.com"
+
+        with (
+            patch("swarmer.openshell_client.list_sandboxes", new=AsyncMock(return_value=["sandbox-abc"])),
+            patch("swarmer.openshell_client.expose_service", new=AsyncMock(return_value=fresh_url)),
+            patch("swarmer.database.get_db", new=_override_get_db),
+        ):
+            from swarmer.main import _restart_server_sessions
+            with caplog.at_level(logging.INFO):
+                await _restart_server_sessions()
+
+        assert "fresh-secret-gateway-host" not in caplog.text
+        assert fresh_url not in caplog.text
+        # The fresh URL is still persisted for the chat proxy / TUI reconnect.
         async with _TestSession() as db:
             from swarmer.models.session import Session as _Session
             session_obj = await db.get(_Session, s["id"])

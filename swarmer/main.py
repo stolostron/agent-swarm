@@ -307,9 +307,11 @@ async def _restart_server_sessions() -> None:
                     service_url = await openshell_client.expose_service(sandbox_name, "agent", port, client=oc_client)
                     s.service_url = service_url
                     s.phase = "running"
+                    # The service URL embeds the gateway hostname; keep it out
+                    # of log output (it is persisted on the session row).
                     log.info(
-                        "restart: interactive session %d re-connected to sandbox %s at %s",
-                        s.id, sandbox_name, service_url,
+                        "restart: interactive session %d re-connected to sandbox %s",
+                        s.id, sandbox_name,
                     )
                 except Exception:
                     log.warning(
