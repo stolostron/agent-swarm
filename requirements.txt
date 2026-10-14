@@ -34,7 +34,7 @@ kubernetes==37.0.1
 MarkupSafe==3.0.4
 multidict==7.1.0
 oauthlib==4.0.0
-openshell==0.1.3     # OpenShell sandbox SDK; update with make update-deps
+openshell==0.0.116   # OpenShell sandbox SDK; keep aligned with the gateway version
 propcache==0.5.4
 protobuf==7.36.2
 pyasn1==0.6.4
