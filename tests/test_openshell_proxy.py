@@ -1550,9 +1550,14 @@ class TestRestartServerSessions:
             patch("swarmer.openshell_client.list_sandboxes", new=AsyncMock(return_value=["sandbox-still-live"])),
             patch("swarmer.openshell_client.expose_service", new=AsyncMock(side_effect=RuntimeError("gateway warming"))),
             patch("swarmer.database.get_db", new=_override_get_db),
+            patch("swarmer.main._restart_github_app_iat_refresh", new=AsyncMock()) as iat_refresh,
+            patch("swarmer.main._restart_agent_swarm_token_refresh", new=AsyncMock()) as token_refresh,
         ):
             from swarmer.main import _restart_server_sessions
             await _restart_server_sessions()
+
+        iat_refresh.assert_awaited_once()
+        token_refresh.assert_awaited_once()
 
         async with _TestSession() as db:
             from swarmer.models.session import Session as _Session

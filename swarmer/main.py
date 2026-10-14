@@ -323,7 +323,9 @@ async def _restart_server_sessions() -> None:
                     # transiently (for example during a gateway restart), so
                     # keep its identity and active phase; a later startup
                     # reconciliation can retry without orphaning the session.
-                    continue
+                    # Fall through: the sandbox survives without a fresh
+                    # service_url, so its credential-refresh loops must still
+                    # be restored or its tokens would silently expire.
 
             await _restart_github_app_iat_refresh(s, db)
             await _restart_agent_swarm_token_refresh(s, db, client=oc_client)
