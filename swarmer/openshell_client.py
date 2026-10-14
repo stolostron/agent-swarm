@@ -204,10 +204,37 @@ def _set_workspace(request) -> None:
 
 def _set_sandbox(request, sandbox_name: str) -> None:
     """Set the sandbox resource name across OpenShell protobuf generations."""
-    try:
-        request.sandbox = sandbox_name
-    except (AttributeError, ValueError):
-        request.name = sandbox_name
+    _set_proto_resource(request, ("sandbox", "sandbox_id", "name"), sandbox_name)
+
+
+def _set_service(request, service_name: str) -> None:
+    """Set the service resource name across OpenShell protobuf generations."""
+    _set_proto_resource(request, ("name", "service"), service_name)
+
+
+def _set_proto_resource(request, field_names: tuple[str, ...], value: str) -> None:
+    """Set a resource identifier using whichever field the SDK protobuf defines."""
+    descriptor = getattr(request, "DESCRIPTOR", None)
+    fields_by_name = getattr(descriptor, "fields_by_name", None)
+    if fields_by_name is not None:
+        for field_name in field_names:
+            if field_name in fields_by_name:
+                setattr(request, field_name, value)
+                return
+        raise AttributeError(
+            f"{type(request).__name__} has none of the resource fields {field_names!r}"
+        )
+
+    # Lightweight test doubles and older SDK wrappers may not expose a descriptor.
+    for field_name in field_names:
+        try:
+            setattr(request, field_name, value)
+            return
+        except (AttributeError, ValueError):
+            continue
+    raise AttributeError(
+        f"{type(request).__name__} has none of the resource fields {field_names!r}"
+    )
 
 
 def _sdk_call(client, method_name: str, *args, **kwargs):
@@ -1009,11 +1036,10 @@ async def approve_draft_policy_chunks(
 
     def _do_approve():
         try:
-            dp = client._stub.GetDraftPolicy(
-                (lambda req: (_set_workspace(req), req)[1])(
-                    openshell_pb2.GetDraftPolicyRequest(sandbox=sandbox_name)
-                ), timeout=10
-            )
+            req = openshell_pb2.GetDraftPolicyRequest()
+            _set_sandbox(req, sandbox_name)
+            _set_workspace(req)
+            dp = client._stub.GetDraftPolicy(req, timeout=10)
             pending = [c for c in dp.chunks if c.status == "pending"]
             if not pending:
                 return 0, []
@@ -1091,11 +1117,10 @@ async def get_draft_chunks(sandbox_name: str, client=None) -> list[dict]:
 
     def _do_fetch() -> list[dict]:
         try:
-            dp = client._stub.GetDraftPolicy(
-                (lambda req: (_set_workspace(req), req)[1])(
-                    openshell_pb2.GetDraftPolicyRequest(sandbox=sandbox_name)
-                ), timeout=10
-            )
+            req = openshell_pb2.GetDraftPolicyRequest()
+            _set_sandbox(req, sandbox_name)
+            _set_workspace(req)
+            dp = client._stub.GetDraftPolicy(req, timeout=10)
             result = []
             for chunk in dp.chunks:
                 endpoints = [
@@ -1224,12 +1249,10 @@ async def undo_chunks_by_rule_name(
         if not ids_to_undo:
             rule_name_set = set(rule_names)
             try:
-                history = client._stub.GetDraftHistory(
-                    (lambda req: (_set_workspace(req), req)[1])(
-                        openshell_pb2.GetDraftHistoryRequest(sandbox=sandbox_name)
-                    ),
-                    timeout=10,
-                )
+                req = openshell_pb2.GetDraftHistoryRequest()
+                _set_sandbox(req, sandbox_name)
+                _set_workspace(req)
+                history = client._stub.GetDraftHistory(req, timeout=10)
                 for entry in history.chunks:
                     if entry.rule_name in rule_name_set and entry.status == "approved":
                         ids_to_undo.append(entry.id)
@@ -1967,13 +1990,13 @@ def exec_interactive(
 
     def _request_generator():
         req = openshell_pb2.ExecSandboxRequest(
-            sandbox=sandbox_name,
             command=command,
             workdir="/sandbox",
             tty=True,
             cols=cols,
             rows=rows,
         )
+        _set_sandbox(req, sandbox_name)
         for k, v in (env or {}).items():
             req.environment[k] = v
         start_msg = openshell_pb2.ExecSandboxInput(start=req)
@@ -2002,11 +2025,11 @@ async def expose_service(
 
     def _do():
         req = openshell_pb2.ExposeServiceRequest(
-            sandbox=sandbox_name,
-            name=service_name,
             target_port=target_port,
             domain=True,
         )
+        _set_sandbox(req, sandbox_name)
+        _set_service(req, service_name)
         _set_workspace(req)
         resp = client._stub.ExposeService(req, timeout=client._timeout)
         url = resp.url
@@ -2043,10 +2066,9 @@ async def delete_service(
         client = _get_client()
 
     def _do():
-        req = openshell_pb2.DeleteServiceRequest(
-            sandbox=sandbox_name,
-            name=service_name,
-        )
+        req = openshell_pb2.DeleteServiceRequest()
+        _set_sandbox(req, sandbox_name)
+        _set_service(req, service_name)
         _set_workspace(req)
         client._stub.DeleteService(req, timeout=client._timeout)
 
