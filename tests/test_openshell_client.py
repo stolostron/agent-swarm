@@ -925,6 +925,38 @@ async def test_ensure_provider_auto_imports_openai_profile(sdk_client):
     assert imported_profile.endpoints[0].port == 443
 
 
+def test_build_provider_profile_serializes_plain_wire_strings():
+    """Endpoint metadata must stay plain wire strings — the gateway reads them verbatim.
+
+    OpenShell's endpoint ambiguity validation only recognizes "enforce" and
+    classifies any other value (e.g. NETWORK_ENFORCEMENT_MODE_ENFORCE) as
+    "audit". A provider rule marked audit that overlaps a user policy rule
+    marked enforce fails CreateSandbox with FAILED_PRECONDITION.
+    """
+    profile_dict = {
+        "id": "openai",
+        "display_name": "OpenAI",
+        "credentials": [{"name": "OPENAI_API_KEY", "env_vars": ["OPENAI_API_KEY"]}],
+        "endpoints": [
+            {
+                "host": "api.openai.com",
+                "port": 443,
+                "protocol": "rest",
+                "access": "read-write",
+                "enforcement": "enforce",
+                "tls": "passthrough",
+            }
+        ],
+    }
+
+    profile = oc._build_provider_profile(profile_dict)
+    ep = profile.endpoints[0]
+
+    assert ep.enforcement == "enforce"
+    assert ep.access == "read-write"
+    assert ep.tls == "passthrough"
+
+
 @pytest.mark.asyncio
 async def test_import_provider_profiles_maps_endpoints_and_binaries(sdk_client):
     """import_provider_profiles correctly translates endpoints and binaries to protobuf."""
@@ -954,6 +986,8 @@ async def test_import_provider_profiles_maps_endpoints_and_binaries(sdk_client):
     assert p.id == "test-prof"
     assert len(p.endpoints) == 1
     assert p.endpoints[0].host == "api.example.com"
+    assert p.endpoints[0].enforcement == "enforce"
+    assert p.endpoints[0].access == "read-write"
     assert len(p.binaries) == 1
     assert p.binaries[0].path == "/usr/bin/curl"
 

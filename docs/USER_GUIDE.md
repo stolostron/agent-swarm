@@ -683,7 +683,7 @@ Workspace-scoped key-value pairs injected into every sandbox session at launch. 
 
 - Stored in the Swarmer database, **Fernet-encrypted at rest**, and passed to the agent process
   via OpenShell at session launch
-- Applies to all sessions in the workspace (prompt, server, TUI, and cron-scheduled runs)
+- Applies to all sessions in the workspace (prompt, interactive, and cron-scheduled runs)
 - Common uses: `SLACK_WEBHOOK_URL` for workflow notifications, `SKIP_SLACK` to disable Slack
   for a workspace, or other secrets your agent prompts expect
 
@@ -695,7 +695,7 @@ Repositories are configured per-session via the session configuration UI:
 
 - **Add** repos by URL; they are cloned via init containers into the PVC-backed workspace before the agent starts
 - Git auth uses the workspace's GitHub PAT for HTTPS cloning (injected as `GIT_CREDENTIALS` in the init container)
-- Repo context is injected into `AGENTS.md` (TUI/server modes) and prompt text (prompt mode) as a structured markdown table
+- Repo context is injected into `AGENTS.md` (interactive mode) and prompt text (prompt mode) as a structured markdown table
 
 ### Sessions
 
@@ -711,22 +711,15 @@ One-shot execution: runs the agent with a prompt, streams output, and the pod ex
 - Supports cron scheduling for recurring runs (see [Cron Scheduling](#cron-scheduling))
 - OpenCode prompt runs use `--standalone` for a one-shot run without leaving a background service
 
-##### Server Mode
+##### Interactive Mode
 
-Persistent execution: the agent runs in server mode with an HTTP API.
-
-- `restartPolicy: Always` — pod runs indefinitely
-- Creates a ClusterIP Service (+ OpenShift Route if available)
-- Dashboard proxies HTTP/WS/SSE to the agent's own web UI (via Route on OpenShift, or sub-path proxy elsewhere)
-
-##### TUI Mode
-
-Persistent terminal: the sandbox runs the OpenCode V2 shared service (the same backend as Chat mode) and the user attaches an interactive TUI session through a full browser terminal.
+Persistent interactive session: the sandbox runs the OpenCode V2 shared service (`opencode serve --service`), and both the terminal and the chat attach to that one backend. The session stays up until stopped.
 
 - `restartPolicy: Always` — pod runs indefinitely
-- xterm.js browser terminal connected via WebSocket PTY proxy (`kubectl exec` under the hood)
-- The TUI client attaches to the session's persistent OpenCode server, so a dropped browser connection can reconnect to that service. It resumes the saved Chat conversation only when Chat was selected and its conversation ID was persisted; otherwise TUI starts without `--session`.
-- Shell-tool TUI sessions instead keep the sandbox alive with `sleep infinity` and exec an interactive bash on connect
+- The **Terminal** tab opens a full browser terminal (xterm.js over a WebSocket PTY proxy)
+- The **Chat ↗** link opens the agent's own web UI through the dashboard proxy (HTTP/WS/SSE via Route on OpenShift, or sub-path proxy elsewhere)
+- Terminal and chat share the same persistent OpenCode service, so a dropped browser connection can reconnect to it. The TUI resumes the saved chat conversation when one was persisted; otherwise it starts without `--session`
+- Shell-tool interactive sessions instead keep the sandbox alive with `sleep infinity` and exec an interactive bash on connect
 - OSC 52 clipboard support — clipboard copy operations in the pod reach the user's browser clipboard
 - One-time UUID auth tokens prevent unauthorized WebSocket connections
 
@@ -775,8 +768,7 @@ Go-based AI coding agent ([opencode.ai](https://opencode.ai)).
 **Modes:**
 
 - **Prompt** — one-shot: `opencode run --standalone --model <model> <prompt>`
-- **Server** — HTTP API: `opencode serve --service --hostname 0.0.0.0 --port 4096`
-- **TUI** — interactive terminal: `opencode` (attaches to the session's persistent OpenCode V2 shared service — same backend as Chat mode)
+- **Interactive** — persistent shared service: `opencode serve --service --hostname 0.0.0.0 --port 4096`; the Terminal tab (TUI client) and the Chat ↗ web UI both attach to it. New launches store mode `tui`; existing `server` sessions behave identically
 
 Swarmer prepares the shared service password in the sandbox's
 `~/.config/opencode/service.json` before startup. The server and TUI use this
@@ -822,7 +814,7 @@ Workspace-level prompt library with git-backed folders:
 - Recursive `.md` file caching from configured URL sources
 - Choose and preview a remembered prompt in the manual launch dialog
 - **Additional Instructions** apply to that manual launch only and are not reused; scheduled runs use their own configured instructions
-- TUI and Chat receive prompt context in `AGENTS.md` at startup, not as a chat message; Prompt mode receives the same composed startup context
+- Interactive sessions receive prompt context in `AGENTS.md` at startup, not as a chat message; Prompt mode receives the same composed startup context
 - Legacy session prompt defaults remain available as fallback for existing schedules
 
 ### Cron Scheduling

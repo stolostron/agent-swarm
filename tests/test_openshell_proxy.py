@@ -297,7 +297,7 @@ class TestExecInteractive:
         sdk_client._stub.ExecSandboxInteractive.return_value = mock_stream
         with patch.object(oc, "_get_client", return_value=sdk_client):
             stream, input_q = oc.exec_interactive(
-                sandbox_name="sandbox-test",
+                sandbox_id="sandbox-id-test",
                 command=["sh", "-c", "opencode"],
                 cols=80,
                 rows=24,
@@ -321,7 +321,7 @@ class TestExecInteractive:
 
         with patch.object(oc, "_get_client", return_value=sdk_client):
             stream, input_q = oc.exec_interactive(
-                sandbox_name="sandbox-test",
+                sandbox_id="sandbox-id-test",
                 command=["sh", "-c", "opencode --continue"],
                 cols=120,
                 rows=40,
@@ -331,7 +331,7 @@ class TestExecInteractive:
 
         assert len(received_msgs) == 1
         start_msg = received_msgs[0]
-        assert _proto_resource(start_msg.start, "sandbox", "sandbox_id", "name") == "sandbox-test"
+        assert _proto_resource(start_msg.start, "sandbox", "sandbox_id", "name") == "sandbox-id-test"
         assert start_msg.start.tty is True
         assert start_msg.start.cols == 120
         assert start_msg.start.rows == 40
@@ -422,7 +422,7 @@ class TestChatHttpProxy:
         return mock_cls, mock_instance
 
     @pytest.mark.asyncio
-    async def test_proxy_uses_service_url_for_upstream(self, client):
+    async def test_proxy_disables_compression_before_rewriting_response(self, client):
         ws = await _create_workspace(client)
         s = await _create_session(client, ws["id"], mode="server", agent_tool="opencode")
 
@@ -440,12 +440,14 @@ class TestChatHttpProxy:
         )
         with patch("swarmer.routers.chat_proxy.httpx.AsyncClient", mock_cls):
             await client.get(
-                f"/workspaces/{ws['id']}/sessions/{s['id']}/chat/index.html"
+                f"/workspaces/{ws['id']}/sessions/{s['id']}/chat/index.html",
+                headers={"Accept-Encoding": "gzip, deflate, br, zstd"},
             )
 
         mock_instance.request.assert_called_once()
         _, call_kwargs = mock_instance.request.call_args
         headers = call_kwargs.get("headers", {})
+        assert headers.get("accept-encoding") == "identity"
         # With gateway URL rewriting, the upstream URL uses the gateway's real
         # hostname; the virtual host is preserved in the Host header instead.
         assert "agent.openshell.internal" in headers.get("host", ""), (
@@ -1078,6 +1080,18 @@ class TestChatHttpProxyErrors:
         assert 'const _swRoutePrefix="/workspaces/7/sessions/32/chat"' in rewritten
         assert "_swRawPath.slice(_swRoutePrefix.length)" in rewritten
         assert 'const r=(_swRoutePath.startsWith("/")?_swRoutePath:"/"+_swRoutePath)' in rewritten
+
+    def test_rewrite_js_preserves_named_server_url_function(self):
+        """The API-base rewrite must not turn a named declaration into invalid JS."""
+        from swarmer.routers.chat_proxy import _rewrite_js
+
+        prefix = "/workspaces/7/sessions/32/chat"
+        bundle = b"function currentServerUrl(){return location.origin}"
+
+        rewritten = _rewrite_js(bundle, prefix).decode()
+
+        assert f'function currentServerUrl(){{return location.origin+"{prefix}"}}' in rewritten
+        assert "function(){return location.origin" not in rewritten
 
     def test_rewrite_js_prefixes_all_absolute_asset_quote_styles(self):
         """All JS asset references are proxied without touching unrelated URLs."""
@@ -1910,7 +1924,17 @@ class TestTuiWsOpenshell:
         assert "opencode --session ses_selected_chat" in selected
         assert "--continue" not in selected
         assert fallback.endswith("exec opencode")
+        assert 'NO_PROXY="${NO_PROXY:+$NO_PROXY,}0.0.0.0"' in fallback
+        assert 'no_proxy="${no_proxy:+$no_proxy,}0.0.0.0"' in fallback
         assert "--continue" not in fallback
+
+    def test_non_opencode_tui_does_not_change_proxy_exclusions(self):
+        from swarmer.routers.tui_ws import _build_tui_shell
+
+        shell = _build_tui_shell("bash")
+
+        assert shell.endswith("exec bash")
+        assert "NO_PROXY" not in shell
 
     def test_exec_interactive_stdin_queued(self):
         """The first message in the stream identifies the sandbox across SDK versions."""
@@ -1931,7 +1955,7 @@ class TestTuiWsOpenshell:
         sdk_client._timeout = 30
 
         stream, input_q = oc.exec_interactive(
-            sandbox_name="sandbox-x",
+            sandbox_id="sandbox-id-x",
             command=["sh", "-c", "opencode"],
             cols=80,
             rows=24,
@@ -1940,10 +1964,10 @@ class TestTuiWsOpenshell:
         input_q.put(None)  # unblock generator if it ever resumes
 
         assert len(received) == 1
-        assert _proto_resource(received[0].start, "sandbox", "sandbox_id", "name") == "sandbox-x"
+        assert _proto_resource(received[0].start, "sandbox", "sandbox_id", "name") == "sandbox-id-x"
 
     def test_exec_interactive_resize_queued(self):
-        """The first message in the stream carries the sandbox name and tty flags."""
+        """The first message in the stream carries the sandbox ID and tty flags."""
         from openshell._proto import openshell_pb2 as pb
 
         received = []
@@ -1959,7 +1983,7 @@ class TestTuiWsOpenshell:
         sdk_client._timeout = 30
 
         stream, input_q = oc.exec_interactive(
-            sandbox_name="sandbox-x",
+            sandbox_id="sandbox-id-x",
             command=["sh", "-c", "opencode"],
             cols=80,
             rows=24,
@@ -1967,7 +1991,7 @@ class TestTuiWsOpenshell:
         )
         input_q.put(None)  # unblock generator if it ever resumes
 
-        assert _proto_resource(received[0].start, "sandbox", "sandbox_id", "name") == "sandbox-x"
+        assert _proto_resource(received[0].start, "sandbox", "sandbox_id", "name") == "sandbox-id-x"
 
 
 # ===========================================================================

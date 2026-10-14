@@ -20,7 +20,20 @@ def _build_tui_shell(binary: str, opencode_session_id: str | None = None) -> str
     if opencode_session_id:
         cmd_parts.extend(("--session", opencode_session_id))
     cmd = " ".join(shlex.quote(part) for part in cmd_parts)
-    return f'export HOME=/sandbox PATH="/sandbox/.local/bin:$PATH" && exec {cmd}'
+    env_setup = 'export HOME=/sandbox PATH="/sandbox/.local/bin:$PATH"'
+    if binary == "opencode":
+        # OpenCode V2 discovers its shared service through
+        # ~/.local/state/opencode/service.json, whose URL is http://0.0.0.0:4096.
+        # OpenShell injects HTTP proxy settings into the sandbox; without this
+        # loopback exemption the CLI sends its health probe through that proxy,
+        # fails to discover the already-running server, and tries to start a
+        # second one on port 4096. Preserve existing exclusions and add the
+        # service's advertised wildcard-bind address for both env conventions.
+        env_setup += (
+            ' && export NO_PROXY="${NO_PROXY:+$NO_PROXY,}0.0.0.0"'
+            ' no_proxy="${no_proxy:+$no_proxy,}0.0.0.0"'
+        )
+    return f"{env_setup} && exec {cmd}"
 
 
 @router.websocket("/ws/{ws_id}/sessions/{sid}/tui")
@@ -206,7 +219,7 @@ async def _run_openshell_tui(
 
     try:
         response_stream, input_q = openshell_client.exec_interactive(
-            sandbox_name=sandbox_name,
+            sandbox_id=sandbox_id,
             command=command,
             cols=cols,
             rows=rows,

@@ -11,9 +11,8 @@
         <span class="pf-v6-c-form__label-text">Launch mode</span>
       </label>
       <select class="pf-v6-c-form-control" id="launch-mode" name="mode" autofocus>
-        <option value="prompt" {% if selected_mode == 'prompt' %}selected{% endif %}>Prompt</option>
-        <option value="tui" {% if selected_mode == 'tui' %}selected{% endif %}>TUI</option>
-        <option value="server" {% if selected_mode == 'server' %}selected{% endif %}>Chat</option>
+        <option value="prompt" {% if selected_mode == 'prompt' %}selected{% endif %}>Prompt — run once and exit</option>
+        <option value="tui" {% if selected_mode == 'tui' %}selected{% endif %}>Interactive — terminal and chat, runs until stopped</option>
       </select>
     </div>
 
@@ -57,7 +56,7 @@
                 name="instruction_prompt" rows="5" style="resize:vertical;"></textarea>
       <div class="pf-v6-c-form__helper-text">
         <div class="pf-v6-c-helper-text__item">
-          <span class="pf-v6-c-helper-text__item-text">Applies only to this manual launch and is not reused. It does not change scheduled-run instructions. For TUI and Chat, this is startup context written to AGENTS.md, not a chat message.</span>
+          <span class="pf-v6-c-helper-text__item-text">Applies only to this manual launch and is not reused. It does not change scheduled-run instructions. For Interactive launches, this is startup context written to AGENTS.md, not a chat message.</span>
         </div>
       </div>
     </div>
