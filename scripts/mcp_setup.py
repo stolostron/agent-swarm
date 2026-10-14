@@ -136,6 +136,26 @@ def _auto_detect_token() -> str:
     return ""
 
 
+def _mcp_server_block(api_url: str, verify_ssl: str, token_value: str) -> dict[str, Any]:
+    """Build the agent-swarm MCP server block for opencode.json (V2 shape).
+
+    ``token_value`` is the bearer token for the written configuration, or the
+    literal display placeholder for printed output; an empty value omits the
+    token entry entirely.
+    """
+    environment = {
+        "AGENT_SWARM_API_URL": api_url,
+        "AGENT_SWARM_VERIFY_SSL": verify_ssl,
+    }
+    if token_value:
+        environment["AGENT_SWARM_API_TOKEN"] = token_value
+    return {
+        "type": "local",
+        "command": ["agent-swarm-mcp-server"],
+        "environment": environment,
+    }
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Configure Agent Swarm MCP in opencode.json")
     parser.add_argument("--token", help="Bearer token or pasted JSON snippet")
@@ -186,16 +206,7 @@ def main() -> None:
     # 3. Build MCP configuration block (OpenCode V2 native shape: servers
     # nest under "mcp.servers" and are connected by default).
     verify_ssl = "false" if args.insecure else "true"
-    mcp_agent_swarm = {
-        "type": "local",
-        "command": ["agent-swarm-mcp-server"],
-        "environment": {
-            "AGENT_SWARM_API_URL": api_url,
-            "AGENT_SWARM_VERIFY_SSL": verify_ssl,
-        },
-    }
-    if token:
-        mcp_agent_swarm["environment"]["AGENT_SWARM_API_TOKEN"] = token
+    mcp_agent_swarm = _mcp_server_block(api_url, verify_ssl, token)
 
     jwt_user = _decode_jwt_sub(token) if token else ""
 
@@ -211,10 +222,11 @@ def main() -> None:
             print("Token:     (No active token found)")
         print("──────────────────────────────────────────────────")
         print("\nopencode.json configuration snippet:")
-        print_snippet = json.loads(json.dumps(mcp_agent_swarm))
-        if "AGENT_SWARM_API_TOKEN" in print_snippet.get("environment", {}):
-            print_snippet["environment"]["AGENT_SWARM_API_TOKEN"] = "<YOUR_TOKEN>"
-        print(json.dumps({"mcp": {"servers": {"agent-swarm": print_snippet}}}, indent=2))
+        # Build the display snippet from non-secret inputs only — the bearer
+        # token must never flow into printed output. The literal placeholder
+        # keeps the snippet shape identical to the written configuration.
+        display_snippet = _mcp_server_block(api_url, verify_ssl, "<YOUR_TOKEN>" if token else "")
+        print(json.dumps({"mcp": {"servers": {"agent-swarm": display_snippet}}}, indent=2))
         print("\nRun 'make mcp-setup' to apply this configuration to opencode.json.")
         return
 
