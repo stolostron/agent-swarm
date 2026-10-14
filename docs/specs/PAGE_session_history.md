@@ -37,11 +37,12 @@ expandable output.
    context, mode, trigger, and separate event context before runtime setup.
 2. Retain the snapshot through queue dispatch/restarts and copy it into the run
    record when the session reaches a terminal phase.
-3. Render source labels for TUI, Chat, Prompt, schedules, and events.
+3. Render source labels for Interactive, Prompt, schedules, and events.
 4. Expose event repository, PR, SHA, condition, and title when available.
 5. Show captured startup context even when output is empty; identify older runs
    without a captured snapshot as unavailable instead of rebuilding it from
-   current settings. TUI/Chat conversation messages after startup are excluded.
+   current settings. Interactive-mode conversation messages after startup are
+   excluded.
 
 ## Acceptance checks
 

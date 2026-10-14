@@ -67,8 +67,7 @@ REQUIRED_SECTIONS = [
     "### Sessions",
     "#### Session Modes",
     "##### Prompt Mode",
-    "##### Server Mode",
-    "##### TUI Mode",
+    "##### Interactive Mode",
     "#### Session Lifecycle",
     "### Agent Tools",
     "#### OpenCode",
@@ -228,7 +227,7 @@ def test_env_var_table_exists(guide_content):
 # ── Session modes documented ──────────────────────────────────────────
 
 def test_session_modes(guide_content):
-    for mode in ["Prompt Mode", "Server Mode", "TUI Mode"]:
+    for mode in ["Prompt Mode", "Interactive Mode"]:
         assert mode in guide_content, f"Missing session mode: {mode}"
 
 

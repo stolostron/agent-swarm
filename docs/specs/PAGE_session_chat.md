@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Chat exposes the OpenCode server UI for a running server-mode session without
+Chat exposes the OpenCode server UI for a running interactive session without
 requiring the browser to reach the internal OpenShell virtual hostname.
 
 ## Sources
@@ -13,7 +13,7 @@ requiring the browser to reach the internal OpenShell virtual hostname.
 
 ## Methods and tooling
 
-- New-tab link is shown only when `mode=server` and `phase=running`.
+- New-tab link is shown when `mode in (tui, server)` and `phase=running`.
 - HTTP proxy forwards browser requests to the OpenShell exposed service.
 - WebSocket route handles `/chat/{path}` upgrades.
 - `_resolve_upstream()` maps the gateway-assigned virtual hostname to the
@@ -31,7 +31,7 @@ requiring the browser to reach the internal OpenShell virtual hostname.
 
 ## Acceptance checks
 
-- Chat is unavailable for prompt/TUI/non-running sessions.
+- Chat is unavailable for prompt-mode and non-running sessions.
 - The internal virtual hostname is never presented as a required DNS target.
 - WebSocket chat connections survive proxy path rewriting.
 - Proxy responses do not leak gateway credentials or internal configuration.

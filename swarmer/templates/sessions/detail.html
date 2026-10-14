@@ -173,15 +173,12 @@
     </form>
   </div>
 
-  {# Three launch pills — hidden when session is active #}
+  {# Two launch pills — hidden when session is active. Interactive covers both
+     the Terminal tab and the Chat ↗ link (tui and server share one backend). #}
   <div id="launch-pills" style="display:{% if session.is_active %}none{% else %}flex{% endif %}; gap:var(--pf-t--global--spacer--sm); align-items:center;">
     <button type="button" data-launch-dialog-url="/workspaces/{{ ws.id }}/sessions/{{ session.id }}/launch-dialog?mode=tui"
             class="pf-v6-c-label launch-pill-green" style="cursor:pointer; font-family:inherit; font-weight:700;">
-      <span class="pf-v6-c-label__content">&#9654; TERM.UI</span>
-    </button>
-    <button type="button" data-launch-dialog-url="/workspaces/{{ ws.id }}/sessions/{{ session.id }}/launch-dialog?mode=server"
-            class="pf-v6-c-label launch-pill-green" style="cursor:pointer; font-family:inherit; font-weight:700;">
-      <span class="pf-v6-c-label__content">&#9654; CHAT</span>
+      <span class="pf-v6-c-label__content">&#9654; INTERACTIVE</span>
     </button>
     <button type="button" data-launch-dialog-url="/workspaces/{{ ws.id }}/sessions/{{ session.id }}/launch-dialog?mode=prompt"
             class="pf-v6-c-label launch-pill-muted" style="cursor:pointer; font-family:inherit; font-weight:700;">

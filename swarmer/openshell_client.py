@@ -1335,28 +1335,14 @@ def _build_provider_profile(p: dict, resource_version: int = 0):
                 m.secret = mat.get("secret", False)
         profile.credentials.append(c)
     for ep in p.get("endpoints", []):
-        endpoint = dict(ep)
-        enum_aliases = {
-            "access": {
-                "read-only": "NETWORK_ACCESS_PRESET_READ_ONLY",
-                "read-write": "NETWORK_ACCESS_PRESET_READ_WRITE",
-                "full": "NETWORK_ACCESS_PRESET_FULL",
-            },
-            "enforcement": {
-                "enforce": "NETWORK_ENFORCEMENT_MODE_ENFORCE",
-                "audit": "NETWORK_ENFORCEMENT_MODE_AUDIT",
-            },
-            "tls": {
-                "skip": "NETWORK_TLS_MODE_SKIP",
-                "terminate": "NETWORK_TLS_MODE_TERMINATE",
-                "passthrough": "NETWORK_TLS_MODE_PASSTHROUGH",
-            },
-        }
-        for field, aliases in enum_aliases.items():
-            value = endpoint.get(field)
-            if isinstance(value, str) and value.lower() in aliases:
-                endpoint[field] = aliases[value.lower()]
-        ParseDict(endpoint, profile.endpoints.add())
+        # Endpoint metadata (enforcement/access/tls) uses plain wire strings
+        # ("enforce", "read-write", ...) that the gateway reads verbatim.
+        # Do NOT translate these to enum-style names: OpenShell's endpoint
+        # ambiguity validation only recognizes "enforce" and classifies any
+        # other value (e.g. NETWORK_ENFORCEMENT_MODE_ENFORCE) as "audit",
+        # which conflicts with overlapping user policy rules and fails
+        # CreateSandbox with FAILED_PRECONDITION.
+        ParseDict(ep, profile.endpoints.add())
     for bn in p.get("binaries", []):
         ParseDict(bn, profile.binaries.add())
     return profile
@@ -1965,7 +1951,7 @@ async def get_sandbox_provider_environment(sandbox_id: str, client=None) -> dict
 
 
 def exec_interactive(
-    sandbox_name: str,
+    sandbox_id: str,
     command: list[str],
     cols: int,
     rows: int,
@@ -1996,7 +1982,10 @@ def exec_interactive(
             cols=cols,
             rows=rows,
         )
-        _set_sandbox(req, sandbox_name)
+        # ExecSandboxRequest identifies the sandbox by ID (unlike most Gateway
+        # lifecycle calls, which accept its name). Resolve the name before
+        # calling this helper.
+        _set_sandbox(req, sandbox_id)
         for k, v in (env or {}).items():
             req.environment[k] = v
         start_msg = openshell_pb2.ExecSandboxInput(start=req)

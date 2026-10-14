@@ -897,7 +897,12 @@ async def session_launch_dialog(
     session = await db.get(Session, sid, options=[selectinload(Session.prompt)])
     if ws is None or session is None or session.workspace_id != ws_id or session.is_active:
         return HTMLResponse("Session is unavailable for launch.", status_code=404)
-    selected_mode = mode if mode in ("tui", "server", "prompt") else "prompt"
+    # The UI offers Interactive and Prompt. Legacy `server` sessions map to
+    # Interactive (tui) now that both share the same OpenCode backend; the
+    # stored mode value is unchanged for API compatibility.
+    if mode == "server":
+        mode = "tui"
+    selected_mode = mode if mode in ("tui", "prompt") else "prompt"
     return templates.TemplateResponse(
         request,
         "sessions/_launch_dialog.html",

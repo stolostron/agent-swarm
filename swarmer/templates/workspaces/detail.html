@@ -71,8 +71,8 @@
         </span>
       </td>
       <td class="pf-v6-c-table__td" role="cell" data-label="Mode">
-        <span class="pf-v6-c-label pf-m-{{ 'cyan' if s.mode == 'server' else ('blue' if s.mode == 'tui' else 'grey') }}">
-          <span class="pf-v6-c-label__content">{{ s.mode | capitalize }}</span>
+        <span class="pf-v6-c-label pf-m-{{ 'blue' if s.mode in ('tui', 'server') else 'grey' }}">
+          <span class="pf-v6-c-label__content">{{ 'Interactive' if s.mode in ('tui', 'server') else 'Prompt' }}</span>
         </span>
       </td>
       <td class="pf-v6-c-table__td" role="cell" data-label="Status">

@@ -74,10 +74,8 @@
             &#128197; {{ run.schedule_label }}{% if run.prompt_name %} &middot; {{ run.prompt_name }}{% endif %}
           </span>
         </span>
-      {% elif run.mode == 'tui' %}
-        <span class="pf-v6-c-label pf-m-blue pf-m-compact"><span class="pf-v6-c-label__content">TERM.UI</span></span>
-      {% elif run.mode == 'server' %}
-        <span class="pf-v6-c-label pf-m-cyan pf-m-compact"><span class="pf-v6-c-label__content">CHAT</span></span>
+      {% elif run.mode in ('tui', 'server') %}
+        <span class="pf-v6-c-label pf-m-blue pf-m-compact"><span class="pf-v6-c-label__content">INTERACTIVE</span></span>
       {% elif run.prompt_name %}
         <span class="pf-v6-c-label pf-m-outline pf-m-compact"><span class="pf-v6-c-label__content">{{ run.prompt_name }}</span></span>
       {% else %}
@@ -147,7 +145,7 @@
           </h4>
           {% if run.context_captured %}
             {% if run.mode in ('tui', 'server') %}
-            <div style="font-size:var(--pf-t--global--font--size--xs); color:var(--pf-t--global--text--color--subtle); margin-bottom:var(--pf-t--global--spacer--xs);">TUI and Chat use this startup context from AGENTS.md. Later terminal or chat messages are not included.</div>
+            <div style="font-size:var(--pf-t--global--font--size--xs); color:var(--pf-t--global--text--color--subtle); margin-bottom:var(--pf-t--global--spacer--xs);">Interactive sessions use this startup context from AGENTS.md. Later terminal or chat messages are not included.</div>
             {% endif %}
             <pre class="last-output" style="padding:var(--pf-t--global--spacer--sm); margin:var(--pf-t--global--spacer--xs) 0 0; max-height:400px; overflow:auto; white-space:pre-wrap;">{{ run.startup_context }}</pre>
           {% else %}

@@ -398,8 +398,8 @@ def _rewrite_js(content: bytes, prefix: str) -> bytes:
     # that returns location.origin. Rewrite it to include the proxy prefix so
     # there is exactly one server in the UI's list, pointed at the proxy.
     text = re.sub(
-        r"function\s*\w*\s*\(\)\{return location\.origin\}",
-        lambda m: f'function(){{return location.origin+"{prefix}"}}',
+        r"function(?P<name>\s+\w+)?\s*\(\)\{return location\.origin\}",
+        lambda m: f'function{m.group("name") or ""}(){{return location.origin+"{prefix}"}}',
         text,
         count=1,
     )
@@ -579,6 +579,10 @@ async def _chat_http_proxy(
     upstream_url = _with_auth_token(upstream_url, _opencode_auth_token(sid))
 
     fwd_headers = {k: v for k, v in request.headers.items() if k.lower() not in _HOP_BY_HOP}
+    # This proxy rewrites HTML, CSS, and JavaScript bodies. Request identity
+    # encoding so httpx never needs an optional decoder (notably Brotli) and
+    # rewritten bytes always match the response headers sent to the browser.
+    fwd_headers["accept-encoding"] = "identity"
     # Set the virtual host so the OpenShell gateway routes to the right sandbox.
     fwd_headers["host"] = virtual_host
     if gw_config.bearer_callable:
