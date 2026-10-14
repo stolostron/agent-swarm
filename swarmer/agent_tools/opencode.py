@@ -95,7 +95,7 @@ class OpenCodeStrategy(AgentToolStrategy):
             # backward compatibility with sessions created before presets existed.
             # Legacy "google-vertex-anthropic/..." IDs are normalized to the V2
             # canonical "google-vertex" provider ID.
-            _model = normalize_model_id(model or "google/gemini-3.7-flash")
+            _model = normalize_model_id(model or "google/gemini-3.8-flash")
             _small_model = "google/gemini-3.5-flash-lite"
             if "/" in _model:
                 _provider, _mid = _model.split("/", 1)
