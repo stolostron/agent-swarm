@@ -1078,6 +1078,91 @@ class TestDoLaunchOpenshell:
         assert detail.status_code == 200
         assert detail.json()["provider"] == "enmaas"
 
+    @pytest.mark.parametrize(
+        "endpoint",
+        ["", "http://invalid.example/v1"],
+        ids=["unset-endpoint", "invalid-endpoint"],
+    )
+    @pytest.mark.asyncio
+    async def test_enmaas_provider_is_not_empty_selection_fallback_without_endpoint(
+        self, client, monkeypatch, endpoint
+    ):
+        """A gateway provider alone cannot make EnMaaS an empty-selection fallback."""
+        from swarmer.config import settings
+
+        monkeypatch.setattr(settings, "enmaas_base_url", endpoint)
+        ws = await _create_workspace(client)
+        s_resp = await client.post(
+            f"/api/v1/workspaces/{ws['id']}/sessions",
+            json={"name": "s-enmaas-endpoint-unavailable", "mode": "prompt", "agent_tool": "opencode", "provider": ""},
+        )
+        assert s_resp.status_code == 201, s_resp.text
+        s = s_resp.json()
+        enmaas_pname = f"swarmer-ws-{ws['id']}-enmaas"
+
+        patches = self._patch_openshell()
+        with patches["create_provider"], patches["ensure_provider"], \
+             patches["configure_provider_credential"], patches["attach_sandbox_provider"], \
+              patches["create_sandbox"], patches["write_agent_config"], \
+              patches["write_agents_md"], patches["exec_command"], \
+              patches["start_agent"], patches["delete_sandbox"], \
+              patches["build_policy"], patches["run_agent"], \
+              patches["setup_sandbox"] as mock_setup, \
+              patches["get_image"]:
+            with patch(
+                "swarmer.openshell_client.provider_exists",
+                new=AsyncMock(side_effect=lambda name, **kw: name == enmaas_pname),
+            ) as mock_provider_exists:
+                resp = await client.post(
+                    f"/api/v1/workspaces/{ws['id']}/sessions/{s['id']}/launch"
+                )
+                await asyncio.sleep(0)
+
+        assert resp.status_code == 500
+        assert "No AI provider is configured for this workspace" in resp.text
+        assert any(
+            probe_call.args[0] == enmaas_pname
+            for probe_call in mock_provider_exists.call_args_list
+        )
+        mock_setup.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_explicit_enmaas_selection_fails_closed_without_endpoint(self, client, monkeypatch):
+        """An existing gateway provider cannot bypass endpoint validation for an explicit selection."""
+        from swarmer.config import settings
+
+        monkeypatch.setattr(settings, "enmaas_base_url", "http://invalid.example/v1")
+        ws = await _create_workspace(client)
+        s_resp = await client.post(
+            f"/api/v1/workspaces/{ws['id']}/sessions",
+            json={"name": "s-enmaas-explicit-no-endpoint", "mode": "prompt", "agent_tool": "opencode", "provider": "enmaas"},
+        )
+        assert s_resp.status_code == 201, s_resp.text
+        s = s_resp.json()
+        enmaas_pname = f"swarmer-ws-{ws['id']}-enmaas"
+
+        patches = self._patch_openshell()
+        with patches["create_provider"], patches["ensure_provider"], \
+             patches["configure_provider_credential"], patches["attach_sandbox_provider"], \
+              patches["create_sandbox"], patches["write_agent_config"], \
+              patches["write_agents_md"], patches["exec_command"], \
+              patches["start_agent"], patches["delete_sandbox"], \
+              patches["build_policy"], patches["run_agent"], \
+              patches["setup_sandbox"] as mock_setup, \
+              patches["get_image"]:
+            with patch(
+                "swarmer.openshell_client.provider_exists",
+                new=AsyncMock(side_effect=lambda name, **kw: name == enmaas_pname),
+            ):
+                resp = await client.post(
+                    f"/api/v1/workspaces/{ws['id']}/sessions/{s['id']}/launch"
+                )
+                await asyncio.sleep(0)
+
+        assert resp.status_code == 500
+        assert "EnMaaS provider is not configured" in resp.text
+        mock_setup.assert_not_called()
+
     @pytest.mark.asyncio
     async def test_launch_rejects_when_requested_provider_probe_fails(self, client):
         """When requested provider probe fails with an exception, launch must fail fast rather than falling back."""

@@ -1487,15 +1487,27 @@ async def _do_launch_openshell(
         "openai": f"swarmer-ws-{session.workspace_id}-openai",
         "enmaas": f"swarmer-ws-{session.workspace_id}-enmaas",
     }
+    # EnMaaS is available only when its workspace gateway provider exists and
+    # the operator-controlled endpoint is valid. Workspace/legacy values must
+    # never supply or override this endpoint.
+    from swarmer.config import configured_enmaas_base_url, enmaas_endpoint_from_url
+
+    _enmaas_base_url = configured_enmaas_base_url()
+    _enmaas_endpoint = (
+        enmaas_endpoint_from_url(_enmaas_base_url) if _enmaas_base_url else None
+    )
     _available_providers: dict[str, bool] = {}
     _probe_failed: set[str] = set()
     oc_client = await openshell_client.get_client_for_workspace(ws, db)
     if tool.requires_ai_model():
         for _name, _gateway_name in _provider_names.items():
             try:
-                _available_providers[_name] = await openshell_client.provider_exists(
+                _provider_available = await openshell_client.provider_exists(
                     _gateway_name, client=oc_client
                 )
+                if _name == "enmaas":
+                    _provider_available = _provider_available and _enmaas_endpoint is not None
+                _available_providers[_name] = _provider_available
             except Exception:
                 _available_providers[_name] = False
                 _probe_failed.add(_name)
@@ -1553,16 +1565,6 @@ async def _do_launch_openshell(
             )
     raw_model = raw_model.strip("\r\n")  # strip any stray line endings before embedding in shell commands
     model = tool.resolve_build_model(raw_model)
-    # Resolve the EnMaaS endpoint only from operator-controlled deployment
-    # configuration; legacy workspace URL fields never affect routing.
-    from swarmer.config import configured_enmaas_base_url
-
-    _enmaas_base_url = configured_enmaas_base_url()
-    _enmaas_endpoint: tuple[str, int] | None = None
-    if _enmaas_base_url:
-        from swarmer.config import enmaas_endpoint_from_url
-
-        _enmaas_endpoint = enmaas_endpoint_from_url(_enmaas_base_url)
     # Persist the resolved preset so restart-resume (main.py) and later runs
     # reuse exactly what launched instead of re-resolving against possibly
     # different defaults (ACM-48198: resume must not replace EnMaaS
