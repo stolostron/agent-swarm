@@ -113,11 +113,9 @@ async def _ensure_openshell_provider_profiles() -> None:
         )
     except Exception:
         log.warning("Failed to import OpenShell provider profiles — sessions may lack Google AI Studio support", exc_info=True)
-    # EnMaaS profiles are per-workspace (ACM-48198): each workspace's profile
-    # type (enmaas-ws-{id}) carries that workspace's own gateway URL, so no
-    # single global profile can be registered here. Reconcile every stored
-    # workspace URL against its resolved gateway so endpoint bindings survive
-    # gateway restarts; the credential save path re-imports on demand anyway.
+    # EnMaaS profiles are per-workspace for credential isolation, but all bind
+    # to the operator-managed endpoint. Reconcile configured workspaces so
+    # profile bindings survive gateway restarts.
     try:
         await _reconcile_workspace_enmaas_profiles()
     except Exception:
@@ -129,32 +127,38 @@ async def _reconcile_workspace_enmaas_profiles() -> None:
     from sqlalchemy import select
 
     from swarmer import openshell_client
+    from swarmer.config import configured_enmaas_base_url
     from swarmer.database import get_db
     from swarmer.models.opencode_secret import OpencodeSecret
 
+    base_url = configured_enmaas_base_url()
+    if not base_url:
+        log.info("EnMaaS profile reconciliation skipped: operator endpoint is not configured")
+        return
+
+    rows: list[int] = []
     async for db in get_db():
         result = await db.execute(
-            select(OpencodeSecret).where(OpencodeSecret.enmaas_base_url_enc != "")
+            select(OpencodeSecret).where(OpencodeSecret.enmaas_configured.is_(True))
         )
         # Decrypt inside the session scope — property access requires a live
         # DB session context for the ORM instances.
         rows = [
-            (s.workspace_id, s.enmaas_base_url) for s in result.scalars().all()
+            s.workspace_id for s in result.scalars().all()
         ]
         break
-    for ws_id, base_url in rows:
+    for ws_id in rows:
         client = None
         try:
             try:
                 client = await openshell_client.get_client_for_workspace(ws_id)
             except Exception:  # noqa: BLE001 — gateway profile reconciliation is non-fatal
                 log.warning(
-                    "EnMaaS profile reconcile: no gateway client for workspace %d — using default",
+                    "EnMaaS profile reconcile: no gateway client for workspace %d — skipping",
                     ws_id,
                 )
-            imported = await openshell_client.import_enmaas_profile(
-                ws_id, base_url, client=client
-            )
+                continue
+            imported = await openshell_client.import_enmaas_profile(ws_id, client=client)
             if imported:
                 log.info("EnMaaS provider profile registered for workspace %d", ws_id)
         except Exception:

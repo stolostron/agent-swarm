@@ -47,6 +47,8 @@ class Settings(BaseSettings):
     openshell_tls_verify: bool = True   # verify gateway server certificates
     openshell_bearer_token: str = ""    # bearer token for gateway/supervisor auth
     agent_swarm_internal_url: str = ""  # internal URL used by the Agent Swarm MCP
+    # Operator-managed EnMaaS endpoint; workspace members cannot override it.
+    enmaas_base_url: str = ""
     sandbox_gc_interval: int = 300      # seconds between sandbox GC sweeps
     log_level: str = "INFO"             # Python logging level: DEBUG, INFO, WARNING, ERROR
 
@@ -91,7 +93,7 @@ settings = Settings()
 
 
 def validate_enmaas_base_url(raw: str) -> str:
-    """Validate and normalize a workspace EnMaaS gateway base URL.
+    """Validate and normalize the operator-managed EnMaaS gateway base URL.
 
     Returns the normalized URL (trailing slashes stripped, ``/v1`` style path
     retained), or ``""`` when *raw* is empty/unset. Raises ``ValueError`` for
@@ -122,8 +124,8 @@ def sanitize_enmaas_base_url(raw: str) -> str:
     """Return the validated EnMaaS gateway base URL, or "" when not configured.
 
     Invalid values also return "" (with a warning log) so UI render paths
-    degrade to "not configured" instead of raising; save and launch paths
-    surface the underlying validation error via ``validate_enmaas_base_url``.
+    degrade to "not configured" instead of raising. The value comes only
+    from operator-controlled application settings.
     """
     import logging
 
@@ -146,13 +148,18 @@ def enmaas_endpoint_from_url(base_url: str) -> tuple[str, int] | None:
     Invalid values also return None — display paths degrade to
     "not configured". Shared by the OpenShell provider profile and the
     sandbox network policy so both always derive their endpoint from the
-    same validated workspace URL.
+    same validated operator-managed URL.
     """
     base = sanitize_enmaas_base_url(base_url)
     if not base:
         return None
     parsed = urlparse(base)
     return (parsed.hostname or "", parsed.port or 443)
+
+
+def configured_enmaas_base_url() -> str:
+    """Return the validated operator-managed EnMaaS endpoint, or empty."""
+    return sanitize_enmaas_base_url(settings.enmaas_base_url)
 
 
 def get_agent_swarm_internal_url() -> str:

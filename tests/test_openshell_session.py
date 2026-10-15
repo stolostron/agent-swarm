@@ -110,6 +110,7 @@ async def _setup_db(monkeypatch):
     from swarmer.config import settings
     orig_ns = settings.k8s_namespace
     orig_max = settings.max_concurrent_agents
+    monkeypatch.setattr(settings, "enmaas_base_url", "https://operator.example/v1")
     settings.k8s_namespace = ""  # must be empty to allow workspace creation
     settings.max_concurrent_agents = 0  # unlimited by default for these tests
 
@@ -940,13 +941,7 @@ class TestDoLaunchOpenshell:
         assert openai_pname in call_kwargs.get("provider_names", [])
 
     async def _save_enmaas_credentials(self, client, ws_id: int) -> None:
-        """Store workspace EnMaaS credentials (gateway URL + key).
-
-        Since ACM-48198 moved the gateway URL from the operator ConfigMap to
-        per-workspace Secrets storage, an EnMaaS launch needs the URL saved on
-        the credential row (the sandbox agent config and network policy derive
-        from it). The gateway push is mocked.
-        """
+        """Store EnMaaS credentials; the endpoint is operator-configured."""
         with patch(
             "swarmer.openshell_client.ensure_provider",
             new=AsyncMock(),
@@ -955,7 +950,6 @@ class TestDoLaunchOpenshell:
                 f"/api/v1/workspaces/{ws_id}/secrets/credentials",
                 json={
                     "enmaas_api_key": "<test-enmaas-key>",
-                    "enmaas_base_url": "https://enmaas-gateway.example.com/v1",
                 },
             )
             assert resp.status_code == 200, resp.text

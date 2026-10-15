@@ -450,9 +450,7 @@ def test_agent_api_block_vertex_includes_regional_aiplatform_endpoints():
 
 
 def test_agent_api_block_enmaas_includes_gateway_endpoint():
-    """EnMaaS sessions get endpoint-scoped access to the workspace's gateway
-    host only (ACM-48198) — derived from the workspace URL, not a global
-    operator setting."""
+    """EnMaaS sessions get endpoint-scoped access to the operator gateway."""
     net = _bnet(
         model="enmaas/rits/zai-org/glm-5-3",
         enmaas_endpoint=("enmaas-gateway.example.com", 443),
@@ -480,7 +478,7 @@ def test_agent_api_block_enmaas_excludes_paid_inference_endpoints():
 
 
 def test_agent_api_block_enmaas_unset_url_keeps_service_endpoints():
-    """With no workspace gateway URL the block must not gain a bogus endpoint
+    """With no operator gateway URL the block must not gain a bogus endpoint
     — the launch path blocks EnMaaS sessions long before policy building."""
     net = _bnet(model="enmaas/rits/zai-org/glm-5-3", enmaas_endpoint=None)
     agent_api = next(v for k, v in net.items() if k == "agent_api")

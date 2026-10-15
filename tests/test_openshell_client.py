@@ -932,11 +932,12 @@ async def test_ensure_provider_auto_imports_openai_profile(sdk_client):
 _ENMAAS_TEST_URL = "https://enmaas-gateway.example.com/v1"
 
 
-def test_enmaas_profile_derives_endpoint_from_workspace_url():
-    """The profile endpoint comes from the workspace's gateway URL — host and
-    port match the validated URL, and the type is workspace-scoped so shared
-    gateways can host different EnMaaS URLs per workspace."""
-    profile = oc._enmaas_profile("enmaas-ws-1", _ENMAAS_TEST_URL)
+def test_enmaas_profile_derives_endpoint_from_operator_setting(monkeypatch):
+    """The profile endpoint is operator-controlled and shared across workspaces."""
+    from swarmer.config import settings
+
+    monkeypatch.setattr(settings, "enmaas_base_url", _ENMAAS_TEST_URL)
+    profile = oc._enmaas_profile("enmaas-ws-1")
     assert profile is not None
     assert profile["id"] == "enmaas-ws-1"
     assert profile["inference_capable"] is True
@@ -958,16 +959,20 @@ def test_enmaas_profile_derives_endpoint_from_workspace_url():
     assert oc.enmaas_profile_type(42) == "enmaas-ws-42"
 
 
-def test_enmaas_profile_none_when_unconfigured():
-    assert oc._enmaas_profile("enmaas-ws-1", "") is None
-    # Invalid URLs degrade to not-configured as well.
-    assert oc._enmaas_profile("enmaas-ws-1", "http://not-https.example.com/v1") is None
+def test_enmaas_profile_none_when_operator_endpoint_unconfigured(monkeypatch):
+    from swarmer.config import settings
+
+    monkeypatch.setattr(settings, "enmaas_base_url", "")
+    assert oc._enmaas_profile("enmaas-ws-1") is None
 
 
 @pytest.mark.asyncio
-async def test_ensure_provider_enmaas_raises_without_url(monkeypatch, sdk_client):
+async def test_ensure_provider_enmaas_raises_without_operator_endpoint(monkeypatch, sdk_client):
     """An endpoint-less EnMaaS provider must never be registered — the
-    workspace must have a gateway URL saved first."""
+    operator must configure a gateway URL first."""
+    from swarmer.config import settings
+
+    monkeypatch.setattr(settings, "enmaas_base_url", "")
     with patch.object(oc, "_get_client", return_value=sdk_client):
         with pytest.raises(ValueError, match="gateway URL"):
             await oc.ensure_provider(
@@ -982,14 +987,16 @@ async def test_ensure_provider_enmaas_raises_without_url(monkeypatch, sdk_client
 
 
 @pytest.mark.asyncio
-async def test_ensure_provider_auto_imports_enmaas_profile(sdk_client):
-    """The workspace-scoped profile is imported with the URL from the provider
-    config map before the provider record is created."""
+async def test_ensure_provider_auto_imports_enmaas_profile(monkeypatch, sdk_client):
+    """The operator-selected profile is imported before provider creation."""
+    from swarmer.config import settings
+
+    monkeypatch.setattr(settings, "enmaas_base_url", _ENMAAS_TEST_URL)
     with patch.object(oc, "_get_client", return_value=sdk_client):
         await oc.ensure_provider(
             "swarmer-ws-1-enmaas",
             "enmaas-ws-1",
-            {"ENMAAS_BASE_URL": _ENMAAS_TEST_URL},
+            {"ENMAAS_BASE_URL": "https://attacker.example.net/v1"},
             credentials={"ENMAAS_KEY": "test-key"},
         )
 
@@ -1003,12 +1010,13 @@ async def test_ensure_provider_auto_imports_enmaas_profile(sdk_client):
 
 
 @pytest.mark.asyncio
-async def test_import_enmaas_profile_url_only_update(sdk_client):
-    """URL-only updates re-bind the profile endpoint without creating or
-    updating a provider record — the gateway's stored ENMAAS_KEY is never
-    touched (an UpdateProvider with an empty credentials map could wipe it)."""
+async def test_import_enmaas_profile_uses_operator_endpoint(monkeypatch, sdk_client):
+    """Reconciliation binds the profile to operator config without provider mutation."""
+    from swarmer.config import settings
+
+    monkeypatch.setattr(settings, "enmaas_base_url", _ENMAAS_TEST_URL)
     with patch.object(oc, "_get_client", return_value=sdk_client):
-        imported = await oc.import_enmaas_profile(3, _ENMAAS_TEST_URL)
+        imported = await oc.import_enmaas_profile(3)
         assert imported is True
 
     sdk_client._stub.ImportProviderProfiles.assert_called_once()
@@ -1018,10 +1026,12 @@ async def test_import_enmaas_profile_url_only_update(sdk_client):
     sdk_client._stub.CreateProvider.assert_not_called()
     sdk_client._stub.UpdateProvider.assert_not_called()
 
-    # Unset/invalid URLs are a no-op returning False.
+    # An unset/invalid operator setting is a no-op returning False.
+    monkeypatch.setattr(settings, "enmaas_base_url", "")
     with patch.object(oc, "_get_client", return_value=sdk_client):
-        assert await oc.import_enmaas_profile(3, "") is False
-        assert await oc.import_enmaas_profile(3, "http://not-https.example.com") is False
+        assert await oc.import_enmaas_profile(3) is False
+    monkeypatch.setattr(settings, "enmaas_base_url", "http://not-https.example.com")
+    assert await oc.import_enmaas_profile(3) is False
 
 
 def test_build_provider_profile_serializes_plain_wire_strings():

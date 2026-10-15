@@ -212,7 +212,8 @@ class TestGetModelOptions:
             assert p["available"] is False
             assert p["reason"]  # non-empty human-readable reason
 
-    def test_presets_marked_available_when_provider_configured(self):
+    def test_presets_marked_available_when_provider_configured(self, monkeypatch):
+        monkeypatch.setattr(settings, "enmaas_base_url", _ENMAAS_TEST_BASE_URL)
         options = _opencode.get_model_options(
             has_vertex=True, has_gemini=True, has_openai=True, has_enmaas=True,
             enmaas_base_url=_ENMAAS_TEST_BASE_URL,
@@ -381,25 +382,27 @@ _ENMAAS_TEST_BASE_URL = "https://enmaas-gateway.example.com/v1"
 
 
 class TestEnmaasModelOptions:
-    def test_enmaas_unavailable_reason_when_url_unset(self):
-        """Without the workspace gateway URL the preset cannot work even when
-        a key was saved — the reason must say so."""
+    def test_enmaas_unavailable_reason_when_operator_endpoint_unset(self, monkeypatch):
+        """Without an operator endpoint the preset is unavailable."""
+        monkeypatch.setattr(settings, "enmaas_base_url", "")
         options = _opencode.get_model_options(has_enmaas=True, enmaas_base_url="")
         enmaas = next(o for o in options if o["value"] == "enmaas")
         assert enmaas["available"] is False
-        assert "not set" in enmaas["reason"]
+        assert "operator" in enmaas["reason"]
         assert "gateway URL" in enmaas["reason"]
 
-    def test_enmaas_invalid_url_degrades_to_unavailable(self):
-        """A corrupt stored URL degrades to not-configured, never a 500."""
+    def test_enmaas_invalid_operator_url_degrades_to_unavailable(self, monkeypatch):
+        """An invalid operator URL degrades to not-configured, never a 500."""
+        monkeypatch.setattr(settings, "enmaas_base_url", "http://invalid.example/v1")
         options = _opencode.get_model_options(
-            has_enmaas=True, enmaas_base_url="http://not-https.example.com/v1"
+            has_enmaas=True, enmaas_base_url=_ENMAAS_TEST_BASE_URL
         )
         enmaas = next(o for o in options if o["value"] == "enmaas")
         assert enmaas["available"] is False
         assert "gateway URL" in enmaas["reason"]
 
-    def test_enmaas_unavailable_reason_when_key_missing(self):
+    def test_enmaas_unavailable_reason_when_key_missing(self, monkeypatch):
+        monkeypatch.setattr(settings, "enmaas_base_url", _ENMAAS_TEST_BASE_URL)
         options = _opencode.get_model_options(
             has_enmaas=False, enmaas_base_url=_ENMAAS_TEST_BASE_URL
         )
@@ -407,7 +410,8 @@ class TestEnmaasModelOptions:
         assert enmaas["available"] is False
         assert "EnMaaS key not set" in enmaas["reason"]
 
-    def test_enmaas_available_when_url_and_key_present(self):
+    def test_enmaas_available_when_operator_endpoint_and_key_present(self, monkeypatch):
+        monkeypatch.setattr(settings, "enmaas_base_url", _ENMAAS_TEST_BASE_URL)
         options = _opencode.get_model_options(
             has_enmaas=True, enmaas_base_url=_ENMAAS_TEST_BASE_URL
         )
@@ -418,6 +422,10 @@ class TestEnmaasModelOptions:
 
 
 class TestEnmaasConfigGeneration:
+    @pytest.fixture(autouse=True)
+    def _operator_endpoint(self, monkeypatch):
+        monkeypatch.setattr(settings, "enmaas_base_url", _ENMAAS_TEST_BASE_URL)
+
     def test_enmaas_pconfig_all_roles_enmaas_and_only_enmaas_enabled(self, monkeypatch):
         monkeypatch.setattr(settings, "opencode_experimental_plan_mode", True)
         data = _opencode.build_config_data(model="enmaas", enmaas_base_url=_ENMAAS_TEST_BASE_URL)
@@ -448,16 +456,19 @@ class TestEnmaasConfigGeneration:
         # preserved (split at the FIRST "/" only).
         model = provider["models"]["rits/zai-org/glm-5-3"]
         assert model["name"] == "GLM 5.3"
+        assert model["modalities"] == {"input": ["text"], "output": ["text"]}
         assert model["limit"] == {"context": 1_000_000, "output": 65_536}
+        assert model["cost"] == {"input": 0, "output": 0}
 
-    def test_enmaas_url_read_from_secret_fallback(self):
-        """The workspace URL can also come from the secret row when the
-        explicit argument is not supplied (launch-path call sites)."""
+    def test_legacy_workspace_url_cannot_override_operator_endpoint(self):
+        """Legacy workspace URL values cannot redirect generated config."""
 
         class _FakeSecret:
-            enmaas_base_url = _ENMAAS_TEST_BASE_URL
+            enmaas_base_url = "https://attacker.example.net/v1"
 
-        data = _opencode.build_config_data(secret=_FakeSecret(), model="enmaas")
+        data = _opencode.build_config_data(
+            secret=_FakeSecret(), model="enmaas", enmaas_base_url="https://attacker.example.net/v1"
+        )
         config = json.loads(data["opencode.json"])
         assert config["providers"]["enmaas"]["settings"]["baseURL"] == _ENMAAS_TEST_BASE_URL
 
@@ -480,8 +491,9 @@ class TestEnmaasConfigGeneration:
         assert config["enabled_providers"] == ["enmaas"]
         assert "enmaas" in config["providers"]
 
-    def test_enmaas_config_raises_without_base_url(self):
-        """A broken config must never be written — unset gateway URL raises."""
+    def test_enmaas_config_raises_without_operator_endpoint(self, monkeypatch):
+        """A broken config must never be written without operator endpoint."""
+        monkeypatch.setattr(settings, "enmaas_base_url", "")
         with pytest.raises(ValueError, match="gateway URL"):
             _opencode.build_config_data(model="enmaas", enmaas_base_url="")
 

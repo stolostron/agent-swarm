@@ -155,13 +155,13 @@ and `openai/gpt-6-luna` for both build and small; the ConfigMap values override 
 defaults in deployed environments. The EnMaaS preset (ACM-48198) defaults every role to
 `enmaas/rits/zai-org/glm-5-3` on the business-provided zero-cost gateway; because `enmaas`
 is not a built-in OpenCode provider, `build_config_data()` emits a native
-`providers.enmaas` block (openai-compatible package, workspace-configured `baseURL`,
+`providers.enmaas` block (openai-compatible package, operator-configured `baseURL`,
 `ENMAAS_KEY` env reference) and enables only the enmaas provider for EnMaaS sessions. The
-gateway URL is workspace configuration: a workspace manager enters it alongside the API
-key in Settings > Secrets, it is validated (`config.validate_enmaas_base_url`), stored
-encrypted on the workspace credential row, and bound to a per-workspace OpenShell profile
-type (`enmaas-ws-{id}`) so the deployment-specific endpoint never ships in git-tracked
-manifests.
+gateway URL is operator-controlled through the deployment's `ENMAAS_BASE_URL` setting;
+it is validated (`config.validate_enmaas_base_url`) and bound to per-workspace OpenShell
+profile types (`enmaas-ws-{id}`) so workspace members cannot redirect gateway credentials.
+The tracked ConfigMap contains an empty value to be set per deployment, never a business
+endpoint.
 
 | Use case | Swarmer behavior | OpenShell behavior |
 |---|---|---|
@@ -285,11 +285,9 @@ the Swarmer dashboard, not the agent sandbox.
   are never stored in Swarmer's database; legacy encrypted columns remain only for
   pre-migration ADC/Gemini/OpenAI keys. EnMaaS (ACM-48198) has no token column at all —
   just the `enmaas_configured` marker — and its token never appears in API responses,
-  rendered HTML, logs, generated `opencode.json`, or sandbox `extra_env`. The workspace's
-  EnMaaS gateway URL, by contrast, IS stored (encrypted in `enmaas_base_url_enc`) because
-  it is per-workspace configuration that must not ship in git-tracked manifests; it is
-  returned by the credentials API for form pre-fill and bound to a per-workspace
-  OpenShell profile type (`enmaas-ws-{id}`).
+  rendered HTML, logs, generated `opencode.json`, or sandbox `extra_env`. The EnMaaS gateway
+  endpoint is operator-controlled through `ENMAAS_BASE_URL`; legacy encrypted workspace URL
+  columns are no longer read or returned and cannot affect provider profiles or network policy.
 
 ## Change Routing
 
@@ -300,8 +298,8 @@ the Swarmer dashboard, not the agent sandbox.
   EnMaaS pattern, ACM-48198) skip the encrypted property entirely — persist only a boolean
   marker column, push the token to the workspace Gateway provider at save time, and add
   marker reset to `gateway_version.py` plus redaction for the token's key name.
-  Non-credential per-workspace configuration that must stay out of git (the EnMaaS
-  gateway URL) gets its own encrypted column and a per-workspace profile type.
+  Non-secret deployment endpoints must come from operator-controlled environment/configuration
+  rather than workspace-editable credential forms.
 - Add an agent tool: implement `AgentToolStrategy`, register it, add model/config/image
   settings, then update OpenShell launch tests.
 - Change a deployment version or image tag: update the owning Makefile/default contract and

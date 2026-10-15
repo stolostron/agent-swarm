@@ -677,11 +677,10 @@ at zero model cost over an OpenAI-compatible API:
   gateway provider `swarmer-ws-{workspace_id}-enmaas`; it is never persisted in Swarmer's
   database, API responses, logs, or generated sandbox config. Blank submissions keep the
   existing token; Delete removes the gateway provider.
-- The **gateway URL** is entered together with the API key (required on first setup) and
-  stored encrypted in Swarmer's database — it is per-workspace configuration that
-  deliberately does **not** ship in the git-tracked `k8s/swarmer/configmap.yaml`. Changing
-  it re-binds this workspace's sandbox egress and provider profile to the new host without
-  touching the stored token.
+- The **gateway URL** is configured by the Swarmer operator through the deployment's
+  `ENMAAS_BASE_URL` setting (for example, in the `swarmer-model-presets` ConfigMap). It is
+  not editable by workspace members and is not hardcoded in tracked source. All workspace
+  credentials and sandbox egress bind to this operator-selected endpoint.
 - The **GLM-5.3 (EnMaaS)** preset is selectable for sessions and schedules. All three roles
   (plan/build/small) resolve to `enmaas/rits/zai-org/glm-5-3` with a 1,000,000-token context,
   65,536-token output limit, and zero configured cost.

@@ -411,7 +411,6 @@ async def _get_provider_options(
         has_gemini=has_gemini,
         has_openai=has_openai,
         has_enmaas=has_enmaas,
-        enmaas_base_url=(oc.enmaas_base_url or "") if oc is not None else "",
     )
 
 router = APIRouter()
@@ -1554,16 +1553,11 @@ async def _do_launch_openshell(
             )
     raw_model = raw_model.strip("\r\n")  # strip any stray line endings before embedding in shell commands
     model = tool.resolve_build_model(raw_model)
-    # Workspace EnMaaS gateway URL (ACM-48198) — encrypted on the credential
-    # row. Serialised here so the background setup task can regenerate the
-    # sandbox agent config (providers.enmaas.options.baseURL) without holding
-    # the ORM object, and validated so launch fails clearly when the URL is
-    # missing/corrupt for an EnMaaS session.
-    from swarmer.config import sanitize_enmaas_base_url
+    # Resolve the EnMaaS endpoint only from operator-controlled deployment
+    # configuration; legacy workspace URL fields never affect routing.
+    from swarmer.config import configured_enmaas_base_url
 
-    _enmaas_base_url = sanitize_enmaas_base_url(
-        (oc_secret.enmaas_base_url or "") if oc_secret is not None else ""
-    )
+    _enmaas_base_url = configured_enmaas_base_url()
     _enmaas_endpoint: tuple[str, int] | None = None
     if _enmaas_base_url:
         from swarmer.config import enmaas_endpoint_from_url

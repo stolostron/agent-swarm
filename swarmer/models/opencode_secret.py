@@ -47,16 +47,12 @@ class OpencodeSecret(Base):
     # EnMaaS (ACM-48198): non-secret marker that the workspace EnMaaS provider
     # was configured on the OpenShell gateway. There is deliberately NO token
     # column — the ENMAAS_KEY credential is gateway-only, mirroring the OpenAI
-    # flow, so the flag is the sole Swarmer-side state for the key. The
-    # gateway URL itself IS stored (encrypted) per workspace below: it is
-    # workspace-supplied configuration that must not ship in git-tracked
-    # manifests, and it never carries credentials.
+    # flow, so the flag is the sole active Swarmer-side state for the key.
     enmaas_configured: Mapped[bool] = mapped_column(
         nullable=False, default=False, server_default="0"
     )
-    # Fernet-encrypted EnMaaS gateway base URL (workspace-scoped operator
-    # config, entered alongside the API key in Secrets). Stored encrypted so
-    # the deployment-specific endpoint never appears in plaintext at rest.
+    # Legacy encrypted workspace endpoint column retained for compatibility.
+    # Active EnMaaS code ignores it and uses operator-controlled settings.
     enmaas_base_url_enc: Mapped[str] = mapped_column(
         Text, nullable=False, default="", server_default=""
     )
