@@ -1226,13 +1226,15 @@ async def _resolve_schedule_prompt(schedule_id: int, session: Session, db: Async
     return resolved_prompt
 
 
-async def _resolve_schedule_provider(schedule_id: int, session: Session, db: AsyncSession) -> str:
-    """Return a schedule provider override, or the session provider."""
+async def _resolve_schedule_provider(
+    schedule_id: int, session: Session, db: AsyncSession
+) -> tuple[str, bool]:
+    """Return the effective provider and whether it came from the schedule."""
     from swarmer.models.session_schedule import SessionSchedule
     sched = await db.get(SessionSchedule, schedule_id)
     if sched and sched.provider.strip():
-        return sched.provider.strip()
-    return (session.provider or "").strip()
+        return sched.provider.strip(), True
+    return (session.provider or "").strip(), False
 
 
 async def _build_run_context_snapshot(
@@ -1420,9 +1422,12 @@ async def _do_launch(
     mcp_servers = _select_session_mcp_servers(session, eligible_mcp_servers)
 
     if session.active_schedule_id:
-        session_provider = await _resolve_schedule_provider(session.active_schedule_id, session, db)
+        session_provider, provider_from_schedule = await _resolve_schedule_provider(
+            session.active_schedule_id, session, db
+        )
     else:
         session_provider = (session.provider or "").strip()
+        provider_from_schedule = False
 
     # Queued manual instructions are consumed exactly once when dispatch begins.
     # Clearing and committing before runtime setup means a setup failure cannot
@@ -1450,6 +1455,7 @@ async def _do_launch(
         prompt_sources=prompt_sources,
         user_id=user_id,
         requested_provider=session_provider,
+        persist_provider_default=not provider_from_schedule,
     )
 
 
@@ -1465,6 +1471,7 @@ async def _do_launch_openshell(
     prompt_sources: list | None = None,
     user_id: str = "",
     requested_provider: str = "",
+    persist_provider_default: bool = True,
 ) -> None:
     """Launch a session via the OpenShell sandbox API."""
     from swarmer import openshell_client
@@ -1570,7 +1577,11 @@ async def _do_launch_openshell(
     # different defaults (ACM-48198: resume must not replace EnMaaS
     # selections). Only fills an empty selection — an explicit choice is
     # never overwritten.
-    if not (session.provider or "").strip() and raw_model in _provider_names:
+    if (
+        persist_provider_default
+        and not (session.provider or "").strip()
+        and raw_model in _provider_names
+    ):
         session.provider = raw_model
 
     # Query workspace env vars from DB before releasing the connection.

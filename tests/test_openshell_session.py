@@ -383,6 +383,74 @@ class TestDoLaunchOpenshell:
         )
 
     @pytest.mark.asyncio
+    async def test_schedule_provider_override_does_not_become_manual_default(
+        self, client, monkeypatch
+    ):
+        """A schedule-only EnMaaS choice applies once; the next manual run uses its own default."""
+        from contextlib import ExitStack
+
+        from swarmer.config import settings
+        from swarmer.models.session import Session
+        from swarmer.models.session_schedule import SessionSchedule
+        from swarmer.models.workspace import Workspace
+        from swarmer.routers.sessions import _do_launch
+        from sqlalchemy.orm import selectinload
+
+        monkeypatch.setattr(settings, "max_concurrent_agents", 0)
+        monkeypatch.setattr(settings, "enmaas_base_url", "https://enmaas.example/v1")
+        ws_data = await _create_workspace(client, "Scheduled provider override")
+        session_data = await _create_session(client, ws_data["id"], "scheduled-enmaas")
+
+        async with _TestSession() as db:
+            session = await db.get(Session, session_data["id"])
+            schedule = SessionSchedule(
+                session_id=session.id,
+                cron_schedule="0 0 * * *",
+                label="Scheduled EnMaaS",
+                provider="enmaas",
+                enabled=True,
+            )
+            db.add(schedule)
+            await db.flush()
+            session.active_schedule_id = schedule.id
+            await db.commit()
+
+        patches = self._patch_openshell()
+        with ExitStack() as stack:
+            for name, patcher in patches.items():
+                if name == "wait_vertex_ready":
+                    continue
+                mock = stack.enter_context(patcher)
+                if name == "provider_exists":
+                    mock.side_effect = lambda *_args, **_kwargs: True
+                elif name == "setup_sandbox":
+                    setup_mock = mock
+
+            async with _TestSession() as db:
+                session = await db.get(
+                    Session,
+                    session_data["id"],
+                    options=[selectinload(Session.repos)],
+                )
+                workspace = await db.get(Workspace, ws_data["id"])
+                await _do_launch(session, workspace, db)
+                await asyncio.sleep(0)
+                assert session.provider == ""
+                scheduled_launch = setup_mock.call_args.kwargs
+                assert scheduled_launch["config_model"] == "enmaas"
+                assert scheduled_launch["model"] == "enmaas/rits/zai-org/glm-5-3"
+
+                session.active_schedule_id = None
+                session.phase = "idle"
+                await db.commit()
+                await _do_launch(session, workspace, db)
+                await asyncio.sleep(0)
+
+                assert session.provider == "claude"
+                manual_launch = setup_mock.call_args.kwargs
+                assert manual_launch["config_model"] == "claude"
+
+    @pytest.mark.asyncio
     async def test_creates_sandbox_with_tool_image(self, client):
         ws = await _create_workspace(client)
         s = await _create_session(client, ws["id"])
