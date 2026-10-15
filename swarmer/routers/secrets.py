@@ -117,9 +117,8 @@ async def _secrets_context(api, ws_id: int) -> dict:
                 enmaas_provider_configured = await openshell_client.provider_exists(
                     f"swarmer-ws-{ws_id}-enmaas"
                 )
-        except Exception:
+        except Exception:  # noqa: BLE001 — gateway may be unreachable in local development
             enmaas_provider_check_failed = True
-            pass  # gateway may be unreachable in local dev without OpenShell
     finally:
         if oc_client is not None:
             close = getattr(oc_client, "close", None)

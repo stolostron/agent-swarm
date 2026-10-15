@@ -147,7 +147,7 @@ async def _reconcile_workspace_enmaas_profiles() -> None:
         try:
             try:
                 client = await openshell_client.get_client_for_workspace(ws_id)
-            except Exception:
+            except Exception:  # noqa: BLE001 — gateway profile reconciliation is non-fatal
                 log.warning(
                     "EnMaaS profile reconcile: no gateway client for workspace %d — using default",
                     ws_id,
