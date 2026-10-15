@@ -1504,6 +1504,7 @@ async def _do_launch_openshell(
         enmaas_endpoint_from_url(_enmaas_base_url) if _enmaas_base_url else None
     )
     _available_providers: dict[str, bool] = {}
+    _provider_exists: dict[str, bool] = {}
     _probe_failed: set[str] = set()
     oc_client = await openshell_client.get_client_for_workspace(ws, db)
     if tool.requires_ai_model():
@@ -1512,6 +1513,7 @@ async def _do_launch_openshell(
                 _provider_available = await openshell_client.provider_exists(
                     _gateway_name, client=oc_client
                 )
+                _provider_exists[_name] = _provider_available
                 if _name == "enmaas":
                     _provider_available = _provider_available and _enmaas_endpoint is not None
                 _available_providers[_name] = _provider_available
@@ -1549,6 +1551,12 @@ async def _do_launch_openshell(
             # Cost-safety (ACM-48198): an explicitly selected but unavailable
             # EnMaaS provider fails clearly — it must never silently fall back
             # to another (paid) provider.
+            if _provider_exists.get("enmaas") and _enmaas_endpoint is None:
+                raise ValueError(
+                    "EnMaaS gateway endpoint is not configured or valid. Ask the "
+                    "Swarmer operator to configure a valid endpoint "
+                    "(no fallback to paid providers)"
+                )
             raise ValueError(
                 "EnMaaS provider is not configured for this workspace — add an "
                 "EnMaaS key in Settings > Token (no fallback to paid providers)"

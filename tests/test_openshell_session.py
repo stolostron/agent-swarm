@@ -1102,6 +1102,7 @@ class TestDoLaunchOpenshell:
 
         assert resp.status_code == 500
         assert "EnMaaS provider is not configured" in resp.text
+        assert "EnMaaS key in Settings > Token" in resp.text
         mock_setup.assert_not_called()
 
     @pytest.mark.asyncio
@@ -1194,12 +1195,19 @@ class TestDoLaunchOpenshell:
         )
         mock_setup.assert_not_called()
 
+    @pytest.mark.parametrize(
+        "endpoint",
+        ["", "http://invalid.example/v1"],
+        ids=["unset-endpoint", "invalid-endpoint"],
+    )
     @pytest.mark.asyncio
-    async def test_explicit_enmaas_selection_fails_closed_without_endpoint(self, client, monkeypatch):
+    async def test_explicit_enmaas_selection_fails_closed_without_endpoint(
+        self, client, monkeypatch, endpoint
+    ):
         """An existing gateway provider cannot bypass endpoint validation for an explicit selection."""
         from swarmer.config import settings
 
-        monkeypatch.setattr(settings, "enmaas_base_url", "http://invalid.example/v1")
+        monkeypatch.setattr(settings, "enmaas_base_url", endpoint)
         ws = await _create_workspace(client)
         s_resp = await client.post(
             f"/api/v1/workspaces/{ws['id']}/sessions",
@@ -1208,6 +1216,7 @@ class TestDoLaunchOpenshell:
         assert s_resp.status_code == 201, s_resp.text
         s = s_resp.json()
         enmaas_pname = f"swarmer-ws-{ws['id']}-enmaas"
+        gemini_pname = f"swarmer-ws-{ws['id']}-google-ai-studio"
 
         patches = self._patch_openshell()
         with patches["create_provider"], patches["ensure_provider"], \
@@ -1220,7 +1229,9 @@ class TestDoLaunchOpenshell:
               patches["get_image"]:
             with patch(
                 "swarmer.openshell_client.provider_exists",
-                new=AsyncMock(side_effect=lambda name, **kw: name == enmaas_pname),
+                new=AsyncMock(
+                    side_effect=lambda name, **kw: name in (enmaas_pname, gemini_pname)
+                ),
             ):
                 resp = await client.post(
                     f"/api/v1/workspaces/{ws['id']}/sessions/{s['id']}/launch"
@@ -1228,7 +1239,10 @@ class TestDoLaunchOpenshell:
                 await asyncio.sleep(0)
 
         assert resp.status_code == 500
-        assert "EnMaaS provider is not configured" in resp.text
+        assert "EnMaaS gateway endpoint is not configured or valid" in resp.text
+        assert "Swarmer operator" in resp.text
+        assert "no fallback to paid providers" in resp.text
+        assert "EnMaaS key in Settings > Token" not in resp.text
         mock_setup.assert_not_called()
 
     @pytest.mark.asyncio
