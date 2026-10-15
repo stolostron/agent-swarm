@@ -1068,6 +1068,58 @@ class TestDoLaunchOpenshell:
         assert enmaas_ensure_calls == []
 
     @pytest.mark.asyncio
+    async def test_enmaas_launch_excludes_configured_gemini_and_vertex_providers(self, client):
+        """An EnMaaS sandbox must not receive unrelated Google credentials."""
+        ws = await _create_workspace(client)
+        await self._save_enmaas_credentials(client, ws["id"])
+        s_resp = await client.post(
+            f"/api/v1/workspaces/{ws['id']}/sessions",
+            json={"name": "s-enmaas-isolated", "mode": "prompt", "agent_tool": "opencode", "provider": "enmaas"},
+        )
+        assert s_resp.status_code == 201, s_resp.text
+        expected_ai_providers = {
+            f"swarmer-ws-{ws['id']}-enmaas",
+            f"swarmer-ws-{ws['id']}-google-ai-studio",
+            f"swarmer-ws-{ws['id']}-google-cloud",
+        }
+
+        patches = self._patch_openshell()
+        with (
+            patches["create_provider"],
+            patches["ensure_provider"],
+            patches["configure_provider_credential"],
+            patches["attach_sandbox_provider"],
+            patches["create_sandbox"],
+            patches["write_agent_config"],
+            patches["write_agents_md"],
+            patches["exec_command"],
+            patches["start_agent"],
+            patches["delete_sandbox"],
+            patches["build_policy"],
+            patches["run_agent"],
+            patches["setup_sandbox"] as mock_setup,
+            patches["get_image"],
+        ):
+            with patch(
+                "swarmer.openshell_client.provider_exists",
+                new=AsyncMock(return_value=True),
+            ):
+                resp = await client.post(
+                    f"/api/v1/workspaces/{ws['id']}/sessions/{s_resp.json()['id']}/launch"
+                )
+                await asyncio.sleep(0)
+
+        assert resp.status_code == 200
+        call_kwargs = mock_setup.call_args.kwargs
+        attached_ai_providers = set(call_kwargs.get("provider_names", [])) & expected_ai_providers
+        assert attached_ai_providers == {f"swarmer-ws-{ws['id']}-enmaas"}
+        env_vars = call_kwargs.get("env_vars", {})
+        assert not {
+            "GOOGLE_CLOUD_LOCATION", "VERTEX_LOCATION",
+            "GOOGLE_CLOUD_PROJECT", "VERTEX_PROJECT",
+        } & env_vars.keys()
+
+    @pytest.mark.asyncio
     async def test_enmaas_selection_fails_clearly_without_paid_fallback(self, client):
         """Cost-safety (ACM-48198): an explicitly selected but unavailable
         EnMaaS provider must fail with a clear error — never fall back to a

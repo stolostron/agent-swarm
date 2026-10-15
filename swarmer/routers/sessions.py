@@ -1671,7 +1671,8 @@ async def _do_launch_openshell(
     # Non-AI tools (e.g. shell) never call an AI model — skip AI provider
     # credentials (Google AI Studio, Vertex/google-cloud) for their sandboxes.
     _gemini_pname = f"swarmer-ws-{ws_id}-google-ai-studio"
-    if tool.requires_ai_model():
+    _is_enmaas_model = tool.requires_ai_model() and model.split("/", 1)[0] == "enmaas"
+    if tool.requires_ai_model() and not _is_enmaas_model:
         try:
             if await openshell_client.provider_exists(_gemini_pname, client=oc_client):
                 provider_names.append(_gemini_pname)
@@ -1721,7 +1722,7 @@ async def _do_launch_openshell(
     # Attach the provider if it already exists (created via the secrets UI).
     _vertex_pname = f"swarmer-ws-{ws_id}-google-cloud"
     _has_google_cloud_provider = False
-    if tool.requires_ai_model():
+    if tool.requires_ai_model() and not _is_enmaas_model:
         try:
             if await openshell_client.provider_exists(_vertex_pname, client=oc_client):
                 provider_names.append(_vertex_pname)
