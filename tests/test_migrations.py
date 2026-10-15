@@ -162,6 +162,75 @@ class TestMigrateDbDropsLegacyColumns:
         assert "opencode_session_id" in cols
 
     @pytest.mark.asyncio
+    async def test_enmaas_columns_added_to_existing_schema(self):
+        """ACM-48198: existing databases gain the EnMaaS gateway-only
+        credential marker column (server_default 0) and the encrypted
+        workspace gateway URL column (server_default '') via migrate_db()."""
+        async with _engine.begin() as conn:
+            await conn.execute(
+                text("ALTER TABLE opencode_secrets DROP COLUMN enmaas_configured")
+            )
+            await conn.execute(
+                text("ALTER TABLE opencode_secrets DROP COLUMN enmaas_base_url_enc")
+            )
+
+        # Seed a pre-migration row so we can verify the default applies.
+        from swarmer.models.workspace import Workspace
+
+        async with _TestSession() as session:
+            ws = Workspace(display_name="enmaas-mig", description="", namespace="test-ns")
+            session.add(ws)
+            await session.commit()
+            await session.refresh(ws)
+
+        async with _engine.begin() as conn:
+            await conn.execute(
+                text(
+                    "INSERT INTO opencode_secrets "
+                    "(workspace_id, user_id, shared, google_cloud_project, vertex_location, "
+                    "application_default_credentials_enc, google_api_key_enc, openai_api_key_enc) "
+                    "VALUES (:ws, '', 0, '', '', '', '', '')"
+                ),
+                {"ws": ws.id},
+            )
+
+        import swarmer.database as db_module
+
+        orig_engine = db_module._engine
+        db_module._engine = _engine
+        try:
+            await db_module.migrate_db()
+        finally:
+            db_module._engine = orig_engine
+
+        async with _engine.begin() as conn:
+            result = await conn.execute(text("PRAGMA table_info(opencode_secrets)"))
+            cols = [row[1] for row in result.fetchall()]
+        assert "enmaas_configured" in cols
+        assert "enmaas_base_url_enc" in cols
+
+        # The pre-existing row works with the defaulted marker/URL, and the
+        # URL round-trips encrypted through the property accessors.
+        async with _TestSession() as session:
+            from sqlalchemy import select
+
+            from swarmer.models.opencode_secret import OpencodeSecret
+
+            secret = (
+                await session.execute(
+                    select(OpencodeSecret).where(OpencodeSecret.workspace_id == ws.id)
+                )
+            ).scalar_one()
+            assert secret.enmaas_configured is False
+            assert secret.has_enmaas is False
+            assert secret.enmaas_base_url == ""
+            secret.enmaas_base_url = "https://enmaas-gateway.example.com/v1"
+            assert secret.enmaas_base_url_enc != "https://enmaas-gateway.example.com/v1"
+            assert secret.enmaas_base_url == "https://enmaas-gateway.example.com/v1"
+            secret.enmaas_base_url = ""
+            assert secret.enmaas_base_url_enc == ""
+
+    @pytest.mark.asyncio
     async def test_migrate_db_idempotent_on_fresh_schema(self):
         """migrate_db() must not raise when run against a fresh schema
         (columns already absent — 'no such column' suppressed)."""

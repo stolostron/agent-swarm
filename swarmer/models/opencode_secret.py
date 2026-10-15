@@ -44,6 +44,22 @@ class OpencodeSecret(Base):
     vertex_configured: Mapped[bool] = mapped_column(
         nullable=False, default=False, server_default="0"
     )
+    # EnMaaS (ACM-48198): non-secret marker that the workspace EnMaaS provider
+    # was configured on the OpenShell gateway. There is deliberately NO token
+    # column — the ENMAAS_KEY credential is gateway-only, mirroring the OpenAI
+    # flow, so the flag is the sole Swarmer-side state for the key. The
+    # gateway URL itself IS stored (encrypted) per workspace below: it is
+    # workspace-supplied configuration that must not ship in git-tracked
+    # manifests, and it never carries credentials.
+    enmaas_configured: Mapped[bool] = mapped_column(
+        nullable=False, default=False, server_default="0"
+    )
+    # Fernet-encrypted EnMaaS gateway base URL (workspace-scoped operator
+    # config, entered alongside the API key in Secrets). Stored encrypted so
+    # the deployment-specific endpoint never appears in plaintext at rest.
+    enmaas_base_url_enc: Mapped[str] = mapped_column(
+        Text, nullable=False, default="", server_default=""
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, server_default=func.now()
     )
@@ -86,6 +102,21 @@ class OpencodeSecret(Base):
     @property
     def has_openai(self) -> bool:
         return self.openai_configured or bool(self.openai_api_key_enc)
+
+    @property
+    def has_enmaas(self) -> bool:
+        # Marker only — the token itself lives on the OpenShell gateway.
+        return self.enmaas_configured
+
+    @property
+    def enmaas_base_url(self) -> str:
+        if not self.enmaas_base_url_enc:
+            return ""
+        return crypto.decrypt(self.enmaas_base_url_enc)
+
+    @enmaas_base_url.setter
+    def enmaas_base_url(self, value: str) -> None:
+        self.enmaas_base_url_enc = crypto.encrypt(value) if value else ""
 
     # ---------- display helpers (safe to send to browser) ----------
 

@@ -106,10 +106,67 @@ async def _ensure_openshell_provider_profiles() -> None:
     except Exception:
         log.warning("Failed to enable OpenShell providers_v2 — VertexAI inference routing may not work", exc_info=True)
     try:
-        await openshell_client.import_provider_profiles(_OPENSHELL_CUSTOM_PROFILES)
-        log.info("OpenShell provider profiles registered: %s", [p["id"] for p in _OPENSHELL_CUSTOM_PROFILES])
+        await openshell_client.import_provider_profiles(list(_OPENSHELL_CUSTOM_PROFILES))
+        log.info(
+            "OpenShell provider profiles registered: %s",
+            [p["id"] for p in _OPENSHELL_CUSTOM_PROFILES],
+        )
     except Exception:
         log.warning("Failed to import OpenShell provider profiles — sessions may lack Google AI Studio support", exc_info=True)
+    # EnMaaS profiles are per-workspace (ACM-48198): each workspace's profile
+    # type (enmaas-ws-{id}) carries that workspace's own gateway URL, so no
+    # single global profile can be registered here. Reconcile every stored
+    # workspace URL against its resolved gateway so endpoint bindings survive
+    # gateway restarts; the credential save path re-imports on demand anyway.
+    try:
+        await _reconcile_workspace_enmaas_profiles()
+    except Exception:
+        log.warning("Failed to reconcile workspace EnMaaS provider profiles (non-fatal)", exc_info=True)
+
+
+async def _reconcile_workspace_enmaas_profiles() -> None:
+    """Import each workspace's EnMaaS profile into its resolved gateway."""
+    from sqlalchemy import select
+
+    from swarmer import openshell_client
+    from swarmer.database import get_db
+    from swarmer.models.opencode_secret import OpencodeSecret
+
+    async for db in get_db():
+        result = await db.execute(
+            select(OpencodeSecret).where(OpencodeSecret.enmaas_base_url_enc != "")
+        )
+        # Decrypt inside the session scope — property access requires a live
+        # DB session context for the ORM instances.
+        rows = [
+            (s.workspace_id, s.enmaas_base_url) for s in result.scalars().all()
+        ]
+        break
+    for ws_id, base_url in rows:
+        client = None
+        try:
+            try:
+                client = await openshell_client.get_client_for_workspace(ws_id)
+            except Exception:
+                log.warning(
+                    "EnMaaS profile reconcile: no gateway client for workspace %d — using default",
+                    ws_id,
+                )
+            imported = await openshell_client.import_enmaas_profile(
+                ws_id, base_url, client=client
+            )
+            if imported:
+                log.info("EnMaaS provider profile registered for workspace %d", ws_id)
+        except Exception:
+            log.warning(
+                "EnMaaS profile reconcile failed for workspace %d (non-fatal)", ws_id,
+                exc_info=True,
+            )
+        finally:
+            if client is not None:
+                close = getattr(client, "close", None)
+                if callable(close):
+                    close()
 
 
 async def _track_default_gateway_version() -> None:
@@ -198,7 +255,7 @@ async def _restart_prompt_pollers() -> None:
                 )
             else:
                 _raw_model = s.provider or _tool.get_default_model(False)
-                # s.provider is a family preset name ("claude"/"gemini"/"openai", ACM-37232);
+                # s.provider is a family preset name ("claude"/"gemini"/"openai"/"enmaas", ACM-37232);
                 # resolve it to a concrete provider/model@version ID for the CLI flag.
                 _model = _tool.resolve_build_model(_raw_model)
                 # Reconstruct the same AGENTS.md-reading command used at initial launch

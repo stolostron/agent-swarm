@@ -58,6 +58,7 @@ class ShellStrategy(AgentToolStrategy):
         mcp_servers: "list[McpServer] | None" = None,
         use_inference_local: bool = False,
         model: str = "",
+        enmaas_base_url: str = "",
     ) -> dict[str, str]:
         """Return an empty config dict — shell tool needs no agent config files.
 
@@ -177,11 +178,16 @@ class ShellStrategy(AgentToolStrategy):
         has_vertex: bool = False,
         has_gemini: bool = False,
         has_openai: bool = False,
+        has_enmaas: bool = False,
+        enmaas_base_url: str = "",
     ) -> list[dict]:
         """Return an empty list — shell tool needs no AI provider.
 
         An empty list signals to the UI that the model/provider selector
-        should be hidden when the shell tool is selected.
+        should be hidden when the shell tool is selected. The availability
+        flags (including has_enmaas and the EnMaaS gateway URL) are accepted
+        for interface compatibility but ignored — shell sessions are
+        independent of AI credentials.
         """
         return []
 

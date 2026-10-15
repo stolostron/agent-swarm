@@ -21,4 +21,12 @@ data:
   OPENAI_PRESET_PLAN_MODEL: "openai/gpt-6.1-sol"
   OPENAI_PRESET_BUILD_MODEL: "openai/gpt-6-luna"
   OPENAI_PRESET_SMALL_MODEL: "openai/gpt-6-luna"
+  # EnMaaS preset role models (ACM-48198) — business-provided zero-cost
+  # GLM-5.3 gateway. The gateway URL is NOT configured here: it is
+  # workspace-supplied configuration entered (with the API key) in each
+  # workspace's Settings > Secrets page, so the deployment-specific endpoint
+  # never ships in this git-tracked manifest.
+  ENMAAS_PRESET_PLAN_MODEL: "enmaas/rits/zai-org/glm-5-3"
+  ENMAAS_PRESET_BUILD_MODEL: "enmaas/rits/zai-org/glm-5-3"
+  ENMAAS_PRESET_SMALL_MODEL: "enmaas/rits/zai-org/glm-5-3"
   OPENCODE_EXPERIMENTAL_PLAN_MODE: "true"

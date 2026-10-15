@@ -32,6 +32,7 @@ async def test_gateway_version_change_resets_ai_provider_flags():
                 gemini_configured=True,
                 openai_configured=True,
                 vertex_configured=True,
+                enmaas_configured=True,
             )
         )
         await db.commit()
@@ -50,6 +51,7 @@ async def test_gateway_version_change_resets_ai_provider_flags():
         assert secret.gemini_configured is False
         assert secret.openai_configured is False
         assert secret.vertex_configured is False
+        assert secret.enmaas_configured is False
 
     await engine.dispose()
 

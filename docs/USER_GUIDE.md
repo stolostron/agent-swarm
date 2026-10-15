@@ -99,7 +99,8 @@ oc apply -f k8s/swarmer/pvc.yaml
 oc apply -f k8s/swarmer/configmap.yaml
 ```
 
-> `configmap.yaml` holds the Claude/Gemini model preset mappings (ACM-37232). Edit it directly
+> `configmap.yaml` holds the Claude/Gemini/OpenAI/EnMaaS model preset mappings (ACM-37232,
+> ACM-48198). Edit it directly
 > and re-apply + `oc rollout restart deployment/swarmer -n swarmer` to bump a model ID when
 > Vertex AI / Google ship new versions — no code change or image rebuild needed.
 
@@ -655,7 +656,10 @@ The Secrets page has three tabs:
 
 #### Provider Credentials
 
-Stores credentials for AI model providers. All values are Fernet-encrypted at rest and synced to Kubernetes Secrets when a session is launched.
+Credentials for AI model providers, entered through **Settings > Token** (the workspace Secrets
+page's credentials tab). Vertex AI (ADC), Gemini, OpenAI, and EnMaaS credentials are stored
+directly on the OpenShell gateway — never in the Swarmer database — and injected into session
+sandboxes at launch time.
 
 | Field | Description |
 |---|---|
@@ -663,8 +667,31 @@ Stores credentials for AI model providers. All values are Fernet-encrypted at re
 | Vertex Location | Vertex AI region (e.g., `us-central1`) |
 | ADC JSON | Application Default Credentials JSON for Vertex AI |
 | Google API Key | API key for Google Gemini (AI Studio) |
-| Anthropic API Key | API key for Anthropic Claude (direct) |
 | OpenAI API Key | API key for OpenAI models |
+| EnMaaS API Key | API key for the EnMaaS gateway (GLM-5.3, zero-cost) |
+
+**EnMaaS / GLM-5.3 (ACM-48198).** The business-provided EnMaaS model gateway serves GLM-5.3
+at zero model cost over an OpenAI-compatible API:
+
+- The token is entered by a workspace manager here and stored **only** as the OpenShell
+  gateway provider `swarmer-ws-{workspace_id}-enmaas`; it is never persisted in Swarmer's
+  database, API responses, logs, or generated sandbox config. Blank submissions keep the
+  existing token; Delete removes the gateway provider.
+- The **gateway URL** is entered together with the API key (required on first setup) and
+  stored encrypted in Swarmer's database — it is per-workspace configuration that
+  deliberately does **not** ship in the git-tracked `k8s/swarmer/configmap.yaml`. Changing
+  it re-binds this workspace's sandbox egress and provider profile to the new host without
+  touching the stored token.
+- The **GLM-5.3 (EnMaaS)** preset is selectable for sessions and schedules. All three roles
+  (plan/build/small) resolve to `enmaas/rits/zai-org/glm-5-3` with a 1,000,000-token context,
+  65,536-token output limit, and zero configured cost.
+- **Cost-safety:** an explicitly selected EnMaaS provider that is unavailable fails the launch
+  with a clear error — it never falls back to a paid provider (including after queueing,
+  credential deletion, gateway probe failure, or process restart). An EnMaaS-only workspace
+  selects EnMaaS automatically; mixed workspaces keep their existing defaults unless EnMaaS
+  is chosen explicitly.
+- Rotating the token is the same save flow (enter a new key); after a gateway outage or
+  replacement, re-enter the key to restore the provider.
 
 > **Note:** Despite the legacy model name `OpencodeSecret`, this stores credentials for AI providers used by OpenCode.
 
@@ -780,22 +807,22 @@ At startup, the generated config is written to `/sandbox/opencode.json` and supp
 
 #### Model Selection
 
-- The primary UX is two family-level **presets** — **Claude** and **Gemini** — selected via
-  radio pills at the top of the Model field. Each preset maps to three roles configured in
-  `Settings` (`swarmer/config.py`), so they can be changed without code changes:
+- The primary UX is family-level **presets** — **Claude**, **Gemini**, **OpenAI**, and
+  **GLM-5.3 (EnMaaS)** — selected via radio pills at the top of the Model field. Each preset
+  maps to three roles configured in `Settings` (`swarmer/config.py`), so they can be changed
+  without code changes:
   - **plan** — stronger-reasoning model assigned to the generated V2 `plan` agent configuration
   - **build** — the model used for `opencode run` / the coding agent (this is what session.model
     resolves to for policy/network purposes)
   - **small** — title generation / housekeeping model
-- An **Advanced** `<details>` toggle reveals the full individual model dropdown (grouped by
-  provider) for users who want to pick a specific model instead of a preset — session.model
-  stores the raw `provider/model@version` string in this case
-- Both presets and individual models are **always listed**, even when the backing provider
-  isn't configured — unavailable choices are shown disabled with an inline error (e.g. "Vertex
-  AI not configured — add credentials in Secrets") instead of silently disappearing
+- Presets are **always listed**, even when the backing provider isn't configured — unavailable
+  choices are shown disabled with an inline error (e.g. "Vertex AI not configured — add
+  credentials in Secrets") instead of silently disappearing
 - Default model auto-selected based on available credentials:
   - ADC configured → **Claude** preset
   - Gemini API key only → **Gemini** preset
+  - Only an EnMaaS key → **GLM-5.3 (EnMaaS)** preset (mixed workspaces keep the defaults above
+    unless EnMaaS is chosen explicitly)
 
 ### MCP Servers
 

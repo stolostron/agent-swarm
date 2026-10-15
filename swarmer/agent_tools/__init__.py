@@ -30,6 +30,7 @@ class AgentToolStrategy(ABC):
         mcp_servers: "list[McpServer] | None" = None,
         use_inference_local: bool = False,
         model: str = "",
+        enmaas_base_url: str = "",
     ) -> dict[str, str]:
         ...
 
@@ -96,6 +97,8 @@ class AgentToolStrategy(ABC):
         has_vertex: bool = False,
         has_gemini: bool = False,
         has_openai: bool = False,
+        has_enmaas: bool = False,
+        enmaas_base_url: str = "",
     ) -> list[dict]:
         ...
 
@@ -108,8 +111,10 @@ class AgentToolStrategy(ABC):
         has_vertex: bool = False,
         has_gemini: bool = False,
         has_openai: bool = False,
+        has_enmaas: bool = False,
+        enmaas_base_url: str = "",
     ) -> list[dict]:
-        """Return family-level model presets (e.g. Claude/Gemini/OpenAI) for the UI.
+        """Return family-level model presets (e.g. Claude/Gemini/OpenAI/EnMaaS) for the UI.
 
         Each dict has: value (preset name), label, group, and available (bool)
         indicating whether the required provider credential is configured.

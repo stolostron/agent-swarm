@@ -325,6 +325,29 @@ class TestSecretsOps:
         assert cred["masked_api_key"]
 
     @pytest.mark.asyncio
+    async def test_save_credentials_enmaas_fields_forwarded(self, api_client):
+        """The console client forwards the EnMaaS key, gateway URL, and marker
+        fields to the REST API (ACM-48198). The key is gateway-only — the
+        client payload carries it only in transit, and the response carries
+        just markers plus the non-secret gateway URL."""
+        ws = await api_client.create_workspace("WS")
+        cred = await api_client.save_credentials(
+            ws["id"],
+            enmaas_api_key="<test-enmaas-key>",
+            enmaas_base_url="https://enmaas-gateway.example.com/v1",
+            enmaas_configured=True,
+        )
+        assert cred["enmaas_configured"] is True
+        assert cred["has_enmaas"] is True
+        assert cred["enmaas_base_url"] == "https://enmaas-gateway.example.com/v1"
+        # No token material in the response.
+        assert "<test-enmaas-key>" not in str(cred)
+
+        # Marker-only update (console pattern: gateway is the store).
+        cred = await api_client.save_credentials(ws["id"], enmaas_configured=False)
+        assert cred["enmaas_configured"] is False
+
+    @pytest.mark.asyncio
     async def test_pat_crud(self, api_client):
         ws = await api_client.create_workspace("WS")
         pat = await api_client.create_pat(

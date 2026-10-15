@@ -12,6 +12,7 @@ _PROVIDERS = {
     "Vertex AI": "google-cloud",
     "Gemini": "google-ai-studio",
     "OpenAI": "openai",
+    "EnMaaS": "enmaas",
 }
 
 
@@ -35,6 +36,8 @@ async def get_missing_provider_names_bulk(
             expected_by_ws[secret.workspace_id].add("Gemini")
         if secret.has_openai:
             expected_by_ws[secret.workspace_id].add("OpenAI")
+        if secret.has_enmaas:
+            expected_by_ws[secret.workspace_id].add("EnMaaS")
 
     sem = asyncio.Semaphore(concurrency)
     clients_by_ws: dict[int, object | None] = {}
@@ -91,4 +94,9 @@ async def get_missing_provider_names(ws_id: int, db: AsyncSession) -> list[str]:
 
 
 def session_provider_label(provider: str) -> str | None:
-    return {"claude": "Vertex AI", "gemini": "Gemini", "openai": "OpenAI"}.get(provider)
+    return {
+        "claude": "Vertex AI",
+        "gemini": "Gemini",
+        "openai": "OpenAI",
+        "enmaas": "EnMaaS",
+    }.get(provider)

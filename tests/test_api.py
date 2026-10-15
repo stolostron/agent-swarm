@@ -1832,6 +1832,242 @@ class TestSecrets:
         assert sentinel not in caplog.text
 
     @pytest.mark.asyncio
+    async def test_save_enmaas_key_configures_gateway_provider_only(self, client, monkeypatch):
+        """ACM-48198: the EnMaaS key goes to the gateway provider only —
+        never into the Swarmer DB or the API response. The gateway URL is
+        workspace configuration: validated, passed as provider config, and
+        stored encrypted on the credential row."""
+        ws = await _create_workspace(client)
+
+        called = {}
+
+        async def _fake_ensure_provider(name, provider_type, config, credentials):
+            called["name"] = name
+            called["provider_type"] = provider_type
+            called["config"] = config
+            called["credentials"] = credentials
+
+        monkeypatch.setattr("swarmer.openshell_client.ensure_provider", _fake_ensure_provider)
+
+        resp = await client.post(
+            f"/api/v1/workspaces/{ws['id']}/secrets/credentials",
+            json={
+                "enmaas_api_key": "<test-enmaas-key>",
+                "enmaas_base_url": "https://enmaas-gateway.example.com/v1",
+            },
+        )
+        assert resp.status_code == 200, resp.text
+
+        assert called["name"] == f"swarmer-ws-{ws['id']}-enmaas"
+        # Workspace-scoped profile type — shared gateways can host a
+        # different EnMaaS URL per workspace.
+        assert called["provider_type"] == f"enmaas-ws-{ws['id']}"
+        assert called["config"] == {"ENMAAS_BASE_URL": "https://enmaas-gateway.example.com/v1"}
+        assert called["credentials"] == {"ENMAAS_KEY": "<test-enmaas-key>"}
+
+        body = resp.json()
+        assert body["enmaas_configured"] is True
+        assert body["has_enmaas"] is True
+        # The token itself must never appear in the response.
+        assert "enmaas_api_key" not in body
+        assert "<test-enmaas-key>" not in resp.text
+
+        # Blank submission preserves the marker and the stored URL (no-op).
+        resp = await client.post(
+            f"/api/v1/workspaces/{ws['id']}/secrets/credentials",
+            json={"enmaas_api_key": ""},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["has_enmaas"] is True
+        assert resp.json()["enmaas_base_url"] == "https://enmaas-gateway.example.com/v1"
+
+    @pytest.mark.asyncio
+    async def test_save_enmaas_key_failure_redacts_exception_detail(self, client, monkeypatch, caplog):
+        ws = await _create_workspace(client)
+        sentinel = "SENTINEL_ENMAAS_SECRET"
+        caplog.set_level(logging.WARNING, logger="swarmer.api.v1.secrets")
+
+        async def _fake_ensure_provider(_name, _provider_type, _config, _credentials):
+            raise RuntimeError(f"provider failed with {sentinel}")
+
+        monkeypatch.setattr("swarmer.openshell_client.ensure_provider", _fake_ensure_provider)
+
+        resp = await client.post(
+            f"/api/v1/workspaces/{ws['id']}/secrets/credentials",
+            json={
+                "enmaas_api_key": "<test-enmaas-key>",
+                "enmaas_base_url": "https://enmaas-gateway.example.com/v1",
+            },
+        )
+
+        assert resp.status_code == 502
+        assert resp.json()["detail"] == "failed to configure EnMaaS provider on OpenShell"
+        assert sentinel not in resp.text
+        assert sentinel not in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_save_enmaas_invalid_url_returns_actionable_422(self, client, monkeypatch):
+        """An invalid gateway URL is a 422 with the validation guidance —
+        never stored, never reaching the gateway."""
+        ws = await _create_workspace(client)
+
+        async def _fail_ensure_provider(*_args, **_kwargs):
+            raise AssertionError("ensure_provider must not be called for an invalid URL")
+
+        monkeypatch.setattr("swarmer.openshell_client.ensure_provider", _fail_ensure_provider)
+
+        resp = await client.post(
+            f"/api/v1/workspaces/{ws['id']}/secrets/credentials",
+            json={
+                "enmaas_api_key": "<test-enmaas-key>",
+                "enmaas_base_url": "http://not-https.example.com/v1",
+            },
+        )
+        assert resp.status_code == 422
+        assert "https" in resp.json()["detail"]
+
+        resp = await client.get(f"/api/v1/workspaces/{ws['id']}/secrets/credentials")
+        assert resp.json() is None  # nothing stored
+
+    @pytest.mark.asyncio
+    async def test_save_enmaas_key_without_url_returns_422(self, client, monkeypatch):
+        """A key without any stored or submitted gateway URL cannot configure
+        the provider — actionable 422."""
+        ws = await _create_workspace(client)
+
+        async def _fail_ensure_provider(*_args, **_kwargs):
+            raise AssertionError("ensure_provider must not be called without a URL")
+
+        monkeypatch.setattr("swarmer.openshell_client.ensure_provider", _fail_ensure_provider)
+
+        resp = await client.post(
+            f"/api/v1/workspaces/{ws['id']}/secrets/credentials",
+            json={"enmaas_api_key": "<test-enmaas-key>"},
+        )
+        assert resp.status_code == 422
+        assert "gateway URL" in resp.json()["detail"]
+
+    @pytest.mark.asyncio
+    async def test_save_enmaas_url_only_stores_url_and_rebinds_profile(self, client, monkeypatch):
+        """A URL-only submission (no key) must NOT call ensure_provider —
+        updating the provider record with an empty credentials map could wipe
+        the gateway's stored key. Instead the profile endpoint is reconciled
+        via import and the URL is stored."""
+        ws = await _create_workspace(client)
+
+        async def _fail_ensure_provider(*_args, **_kwargs):
+            raise AssertionError("ensure_provider must not be called for URL-only saves")
+
+        imported = {}
+
+        async def _fake_import_enmaas_profile(ws_id, base_url, client=None):
+            imported["ws_id"] = ws_id
+            imported["base_url"] = base_url
+            return True
+
+        monkeypatch.setattr("swarmer.openshell_client.ensure_provider", _fail_ensure_provider)
+        monkeypatch.setattr(
+            "swarmer.openshell_client.import_enmaas_profile", _fake_import_enmaas_profile
+        )
+
+        resp = await client.post(
+            f"/api/v1/workspaces/{ws['id']}/secrets/credentials",
+            json={"enmaas_base_url": "https://enmaas-gateway.example.com/v1"},
+        )
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        # No key was submitted — the marker stays unset, only the URL is stored.
+        assert body["has_enmaas"] is False
+        assert body["enmaas_configured"] is False
+        assert body["enmaas_base_url"] == "https://enmaas-gateway.example.com/v1"
+        assert imported == {
+            "ws_id": ws["id"],
+            "base_url": "https://enmaas-gateway.example.com/v1",
+        }
+
+        # A subsequent key-only save rotates against the stored URL.
+        async def _fake_ensure_provider(name, provider_type, config, credentials):
+            imported["rotate"] = {
+                "name": name, "type": provider_type, "config": config,
+            }
+
+        monkeypatch.setattr("swarmer.openshell_client.ensure_provider", _fake_ensure_provider)
+        resp = await client.post(
+            f"/api/v1/workspaces/{ws['id']}/secrets/credentials",
+            json={"enmaas_api_key": "<test-enmaas-key>"},
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["has_enmaas"] is True
+        assert imported["rotate"]["config"] == {
+            "ENMAAS_BASE_URL": "https://enmaas-gateway.example.com/v1"
+        }
+        assert imported["rotate"]["type"] == f"enmaas-ws-{ws['id']}"
+
+    @pytest.mark.asyncio
+    async def test_save_enmaas_key_ensure_provider_valueerror_returns_422(self, client, monkeypatch):
+        """A URL/endpoint problem raised by ensure_provider surfaces as an
+        actionable 422, not a gateway-outage 502."""
+        ws = await _create_workspace(client)
+
+        async def _fake_ensure_provider(_name, _provider_type, _config, credentials=None, **kwargs):
+            raise ValueError("EnMaaS gateway URL is missing or invalid — set the gateway URL")
+
+        monkeypatch.setattr("swarmer.openshell_client.ensure_provider", _fake_ensure_provider)
+
+        resp = await client.post(
+            f"/api/v1/workspaces/{ws['id']}/secrets/credentials",
+            json={
+                "enmaas_api_key": "<test-enmaas-key>",
+                "enmaas_base_url": "https://enmaas-gateway.example.com/v1",
+            },
+        )
+        assert resp.status_code == 422
+        assert "gateway URL" in resp.json()["detail"]
+
+    @pytest.mark.asyncio
+    async def test_delete_enmaas_credential_clears_marker_and_url(self, client, monkeypatch):
+        """Deleting EnMaaS clears the marker and the stored gateway URL —
+        unrelated credential metadata survives, and an empty record is removed."""
+        ws = await _create_workspace(client)
+
+        async def _fake_ensure_provider(_name, _provider_type, _config, credentials):
+            return None
+
+        monkeypatch.setattr("swarmer.openshell_client.ensure_provider", _fake_ensure_provider)
+        resp = await client.post(
+            f"/api/v1/workspaces/{ws['id']}/secrets/credentials",
+            json={
+                "enmaas_api_key": "<test-enmaas-key>",
+                "enmaas_base_url": "https://enmaas-gateway.example.com/v1",
+                "openai_api_key": "<test-openai-key>",
+            },
+        )
+        assert resp.status_code == 200
+        assert resp.json()["has_enmaas"] is True
+        assert resp.json()["has_openai"] is True
+
+        resp = await client.delete(
+            f"/api/v1/workspaces/{ws['id']}/secrets/credentials/enmaas"
+        )
+        assert resp.status_code == 200, resp.text
+
+        resp = await client.get(f"/api/v1/workspaces/{ws['id']}/secrets/credentials")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["has_enmaas"] is False
+        assert body["enmaas_configured"] is False
+        assert body["enmaas_base_url"] == ""
+        assert body["has_openai"] is True  # unrelated metadata preserved
+
+        # Removing the rest drops the now-empty credential record.
+        resp = await client.delete(
+            f"/api/v1/workspaces/{ws['id']}/secrets/credentials/openai"
+        )
+        assert resp.status_code == 200
+        resp = await client.get(f"/api/v1/workspaces/{ws['id']}/secrets/credentials")
+        assert resp.json() is None
+
+    @pytest.mark.asyncio
     async def test_delete_gateway_credentials_clears_provider_state(self, client, monkeypatch):
         ws = await _create_workspace(client)
 
@@ -2261,6 +2497,8 @@ class TestSecrets:
             vertex_location="us-central1",
             google_api_key="",
             openai_api_key="",
+            enmaas_api_key="",
+            enmaas_base_url="",
             shared="1",
             adc_file=adc_file,
         )

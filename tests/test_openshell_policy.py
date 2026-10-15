@@ -103,23 +103,24 @@ _MODEL = "google-vertex-anthropic/claude-sonnet-5@default"
 
 def _bnet(
     session=None, repos=None, mcp_servers=None, agent_tool="opencode",
-    model=_MODEL, prompt_sources=None,
+    model=_MODEL, prompt_sources=None, enmaas_endpoint=None,
 ) -> dict:
     """Build network_policies dict via build_session_network_policies."""
     return build_session_network_policies(
         session or _make_session(), repos or [], mcp_servers or [], agent_tool, model,
-        prompt_sources=prompt_sources or [],
+        prompt_sources=prompt_sources or [], enmaas_endpoint=enmaas_endpoint,
     )
 
 
 def _bhosts(
     session=None, repos=None, mcp_servers=None, agent_tool="opencode",
-    model=_MODEL, prompt_sources=None,
+    model=_MODEL, prompt_sources=None, enmaas_endpoint=None,
 ) -> list[str]:
     """Return all endpoint hosts from computed network_policies."""
     hosts = []
     for rule in _bnet(session, repos, mcp_servers, agent_tool, model,
-                      prompt_sources=prompt_sources).values():
+                      prompt_sources=prompt_sources,
+                      enmaas_endpoint=enmaas_endpoint).values():
         for ep in rule.get("endpoints", []):
             hosts.append(ep.get("host", ""))
     return hosts
@@ -419,6 +420,23 @@ def test_agent_api_block_opencode_includes_gemini_endpoint():
     assert any("generativelanguage.googleapis.com" in h for h in hosts)
 
 
+def test_opencode_default_policy_includes_models_opencode_ai_and_binary():
+    """All OpenCode sandboxes need the model catalog endpoint bound to the
+    OpenCode executable, including sessions using non-Google providers."""
+    net = _bnet(model="openai/gpt-5.3-codex")
+    agent_api = net["agent_api"]
+    endpoint = next(
+        ep for ep in agent_api["endpoints"] if ep["host"] == "models.opencode.ai"
+    )
+    assert endpoint["port"] == 443
+    assert endpoint["protocol"] == "rest"
+    assert endpoint["access"] == "full"
+    assert {
+        "path": "/usr/local/share/npm-global/lib/node_modules/@opencode/cli/bin/opencode.exe",
+        "harness": True,
+    } in agent_api["binaries"]
+
+
 def test_agent_api_block_openai_includes_openai_endpoint():
     hosts = _bhosts(model="openai/gpt-5.3-codex")
     assert "api.openai.com" in hosts
@@ -429,6 +447,45 @@ def test_agent_api_block_vertex_includes_regional_aiplatform_endpoints():
     assert "aiplatform.googleapis.com" in hosts
     assert "*-aiplatform.googleapis.com" in hosts
     assert "aiplatform.*.rep.googleapis.com" in hosts
+
+
+def test_agent_api_block_enmaas_includes_gateway_endpoint():
+    """EnMaaS sessions get endpoint-scoped access to the workspace's gateway
+    host only (ACM-48198) — derived from the workspace URL, not a global
+    operator setting."""
+    net = _bnet(
+        model="enmaas/rits/zai-org/glm-5-3",
+        enmaas_endpoint=("enmaas-gateway.example.com", 443),
+    )
+    agent_api = next(v for k, v in net.items() if k == "agent_api")
+    endpoints = {(ep["host"], ep["port"]) for ep in agent_api["endpoints"]}
+    assert ("enmaas-gateway.example.com", 443) in endpoints
+    # OpenCode service endpoints are preserved.
+    assert any(h == "models.dev" for h, _ in endpoints)
+    assert any(h == "opencode.ai" for h, _ in endpoints)
+    assert ("models.opencode.ai", 443) in endpoints
+
+
+def test_agent_api_block_enmaas_excludes_paid_inference_endpoints():
+    """No Google/OpenAI inference endpoints merely because EnMaaS is
+    selected — cost-safety and least-privilege (ACM-48198)."""
+    hosts = _bhosts(
+        model="enmaas/rits/zai-org/glm-5-3",
+        enmaas_endpoint=("enmaas-gateway.example.com", 443),
+    )
+    assert "generativelanguage.googleapis.com" not in hosts
+    assert "oauth2.googleapis.com" not in hosts
+    assert "api.openai.com" not in hosts
+    assert "aiplatform.googleapis.com" not in hosts
+
+
+def test_agent_api_block_enmaas_unset_url_keeps_service_endpoints():
+    """With no workspace gateway URL the block must not gain a bogus endpoint
+    — the launch path blocks EnMaaS sessions long before policy building."""
+    net = _bnet(model="enmaas/rits/zai-org/glm-5-3", enmaas_endpoint=None)
+    agent_api = next(v for k, v in net.items() if k == "agent_api")
+    hosts = {ep["host"] for ep in agent_api["endpoints"]}
+    assert hosts == {"models.dev", "opencode.ai", "models.opencode.ai"}
 
 
 def test_google_cloud_block_includes_regional_aiplatform_endpoints():

@@ -69,6 +69,13 @@ async def migrate_db() -> None:
         "ALTER TABLE opencode_secrets ADD COLUMN gemini_configured BOOLEAN NOT NULL DEFAULT 0",
         "ALTER TABLE opencode_secrets ADD COLUMN openai_configured BOOLEAN NOT NULL DEFAULT 0",
         "ALTER TABLE opencode_secrets ADD COLUMN vertex_configured BOOLEAN NOT NULL DEFAULT 0",
+        # ACM-48198: EnMaaS gateway-only credential marker (no token column —
+        # the ENMAAS_KEY lives exclusively on the OpenShell gateway).
+        "ALTER TABLE opencode_secrets ADD COLUMN enmaas_configured BOOLEAN NOT NULL DEFAULT 0",
+        # ACM-48198: workspace-scoped EnMaaS gateway URL (encrypted at rest;
+        # the URL is entered per workspace in Secrets instead of shipping in
+        # the tracked ConfigMap).
+        "ALTER TABLE opencode_secrets ADD COLUMN enmaas_base_url_enc TEXT NOT NULL DEFAULT ''",
         "ALTER TABLE sessions ADD COLUMN status_detail VARCHAR(255) NOT NULL DEFAULT ''",
         "ALTER TABLE sessions ADD COLUMN run_started_at DATETIME",
         "ALTER TABLE sessions ADD COLUMN run_completed_at DATETIME",
@@ -179,7 +186,7 @@ async def migrate_db() -> None:
         # 'shell' is an additional supported tool and must NOT be normalised to 'opencode'.
         "UPDATE sessions SET agent_tool = 'opencode' WHERE agent_tool NOT IN ('opencode', 'shell')",
         # ACM-37232 follow-up: Session.model renamed to Session.provider — the
-        # column now stores an AI provider selection ("claude"/"gemini"/"openai" preset)
+        # column now stores an AI provider selection ("claude"/"gemini"/"openai"/"enmaas" preset)
         # rather than a specific model ID. "no such column" (fresh DB already
         # created with "provider", or already migrated) is safely suppressed.
         "ALTER TABLE sessions RENAME COLUMN model TO provider",

@@ -216,7 +216,7 @@ class ScheduleEntryCreate(BaseModel):
     fix_authors: str = Field("", max_length=512)
     label: str = ""
     prompt_id: int
-    provider: str = Field("", max_length=128, pattern=r"^(|claude|gemini|openai)$")
+    provider: str = Field("", max_length=128, pattern=r"^(|claude|gemini|openai|enmaas)$")
     instruction_prompt: str = ""
     include_event_context: bool = True
     enabled: bool = True
@@ -231,7 +231,7 @@ class ScheduleEntryUpdate(BaseModel):
     fix_authors: str | None = Field(None, max_length=512)
     label: str | None = None
     prompt_id: int | None = None
-    provider: str | None = Field(None, max_length=128, pattern=r"^(|claude|gemini|openai)$")
+    provider: str | None = Field(None, max_length=128, pattern=r"^(|claude|gemini|openai|enmaas)$")
     instruction_prompt: str | None = None
     include_event_context: bool | None = None
     enabled: bool | None = None
@@ -435,6 +435,15 @@ class CredentialsSave(BaseModel):
     vertex_location: str = ""
     google_api_key: str = ""
     openai_api_key: str = ""
+    # Write-only EnMaaS token submission (ACM-48198). Pushed to the OpenShell
+    # gateway provider and never persisted by Swarmer; blank preserves the
+    # existing gateway credential.
+    enmaas_api_key: str = ""
+    # Write-only EnMaaS gateway URL submission (ACM-48198). Unlike the token,
+    # the URL IS workspace configuration: validated and stored encrypted in
+    # the Swarmer DB so the deployment-specific endpoint never ships in
+    # git-tracked manifests. Blank preserves the stored URL.
+    enmaas_base_url: str = ""
     application_default_credentials: str = ""
     shared: bool = False
     # Non-secret markers used by the console when credentials are stored only
@@ -442,6 +451,7 @@ class CredentialsSave(BaseModel):
     gemini_configured: bool | None = None
     openai_configured: bool | None = None
     vertex_configured: bool | None = None
+    enmaas_configured: bool | None = None
 
 
 class CredentialsOut(BaseModel):
@@ -456,8 +466,14 @@ class CredentialsOut(BaseModel):
     gemini_configured: bool
     openai_configured: bool
     vertex_configured: bool
+    enmaas_configured: bool
+    # Workspace EnMaaS gateway URL (non-credential configuration; needed by
+    # the console to pre-fill the Secrets form). The EnMaaS token itself is
+    # never returned.
+    enmaas_base_url: str
     has_gemini: bool
     has_openai: bool
+    has_enmaas: bool
     created_at: datetime
     updated_at: datetime
 

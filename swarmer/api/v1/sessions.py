@@ -814,6 +814,9 @@ async def create_schedule(
         cron_next_run=cron_next_run,
         label=body.label,
         prompt_id=body.prompt_id,
+        # Provider preset override — schema-validated against the supported
+        # preset names (claude/gemini/openai/enmaas). Empty = session default.
+        provider=body.provider.strip(),
         instruction_prompt=body.instruction_prompt,
         include_event_context=body.include_event_context,
         delay_minutes=body.delay_minutes,
