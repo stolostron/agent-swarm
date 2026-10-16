@@ -123,19 +123,24 @@ async def test_reconcile_uses_same_operator_url_for_each_workspace(monkeypatch):
 
     class _Result:
         def scalars(self):
+            """Expose the fake query result through SQLAlchemy's scalar API."""
             return self
 
         def all(self):
+            """Return each fake workspace credential selected for reconciliation."""
             return secrets
 
     class _Database:
         async def execute(self, _query):
+            """Return the fake workspace credential query result."""
             return _Result()
 
     async def _get_db():
+        """Yield a fake database session for the reconciliation helper."""
         yield _Database()
 
     async def _resolve(ws_id):
+        """Return a gateway client placeholder for each workspace ID."""
         return object()  # any non-None client
 
     monkeypatch.setattr("swarmer.database.get_db", _get_db)
