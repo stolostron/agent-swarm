@@ -1,14 +1,9 @@
 from datetime import datetime
-from typing import TYPE_CHECKING
-
 from sqlalchemy import DateTime, ForeignKey, Integer, Text, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 import swarmer.crypto as crypto
 from swarmer.database import Base
-
-if TYPE_CHECKING:
-    from sqlalchemy.ext.asyncio import AsyncSession
 
 
 class OpencodeSecret(Base):
