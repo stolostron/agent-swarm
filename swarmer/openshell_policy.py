@@ -472,9 +472,9 @@ def build_session_policy(
     has_slack_webhook: when True (workspace has SLACK_WEBHOOK_URL), grant
     egress to hooks.slack.com for curl/python digest posts.
 
-    enmaas_endpoint: the (host, port) of the operator-configured EnMaaS
+    enmaas_endpoint: the (host, port) of the workspace's EnMaaS gateway
     endpoint, granted as egress for EnMaaS model sessions (ACM-48198). None when the
-    operator endpoint is not configured.
+    workspace gateway URL is not configured.
 
     Returns a SandboxPolicy proto object to be set on SandboxSpec.policy.
     """
@@ -529,7 +529,7 @@ def build_session_network_policies(
     has_slack_webhook: when True, include hooks.slack.com egress for workspace
     Slack Incoming Webhook posts (SLACK_WEBHOOK_URL).
 
-    enmaas_endpoint: (host, port) of the operator-configured EnMaaS endpoint,
+    enmaas_endpoint: (host, port) of the workspace's EnMaaS gateway endpoint,
     used by the agent-api block for EnMaaS model sessions (ACM-48198).
     """
     network_policies_dict: dict = {}

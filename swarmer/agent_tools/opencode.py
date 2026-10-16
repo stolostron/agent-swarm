@@ -48,7 +48,7 @@ def _enmaas_provider_config(model_ids: list[str], base_url: str) -> dict:
 
     *model_ids* is the list of upstream model IDs (the part after the first
     "/" of each reference — embedded slashes are significant and preserved).
-    *base_url* is the operator-managed EnMaaS gateway URL (ACM-48198).
+    *base_url* is the workspace's EnMaaS gateway URL (ACM-48198).
     OpenCode V2 uses ``package`` for the provider runtime and ``settings``
     for package-specific settings such as ``baseURL``. The ``env`` list is a
     name reference: OpenCode reads the credential from that environment
@@ -59,8 +59,8 @@ def _enmaas_provider_config(model_ids: list[str], base_url: str) -> dict:
     """
     if not base_url:
         raise ValueError(
-            "EnMaaS gateway URL is not configured by the operator — contact "
-            "your Swarmer administrator before launching EnMaaS sessions."
+            "EnMaaS gateway URL is not configured for this workspace — set it "
+            "in Settings > AI Tokens before launching EnMaaS sessions."
         )
     models: dict[str, dict] = {}
     for mid in model_ids:
@@ -135,11 +135,11 @@ class OpenCodeStrategy(AgentToolStrategy):
         model: str = "",
         enmaas_base_url: str = "",
     ) -> dict[str, str]:
-        # Ignore legacy workspace URL arguments/columns: endpoint selection is
-        # exclusively controlled by the operator (ACM-48198).
-        from swarmer.config import configured_enmaas_base_url
+        # The EnMaaS gateway URL is workspace configuration — the caller
+        # resolves it from the workspace's stored value (ACM-48198).
+        from swarmer.config import sanitize_enmaas_base_url
 
-        _enmaas_base_url = configured_enmaas_base_url()
+        _enmaas_base_url = sanitize_enmaas_base_url(enmaas_base_url)
         preset = self.resolve_preset(model)
         _plan_model = ""
         _plan_mode = ""
@@ -337,14 +337,14 @@ class OpenCodeStrategy(AgentToolStrategy):
         _vertex_reason = "" if has_vertex else "Vertex AI not configured — add credentials in Secrets."
         _gemini_reason = "" if has_gemini else "Google AI Studio API key not set — add it in Secrets."
         _openai_reason = "" if has_openai else "OpenAI API key not set — add it in Secrets."
-        # The endpoint is shared deployment configuration, not a
-        # workspace-editable field.
-        from swarmer.config import configured_enmaas_base_url
+        # The endpoint is workspace configuration entered in the AI Tokens
+        # form, validated from the caller-resolved stored value.
+        from swarmer.config import sanitize_enmaas_base_url
 
-        _enmaas_endpoint_ok = bool(configured_enmaas_base_url())
+        _enmaas_endpoint_ok = bool(sanitize_enmaas_base_url(enmaas_base_url))
         _enmaas_available = has_enmaas and _enmaas_endpoint_ok
         if not _enmaas_endpoint_ok:
-            _enmaas_reason = "EnMaaS gateway URL not configured by the operator."
+            _enmaas_reason = "EnMaaS gateway URL not set — add it in AI Tokens."
         else:
             _enmaas_reason = "" if has_enmaas else "EnMaaS key not set — add it in Secrets."
 

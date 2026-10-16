@@ -15,7 +15,7 @@ Covers:
     stanza only when OPENCODE_EXPERIMENTAL_PLAN_MODE is enabled
   - The EnMaaS preset (ACM-48198): all roles stay within EnMaaS, generated
     config defines providers.enmaas natively, only enmaas is enabled, and the
-    operator-configured gateway URL is validated/normalized
+    workspace-supplied gateway URL is validated/normalized
 
 No K8s or DB dependencies required — these are pure unit tests against the
 OpenCodeStrategy class and the Settings singleton.
@@ -212,8 +212,7 @@ class TestGetModelOptions:
             assert p["available"] is False
             assert p["reason"]  # non-empty human-readable reason
 
-    def test_presets_marked_available_when_provider_configured(self, monkeypatch):
-        monkeypatch.setattr(settings, "enmaas_base_url", _ENMAAS_TEST_BASE_URL)
+    def test_presets_marked_available_when_provider_configured(self):
         options = _opencode.get_model_options(
             has_vertex=True, has_gemini=True, has_openai=True, has_enmaas=True,
             enmaas_base_url=_ENMAAS_TEST_BASE_URL,
@@ -382,27 +381,24 @@ _ENMAAS_TEST_BASE_URL = "https://enmaas-gateway.example.com/v1"
 
 
 class TestEnmaasModelOptions:
-    def test_enmaas_unavailable_reason_when_operator_endpoint_unset(self, monkeypatch):
-        """Without an operator endpoint the preset is unavailable."""
-        monkeypatch.setattr(settings, "enmaas_base_url", "")
+    def test_enmaas_unavailable_reason_when_workspace_url_unset(self):
+        """Without a workspace gateway URL the preset is unavailable."""
         options = _opencode.get_model_options(has_enmaas=True, enmaas_base_url="")
         enmaas = next(o for o in options if o["value"] == "enmaas")
         assert enmaas["available"] is False
-        assert "operator" in enmaas["reason"]
         assert "gateway URL" in enmaas["reason"]
+        assert "AI Tokens" in enmaas["reason"]
 
-    def test_enmaas_invalid_operator_url_degrades_to_unavailable(self, monkeypatch):
-        """An invalid operator URL degrades to not-configured, never a 500."""
-        monkeypatch.setattr(settings, "enmaas_base_url", "http://invalid.example/v1")
+    def test_enmaas_invalid_workspace_url_degrades_to_unavailable(self):
+        """An invalid workspace URL degrades to not-configured, never a 500."""
         options = _opencode.get_model_options(
-            has_enmaas=True, enmaas_base_url=_ENMAAS_TEST_BASE_URL
+            has_enmaas=True, enmaas_base_url="http://invalid.example/v1"
         )
         enmaas = next(o for o in options if o["value"] == "enmaas")
         assert enmaas["available"] is False
         assert "gateway URL" in enmaas["reason"]
 
-    def test_enmaas_unavailable_reason_when_key_missing(self, monkeypatch):
-        monkeypatch.setattr(settings, "enmaas_base_url", _ENMAAS_TEST_BASE_URL)
+    def test_enmaas_unavailable_reason_when_key_missing(self):
         options = _opencode.get_model_options(
             has_enmaas=False, enmaas_base_url=_ENMAAS_TEST_BASE_URL
         )
@@ -410,8 +406,7 @@ class TestEnmaasModelOptions:
         assert enmaas["available"] is False
         assert "EnMaaS key not set" in enmaas["reason"]
 
-    def test_enmaas_available_when_operator_endpoint_and_key_present(self, monkeypatch):
-        monkeypatch.setattr(settings, "enmaas_base_url", _ENMAAS_TEST_BASE_URL)
+    def test_enmaas_available_when_workspace_url_and_key_present(self):
         options = _opencode.get_model_options(
             has_enmaas=True, enmaas_base_url=_ENMAAS_TEST_BASE_URL
         )
@@ -422,10 +417,6 @@ class TestEnmaasModelOptions:
 
 
 class TestEnmaasConfigGeneration:
-    @pytest.fixture(autouse=True)
-    def _operator_endpoint(self, monkeypatch):
-        monkeypatch.setattr(settings, "enmaas_base_url", _ENMAAS_TEST_BASE_URL)
-
     def test_enmaas_pconfig_all_roles_enmaas_and_only_enmaas_enabled(self, monkeypatch):
         monkeypatch.setattr(settings, "opencode_experimental_plan_mode", True)
         data = _opencode.build_config_data(model="enmaas", enmaas_base_url=_ENMAAS_TEST_BASE_URL)
@@ -460,17 +451,22 @@ class TestEnmaasConfigGeneration:
         assert model["limit"] == {"context": 1_000_000, "output": 65_536}
         assert model["cost"] == {"input": 0, "output": 0}
 
-    def test_legacy_workspace_url_cannot_override_operator_endpoint(self):
-        """Legacy workspace URL values cannot redirect generated config."""
+    def test_workspace_supplied_url_drives_generated_config(self):
+        """The caller-resolved workspace URL is the config baseURL source."""
 
         class _FakeSecret:
-            enmaas_base_url = "https://attacker.example.net/v1"
+            enmaas_base_url = "https://workspace-gateway.example.net/v1"
 
         data = _opencode.build_config_data(
-            secret=_FakeSecret(), model="enmaas", enmaas_base_url="https://attacker.example.net/v1"
+            secret=_FakeSecret(),
+            model="enmaas",
+            enmaas_base_url="https://workspace-gateway.example.net/v1",
         )
         config = json.loads(data["opencode.json"])
-        assert config["providers"]["enmaas"]["settings"]["baseURL"] == _ENMAAS_TEST_BASE_URL
+        assert (
+            config["providers"]["enmaas"]["settings"]["baseURL"]
+            == "https://workspace-gateway.example.net/v1"
+        )
 
     def test_enmaas_pconfig_contains_no_secret_values(self):
         data = _opencode.build_config_data(model="enmaas", enmaas_base_url=_ENMAAS_TEST_BASE_URL)
@@ -491,9 +487,8 @@ class TestEnmaasConfigGeneration:
         assert config["enabled_providers"] == ["enmaas"]
         assert "enmaas" in config["providers"]
 
-    def test_enmaas_config_raises_without_operator_endpoint(self, monkeypatch):
-        """A broken config must never be written without operator endpoint."""
-        monkeypatch.setattr(settings, "enmaas_base_url", "")
+    def test_enmaas_config_raises_without_workspace_url(self):
+        """A broken config must never be written without a workspace URL."""
         with pytest.raises(ValueError, match="gateway URL"):
             _opencode.build_config_data(model="enmaas", enmaas_base_url="")
 

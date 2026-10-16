@@ -110,7 +110,6 @@ async def _setup_db(monkeypatch):
     from swarmer.config import settings
     orig_ns = settings.k8s_namespace
     orig_max = settings.max_concurrent_agents
-    monkeypatch.setattr(settings, "enmaas_base_url", "https://operator.example/v1")
     settings.k8s_namespace = ""  # must be empty to allow workspace creation
     settings.max_concurrent_agents = 0  # unlimited by default for these tests
 
@@ -160,6 +159,28 @@ async def _create_workspace(client: AsyncClient, name: str = "Test WS") -> dict:
     )
     assert resp.status_code == 201, resp.text
     return resp.json()
+
+
+async def _set_workspace_enmaas_url(ws_id: int, url: str) -> None:
+    """Write the workspace's stored EnMaaS gateway URL directly to the DB.
+
+    Used for values the REST layer would reject (invalid URLs) or omit
+    (empty) — mirroring legacy rows that predate save-time validation.
+    """
+    from sqlalchemy import select
+
+    from swarmer.models.opencode_secret import OpencodeSecret
+
+    async with _TestSession() as db:
+        result = await db.execute(
+            select(OpencodeSecret).where(OpencodeSecret.workspace_id == ws_id)
+        )
+        secret = result.scalars().first()
+        if secret is None:
+            secret = OpencodeSecret(workspace_id=ws_id, user_id="test-user")
+            db.add(secret)
+        secret.enmaas_base_url = url
+        await db.commit()
 
 
 async def _create_session(
@@ -397,9 +418,9 @@ class TestDoLaunchOpenshell:
         from sqlalchemy.orm import selectinload
 
         monkeypatch.setattr(settings, "max_concurrent_agents", 0)
-        monkeypatch.setattr(settings, "enmaas_base_url", "https://enmaas.example/v1")
         ws_data = await _create_workspace(client, "Scheduled provider override")
         session_data = await _create_session(client, ws_data["id"], "scheduled-enmaas")
+        await _set_workspace_enmaas_url(ws_data["id"], "https://enmaas.example/v1")
 
         async with _TestSession() as db:
             session = await db.get(Session, session_data["id"])
@@ -1008,8 +1029,10 @@ class TestDoLaunchOpenshell:
         assert gemini_pname not in call_kwargs.get("provider_names", [])
         assert openai_pname in call_kwargs.get("provider_names", [])
 
-    async def _save_enmaas_credentials(self, client, ws_id: int) -> None:
-        """Store EnMaaS credentials; the endpoint is operator-configured."""
+    async def _save_enmaas_credentials(
+        self, client, ws_id: int, base_url: str = "https://enmaas.example/v1"
+    ) -> None:
+        """Store EnMaaS credentials; the gateway URL is workspace-supplied."""
         with patch(
             "swarmer.openshell_client.ensure_provider",
             new=AsyncMock(),
@@ -1018,6 +1041,7 @@ class TestDoLaunchOpenshell:
                 f"/api/v1/workspaces/{ws_id}/secrets/credentials",
                 json={
                     "enmaas_api_key": "<test-enmaas-key>",
+                    "enmaas_base_url": base_url,
                 },
             )
             assert resp.status_code == 200, resp.text
@@ -1209,10 +1233,8 @@ class TestDoLaunchOpenshell:
         self, client, monkeypatch, endpoint
     ):
         """A gateway provider alone cannot make EnMaaS an empty-selection fallback."""
-        from swarmer.config import settings
-
-        monkeypatch.setattr(settings, "enmaas_base_url", endpoint)
         ws = await _create_workspace(client)
+        await _set_workspace_enmaas_url(ws["id"], endpoint)
         s_resp = await client.post(
             f"/api/v1/workspaces/{ws['id']}/sessions",
             json={"name": "s-enmaas-endpoint-unavailable", "mode": "prompt", "agent_tool": "opencode", "provider": ""},
@@ -1257,10 +1279,8 @@ class TestDoLaunchOpenshell:
         self, client, monkeypatch, endpoint
     ):
         """An existing gateway provider cannot bypass endpoint validation for an explicit selection."""
-        from swarmer.config import settings
-
-        monkeypatch.setattr(settings, "enmaas_base_url", endpoint)
         ws = await _create_workspace(client)
+        await _set_workspace_enmaas_url(ws["id"], endpoint)
         s_resp = await client.post(
             f"/api/v1/workspaces/{ws['id']}/sessions",
             json={"name": "s-enmaas-explicit-no-endpoint", "mode": "prompt", "agent_tool": "opencode", "provider": "enmaas"},
@@ -1291,8 +1311,8 @@ class TestDoLaunchOpenshell:
                 await asyncio.sleep(0)
 
         assert resp.status_code == 500
-        assert "EnMaaS gateway endpoint is not configured or valid" in resp.text
-        assert "Swarmer operator" in resp.text
+        assert "EnMaaS gateway URL is not configured or valid" in resp.text
+        assert "Settings > AI Tokens" in resp.text
         assert "no fallback to paid providers" in resp.text
         assert "EnMaaS key in Settings > Token" not in resp.text
         mock_setup.assert_not_called()

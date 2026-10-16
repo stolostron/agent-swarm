@@ -1,10 +1,14 @@
 from datetime import datetime
+from typing import TYPE_CHECKING
 
 from sqlalchemy import DateTime, ForeignKey, Integer, Text, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 import swarmer.crypto as crypto
 from swarmer.database import Base
+
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
 
 
 class OpencodeSecret(Base):
@@ -51,8 +55,11 @@ class OpencodeSecret(Base):
     enmaas_configured: Mapped[bool] = mapped_column(
         nullable=False, default=False, server_default="0"
     )
-    # Legacy encrypted workspace endpoint column retained for compatibility.
-    # Active EnMaaS code ignores it and uses operator-controlled settings.
+    # Encrypted workspace EnMaaS gateway URL (entered in the AI Tokens form).
+    # The URL itself is non-secret configuration, but it is stored encrypted
+    # alongside the rest of the credential row. Only workspace managers can
+    # set it; it drives the OpenShell profile endpoint, sandbox network
+    # policy, and the generated agent config.
     enmaas_base_url_enc: Mapped[str] = mapped_column(
         Text, nullable=False, default="", server_default=""
     )
@@ -136,3 +143,37 @@ class OpencodeSecret(Base):
         if len(key) <= 8:
             return "****"
         return "****" + key[-4:]
+
+
+async def workspace_enmaas_base_url(
+    db: "AsyncSession",
+    ws_id: int,
+    prefer: "OpencodeSecret | None" = None,
+) -> str:
+    """Resolve the workspace's stored EnMaaS gateway URL, or "" when unset.
+
+    The URL is workspace-scoped configuration (mirroring the workspace-scoped
+    ``swarmer-ws-{id}-enmaas`` gateway provider), so it may live on any
+    credential row — e.g. a shared row saved by a manager while another
+    member launches the session. *prefer* (typically the caller-resolved
+    secret for the launching user) is checked first, then every other row
+    for the workspace. Values are validated with
+    ``config.sanitize_enmaas_base_url`` so invalid stored values degrade to
+    "not configured" instead of breaking renders or launches.
+    """
+    from sqlalchemy import select
+
+    from swarmer.config import sanitize_enmaas_base_url
+
+    result = await db.execute(
+        select(OpencodeSecret).where(OpencodeSecret.workspace_id == ws_id)
+    )
+    rows = list(result.scalars().all())
+    ordered = ([prefer] if prefer is not None else []) + [
+        r for r in rows if r is not prefer
+    ]
+    for row in ordered:
+        url = sanitize_enmaas_base_url(row.enmaas_base_url or "")
+        if url:
+            return url
+    return ""

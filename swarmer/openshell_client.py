@@ -203,19 +203,19 @@ def enmaas_profile_type(ws_id: int) -> str:
     return f"enmaas-ws-{ws_id}"
 
 
-def _enmaas_profile(profile_type: str) -> dict | None:
-    """Build a workspace-scoped profile bound to the operator endpoint.
+def _enmaas_profile(profile_type: str, base_url: str = "") -> dict | None:
+    """Build a workspace-scoped profile bound to the workspace gateway URL.
 
     *profile_type* is the workspace-scoped type id (``enmaas-ws-{id}``,
-    see ``enmaas_profile_type``). Returns None when the operator URL is unset
+    see ``enmaas_profile_type``). Returns None when *base_url* is unset
     or invalid — callers surface a clear error instead of registering a profile
     with no endpoint.
     The endpoint here and the sandbox network policy both derive from the
-    same validated operator-managed URL (ACM-48198).
+    same validated workspace-supplied URL (ACM-48198).
     """
-    from swarmer.config import configured_enmaas_base_url, enmaas_endpoint_from_url
+    from swarmer.config import enmaas_endpoint_from_url
 
-    endpoint = enmaas_endpoint_from_url(configured_enmaas_base_url())
+    endpoint = enmaas_endpoint_from_url(base_url)
     if endpoint is None:
         return None
     host, port = endpoint
@@ -246,28 +246,32 @@ def _enmaas_profile(profile_type: str) -> dict | None:
     }
 
 
-def _custom_profile_for(profile_type: str, _config: dict | None = None) -> dict | None:
+def _custom_profile_for(
+    profile_type: str, _config: dict | None = None, enmaas_base_url: str = ""
+) -> dict | None:
     """Resolve a custom provider profile by type id, or None if unknown.
 
     Dynamic profiles (agent-swarm, enmaas-ws-*) are built from live
     configuration; static profiles come from CUSTOM_PROVIDER_PROFILES. The
-    per-workspace EnMaaS types bind to the operator-managed application
-    endpoint; a provider config map cannot override the endpoint.
+    per-workspace EnMaaS types bind to the workspace's stored gateway URL;
+    a provider config map cannot override the endpoint.
     """
     if profile_type == "agent-swarm":
         return _agent_swarm_profile()
     if profile_type.startswith("enmaas-ws-"):
-        return _enmaas_profile(profile_type)
+        return _enmaas_profile(profile_type, enmaas_base_url)
     return next((p for p in CUSTOM_PROVIDER_PROFILES if p["id"] == profile_type), None)
 
 
-async def import_enmaas_profile(ws_id: int, client=None) -> bool:
+async def import_enmaas_profile(
+    ws_id: int, client=None, base_url: str = ""
+) -> bool:
     """Import (or reconcile) a workspace profile on the selected gateway.
 
-    Endpoint bindings always come from operator-controlled configuration.
-    Returns False when it is unset.
+    Endpoint bindings always come from the workspace's validated gateway
+    URL (*base_url*). Returns False when it is unset or invalid.
     """
-    profile = _enmaas_profile(enmaas_profile_type(ws_id))
+    profile = _enmaas_profile(enmaas_profile_type(ws_id), base_url)
     if profile is None:
         return False
     await import_provider_profiles([profile], client=client)
@@ -701,6 +705,7 @@ async def ensure_provider(
     config: dict[str, str],
     credentials: dict[str, str] | None = None,
     client=None,
+    enmaas_base_url: str = "",
 ) -> None:
     """Create or update a named provider on the gateway with its credentials.
 
@@ -708,6 +713,10 @@ async def ensure_provider(
     them as env vars into the sandbox via GetSandboxProviderEnvironment.
     Credentials are stored server-side (returned as REDACTED); use UpdateProvider
     on subsequent launches to rotate keys.
+
+    *enmaas_base_url* supplies the workspace's validated EnMaaS gateway URL
+    for ``enmaas-ws-*`` profile types — the caller resolves it from the
+    workspace's stored configuration.
     """
     from openshell._proto import openshell_pb2
     import grpc
@@ -717,15 +726,15 @@ async def ensure_provider(
 
     # Custom Swarmer-owned profiles are imported on the resolved client so
     # dedicated remote gateways and fresh setups behave consistently. EnMaaS
-    # profiles use only the operator-managed application endpoint.
-    custom_profile = _custom_profile_for(profile_type, config)
+    # profiles use only the workspace's stored gateway URL.
+    custom_profile = _custom_profile_for(profile_type, config, enmaas_base_url)
     if custom_profile is None and profile_type.startswith("enmaas-ws-"):
-        # Never register an endpoint-less EnMaaS profile — the operator must
-        # configure the deployment endpoint before EnMaaS credentials can be
-        # configured (ACM-48198).
+        # Never register an endpoint-less EnMaaS profile — the workspace must
+        # have a gateway URL before EnMaaS credentials can be configured
+        # (ACM-48198).
         raise ValueError(
-            "EnMaaS gateway URL is missing or invalid — ask the Swarmer "
-            "operator to configure the deployment endpoint."
+            "EnMaaS gateway URL is missing or invalid — set the gateway URL "
+            "for this workspace in Settings > AI Tokens."
         )
     if custom_profile is not None:
         await import_provider_profiles([custom_profile], client=client)

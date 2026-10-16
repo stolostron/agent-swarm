@@ -102,7 +102,8 @@ async def _secrets_context(api, ws_id: int) -> dict:
             pass  # gateway may be unreachable in local dev without OpenShell
 
         # Check gateway for the EnMaaS provider (ACM-48198) — same gateway-only
-        # pattern as OpenAI. The endpoint is operator-managed configuration.
+        # pattern as OpenAI. The endpoint is workspace-supplied configuration
+        # stored on the credential row (entered in this form).
         enmaas_provider_configured = False
         enmaas_provider_check_failed = False
         try:
@@ -129,8 +130,6 @@ async def _secrets_context(api, ws_id: int) -> dict:
     openai_intent = bool(secret and secret.get("has_openai"))
     enmaas_intent = bool(secret and secret.get("has_enmaas"))
 
-    from swarmer.config import configured_enmaas_base_url
-
     return {
         "secret": secret,
         "pats": pats,
@@ -140,7 +139,7 @@ async def _secrets_context(api, ws_id: int) -> dict:
         "gemini_provider_configured": gemini_provider_configured,
         "openai_provider_configured": openai_provider_configured,
         "enmaas_provider_configured": enmaas_provider_configured,
-        "enmaas_endpoint_configured": bool(configured_enmaas_base_url()),
+        "enmaas_endpoint_configured": bool(secret and secret.get("enmaas_base_url")),
         "vertex_provider_missing": vertex_intent and not vertex_provider_configured and not vertex_provider_check_failed,
         "gemini_provider_missing": gemini_intent and not gemini_provider_configured and not gemini_provider_check_failed,
         "openai_provider_missing": openai_intent and not openai_provider_configured and not openai_provider_check_failed,
@@ -210,6 +209,7 @@ async def opencode_secret_save(
     google_api_key: str = Form(""),
     openai_api_key: str = Form(""),
     enmaas_api_key: str = Form(""),
+    enmaas_base_url: str = Form(""),
     shared: str = Form(""),
     adc_file: UploadFile | None = File(None),
 ):
@@ -246,6 +246,12 @@ async def opencode_secret_save(
             ws = await api.get_workspace(ws_id)
         except APIError:
             return RedirectResponse(url="/workspaces", status_code=302)
+        # Current credentials — needed to resolve the effective EnMaaS
+        # gateway URL ("leave blank to keep") for the gateway push below.
+        try:
+            current_cred = await api.get_credentials(ws_id)
+        except APIError:
+            current_cred = None
 
     # Push credentials to the OpenShell gateway BEFORE touching the DB. Each
     # provider is configured independently so a failure on one does not affect
@@ -341,17 +347,37 @@ async def opencode_secret_save(
                 flash(request, "Failed to configure OpenAI on OpenShell. Check gateway connectivity.", "danger")
 
         # Push the EnMaaS key to the OpenShell gateway if submitted (ACM-48198).
-        # The endpoint comes from operator-controlled deployment configuration;
-        # workspace form data cannot select or override the destination.
+        # The gateway URL is workspace configuration entered alongside the key;
+        # a blank submission keeps the stored value, and form data alone never
+        # redirects an already-configured provider without a manager's save.
         enmaas_key = enmaas_api_key.strip()
-        from swarmer.config import configured_enmaas_base_url
+        enmaas_url_input = enmaas_base_url.strip()
+        from swarmer.config import sanitize_enmaas_base_url, validate_enmaas_base_url
 
-        enmaas_url = configured_enmaas_base_url()
+        if enmaas_url_input:
+            try:
+                enmaas_url_input = validate_enmaas_base_url(enmaas_url_input)
+            except ValueError:
+                flash(
+                    request,
+                    "EnMaaS gateway URL must be an https:// URL without "
+                    "credentials, query string, or fragment.",
+                    "danger",
+                )
+                return RedirectResponse(
+                    url=f"/workspaces/{ws_id}/secrets?tab=credentials", status_code=302
+                )
+        # Effective endpoint for the gateway push: the submitted URL, or the
+        # workspace's stored value when the field was left blank.
+        enmaas_url = enmaas_url_input or sanitize_enmaas_base_url(
+            (current_cred or {}).get("enmaas_base_url") or ""
+        )
         if enmaas_key:
             if not enmaas_url:
                 flash(
                     request,
-                    "EnMaaS gateway endpoint is not configured by the Swarmer operator.",
+                    "EnMaaS gateway URL is not configured — enter the gateway URL "
+                    "alongside the API key.",
                     "warning",
                 )
             else:
@@ -363,13 +389,14 @@ async def opencode_secret_save(
                         {},
                         credentials={"ENMAAS_KEY": enmaas_key},
                         client=oc_client,
+                        enmaas_base_url=enmaas_url,
                     )
                     enmaas_configured = True
                 except ValueError:
                     # No key material is included in the message.
                     flash(
                         request,
-                        "EnMaaS gateway endpoint is not configured by the operator.",
+                        "EnMaaS gateway URL is missing or invalid — set the gateway URL.",
                         "danger",
                     )
                 except Exception:
@@ -379,6 +406,22 @@ async def opencode_secret_save(
                         exc_info=True,
                     )
                     flash(request, "Failed to configure EnMaaS on OpenShell. Check gateway connectivity.", "danger")
+        elif enmaas_url_input and enmaas_url_input != sanitize_enmaas_base_url(
+            (current_cred or {}).get("enmaas_base_url") or ""
+        ):
+            # URL-only change: rebind the workspace profile to the new endpoint
+            # so the existing gateway credential keeps working.
+            try:
+                await openshell_client.import_enmaas_profile(
+                    ws_id, client=oc_client, base_url=enmaas_url_input
+                )
+            except Exception:
+                log.warning(
+                    "credential_save: failed to rebind EnMaaS profile for workspace %d",
+                    ws_id,
+                    exc_info=True,
+                )
+                flash(request, "Failed to update EnMaaS gateway endpoint on OpenShell. Check gateway connectivity.", "danger")
     finally:
         if oc_client is not None:
             close = getattr(oc_client, "close", None)
@@ -403,6 +446,9 @@ async def opencode_secret_save(
                 google_api_key="",  # intentionally empty — gateway is the store
                 openai_api_key="",  # intentionally empty — gateway is the store
                 enmaas_api_key="",  # intentionally empty — gateway is the store
+                # Pass through only what was submitted — blank keeps the
+                # stored workspace URL (the REST layer resolves "keep").
+                enmaas_base_url=enmaas_url_input,
                 application_default_credentials="",  # intentionally empty — gateway is the store
                 gemini_configured=True if gemini_configured else None,
                 openai_configured=True if openai_configured else None,

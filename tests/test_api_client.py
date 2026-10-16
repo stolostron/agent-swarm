@@ -326,26 +326,46 @@ class TestSecretsOps:
 
     @pytest.mark.asyncio
     async def test_save_credentials_enmaas_fields_forwarded(self, api_client, monkeypatch):
-        """The console client forwards only the EnMaaS key and marker fields;
-        endpoint selection is operator-controlled (ACM-48198)."""
-        from swarmer.config import settings
-
-        monkeypatch.setattr(settings, "enmaas_base_url", "https://operator.example/v1")
+        """The console client forwards the EnMaaS key, gateway URL, and marker
+        fields; the URL is workspace-supplied configuration (ACM-48198)."""
         ws = await api_client.create_workspace("WS")
+        imported = {}
+
+        async def _fake_import_enmaas_profile(ws_id, client=None, base_url=""):
+            imported["ws_id"] = ws_id
+            imported["base_url"] = base_url
+            return True
+
+        monkeypatch.setattr(
+            "swarmer.openshell_client.import_enmaas_profile",
+            _fake_import_enmaas_profile,
+        )
         cred = await api_client.save_credentials(
             ws["id"],
             enmaas_api_key="<test-enmaas-key>",
+            enmaas_base_url="https://enmaas-gateway.example.com/v1",
             enmaas_configured=True,
         )
         assert cred["enmaas_configured"] is True
         assert cred["has_enmaas"] is True
-        assert "enmaas_base_url" not in cred
+        assert cred["enmaas_base_url"] == "https://enmaas-gateway.example.com/v1"
         # No token material in the response.
         assert "<test-enmaas-key>" not in str(cred)
 
-        # Marker-only update (console pattern: gateway is the store).
+        # URL-only change rebinds the profile without a token.
+        cred = await api_client.save_credentials(
+            ws["id"],
+            enmaas_base_url="https://enmaas-gateway-2.example.com/v1",
+        )
+        assert imported["ws_id"] == ws["id"]
+        assert imported["base_url"] == "https://enmaas-gateway-2.example.com/v1"
+        assert cred["enmaas_base_url"] == "https://enmaas-gateway-2.example.com/v1"
+        assert cred["enmaas_configured"] is True
+
+        # Blank URL keeps the stored value (console "leave blank to keep").
         cred = await api_client.save_credentials(ws["id"], enmaas_configured=False)
         assert cred["enmaas_configured"] is False
+        assert cred["enmaas_base_url"] == "https://enmaas-gateway-2.example.com/v1"
 
     @pytest.mark.asyncio
     async def test_pat_crud(self, api_client):

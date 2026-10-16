@@ -21,11 +21,9 @@ data:
   OPENAI_PRESET_PLAN_MODEL: "openai/gpt-6.1-sol"
   OPENAI_PRESET_BUILD_MODEL: "openai/gpt-6-luna"
   OPENAI_PRESET_SMALL_MODEL: "openai/gpt-6-luna"
-  # Operator-managed EnMaaS endpoint (ACM-48198). Set this in the deployment
-  # ConfigMap for the environment; workspace settings cannot redirect gateway
-  # credentials. Keep deployment-specific endpoints out of git.
-  ENMAAS_BASE_URL: ""
-  # EnMaaS preset role models — business-provided zero-cost GLM-5.3.
+  # EnMaaS preset role models — business-provided zero-cost GLM-5.3. The
+  # EnMaaS gateway URL is per-workspace configuration entered in the
+  # Settings > AI Tokens form; there is no deployment-level setting for it.
   ENMAAS_PRESET_PLAN_MODEL: "enmaas/rits/zai-org/glm-5-3"
   ENMAAS_PRESET_BUILD_MODEL: "enmaas/rits/zai-org/glm-5-3"
   ENMAAS_PRESET_SMALL_MODEL: "enmaas/rits/zai-org/glm-5-3"
