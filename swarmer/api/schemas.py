@@ -216,7 +216,7 @@ class ScheduleEntryCreate(BaseModel):
     fix_authors: str = Field("", max_length=512)
     label: str = ""
     prompt_id: int
-    provider: str = Field("", max_length=128, pattern=r"^(|claude|gemini|openai)$")
+    provider: str = Field("", max_length=128, pattern=r"^(|claude|gemini|openai|enmaas)$")
     instruction_prompt: str = ""
     include_event_context: bool = True
     enabled: bool = True
@@ -231,7 +231,7 @@ class ScheduleEntryUpdate(BaseModel):
     fix_authors: str | None = Field(None, max_length=512)
     label: str | None = None
     prompt_id: int | None = None
-    provider: str | None = Field(None, max_length=128, pattern=r"^(|claude|gemini|openai)$")
+    provider: str | None = Field(None, max_length=128, pattern=r"^(|claude|gemini|openai|enmaas)$")
     instruction_prompt: str | None = None
     include_event_context: bool | None = None
     enabled: bool | None = None
@@ -435,6 +435,10 @@ class CredentialsSave(BaseModel):
     vertex_location: str = ""
     google_api_key: str = ""
     openai_api_key: str = ""
+    # Write-only EnMaaS token submission (ACM-48198). Pushed to the OpenShell
+    # gateway provider and never persisted by Swarmer; blank preserves the
+    # existing gateway credential.
+    enmaas_api_key: str = ""
     application_default_credentials: str = ""
     shared: bool = False
     # Non-secret markers used by the console when credentials are stored only
@@ -442,6 +446,7 @@ class CredentialsSave(BaseModel):
     gemini_configured: bool | None = None
     openai_configured: bool | None = None
     vertex_configured: bool | None = None
+    enmaas_configured: bool | None = None
 
 
 class CredentialsOut(BaseModel):
@@ -456,8 +461,13 @@ class CredentialsOut(BaseModel):
     gemini_configured: bool
     openai_configured: bool
     vertex_configured: bool
+    enmaas_configured: bool
+    # Operator-configured EnMaaS gateway URL ("" when unset). Non-secret
+    # configuration — workspace request data cannot set or override it.
+    enmaas_base_url: str
     has_gemini: bool
     has_openai: bool
+    has_enmaas: bool
     created_at: datetime
     updated_at: datetime
 

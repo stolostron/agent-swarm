@@ -99,7 +99,12 @@ refresh loops -> start `scheduler.py` and `pr_watcher.py` background tasks.
 1. HTTP route, cron scheduler, or PR watcher calls `routers/sessions.py:_do_launch()`.
 2. If `MAX_CONCURRENT_AGENTS` is full, persist `phase="queued"`; do not create a sandbox.
 3. Resolve the workspace Gateway with `resolve_gateway_config()`.
-4. Resolve providers and credentials; mint a GitHub App IAT when needed.
+4. Resolve providers and credentials; mint a GitHub App IAT when needed. When the Agent
+   Swarm MCP is enabled, `session_auth.py:mint_session_token()` also mints the
+   short-lived per-session API token (`AGENT_SWARM_API_TOKEN`, HMAC-signed, 1-hour TTL
+   with a background refresh loop) that authorizes the sandbox's MCP client back into
+   Swarmer's REST API — it is scope- and session-bound, unrelated to AI provider
+   credentials, and rotated independently of them.
 5. `openshell_client.create_sandbox()` creates the sandbox and applies policy/providers.
 6. Clone `SessionRepo` entries and write tool config plus `/sandbox/AGENTS.md`.
 7. Run the selected mode:
@@ -147,7 +152,15 @@ add tool-specific behavior to `agent_tools/`.
 Provider presets map `plan`, `build`, and `small` roles through `swarmer/config.py` and
 `k8s/swarmer/configmap.yaml`. The OpenAI preset defaults are `openai/gpt-6.1-sol` for plan
 and `openai/gpt-6-luna` for both build and small; the ConfigMap values override the Python
-defaults in deployed environments.
+defaults in deployed environments. The EnMaaS preset (ACM-48198) defaults every role to
+`enmaas/rits/zai-org/glm-5-3` on the business-provided zero-cost gateway; because `enmaas`
+is not a built-in OpenCode provider, `build_config_data()` emits a native
+`providers.enmaas` block (openai-compatible package, operator-configured `baseURL`,
+`ENMAAS_KEY` env reference) and enables only the enmaas provider for EnMaaS sessions. The
+gateway URL is set by the deployment operator through `ENMAAS_BASE_URL` and validated
+(`config.validate_enmaas_base_url`). Workspace credential rows cannot override it. The
+validated endpoint is shared by generated config, per-workspace OpenShell profiles
+(`enmaas-ws-{id}`), and the sandbox's endpoint-scoped egress rule.
 
 | Use case | Swarmer behavior | OpenShell behavior |
 |---|---|---|
@@ -266,15 +279,29 @@ the Swarmer dashboard, not the agent sandbox.
   `SYSLOG`; the deployment grants the required SCCs automatically when `oc` is available.
 - Swarmer runs as non-root UID 1001. `/data` and `/auth` must be writable through the
   deployment's group permissions.
-- `OpencodeSecret` is a legacy model name for AI provider settings. UI-saved ADC and Gemini
-  credentials go to Gateway providers; legacy encrypted columns remain for compatibility.
+- `OpencodeSecret` is a legacy model name for AI provider settings. UI-saved ADC, Gemini,
+  OpenAI, and EnMaaS credentials go to Gateway providers (`swarmer-ws-{id}-{provider}`) and
+  are never stored in Swarmer's database; legacy encrypted columns remain only for
+  pre-migration ADC/Gemini/OpenAI keys. EnMaaS (ACM-48198) has no token column at all —
+  just the `enmaas_configured` marker — and its token never appears in API responses,
+  rendered HTML, logs, generated `opencode.json`, or sandbox `extra_env`. The EnMaaS gateway
+  endpoint comes from the validated operator setting `ENMAAS_BASE_URL`; the legacy
+  encrypted `enmaas_base_url_enc` column is retained for database compatibility and is
+  ignored by active code. Generated config, provider profiles, and sandbox network policy
+  use the operator setting; workspace users can only configure the gateway credential.
 
 ## Change Routing
 
 - Add an API feature: router -> API schema -> tests -> matching MCP client/tool/schema.
 - Add persisted state: model -> `models/__init__.py` import -> `migrate_db()` -> tests.
 - Add a credential: encrypted model property -> provider injection -> policy rules -> smoke
-  and unit tests; never add a session Kubernetes Secret.
+  and unit tests; never add a session Kubernetes Secret. Gateway-only credentials (the
+  EnMaaS pattern, ACM-48198) skip the encrypted property for the token entirely — persist
+  only a boolean marker column, push the token to the workspace Gateway provider at save
+  time, and add marker reset to `gateway_version.py` plus redaction for the token's key
+  name. The non-secret EnMaaS endpoint is operator-managed through `ENMAAS_BASE_URL`,
+  validated (`config.validate_enmaas_base_url`), and cannot be stored in or overridden by
+  workspace credential metadata. Provider profiles and network policy use that setting.
 - Add an agent tool: implement `AgentToolStrategy`, register it, add model/config/image
   settings, then update OpenShell launch tests.
 - Change a deployment version or image tag: update the owning Makefile/default contract and

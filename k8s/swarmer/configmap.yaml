@@ -21,4 +21,11 @@ data:
   OPENAI_PRESET_PLAN_MODEL: "openai/gpt-6.1-sol"
   OPENAI_PRESET_BUILD_MODEL: "openai/gpt-6-luna"
   OPENAI_PRESET_SMALL_MODEL: "openai/gpt-6-luna"
+  # Operator-managed EnMaaS endpoint. Set the deployment value without
+  # committing a real endpoint to tracked configuration or documentation.
+  ENMAAS_BASE_URL: ""
+  # EnMaaS preset role models — zero-cost GLM-5.3.
+  ENMAAS_PRESET_PLAN_MODEL: "enmaas/rits/zai-org/glm-5-3"
+  ENMAAS_PRESET_BUILD_MODEL: "enmaas/rits/zai-org/glm-5-3"
+  ENMAAS_PRESET_SMALL_MODEL: "enmaas/rits/zai-org/glm-5-3"
   OPENCODE_EXPERIMENTAL_PLAN_MODE: "true"

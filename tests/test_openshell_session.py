@@ -104,14 +104,17 @@ def _override_get_bearer_token():
 
 @pytest_asyncio.fixture(autouse=True)
 async def _setup_db(monkeypatch):
+    """Initialize isolated database, crypto, and runtime settings for each test."""
     from swarmer.crypto import init_crypto
     init_crypto("auth/secret.key")
 
     from swarmer.config import settings
     orig_ns = settings.k8s_namespace
     orig_max = settings.max_concurrent_agents
+    orig_enmaas_url = settings.enmaas_base_url
     settings.k8s_namespace = ""  # must be empty to allow workspace creation
     settings.max_concurrent_agents = 0  # unlimited by default for these tests
+    settings.enmaas_base_url = ""
 
     monkeypatch.setattr("swarmer.k8s.ensure_namespace", lambda namespace: None)
     monkeypatch.setattr("swarmer.k8s.delete_namespace", lambda namespace: None)
@@ -125,6 +128,7 @@ async def _setup_db(monkeypatch):
         await conn.run_sync(Base.metadata.drop_all)
     settings.k8s_namespace = orig_ns
     settings.max_concurrent_agents = orig_max
+    settings.enmaas_base_url = orig_enmaas_url
 
 
 @pytest_asyncio.fixture
@@ -159,6 +163,13 @@ async def _create_workspace(client: AsyncClient, name: str = "Test WS") -> dict:
     )
     assert resp.status_code == 201, resp.text
     return resp.json()
+
+
+async def _set_workspace_enmaas_url(ws_id: int, url: str) -> None:
+    """Set the operator-managed EnMaaS endpoint used by launch tests."""
+    from swarmer.config import settings
+
+    settings.enmaas_base_url = url
 
 
 async def _create_session(
@@ -380,6 +391,74 @@ class TestDoLaunchOpenshell:
             patches["wait_vertex_ready"],
             patches["provider_exists"], patches["get_image"],
         )
+
+    @pytest.mark.asyncio
+    async def test_schedule_provider_override_does_not_become_manual_default(
+        self, client, monkeypatch
+    ):
+        """A schedule-only EnMaaS choice applies once; the next manual run uses its own default."""
+        from contextlib import ExitStack
+
+        from swarmer.config import settings
+        from swarmer.models.session import Session
+        from swarmer.models.session_schedule import SessionSchedule
+        from swarmer.models.workspace import Workspace
+        from swarmer.routers.sessions import _do_launch
+        from sqlalchemy.orm import selectinload
+
+        monkeypatch.setattr(settings, "max_concurrent_agents", 0)
+        ws_data = await _create_workspace(client, "Scheduled provider override")
+        session_data = await _create_session(client, ws_data["id"], "scheduled-enmaas")
+        await _set_workspace_enmaas_url(ws_data["id"], "https://enmaas.example/v1")
+
+        async with _TestSession() as db:
+            session = await db.get(Session, session_data["id"])
+            schedule = SessionSchedule(
+                session_id=session.id,
+                cron_schedule="0 0 * * *",
+                label="Scheduled EnMaaS",
+                provider="enmaas",
+                enabled=True,
+            )
+            db.add(schedule)
+            await db.flush()
+            session.active_schedule_id = schedule.id
+            await db.commit()
+
+        patches = self._patch_openshell()
+        with ExitStack() as stack:
+            for name, patcher in patches.items():
+                if name == "wait_vertex_ready":
+                    continue
+                mock = stack.enter_context(patcher)
+                if name == "provider_exists":
+                    mock.side_effect = lambda *_args, **_kwargs: True
+                elif name == "setup_sandbox":
+                    setup_mock = mock
+
+            async with _TestSession() as db:
+                session = await db.get(
+                    Session,
+                    session_data["id"],
+                    options=[selectinload(Session.repos)],
+                )
+                workspace = await db.get(Workspace, ws_data["id"])
+                await _do_launch(session, workspace, db)
+                await asyncio.sleep(0)
+                assert session.provider == ""
+                scheduled_launch = setup_mock.call_args.kwargs
+                assert scheduled_launch["config_model"] == "enmaas"
+                assert scheduled_launch["model"] == "enmaas/rits/zai-org/glm-5-3"
+
+                session.active_schedule_id = None
+                session.phase = "idle"
+                await db.commit()
+                await _do_launch(session, workspace, db)
+                await asyncio.sleep(0)
+
+                assert session.provider == "claude"
+                manual_launch = setup_mock.call_args.kwargs
+                assert manual_launch["config_model"] == "claude"
 
     @pytest.mark.asyncio
     async def test_creates_sandbox_with_tool_image(self, client):
@@ -938,6 +1017,295 @@ class TestDoLaunchOpenshell:
         call_kwargs = mock_setup.call_args.kwargs if mock_setup.call_args else {}
         assert gemini_pname not in call_kwargs.get("provider_names", [])
         assert openai_pname in call_kwargs.get("provider_names", [])
+
+    async def _save_enmaas_credentials(
+        self, client, ws_id: int, base_url: str = "https://enmaas.example/v1"
+    ) -> None:
+        """Store EnMaaS credentials with the operator-configured endpoint."""
+        await _set_workspace_enmaas_url(ws_id, base_url)
+        with patch(
+            "swarmer.openshell_client.ensure_provider",
+            new=AsyncMock(),
+        ):
+            resp = await client.post(
+                f"/api/v1/workspaces/{ws_id}/secrets/credentials",
+                json={
+                    "enmaas_api_key": "<test-enmaas-key>",
+                    "enmaas_base_url": base_url,
+                },
+            )
+            assert resp.status_code == 200, resp.text
+
+    @pytest.mark.asyncio
+    async def test_enmaas_provider_attached_when_configured_on_gateway(self, client):
+        """When an EnMaaS provider exists on the gateway, attach it to the sandbox."""
+        ws = await _create_workspace(client)
+        await self._save_enmaas_credentials(client, ws["id"])
+        s_resp = await client.post(
+            f"/api/v1/workspaces/{ws['id']}/sessions",
+            json={"name": "s-enmaas", "mode": "prompt", "agent_tool": "opencode", "provider": "enmaas"},
+        )
+        assert s_resp.status_code == 201, s_resp.text
+        s = s_resp.json()
+        expected_pname = f"swarmer-ws-{ws['id']}-enmaas"
+
+        patches = self._patch_openshell()
+        with patches["create_provider"], \
+             patches["ensure_provider"] as mock_ensure, \
+             patches["configure_provider_credential"], patches["attach_sandbox_provider"], \
+              patches["create_sandbox"], patches["write_agent_config"], \
+              patches["write_agents_md"], patches["exec_command"], \
+              patches["start_agent"], patches["delete_sandbox"], \
+              patches["build_policy"], patches["run_agent"], \
+              patches["setup_sandbox"] as mock_setup, \
+              patches["get_image"]:
+            with patch(
+                "swarmer.openshell_client.provider_exists",
+                new=AsyncMock(side_effect=lambda name, **kw: name == expected_pname),
+            ):
+                resp = await client.post(
+                    f"/api/v1/workspaces/{ws['id']}/sessions/{s['id']}/launch"
+                )
+                await asyncio.sleep(0)
+
+        assert resp.status_code == 200
+        call_kwargs = mock_setup.call_args.kwargs if mock_setup.call_args else {}
+        assert expected_pname in call_kwargs.get("provider_names", [])
+        # The model passed to the sandbox is the full EnMaaS reference with
+        # embedded slashes preserved.
+        assert call_kwargs.get("model") == "enmaas/rits/zai-org/glm-5-3"
+        assert call_kwargs.get("config_model") == "enmaas"
+        enmaas_ensure_calls = [
+            c for c in mock_ensure.call_args_list
+            if len(c.args) >= 1 and c.args[0] == expected_pname
+        ]
+        assert enmaas_ensure_calls == []
+
+    @pytest.mark.asyncio
+    async def test_enmaas_launch_excludes_configured_gemini_and_vertex_providers(self, client):
+        """An EnMaaS sandbox must not receive unrelated Google credentials."""
+        ws = await _create_workspace(client)
+        await self._save_enmaas_credentials(client, ws["id"])
+        s_resp = await client.post(
+            f"/api/v1/workspaces/{ws['id']}/sessions",
+            json={"name": "s-enmaas-isolated", "mode": "prompt", "agent_tool": "opencode", "provider": "enmaas"},
+        )
+        assert s_resp.status_code == 201, s_resp.text
+        expected_ai_providers = {
+            f"swarmer-ws-{ws['id']}-enmaas",
+            f"swarmer-ws-{ws['id']}-google-ai-studio",
+            f"swarmer-ws-{ws['id']}-google-cloud",
+        }
+
+        patches = self._patch_openshell()
+        with (
+            patches["create_provider"],
+            patches["ensure_provider"],
+            patches["configure_provider_credential"],
+            patches["attach_sandbox_provider"],
+            patches["create_sandbox"],
+            patches["write_agent_config"],
+            patches["write_agents_md"],
+            patches["exec_command"],
+            patches["start_agent"],
+            patches["delete_sandbox"],
+            patches["build_policy"],
+            patches["run_agent"],
+            patches["setup_sandbox"] as mock_setup,
+            patches["get_image"],
+        ):
+            with patch(
+                "swarmer.openshell_client.provider_exists",
+                new=AsyncMock(return_value=True),
+            ):
+                resp = await client.post(
+                    f"/api/v1/workspaces/{ws['id']}/sessions/{s_resp.json()['id']}/launch"
+                )
+                await asyncio.sleep(0)
+
+        assert resp.status_code == 200
+        call_kwargs = mock_setup.call_args.kwargs
+        attached_ai_providers = set(call_kwargs.get("provider_names", [])) & expected_ai_providers
+        assert attached_ai_providers == {f"swarmer-ws-{ws['id']}-enmaas"}
+        env_vars = call_kwargs.get("env_vars", {})
+        assert not {
+            "GOOGLE_CLOUD_LOCATION", "VERTEX_LOCATION",
+            "GOOGLE_CLOUD_PROJECT", "VERTEX_PROJECT",
+        } & env_vars.keys()
+
+    @pytest.mark.asyncio
+    async def test_enmaas_selection_fails_clearly_without_paid_fallback(self, client):
+        """Cost-safety (ACM-48198): an explicitly selected but unavailable
+        EnMaaS provider must fail with a clear error — never fall back to a
+        paid provider, even when one is available."""
+        ws = await _create_workspace(client)
+        s_resp = await client.post(
+            f"/api/v1/workspaces/{ws['id']}/sessions",
+            json={"name": "s-enmaas-absent", "mode": "prompt", "agent_tool": "opencode", "provider": "enmaas"},
+        )
+        assert s_resp.status_code == 201, s_resp.text
+        s = s_resp.json()
+        gemini_pname = f"swarmer-ws-{ws['id']}-google-ai-studio"
+
+        patches = self._patch_openshell()
+        with patches["create_provider"], patches["ensure_provider"], \
+             patches["configure_provider_credential"], patches["attach_sandbox_provider"], \
+              patches["create_sandbox"], patches["write_agent_config"], \
+              patches["write_agents_md"], patches["exec_command"], \
+              patches["start_agent"], patches["delete_sandbox"], \
+              patches["build_policy"], patches["run_agent"], \
+              patches["setup_sandbox"] as mock_setup, \
+              patches["get_image"]:
+            # Gemini (paid) IS available — the launch must still fail.
+            with patch(
+                "swarmer.openshell_client.provider_exists",
+                new=AsyncMock(side_effect=lambda name, **kw: name == gemini_pname),
+            ):
+                resp = await client.post(
+                    f"/api/v1/workspaces/{ws['id']}/sessions/{s['id']}/launch"
+                )
+                await asyncio.sleep(0)
+
+        assert resp.status_code == 500
+        assert "EnMaaS provider is not configured" in resp.text
+        assert "EnMaaS key in Settings > AI Tokens" in resp.text
+        mock_setup.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_enmaas_only_workspace_selects_enmaas_for_empty_provider(self, client):
+        """An EnMaaS-only workspace launches successfully with an empty
+        provider selection — EnMaaS is chosen, not a paid default."""
+        ws = await _create_workspace(client)
+        await self._save_enmaas_credentials(client, ws["id"])
+        s_resp = await client.post(
+            f"/api/v1/workspaces/{ws['id']}/sessions",
+            json={"name": "s-enmaas-only", "mode": "prompt", "agent_tool": "opencode", "provider": ""},
+        )
+        assert s_resp.status_code == 201, s_resp.text
+        s = s_resp.json()
+        enmaas_pname = f"swarmer-ws-{ws['id']}-enmaas"
+
+        patches = self._patch_openshell()
+        with patches["create_provider"], patches["ensure_provider"], \
+             patches["configure_provider_credential"], patches["attach_sandbox_provider"], \
+              patches["create_sandbox"], patches["write_agent_config"], \
+              patches["write_agents_md"], patches["exec_command"], \
+              patches["start_agent"], patches["delete_sandbox"], \
+              patches["build_policy"], patches["run_agent"], \
+              patches["setup_sandbox"] as mock_setup, \
+              patches["get_image"]:
+            with patch(
+                "swarmer.openshell_client.provider_exists",
+                new=AsyncMock(side_effect=lambda name, **kw: name == enmaas_pname),
+            ):
+                resp = await client.post(
+                    f"/api/v1/workspaces/{ws['id']}/sessions/{s['id']}/launch"
+                )
+                await asyncio.sleep(0)
+
+        assert resp.status_code == 200
+        call_kwargs = mock_setup.call_args.kwargs if mock_setup.call_args else {}
+        assert enmaas_pname in call_kwargs.get("provider_names", [])
+        assert call_kwargs.get("config_model") == "enmaas"
+
+        # The resolved preset is persisted so restart-resume reuses it.
+        detail = await client.get(f"/api/v1/workspaces/{ws['id']}/sessions/{s['id']}")
+        assert detail.status_code == 200
+        assert detail.json()["provider"] == "enmaas"
+
+    @pytest.mark.parametrize(
+        "endpoint",
+        ["", "http://invalid.example/v1"],
+        ids=["unset-endpoint", "invalid-endpoint"],
+    )
+    @pytest.mark.asyncio
+    async def test_enmaas_provider_is_not_empty_selection_fallback_without_endpoint(
+        self, client, monkeypatch, endpoint
+    ):
+        """A gateway provider alone cannot make EnMaaS an empty-selection fallback."""
+        ws = await _create_workspace(client)
+        await _set_workspace_enmaas_url(ws["id"], endpoint)
+        s_resp = await client.post(
+            f"/api/v1/workspaces/{ws['id']}/sessions",
+            json={"name": "s-enmaas-endpoint-unavailable", "mode": "prompt", "agent_tool": "opencode", "provider": ""},
+        )
+        assert s_resp.status_code == 201, s_resp.text
+        s = s_resp.json()
+        enmaas_pname = f"swarmer-ws-{ws['id']}-enmaas"
+
+        patches = self._patch_openshell()
+        with patches["create_provider"], patches["ensure_provider"], \
+             patches["configure_provider_credential"], patches["attach_sandbox_provider"], \
+              patches["create_sandbox"], patches["write_agent_config"], \
+              patches["write_agents_md"], patches["exec_command"], \
+              patches["start_agent"], patches["delete_sandbox"], \
+              patches["build_policy"], patches["run_agent"], \
+              patches["setup_sandbox"] as mock_setup, \
+              patches["get_image"]:
+            with patch(
+                "swarmer.openshell_client.provider_exists",
+                new=AsyncMock(side_effect=lambda name, **kw: name == enmaas_pname),
+            ) as mock_provider_exists:
+                resp = await client.post(
+                    f"/api/v1/workspaces/{ws['id']}/sessions/{s['id']}/launch"
+                )
+                await asyncio.sleep(0)
+
+        assert resp.status_code == 500
+        assert "No AI provider is configured for this workspace" in resp.text
+        assert any(
+            probe_call.args[0] == enmaas_pname
+            for probe_call in mock_provider_exists.call_args_list
+        )
+        mock_setup.assert_not_called()
+
+    @pytest.mark.parametrize(
+        "endpoint",
+        ["", "http://invalid.example/v1"],
+        ids=["unset-endpoint", "invalid-endpoint"],
+    )
+    @pytest.mark.asyncio
+    async def test_explicit_enmaas_selection_fails_closed_without_endpoint(
+        self, client, monkeypatch, endpoint
+    ):
+        """An existing gateway provider cannot bypass endpoint validation for an explicit selection."""
+        ws = await _create_workspace(client)
+        await _set_workspace_enmaas_url(ws["id"], endpoint)
+        s_resp = await client.post(
+            f"/api/v1/workspaces/{ws['id']}/sessions",
+            json={"name": "s-enmaas-explicit-no-endpoint", "mode": "prompt", "agent_tool": "opencode", "provider": "enmaas"},
+        )
+        assert s_resp.status_code == 201, s_resp.text
+        s = s_resp.json()
+        enmaas_pname = f"swarmer-ws-{ws['id']}-enmaas"
+        gemini_pname = f"swarmer-ws-{ws['id']}-google-ai-studio"
+
+        patches = self._patch_openshell()
+        with patches["create_provider"], patches["ensure_provider"], \
+             patches["configure_provider_credential"], patches["attach_sandbox_provider"], \
+              patches["create_sandbox"], patches["write_agent_config"], \
+              patches["write_agents_md"], patches["exec_command"], \
+              patches["start_agent"], patches["delete_sandbox"], \
+              patches["build_policy"], patches["run_agent"], \
+              patches["setup_sandbox"] as mock_setup, \
+              patches["get_image"]:
+            with patch(
+                "swarmer.openshell_client.provider_exists",
+                new=AsyncMock(
+                    side_effect=lambda name, **kw: name in (enmaas_pname, gemini_pname)
+                ),
+            ):
+                resp = await client.post(
+                    f"/api/v1/workspaces/{ws['id']}/sessions/{s['id']}/launch"
+                )
+                await asyncio.sleep(0)
+
+        assert resp.status_code == 500
+        assert "EnMaaS gateway URL is not configured or valid" in resp.text
+        assert "configure ENMAAS_BASE_URL" in resp.text
+        assert "no fallback to paid providers" in resp.text
+        assert "EnMaaS key in Settings > AI Tokens" not in resp.text
+        mock_setup.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_launch_rejects_when_requested_provider_probe_fails(self, client):

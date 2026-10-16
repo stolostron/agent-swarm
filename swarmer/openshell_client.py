@@ -90,6 +90,9 @@ def _agent_swarm_profile() -> dict:
 # Custom provider profiles swarmer registers in OpenShell gateways.
 # Ensures static credentials (e.g. OPENAI_API_KEY, GOOGLE_API_KEY) are bound to
 # their endpoints so OpenShell 0.0.116+ does not withhold them as unbound credentials.
+# Note: "agent-swarm" and the per-workspace "enmaas-ws-{id}" profiles are built
+# dynamically (see _agent_swarm_profile and _enmaas_profile) because their
+# endpoints derive from runtime configuration.
 CUSTOM_PROVIDER_PROFILES: list[dict] = [
     _agent_swarm_profile(),
     {
@@ -188,6 +191,91 @@ CUSTOM_PROVIDER_PROFILES: list[dict] = [
         ],
     },
 ]
+
+
+def enmaas_profile_type(ws_id: int) -> str:
+    """Return the workspace-scoped EnMaaS provider profile type id.
+
+    Each workspace gets its own profile type so workspaces on a shared
+    gateway can point at different EnMaaS gateway URLs without their
+    ENMAAS_KEY credentials being endpoint-bound to another workspace's host.
+    """
+    return f"enmaas-ws-{ws_id}"
+
+
+def _enmaas_profile(profile_type: str, base_url: str = "") -> dict | None:
+    """Build a workspace-scoped profile bound to the operator gateway URL.
+
+    *profile_type* is the workspace-scoped type id (``enmaas-ws-{id}``,
+    see ``enmaas_profile_type``). Returns None when the operator endpoint is
+    unset or invalid — callers surface a clear error instead of registering a
+    profile with no endpoint.
+    ``base_url`` is retained for caller compatibility but ignored. The
+    endpoint here and sandbox network policy use the validated operator URL.
+    """
+    from swarmer.config import configured_enmaas_endpoint
+
+    endpoint = configured_enmaas_endpoint()
+    if endpoint is None:
+        return None
+    host, port = endpoint
+    return {
+        "id": profile_type,
+        "display_name": "EnMaaS",
+        "inference_capable": True,
+        "credentials": [
+            {
+                # Bearer auth, mirroring the OpenAI profile — EnMaaS is a
+                # distinct OpenAI-compatible gateway, not the OpenAI provider.
+                "name": "ENMAAS_KEY",
+                "env_vars": ["ENMAAS_KEY"],
+                "required": True,
+                "auth_style": "bearer",
+                "header_name": "authorization",
+            }
+        ],
+        "endpoints": [
+            {
+                "host": host,
+                "port": port,
+                "protocol": "rest",
+                "access": "read-write",
+                "enforcement": "enforce",
+            }
+        ],
+    }
+
+
+def _custom_profile_for(
+    profile_type: str, _config: dict | None = None, enmaas_base_url: str = ""
+) -> dict | None:
+    """Resolve a custom provider profile by type id, or None if unknown.
+
+    Dynamic profiles (agent-swarm, enmaas-ws-*) are built from live
+    configuration; static profiles come from CUSTOM_PROVIDER_PROFILES. The
+    per-workspace EnMaaS types bind to the operator-managed gateway URL; a
+    workspace-supplied URL cannot override the endpoint.
+    """
+    if profile_type == "agent-swarm":
+        return _agent_swarm_profile()
+    if profile_type.startswith("enmaas-ws-"):
+        return _enmaas_profile(profile_type, enmaas_base_url)
+    return next((p for p in CUSTOM_PROVIDER_PROFILES if p["id"] == profile_type), None)
+
+
+async def import_enmaas_profile(
+    ws_id: int, client=None, base_url: str = ""
+) -> bool:
+    """Import (or reconcile) a workspace profile on the selected gateway.
+
+    Endpoint bindings always come from the workspace's validated gateway
+    URL (*base_url*). Returns False when it is unset or invalid.
+    """
+    profile = _enmaas_profile(enmaas_profile_type(ws_id), base_url)
+    if profile is None:
+        return False
+    await import_provider_profiles([profile], client=client)
+    return True
 
 
 def _set_workspace(request) -> None:
@@ -617,6 +705,7 @@ async def ensure_provider(
     config: dict[str, str],
     credentials: dict[str, str] | None = None,
     client=None,
+    enmaas_base_url: str = "",
 ) -> None:
     """Create or update a named provider on the gateway with its credentials.
 
@@ -624,6 +713,9 @@ async def ensure_provider(
     them as env vars into the sandbox via GetSandboxProviderEnvironment.
     Credentials are stored server-side (returned as REDACTED); use UpdateProvider
     on subsequent launches to rotate keys.
+
+    *enmaas_base_url* is retained for compatibility; EnMaaS profile endpoints
+    are resolved from operator-managed configuration.
     """
     from openshell._proto import openshell_pb2
     import grpc
@@ -632,12 +724,16 @@ async def ensure_provider(
         client = _get_client()
 
     # Custom Swarmer-owned profiles are imported on the resolved client so
-    # dedicated remote gateways and fresh setups behave consistently.
-    custom_profile = (
-        _agent_swarm_profile()
-        if profile_type == "agent-swarm"
-        else next((p for p in CUSTOM_PROVIDER_PROFILES if p["id"] == profile_type), None)
-    )
+    # dedicated remote gateways and fresh setups behave consistently. EnMaaS
+    # profiles use only the operator-managed gateway URL.
+    custom_profile = _custom_profile_for(profile_type, config, enmaas_base_url)
+    if custom_profile is None and profile_type.startswith("enmaas-ws-"):
+        # Never register an endpoint-less EnMaaS profile — the operator must
+        # configure a gateway URL before EnMaaS credentials can be configured
+        # (ACM-48198).
+        raise ValueError(
+            "EnMaaS gateway URL is missing or invalid — configure ENMAAS_BASE_URL."
+        )
     if custom_profile is not None:
         await import_provider_profiles([custom_profile], client=client)
 
@@ -732,6 +828,48 @@ async def provider_exists(name: str, client=None) -> bool:
     result = await asyncio.to_thread(_do_check)
     _provider_cache[name] = (result, now + _PROVIDER_CACHE_TTL)
     return result
+
+
+async def provider_profile_endpoint_matches(
+    profile_id: str,
+    endpoint: tuple[str, int] | None,
+    client=None,
+) -> bool:
+    """Check that a gateway provider profile has exactly the configured endpoint.
+
+    Unlike provider existence, this check is deliberately not cached: startup
+    resume must not trust a stale workspace profile after reconciliation failed.
+    """
+    if not endpoint:
+        return False
+
+    import grpc
+    from openshell._proto import openshell_pb2
+
+    if client is None:
+        client = _get_client()
+
+    def _do_check() -> bool:
+        req = openshell_pb2.GetProviderProfileRequest(id=profile_id)
+        if hasattr(req, "workspace"):
+            req.workspace = ""
+        try:
+            response = client._stub.GetProviderProfile(req, timeout=client._timeout)
+        except grpc.RpcError as exc:
+            if isinstance(exc, grpc.Call) and exc.code() == grpc.StatusCode.NOT_FOUND:
+                return False
+            raise
+
+        profile = getattr(response, "profile", None)
+        endpoints = getattr(profile, "endpoints", ()) if profile is not None else ()
+        actual = [
+            (str(item.host).lower().rstrip("."), int(item.port))
+            for item in endpoints
+        ]
+        expected = [(endpoint[0].lower().rstrip("."), int(endpoint[1]))]
+        return actual == expected
+
+    return await asyncio.to_thread(_do_check)
 
 
 async def create_google_cloud_provider(

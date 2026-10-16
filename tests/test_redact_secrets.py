@@ -66,9 +66,13 @@ def test_redacts_multiple_occurrences():
 
 
 def test_redacts_known_key_substrings():
+    """Redact known provider credentials, including EnMaaS key spellings."""
     assert _redact_secrets("google_api_key=test_gcp_abcdef12") == "google_api_key=[REDACTED]"
     assert _redact_secrets("aws_secret_access_key=test_aws_abcdef123456") == "aws_secret_access_key=[REDACTED]"
     assert _redact_secrets("openai_api_key=test_oai_abcdef12") == "openai_api_key=[REDACTED]"
+    # EnMaaS credential (ACM-48198) — both the env-var and form-field spellings.
+    assert _redact_secrets("ENMAAS_KEY=test_enmaas_abcdef12") == "ENMAAS_KEY=[REDACTED]"
+    assert _redact_secrets("enmaas_api_key=test_enmaas_abcdef12") == "enmaas_api_key=[REDACTED]"
 
 
 def test_redacts_short_credential_assignment():
@@ -122,4 +126,3 @@ def test_redacts_injected_secrets_sorted_by_length():
     secrets = ["secret", "secret_longer_val"]
     out = _redact_secrets("Found secret_longer_val here", secret_values=secrets)
     assert out == "Found [REDACTED] here"
-

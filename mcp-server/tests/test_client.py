@@ -102,6 +102,28 @@ async def test_session_mcp_selection_is_propagated(client):
 
 
 @pytest.mark.asyncio
+async def test_enmaas_provider_forwarded_for_sessions_and_schedules(client):
+    """ACM-48198: the enmaas preset value reaches the REST API wire body
+    unchanged for both session and schedule creation."""
+    with respx.mock(base_url=BASE_URL) as mock:
+        session_route = mock.post("/api/v1/workspaces/1/sessions").mock(
+            return_value=httpx.Response(201, json={"id": 9, "provider": "enmaas"})
+        )
+        await client.create_session(1, "enmaas-session", provider="enmaas")
+        body = json.loads(session_route.calls[0].request.content)
+        assert body["provider"] == "enmaas"
+
+        schedule_route = mock.post("/api/v1/workspaces/1/sessions/9/schedules").mock(
+            return_value=httpx.Response(201, json={"id": 4, "provider": "enmaas"})
+        )
+        await client.create_session_schedule(
+            1, 9, "0 * * * *", prompt_id=7, provider="enmaas"
+        )
+        sched_body = json.loads(schedule_route.calls[0].request.content)
+        assert sched_body["provider"] == "enmaas"
+
+
+@pytest.mark.asyncio
 async def test_list_mcp_servers(client):
     with respx.mock(base_url=BASE_URL) as mock:
         mock.get("/api/v1/workspaces/1/mcp-servers").mock(

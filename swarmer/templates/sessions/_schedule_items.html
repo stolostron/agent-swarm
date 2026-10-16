@@ -61,7 +61,7 @@
           <span class="pf-v6-c-label pf-m-purple" style="margin-right:var(--pf-t--global--spacer--xs);"><span class="pf-v6-c-label__content">{{ sched.label }}</span></span>
          {% endif %}
          {% if sched.provider %}
-         <span class="pf-v6-c-label pf-m-blue" style="margin-left:var(--pf-t--global--spacer--xs);"><span class="pf-v6-c-label__content">{{ {'claude': 'Claude', 'gemini': 'Gemini', 'openai': 'OpenAI'}.get(sched.provider, sched.provider) }}</span></span>
+         <span class="pf-v6-c-label pf-m-blue" style="margin-left:var(--pf-t--global--spacer--xs);"><span class="pf-v6-c-label__content">{{ {'claude': 'Claude', 'gemini': 'Gemini', 'openai': 'OpenAI', 'enmaas': 'GLM-5.3 (EnMaaS)'}.get(sched.provider, sched.provider) }}</span></span>
          {% else %}
          <span style="margin-left:var(--pf-t--global--spacer--xs); font-size:var(--pf-t--global--font--size--xs); color:var(--pf-t--global--text--color--subtle);">· session provider</span>
          {% endif %}
@@ -194,6 +194,7 @@
              <option value="claude" {% if sched.provider == 'claude' %}selected{% endif %}>Claude / Vertex AI</option>
              <option value="gemini" {% if sched.provider == 'gemini' %}selected{% endif %}>Gemini</option>
              <option value="openai" {% if sched.provider == 'openai' %}selected{% endif %}>OpenAI</option>
+             <option value="enmaas" {% if sched.provider == 'enmaas' %}selected{% endif %}>GLM-5.3 (EnMaaS)</option>
            </select>
          </div>
          <div>
@@ -337,6 +338,7 @@
          <option value="claude">Claude / Vertex AI</option>
          <option value="gemini">Gemini</option>
          <option value="openai">OpenAI</option>
+         <option value="enmaas">GLM-5.3 (EnMaaS)</option>
        </select>
      </div>
      <div>

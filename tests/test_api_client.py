@@ -325,6 +325,29 @@ class TestSecretsOps:
         assert cred["masked_api_key"]
 
     @pytest.mark.asyncio
+    async def test_save_credentials_enmaas_key_and_marker(self, api_client, monkeypatch):
+        """The console submits the gateway key/marker, not the endpoint."""
+        ws = await api_client.create_workspace("WS")
+        from swarmer.config import settings
+
+        monkeypatch.setattr(settings, "enmaas_base_url", "https://operator.example/v1")
+        cred = await api_client.save_credentials(
+            ws["id"],
+            enmaas_api_key="<test-enmaas-key>",
+            enmaas_configured=True,
+        )
+        assert cred["enmaas_configured"] is True
+        assert cred["has_enmaas"] is True
+        assert cred["enmaas_base_url"] == "https://operator.example/v1"
+        # No token material in the response.
+        assert "<test-enmaas-key>" not in str(cred)
+
+        # Blank credential input leaves the marker and configured endpoint.
+        cred = await api_client.save_credentials(ws["id"], enmaas_configured=False)
+        assert cred["enmaas_configured"] is False
+        assert cred["enmaas_base_url"] == "https://operator.example/v1"
+
+    @pytest.mark.asyncio
     async def test_pat_crud(self, api_client):
         ws = await api_client.create_workspace("WS")
         pat = await api_client.create_pat(

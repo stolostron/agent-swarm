@@ -454,12 +454,15 @@ class APIClient:
         vertex_location: str = "",
         google_api_key: str = "",
         openai_api_key: str = "",
+        enmaas_api_key: str = "",
         application_default_credentials: str = "",
         shared: bool = False,
         gemini_configured: bool | None = None,
         openai_configured: bool | None = None,
         vertex_configured: bool | None = None,
+        enmaas_configured: bool | None = None,
     ) -> dict:
+        """Save provider credential fields through the workspace secrets API."""
         return await self._post(
             f"/api/v1/workspaces/{ws_id}/secrets/credentials",
             json={
@@ -467,11 +470,13 @@ class APIClient:
                 "vertex_location": vertex_location,
                 "google_api_key": google_api_key,
                 "openai_api_key": openai_api_key,
+                "enmaas_api_key": enmaas_api_key,
                 "application_default_credentials": application_default_credentials,
                 "shared": shared,
                 "gemini_configured": gemini_configured,
                 "openai_configured": openai_configured,
                 "vertex_configured": vertex_configured,
+                "enmaas_configured": enmaas_configured,
             },
         )
 

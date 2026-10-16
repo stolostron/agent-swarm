@@ -106,10 +106,70 @@ async def _ensure_openshell_provider_profiles() -> None:
     except Exception:
         log.warning("Failed to enable OpenShell providers_v2 — VertexAI inference routing may not work", exc_info=True)
     try:
-        await openshell_client.import_provider_profiles(_OPENSHELL_CUSTOM_PROFILES)
-        log.info("OpenShell provider profiles registered: %s", [p["id"] for p in _OPENSHELL_CUSTOM_PROFILES])
+        await openshell_client.import_provider_profiles(list(_OPENSHELL_CUSTOM_PROFILES))
+        log.info(
+            "OpenShell provider profiles registered: %s",
+            [p["id"] for p in _OPENSHELL_CUSTOM_PROFILES],
+        )
     except Exception:
         log.warning("Failed to import OpenShell provider profiles — sessions may lack Google AI Studio support", exc_info=True)
+    # EnMaaS profiles are per-workspace for credential isolation, and each
+    # binds to the operator-managed endpoint. Reconcile configured workspaces
+    # so profile bindings survive gateway restarts.
+    try:
+        await _reconcile_workspace_enmaas_profiles()
+    except Exception as exc:
+        log.warning(
+            "Failed to reconcile workspace EnMaaS provider profiles (non-fatal, error_type=%s)",
+            type(exc).__name__,
+        )
+
+
+async def _reconcile_workspace_enmaas_profiles() -> None:
+    """Import each workspace's EnMaaS profile into its resolved gateway."""
+    from sqlalchemy import select
+
+    from swarmer import openshell_client
+    from swarmer.config import configured_enmaas_base_url
+    from swarmer.database import get_db
+    from swarmer.models.opencode_secret import OpencodeSecret
+
+    base_url = configured_enmaas_base_url()
+    if not base_url:
+        return
+    workspace_ids: list[int] = []
+    async for db in get_db():
+        result = await db.execute(
+            select(OpencodeSecret).where(OpencodeSecret.enmaas_configured.is_(True))
+        )
+        workspace_ids = list({s.workspace_id for s in result.scalars().all()})
+        break
+    for ws_id in workspace_ids:
+        client = None
+        try:
+            try:
+                client = await openshell_client.get_client_for_workspace(ws_id)
+            except Exception as exc:  # noqa: BLE001 — gateway profile reconciliation is non-fatal
+                log.warning(
+                    "EnMaaS profile reconcile: no gateway client — skipping (error_type=%s)",
+                    type(exc).__name__,
+                )
+                continue
+            imported = await openshell_client.import_enmaas_profile(
+                ws_id, client=client, base_url=base_url
+            )
+            if imported:
+                log.info("EnMaaS provider profile registered for workspace %d", ws_id)
+        except Exception as exc:
+            log.warning(
+                "EnMaaS profile reconcile failed (non-fatal, error_type=%s)",
+                type(exc).__name__,
+            )
+        finally:
+            if client is not None:
+                close = getattr(client, "close", None)
+                if callable(close):
+                    close()
 
 
 async def _track_default_gateway_version() -> None:
@@ -136,6 +196,8 @@ async def _track_default_gateway_version() -> None:
 
 async def _restart_prompt_pollers() -> None:
     """Re-launch background monitors for prompt sessions still active after a restart."""
+    from datetime import datetime, timezone
+
     from sqlalchemy import select
 
     from swarmer.database import get_db
@@ -157,6 +219,7 @@ async def _restart_prompt_pollers() -> None:
             from swarmer.agent_tools.registry import get as _get_tool
             from swarmer.routers.sessions import (
                 _resolve_schedule_prompt,
+                _resolve_schedule_provider,
                 _resolve_session_prompt,
                 _run_openshell_agent,
             )
@@ -198,7 +261,76 @@ async def _restart_prompt_pollers() -> None:
                 )
             else:
                 _raw_model = s.provider or _tool.get_default_model(False)
-                # s.provider is a family preset name ("claude"/"gemini"/"openai", ACM-37232);
+                if s.active_schedule_id:
+                    _raw_model, _ = await _resolve_schedule_provider(
+                        s.active_schedule_id, s, db
+                    )
+                    _raw_model = _raw_model or _tool.get_default_model(False)
+
+                # EnMaaS schedule overrides are intentionally not copied into
+                # Session.provider. On restart, resume the selected provider
+                # only while the operator endpoint and workspace gateway
+                # provider are still available; never substitute a paid model.
+                _model_provider = _raw_model.split("/", 1)[0]
+                if _tool.requires_ai_model() and _model_provider == "enmaas":
+                    from swarmer import openshell_client
+                    from swarmer.config import (
+                        configured_enmaas_base_url,
+                        enmaas_endpoint_from_url,
+                    )
+
+                    _enmaas_url = configured_enmaas_base_url()
+                    _enmaas_endpoint = (
+                        enmaas_endpoint_from_url(_enmaas_url) if _enmaas_url else None
+                    )
+                    _enmaas_available = _enmaas_endpoint is not None
+                    if _enmaas_available:
+                        try:
+                            _oc_client = await openshell_client.get_client_for_workspace(
+                                s.workspace_id, db
+                            )
+                            _enmaas_profile_id = f"enmaas-ws-{s.workspace_id}"
+                            _enmaas_provider_name = f"swarmer-ws-{s.workspace_id}-enmaas"
+                            _enmaas_available = (
+                                await openshell_client.provider_exists(
+                                    _enmaas_provider_name,
+                                    client=_oc_client,
+                                )
+                                and await openshell_client.provider_profile_endpoint_matches(
+                                    _enmaas_profile_id,
+                                    _enmaas_endpoint,
+                                    client=_oc_client,
+                                )
+                            )
+                        except Exception:  # noqa: BLE001 — EnMaaS must fail closed on gateway errors
+                            _enmaas_available = False
+                    if not _enmaas_available:
+                        _failed_at = datetime.now(timezone.utc)
+                        _failure_detail = (
+                            "EnMaaS provider is unavailable; this run was not resumed. "
+                            "Restore the configured provider and launch again."
+                        )
+                        if s.run_started_at:
+                            from swarmer.session_runs import record_session_run
+
+                            await record_session_run(
+                                db,
+                                s,
+                                phase="failed",
+                                status_detail=_failure_detail,
+                                last_output=s.last_output,
+                                raw_output=s.raw_output,
+                                completed_at=_failed_at,
+                            )
+                        s.phase = "failed"
+                        s.status_detail = _failure_detail
+                        s.run_completed_at = _failed_at
+                        s.active_schedule_id = None
+                        log.warning("_restart_prompt_pollers: EnMaaS unavailable; session marked failed")
+                        await db.commit()
+                        continue
+
+                # s.provider is a family preset name ("claude"/"gemini"/"openai"/"enmaas", ACM-37232);
                 # resolve it to a concrete provider/model@version ID for the CLI flag.
                 _model = _tool.resolve_build_model(_raw_model)
                 # Reconstruct the same AGENTS.md-reading command used at initial launch

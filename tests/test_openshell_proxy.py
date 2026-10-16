@@ -1901,6 +1901,118 @@ class TestRestartPromptPollersArgs:
         assert call_args[4] == "prompt"
         assert call_args[5] == "opencode"
 
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("endpoint", "provider_available", "profile_matches", "should_resume"),
+        [
+            ("https://enmaas-gateway.example.com/v1", True, True, True),
+            ("https://enmaas-gateway.example.com/v1", True, False, False),
+            ("", True, True, False),
+            ("https://enmaas-gateway.example.com/v1", False, True, False),
+            ("https://enmaas-gateway.example.com/v1", "error", False, False),
+        ],
+    )
+    async def test_scheduled_enmaas_provider_is_preserved_and_fails_closed(
+        self, client, monkeypatch, endpoint, provider_available, profile_matches,
+        should_resume, caplog
+    ):
+        from datetime import UTC, datetime
+
+        from swarmer.config import settings
+        from swarmer.models.session import Session as _Session
+        from swarmer.models.session_schedule import SessionSchedule
+
+        ws = await _create_workspace(client)
+        s = await _create_session(
+            client, ws["id"], mode="prompt", agent_tool="opencode"
+        )
+        async with _TestSession() as db:
+            session_obj = await db.get(_Session, s["id"])
+            session_obj.phase = "running"
+            session_obj.sandbox_name = "sandbox-enmaas-restart"
+            session_obj.run_started_at = datetime.now(UTC)
+            schedule = SessionSchedule(
+                session_id=s["id"], provider="enmaas", instruction_prompt="scheduled"
+            )
+            db.add(schedule)
+            await db.flush()
+            session_obj.active_schedule_id = schedule.id
+            await db.commit()
+
+        monkeypatch.setattr(settings, "enmaas_base_url", endpoint)
+        mock_run = AsyncMock()
+        mock_get_client = AsyncMock(return_value=MagicMock())
+        sentinel = "SENSITIVE_PROVIDER_EXCEPTION"
+        mock_provider_exists = (
+            AsyncMock(side_effect=RuntimeError(sentinel))
+            if provider_available == "error"
+            else AsyncMock(return_value=provider_available)
+        )
+        mock_profile_endpoint = AsyncMock(return_value=profile_matches)
+        with (
+            patch("swarmer.routers.sessions._run_openshell_agent", new=mock_run),
+            patch("swarmer.database.get_db", new=_override_get_db),
+            patch(
+                "swarmer.openshell_client.get_client_for_workspace",
+                new=mock_get_client,
+            ),
+            patch(
+                "swarmer.openshell_client.provider_exists",
+                new=mock_provider_exists,
+            ),
+            patch(
+                "swarmer.openshell_client.provider_profile_endpoint_matches",
+                new=mock_profile_endpoint,
+            ),
+            caplog.at_level(logging.WARNING, logger="swarmer.main"),
+        ):
+            from swarmer.main import _restart_prompt_pollers
+
+            await _restart_prompt_pollers()
+            await asyncio.sleep(0)
+
+        if should_resume:
+            mock_run.assert_called_once()
+            command = mock_run.call_args.args[3]
+            assert "--model enmaas/" in command[-1]
+            assert "google/" not in command[-1]
+            mock_get_client.assert_awaited_once()
+            mock_provider_exists.assert_awaited_once_with(
+                f"swarmer-ws-{ws['id']}-enmaas",
+                client=mock_get_client.return_value,
+            )
+            mock_profile_endpoint.assert_awaited_once_with(
+                f"enmaas-ws-{ws['id']}",
+                ("enmaas-gateway.example.com", 443),
+                client=mock_get_client.return_value,
+            )
+        else:
+            mock_run.assert_not_called()
+            assert "EnMaaS unavailable; session marked failed" in caplog.text
+            assert str(s["id"]) not in caplog.text
+            assert sentinel not in caplog.text
+            assert "Traceback" not in caplog.text
+            if endpoint:
+                mock_get_client.assert_awaited_once()
+                mock_provider_exists.assert_awaited_once()
+                if provider_available is True:
+                    mock_profile_endpoint.assert_awaited_once()
+                else:
+                    mock_profile_endpoint.assert_not_awaited()
+            else:
+                mock_get_client.assert_not_awaited()
+                mock_provider_exists.assert_not_awaited()
+                mock_profile_endpoint.assert_not_awaited()
+
+            async with _TestSession() as db:
+                session_obj = await db.get(_Session, s["id"])
+                assert session_obj.phase == "failed"
+                assert session_obj.status_detail.startswith(
+                    "EnMaaS provider is unavailable"
+                )
+                assert session_obj.run_completed_at is not None
+                assert session_obj.active_schedule_id is None
+
 
 # ===========================================================================
 # 7. TUI WebSocket — OpenShell path (unit-level)

@@ -72,6 +72,7 @@ async def observe_gateway_version(config, client, db: AsyncSession) -> str:
                     gemini_configured=False,
                     openai_configured=False,
                     vertex_configured=False,
+                    enmaas_configured=False,
                 )
             )
         log.warning(

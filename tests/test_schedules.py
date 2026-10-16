@@ -816,6 +816,36 @@ class TestScheduleAPI:
         assert updated["enabled"] is False
 
     @pytest.mark.asyncio
+    async def test_enmaas_provider_round_trip(self, client):
+        """ACM-48198: schedules can select and preserve the EnMaaS preset."""
+        ws = await _create_workspace(client)
+        s = await _create_session(client, ws["id"])
+        prompt_id = await _create_prompt(ws["id"])
+        ws_id, sid = ws["id"], s["id"]
+
+        resp = await client.post(
+            f"/api/v1/workspaces/{ws_id}/sessions/{sid}/schedules",
+            json={"cron_schedule": "0 * * * *", "prompt_id": prompt_id, "provider": "enmaas"},
+        )
+        assert resp.status_code == 201, resp.text
+        assert resp.json()["provider"] == "enmaas"
+
+        sched_id = resp.json()["id"]
+        resp = await client.put(
+            f"/api/v1/workspaces/{ws_id}/sessions/{sid}/schedules/{sched_id}",
+            json={"provider": ""},
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["provider"] == ""
+
+        # Unknown providers are still rejected by schema validation.
+        resp = await client.post(
+            f"/api/v1/workspaces/{ws_id}/sessions/{sid}/schedules",
+            json={"cron_schedule": "0 * * * *", "prompt_id": prompt_id, "provider": "grok"},
+        )
+        assert resp.status_code == 422
+
+    @pytest.mark.asyncio
     async def test_event_context_option_round_trip(self, client):
         ws = await _create_workspace(client)
         s = await _create_session(client, ws["id"])
