@@ -682,6 +682,7 @@ class AgentSwarmMCPServer:
     # ==================================================================
 
     def _register_tools(self) -> None:
+        """Register the MCP tools that expose Agent Swarm operations."""
         mcp = self.mcp
 
         @mcp.tool()

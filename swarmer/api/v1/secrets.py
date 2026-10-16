@@ -52,6 +52,7 @@ async def get_credentials(
     db: AsyncSession = Depends(get_db),
     user: str = Depends(get_current_user),
 ):
+    """Return the caller's workspace credentials with the configured endpoint."""
     result = await db.execute(
         select(OpencodeSecret).where(
             OpencodeSecret.workspace_id == ws_id,
@@ -88,6 +89,7 @@ async def save_credentials(
     db: AsyncSession = Depends(get_db),
     identity: TokenIdentity = Depends(require_human_api_auth),
 ):
+    """Save workspace provider settings and provision gateway-held credentials."""
     user = identity.username
     from swarmer import workspace_acl
 
@@ -281,8 +283,7 @@ async def save_credentials(
                 ) from exc
             except Exception as exc:
                 log.warning(
-                    "save_credentials: failed to configure EnMaaS provider for workspace %d (error_type=%s)",
-                    ws_id,
+                    "save_credentials: failed to configure EnMaaS provider (error_type=%s)",
                     type(exc).__name__,
                 )
                 raise HTTPException(
@@ -365,6 +366,7 @@ async def delete_credential(
     db: AsyncSession = Depends(get_db),
     identity: TokenIdentity = Depends(require_human_api_auth),
 ) -> MessageOut:
+    """Remove a workspace credential and synchronize its gateway provider."""
     user = identity.username
     provider_names = {
         "vertex": "google-cloud",

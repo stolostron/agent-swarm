@@ -215,6 +215,7 @@ async def opencode_secret_save(
     shared: str = Form(""),
     adc_file: UploadFile | None = File(None),
 ):
+    """Validate and save provider credentials submitted from the secrets form."""
     import json as _json
 
     adc_content = ""
@@ -262,8 +263,11 @@ async def opencode_secret_save(
     try:
         try:
             oc_client = await openshell_client.get_client_for_workspace(ws_id)
-        except Exception:
-            log.warning("credential_save: failed to resolve gateway for workspace %d", ws_id, exc_info=True)
+        except Exception as exc:
+            log.warning(
+                "credential_save: failed to resolve workspace gateway (error_type=%s)",
+                type(exc).__name__,
+            )
             flash(
                 request,
                 "Failed to resolve workspace OpenShell gateway client.",

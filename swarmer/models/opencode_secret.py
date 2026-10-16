@@ -101,17 +101,20 @@ class OpencodeSecret(Base):
 
     @property
     def has_enmaas(self) -> bool:
+        """Report the gateway credential marker without retrieving its token."""
         # Marker only — the token itself lives on the OpenShell gateway.
         return self.enmaas_configured
 
     @property
     def enmaas_base_url(self) -> str:
+        """Decrypt the stored workspace EnMaaS endpoint, if one is present."""
         if not self.enmaas_base_url_enc:
             return ""
         return crypto.decrypt(self.enmaas_base_url_enc)
 
     @enmaas_base_url.setter
     def enmaas_base_url(self, value: str) -> None:
+        """Encrypt a workspace EnMaaS endpoint before storing it."""
         self.enmaas_base_url_enc = crypto.encrypt(value) if value else ""
 
     # ---------- display helpers (safe to send to browser) ----------

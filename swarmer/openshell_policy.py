@@ -370,6 +370,7 @@ def _build_google_cloud_provider_block(agent_tool: str) -> dict:
 # ── Agent API block (tool and model-dependent) ────────────────────────────────
 
 def _endpoint(host: str, port: int = 443) -> dict:
+    """Build an enforced REST egress rule for a host and port."""
     return {
         "host": host,
         "port": port,
@@ -384,6 +385,7 @@ def _build_agent_api_block(
     model: str,
     enmaas_endpoint: tuple[str, int] | None = None,
 ) -> dict:
+    """Build model-specific outbound access rules for the sandbox agent."""
     # OpenCode V2 canonical provider ID is "google-vertex" (the V1
     # "google-vertex-anthropic" prefix is normalized before reaching here, but
     # is still accepted for sessions launched by older Swarmer versions).

@@ -72,6 +72,7 @@ class TestResolvePreset:
         }
 
     def test_resolve_enmaas_preset(self):
+        """Resolve EnMaaS plan, build, and small roles from configuration."""
         mapping = _opencode.resolve_preset("enmaas")
         assert mapping == {
             "plan": settings.enmaas_preset_plan_model,
@@ -105,6 +106,7 @@ class TestResolvePreset:
         assert _opencode.resolve_preset("opus") is None
 
     def test_is_preset(self):
+        """Recognize preset labels while rejecting a raw model identifier."""
         assert _opencode.is_preset("claude") is True
         assert _opencode.is_preset("gemini") is True
         assert _opencode.is_preset("openai") is True
@@ -114,6 +116,7 @@ class TestResolvePreset:
 
 class TestResolveBuildModel:
     def test_preset_resolves_to_build_model(self):
+        """Resolve each provider preset to its configured build model."""
         assert _opencode.resolve_build_model("claude") == normalize_model_id(settings.claude_preset_build_model)
         assert _opencode.resolve_build_model("gemini") == settings.gemini_preset_build_model
         assert _opencode.resolve_build_model("openai") == settings.openai_preset_build_model
@@ -145,17 +148,20 @@ class TestResolveBuildModel:
 
 class TestIsValidModel:
     def test_preset_names_are_valid(self):
+        """Accept every supported family-level provider preset."""
         assert _opencode.is_valid_model("claude") is True
         assert _opencode.is_valid_model("gemini") is True
         assert _opencode.is_valid_model("openai") is True
         assert _opencode.is_valid_model("enmaas") is True
 
     def test_raw_model_ids_are_valid(self):
+        """Accept raw model identifiers for supported provider families."""
         assert _opencode.is_valid_model("google-vertex-anthropic/claude-sonnet-5@default") is True
         assert _opencode.is_valid_model("google/gemini-3.5-flash") is True
         assert _opencode.is_valid_model("openai/gpt-5.3-codex@default") is True
 
     def test_raw_enmaas_model_with_embedded_slashes_is_valid(self):
+        """Accept an EnMaaS model ID whose upstream name contains slashes."""
         assert _opencode.is_valid_model("enmaas/rits/zai-org/glm-5-3") is True
 
     def test_garbage_is_invalid(self):
@@ -168,9 +174,11 @@ class TestGetDefaultModel:
         assert _opencode.get_default_model(True) == "claude"
 
     def test_has_adc_false_returns_gemini_preset(self):
+        """Choose Gemini as the default when ADC is not configured."""
         assert _opencode.get_default_model(False) == "gemini"
 
     def test_openai_is_selected_when_gemini_is_unavailable(self):
+        """Select OpenAI when Gemini is unavailable and OpenAI is configured."""
         assert _opencode.get_default_model(False, has_gemini=False, has_openai=True) == "openai"
 
     def test_enmaas_selected_only_in_enmaas_only_workspace(self):
@@ -185,6 +193,7 @@ class TestGetDefaultModel:
         assert _opencode.get_default_model(False, has_gemini=False, has_openai=True, has_enmaas=True) == "openai"
 
     def test_no_provider_returns_empty_selection(self):
+        """Leave the default unset when no supported provider is available."""
         assert _opencode.get_default_model(False, has_gemini=False, has_openai=False) == ""
         assert (
             _opencode.get_default_model(False, has_gemini=False, has_openai=False, has_enmaas=False)
@@ -213,6 +222,7 @@ class TestGetModelOptions:
             assert p["reason"]  # non-empty human-readable reason
 
     def test_presets_marked_available_when_provider_configured(self):
+        """Mark each preset available when its gateway credential is present."""
         options = _opencode.get_model_options(
             has_vertex=True, has_gemini=True, has_openai=True, has_enmaas=True,
             enmaas_base_url=_ENMAAS_TEST_BASE_URL,
@@ -228,6 +238,7 @@ class TestGetModelOptions:
         assert presets["enmaas"]["reason"] == ""
 
     def test_partial_availability(self):
+        """Show each provider's independent availability and setup guidance."""
         options = _opencode.get_model_options(
             has_vertex=True, has_gemini=False, has_openai=False, has_enmaas=False
         )
@@ -268,16 +279,19 @@ class TestGetModelOptions:
         assert gemini_preset["available"] is False
 
     def test_explicit_has_gemini_overrides_missing_secret(self):
+        """Trust gateway availability even when no database secret row exists."""
         options = _opencode.get_model_options(secret=None, has_vertex=False, has_gemini=True, has_openai=False)
         gemini_preset = next(o for o in options if o["value"] == "gemini")
         assert gemini_preset["available"] is True
 
     def test_explicit_has_openai_overrides_missing_secret(self):
+        """Trust gateway availability even when no database secret row exists."""
         options = _opencode.get_model_options(secret=None, has_vertex=False, has_gemini=False, has_openai=True)
         openai_preset = next(o for o in options if o["value"] == "openai")
         assert openai_preset["available"] is True
 
     def test_get_preset_options_filters_to_presets_only(self):
+        """Return the complete preset list without non-preset model options."""
         presets = _opencode.get_preset_options(
             has_vertex=True, has_gemini=False, has_openai=False, has_enmaas=False
         )
@@ -291,6 +305,7 @@ class TestGetModelOptions:
 
 class TestBuildConfigDataPresets:
     def test_claude_preset_resolves_all_three_roles(self, monkeypatch):
+        """Render build, title, and plan models from the Claude preset."""
         monkeypatch.setattr(settings, "opencode_experimental_plan_mode", True)
         data = _opencode.build_config_data(model="claude")
         config = json.loads(data["opencode.json"])
@@ -300,6 +315,7 @@ class TestBuildConfigDataPresets:
         assert config["agents"]["plan"]["model"] == normalize_model_id(settings.claude_preset_plan_model)
 
     def test_gemini_preset_resolves_all_three_roles(self, monkeypatch):
+        """Render build, title, and plan models from the Gemini preset."""
         monkeypatch.setattr(settings, "opencode_experimental_plan_mode", True)
         data = _opencode.build_config_data(model="gemini")
         config = json.loads(data["opencode.json"])
@@ -308,6 +324,7 @@ class TestBuildConfigDataPresets:
         assert config["agents"]["plan"]["model"] == settings.gemini_preset_plan_model
 
     def test_plan_stanza_omitted_when_plan_mode_disabled(self, monkeypatch):
+        """Omit plan-agent config when experimental plan mode is disabled."""
         monkeypatch.setattr(settings, "opencode_experimental_plan_mode", False)
         data = _opencode.build_config_data(model="claude")
         config = json.loads(data["opencode.json"])
@@ -316,6 +333,7 @@ class TestBuildConfigDataPresets:
         assert config["model"] == normalize_model_id(settings.claude_preset_build_model)
 
     def test_claude_preset_enables_vertex_provider(self, monkeypatch):
+        """Enable Vertex model access for the Claude preset configuration."""
         monkeypatch.setattr(settings, "opencode_experimental_plan_mode", True)
         data = _opencode.build_config_data(model="claude")
         config = json.loads(data["opencode.json"])
@@ -324,6 +342,7 @@ class TestBuildConfigDataPresets:
         assert "google" in config["enabled_providers"]
 
     def test_gemini_preset_does_not_enable_vertex(self, monkeypatch):
+        """Avoid enabling Vertex credentials for a Gemini-only preset."""
         monkeypatch.setattr(settings, "opencode_experimental_plan_mode", True)
         data = _opencode.build_config_data(model="gemini")
         config = json.loads(data["opencode.json"])
@@ -332,6 +351,7 @@ class TestBuildConfigDataPresets:
     def test_openai_preset_resolves_and_sets_plan_mode(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        """Configure OpenAI role models and the expected agent modes."""
         monkeypatch.setattr(settings, "opencode_experimental_plan_mode", True)
         data = _opencode.build_config_data(model="openai")
         config = json.loads(data["opencode.json"])
@@ -361,12 +381,14 @@ class TestBuildConfigDataPresets:
         assert "google-vertex-anthropic" not in data["opencode.json"]
 
     def test_empty_model_falls_back_to_gemini_default(self):
+        """Use the configured Gemini default when no model was selected."""
         data = _opencode.build_config_data(model="")
         config = json.loads(data["opencode.json"])
         assert config["model"] == "google/gemini-3.8-flash"
         assert config["enabled_providers"] == ["google"]
 
     def test_raw_openai_model_enables_only_openai_provider(self):
+        """Enable OpenAI for a raw model without enabling other providers."""
         data = _opencode.build_config_data(model="openai/gpt-5.3-codex@default")
         config = json.loads(data["opencode.json"])
         assert config["agents"]["title"]["model"] == settings.openai_preset_small_model
@@ -403,6 +425,7 @@ class TestEnmaasModelOptions:
         assert "ENMAAS_BASE_URL" in enmaas["reason"]
 
     def test_enmaas_unavailable_reason_when_key_missing(self):
+        """Explain that a configured EnMaaS endpoint still needs a key."""
         options = _opencode.get_model_options(
             has_enmaas=False, enmaas_base_url=_ENMAAS_TEST_BASE_URL
         )
@@ -411,6 +434,7 @@ class TestEnmaasModelOptions:
         assert "EnMaaS key not set" in enmaas["reason"]
 
     def test_enmaas_available_when_workspace_url_and_key_present(self):
+        """Expose the EnMaaS preset when its key and gateway URL are available."""
         options = _opencode.get_model_options(
             has_enmaas=True, enmaas_base_url=_ENMAAS_TEST_BASE_URL
         )
@@ -422,6 +446,7 @@ class TestEnmaasModelOptions:
 
 class TestEnmaasConfigGeneration:
     def test_enmaas_pconfig_all_roles_enmaas_and_only_enmaas_enabled(self, monkeypatch):
+        """Keep all EnMaaS roles on the zero-cost provider with no paid fallback."""
         monkeypatch.setattr(settings, "opencode_experimental_plan_mode", True)
         monkeypatch.setattr(settings, "enmaas_base_url", _ENMAAS_TEST_BASE_URL)
         data = _opencode.build_config_data(model="enmaas", enmaas_base_url=_ENMAAS_TEST_BASE_URL)
@@ -437,6 +462,7 @@ class TestEnmaasConfigGeneration:
         assert "build" not in config["agents"]
 
     def test_enmaas_pconfig_defines_native_provider(self, monkeypatch):
+        """Emit OpenCode V2 model metadata for the native EnMaaS provider."""
         monkeypatch.setattr(settings, "opencode_experimental_plan_mode", True)
         monkeypatch.setattr(settings, "enmaas_base_url", _ENMAAS_TEST_BASE_URL)
         data = _opencode.build_config_data(model="enmaas", enmaas_base_url=_ENMAAS_TEST_BASE_URL)
@@ -476,6 +502,7 @@ class TestEnmaasConfigGeneration:
         )
 
     def test_enmaas_pconfig_contains_no_secret_values(self, monkeypatch):
+        """Keep the EnMaaS key value out of generated OpenCode configuration."""
         monkeypatch.setattr(settings, "enmaas_base_url", _ENMAAS_TEST_BASE_URL)
         data = _opencode.build_config_data(model="enmaas", enmaas_base_url=_ENMAAS_TEST_BASE_URL)
         raw = data["opencode.json"]
@@ -486,6 +513,7 @@ class TestEnmaasConfigGeneration:
         assert "bearer" not in raw.lower()
 
     def test_raw_enmaas_model_uses_enmaas_housekeeping_model(self, monkeypatch):
+        """Keep the housekeeping model and enabled provider within EnMaaS."""
         monkeypatch.setattr(settings, "enmaas_base_url", _ENMAAS_TEST_BASE_URL)
         data = _opencode.build_config_data(
             model="enmaas/rits/zai-org/glm-5-3", enmaas_base_url=_ENMAAS_TEST_BASE_URL
@@ -505,6 +533,7 @@ class TestEnmaasConfigGeneration:
             )
 
     def test_non_enmaas_configs_have_no_enmaas_provider(self):
+        """Exclude EnMaaS provider configuration from other model families."""
         for model in ("claude", "gemini", "openai", ""):
             data = _opencode.build_config_data(model=model)
             config = json.loads(data["opencode.json"])
@@ -514,6 +543,7 @@ class TestEnmaasConfigGeneration:
 
 class TestEnmaasBaseUrlValidation:
     def test_operator_configured_url_is_the_validated_source(self, monkeypatch):
+        """Normalize the operator URL and derive its gateway host and port."""
         from swarmer.config import configured_enmaas_base_url, configured_enmaas_endpoint, settings
 
         monkeypatch.setattr(
@@ -527,12 +557,14 @@ class TestEnmaasBaseUrlValidation:
         assert configured_enmaas_endpoint() is None
 
     def test_unset_url_returns_empty(self):
+        """Allow an unset endpoint while rejecting whitespace-only values."""
         from swarmer.config import validate_enmaas_base_url
 
         assert validate_enmaas_base_url("") == ""
         assert validate_enmaas_base_url("   ") == ""
 
     def test_valid_url_normalized_trailing_slash_stripped(self):
+        """Strip trailing slashes without changing the endpoint path."""
         from swarmer.config import validate_enmaas_base_url
 
         assert (
@@ -546,6 +578,7 @@ class TestEnmaasBaseUrlValidation:
         )
 
     def test_custom_port_preserved(self):
+        """Preserve an explicit HTTPS port during endpoint normalization."""
         from swarmer.config import validate_enmaas_base_url
 
         assert (
@@ -554,18 +587,21 @@ class TestEnmaasBaseUrlValidation:
         )
 
     def test_http_scheme_rejected(self):
+        """Reject non-HTTPS endpoint configuration."""
         from swarmer.config import validate_enmaas_base_url
 
         with pytest.raises(ValueError, match="https"):
             validate_enmaas_base_url("http://enmaas-gateway.example.com/v1")
 
     def test_embedded_credentials_rejected(self):
+        """Reject user information embedded in the configured URL."""
         from swarmer.config import validate_enmaas_base_url
 
         with pytest.raises(ValueError, match="credentials"):
             validate_enmaas_base_url("https://user:pass@enmaas-gateway.example.com/v1")
 
     def test_query_and_fragment_rejected(self):
+        """Reject endpoint URLs containing query strings or fragments."""
         from swarmer.config import validate_enmaas_base_url
 
         with pytest.raises(ValueError, match="query"):
@@ -574,6 +610,7 @@ class TestEnmaasBaseUrlValidation:
             validate_enmaas_base_url("https://enmaas-gateway.example.com/v1#sec")
 
     def test_endpoint_derivation(self):
+        """Derive the HTTPS host and default or explicit port from a URL."""
         from swarmer.config import enmaas_endpoint_from_url
 
         assert enmaas_endpoint_from_url("https://enmaas-gateway.example.com/v1") == (
@@ -586,6 +623,7 @@ class TestEnmaasBaseUrlValidation:
         assert enmaas_endpoint_from_url("http://not-https.example.com/v1") is None
 
     def test_invalid_configured_url_degrades_to_not_configured(self):
+        """Treat invalid configured URLs as absent while normalizing valid ones."""
         from swarmer.config import sanitize_enmaas_base_url
 
         assert sanitize_enmaas_base_url("http://not-https.example.com/v1") == ""

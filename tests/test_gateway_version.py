@@ -17,6 +17,7 @@ from swarmer.models.workspace import Workspace
 
 @pytest.mark.asyncio
 async def test_gateway_version_change_resets_ai_provider_flags():
+    """Clear configured AI provider markers when the shared gateway changes."""
     engine = create_async_engine("sqlite+aiosqlite://")
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     async with engine.begin() as connection:

@@ -118,8 +118,11 @@ async def _ensure_openshell_provider_profiles() -> None:
     # so profile bindings survive gateway restarts.
     try:
         await _reconcile_workspace_enmaas_profiles()
-    except Exception:
-        log.warning("Failed to reconcile workspace EnMaaS provider profiles (non-fatal)", exc_info=True)
+    except Exception as exc:
+        log.warning(
+            "Failed to reconcile workspace EnMaaS provider profiles (non-fatal, error_type=%s)",
+            type(exc).__name__,
+        )
 
 
 async def _reconcile_workspace_enmaas_profiles() -> None:
@@ -146,10 +149,10 @@ async def _reconcile_workspace_enmaas_profiles() -> None:
         try:
             try:
                 client = await openshell_client.get_client_for_workspace(ws_id)
-            except Exception:  # noqa: BLE001 — gateway profile reconciliation is non-fatal
+            except Exception as exc:  # noqa: BLE001 — gateway profile reconciliation is non-fatal
                 log.warning(
-                    "EnMaaS profile reconcile: no gateway client for workspace %d — skipping",
-                    ws_id,
+                    "EnMaaS profile reconcile: no gateway client — skipping (error_type=%s)",
+                    type(exc).__name__,
                 )
                 continue
             imported = await openshell_client.import_enmaas_profile(
@@ -157,10 +160,10 @@ async def _reconcile_workspace_enmaas_profiles() -> None:
             )
             if imported:
                 log.info("EnMaaS provider profile registered for workspace %d", ws_id)
-        except Exception:
+        except Exception as exc:
             log.warning(
-                "EnMaaS profile reconcile failed for workspace %d (non-fatal)", ws_id,
-                exc_info=True,
+                "EnMaaS profile reconcile failed (non-fatal, error_type=%s)",
+                type(exc).__name__,
             )
         finally:
             if client is not None:

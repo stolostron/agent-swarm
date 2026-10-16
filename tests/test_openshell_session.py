@@ -104,6 +104,7 @@ def _override_get_bearer_token():
 
 @pytest_asyncio.fixture(autouse=True)
 async def _setup_db(monkeypatch):
+    """Initialize isolated database, crypto, and runtime settings for each test."""
     from swarmer.crypto import init_crypto
     init_crypto("auth/secret.key")
 

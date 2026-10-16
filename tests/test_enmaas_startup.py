@@ -6,7 +6,8 @@ import pytest
 
 
 @pytest.mark.asyncio
-async def test_reconcile_skips_workspace_when_gateway_resolution_fails(monkeypatch):
+async def test_reconcile_skips_workspace_when_gateway_resolution_fails(monkeypatch, caplog):
+    """Skip an unresolved workspace and keep identifiers out of its warning."""
     from swarmer import main, openshell_client
     from swarmer.config import settings
 
@@ -14,9 +15,11 @@ async def test_reconcile_skips_workspace_when_gateway_resolution_fails(monkeypat
 
     class _Result:
         def scalars(self):
+            """Provide the scalar result interface used by the query handler."""
             return self
 
         def all(self):
+            """Return the configured fake workspace credential rows."""
             return [
                 type(
                     "Secret",
@@ -27,13 +30,16 @@ async def test_reconcile_skips_workspace_when_gateway_resolution_fails(monkeypat
 
     class _Database:
         async def execute(self, _query):
+            """Return fake configured EnMaaS credentials for reconciliation."""
             return _Result()
 
     async def _get_db():
+        """Yield the fake database session consumed by startup reconciliation."""
         yield _Database()
 
     monkeypatch.setattr("swarmer.database.get_db", _get_db)
-    resolve = AsyncMock(side_effect=RuntimeError("gateway unavailable"))
+    sentinel = "internal-gateway-host"
+    resolve = AsyncMock(side_effect=RuntimeError(f"gateway unavailable: {sentinel}"))
     import_profile = AsyncMock()
     monkeypatch.setattr(openshell_client, "get_client_for_workspace", resolve)
     monkeypatch.setattr(openshell_client, "import_enmaas_profile", import_profile)
@@ -42,6 +48,56 @@ async def test_reconcile_skips_workspace_when_gateway_resolution_fails(monkeypat
 
     resolve.assert_awaited_once_with(17)
     import_profile.assert_not_awaited()
+    assert "17" not in caplog.text
+    assert sentinel not in caplog.text
+    assert "Traceback" not in caplog.text
+    assert "error_type=RuntimeError" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_reconcile_profile_failure_logs_only_safe_classification(monkeypatch, caplog):
+    """Redact workspace IDs and exception details on profile import failure."""
+    from swarmer import main, openshell_client
+    from swarmer.config import settings
+
+    monkeypatch.setattr(settings, "enmaas_base_url", "https://operator.example/v1")
+
+    class _Result:
+        def scalars(self):
+            """Provide the scalar result interface used by the query handler."""
+            return self
+
+        def all(self):
+            """Return the fake workspace credential row for reconciliation."""
+            return [type("Secret", (), {"workspace_id": 27})()]
+
+    class _Database:
+        async def execute(self, _query):
+            """Return fake configured EnMaaS credentials for reconciliation."""
+            return _Result()
+
+    async def _get_db():
+        """Yield the fake database session consumed by startup reconciliation."""
+        yield _Database()
+
+    monkeypatch.setattr("swarmer.database.get_db", _get_db)
+    client = type("Client", (), {})()
+    monkeypatch.setattr(
+        openshell_client, "get_client_for_workspace", AsyncMock(return_value=client)
+    )
+    sentinel = "internal-gateway-host"
+    monkeypatch.setattr(
+        openshell_client,
+        "import_enmaas_profile",
+        AsyncMock(side_effect=RuntimeError(f"profile import failed: {sentinel}")),
+    )
+
+    await main._reconcile_workspace_enmaas_profiles()
+
+    assert "27" not in caplog.text
+    assert sentinel not in caplog.text
+    assert "Traceback" not in caplog.text
+    assert "error_type=RuntimeError" in caplog.text
 
 
 @pytest.mark.asyncio

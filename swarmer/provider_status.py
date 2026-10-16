@@ -19,6 +19,7 @@ _PROVIDERS = {
 async def get_missing_provider_names_bulk(
     ws_ids: list[int], db: AsyncSession, concurrency: int = 10
 ) -> dict[int, list[str]]:
+    """Return configured providers missing from each workspace gateway."""
     if not ws_ids:
         return {}
 
@@ -94,6 +95,7 @@ async def get_missing_provider_names(ws_id: int, db: AsyncSession) -> list[str]:
 
 
 def session_provider_label(provider: str) -> str | None:
+    """Translate a session provider identifier into its display label."""
     return {
         "claude": "Vertex AI",
         "gemini": "Gemini",

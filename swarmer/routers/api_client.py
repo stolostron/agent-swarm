@@ -462,6 +462,7 @@ class APIClient:
         vertex_configured: bool | None = None,
         enmaas_configured: bool | None = None,
     ) -> dict:
+        """Save provider credential fields through the workspace secrets API."""
         return await self._post(
             f"/api/v1/workspaces/{ws_id}/secrets/credentials",
             json={

@@ -1711,11 +1711,10 @@ async def _do_launch_openshell(
             has_enmaas_provider = await openshell_client.provider_exists(
                 _enmaas_pname, client=oc_client
             )
-        except Exception:
+        except Exception as exc:
             log.warning(
-                "_do_launch_openshell: could not check enmaas provider for session %d",
-                session.id,
-                exc_info=True,
+                "_do_launch_openshell: could not check enmaas provider (error_type=%s)",
+                type(exc).__name__,
             )
             raise ValueError("Could not verify EnMaaS API key configuration for this workspace")
         if not has_enmaas_provider:
@@ -3133,6 +3132,7 @@ async def schedule_create(
     enabled: str = Form("on"),
     db: AsyncSession = Depends(get_db),
 ):
+    """Validate and create a session schedule submitted from the UI."""
     from croniter import croniter as _croniter
 
     from swarmer.models.session_schedule import EVENT_CONDITIONS, SessionSchedule
@@ -3216,6 +3216,7 @@ async def schedule_edit(
     delay_minutes: int = Form(0),
     db: AsyncSession = Depends(get_db),
 ):
+    """Update schedule timing, provider, and prompt settings from the UI."""
     from croniter import croniter as _croniter
 
     from swarmer.models.session_schedule import EVENT_CONDITIONS, SessionSchedule

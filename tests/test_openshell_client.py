@@ -960,6 +960,7 @@ def test_enmaas_profile_uses_operator_endpoint(monkeypatch):
 
 
 def test_enmaas_profile_none_when_operator_url_unconfigured(monkeypatch):
+    """Do not create an EnMaaS profile when the operator URL is absent or invalid."""
     from swarmer.config import settings
 
     monkeypatch.setattr(settings, "enmaas_base_url", "")

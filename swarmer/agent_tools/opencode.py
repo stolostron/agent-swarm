@@ -95,6 +95,7 @@ class OpenCodeStrategy(AgentToolStrategy):
         return settings.agent_image_opencode
 
     def resolve_preset(self, preset: str) -> dict[str, str] | None:
+        """Map a supported provider preset to its role-specific model IDs."""
         if preset == "claude":
             return {
                 "plan": normalize_model_id(settings.claude_preset_plan_model),
@@ -135,6 +136,7 @@ class OpenCodeStrategy(AgentToolStrategy):
         model: str = "",
         enmaas_base_url: str = "",
     ) -> dict[str, str]:
+        """Generate OpenCode files without embedding gateway-held credentials."""
         # Never allow a workspace-derived argument or stored value to choose
         # the destination for ENMAAS_KEY.
         from swarmer.config import configured_enmaas_base_url
@@ -314,6 +316,7 @@ class OpenCodeStrategy(AgentToolStrategy):
             return " ".join(shlex.quote(p) for p in base_parts + prompt_parts)
 
     def is_valid_model(self, model: str) -> bool:
+        """Check whether a preset or supported provider model ID is accepted."""
         # The legacy google-vertex-anthropic prefix stays valid input: it is
         # normalized to google-vertex at resolve time.
         return model in _PRESET_NAMES or model.startswith((
@@ -330,6 +333,7 @@ class OpenCodeStrategy(AgentToolStrategy):
         has_enmaas: bool = False,
         enmaas_base_url: str = "",
     ) -> list[dict]:
+        """Return provider presets with availability and setup guidance."""
         # has_gemini/has_openai/has_enmaas are sourced by the caller from an
         # OpenShell gateway provider_exists() check (ACM-37263) — the keys are
         # never stored in the Swarmer DB, so there is no DB fallback here
@@ -382,6 +386,7 @@ class OpenCodeStrategy(AgentToolStrategy):
         has_enmaas: bool = False,
         enmaas_base_url: str = "",
     ) -> list[dict]:
+        """Return only preset entries from the model-selection options."""
         return [
             opt
             for opt in self.get_model_options(
@@ -401,6 +406,7 @@ class OpenCodeStrategy(AgentToolStrategy):
         has_openai: bool | None = None,
         has_enmaas: bool | None = None,
     ) -> str:
+        """Select a configured default while preserving EnMaaS cost isolation."""
         # Existing defaults are preserved for mixed-provider workspaces;
         # EnMaaS is only selected when nothing else is available, so an
         # EnMaaS-only workspace gets EnMaaS and no workspace silently
