@@ -2349,7 +2349,9 @@ class TestSecrets:
         assert f"swarmer-ws-{ws['id']}-google-cloud" in deleted_providers
 
     @pytest.mark.asyncio
-    async def test_save_credentials_requires_manager_for_shared_and_providers(self, client):
+    async def test_save_credentials_requires_manager_for_shared_and_providers(
+        self, client, monkeypatch
+    ):
         from swarmer.models.workspace_member import WorkspaceMember
         from swarmer.k8s_auth import TokenIdentity
         from swarmer.api.deps import require_api_auth
@@ -2385,6 +2387,23 @@ class TestSecrets:
             json={"openai_api_key": "openai-key"},
         )
         assert resp.status_code == 403
+
+        # EnMaaS provider mutation is authorized at this backend boundary,
+        # before any credential is sent to the OpenShell gateway.
+        provider_calls = []
+
+        async def _unexpected_enmaas_provider(*args, **kwargs):
+            provider_calls.append((args, kwargs))
+
+        monkeypatch.setattr(
+            "swarmer.openshell_client.ensure_provider", _unexpected_enmaas_provider
+        )
+        resp = await client.post(
+            f"/api/v1/workspaces/{ws['id']}/secrets/credentials",
+            json={"enmaas_api_key": "enmaas-key"},
+        )
+        assert resp.status_code == 403
+        assert provider_calls == []
 
         # Regular member attempting to configure ADC / Vertex provider -> 403
         adc = json.dumps({"type": "authorized_user", "client_id": "x", "client_secret": "y"})

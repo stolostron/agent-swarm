@@ -248,20 +248,16 @@ async def opencode_secret_save(
             ws = await api.get_workspace(ws_id)
         except APIError:
             return RedirectResponse(url="/workspaces", status_code=302)
-    # Push credentials to the OpenShell gateway BEFORE touching the DB. Each
-    # provider is configured independently so a failure on one does not affect
-    # the other, and the DB save below (project/location/shared, plus the
-    # already-blank legacy fields) only happens once we know the outcome of
-    # both pushes — avoiding a "credentials saved" message that masks a gateway
-    # failure, and never discarding a previously-working provider based on an
-    # ordering assumption.
+    # Push the existing provider credentials to OpenShell independently so a
+    # failure on one does not affect the others. EnMaaS is sent through the
+    # REST save below, where workspace-manager authorization runs before its
+    # gateway provider is mutated.
 
     # Push Vertex AI credentials to OpenShell gateway if ADC was provided.
     # The gateway stores and auto-refreshes the credential; Swarmer never persists it.
     vertex_configured = False
     gemini_configured = False
     openai_configured = False
-    enmaas_configured = False
     oc_client = None
     try:
         try:
@@ -341,45 +337,10 @@ async def opencode_secret_save(
                 )
                 flash(request, "Failed to configure OpenAI on OpenShell. Check gateway connectivity.", "danger")
 
-        # Push the EnMaaS key to the OpenShell gateway if submitted (ACM-48198).
-        # The destination comes only from the operator-managed setting.
+        # EnMaaS is configured by the authorized REST save operation below.
+        # That backend boundary checks workspace-manager permissions before it
+        # mutates the workspace-scoped OpenShell provider.
         enmaas_key = enmaas_api_key.strip()
-        from swarmer.config import configured_enmaas_base_url
-
-        enmaas_url = configured_enmaas_base_url()
-        if enmaas_key:
-            if not enmaas_url:
-                flash(
-                    request,
-                    "EnMaaS gateway URL is not configured by the operator.",
-                    "warning",
-                )
-            else:
-                pname = f"swarmer-ws-{ws_id}-enmaas"
-                try:
-                    await openshell_client.ensure_provider(
-                        pname,
-                        openshell_client.enmaas_profile_type(ws_id),
-                        {},
-                        credentials={"ENMAAS_KEY": enmaas_key},
-                        client=oc_client,
-                        enmaas_base_url=enmaas_url,
-                    )
-                    enmaas_configured = True
-                except ValueError:
-                    # No key material is included in the message.
-                    flash(
-                        request,
-                        "EnMaaS gateway URL is missing or invalid — set the gateway URL.",
-                        "danger",
-                    )
-                except Exception:
-                    log.warning(
-                        "credential_save: failed to configure EnMaaS provider for workspace %d",
-                        ws_id,
-                        exc_info=True,
-                    )
-                    flash(request, "Failed to configure EnMaaS on OpenShell. Check gateway connectivity.", "danger")
     finally:
         if oc_client is not None:
             close = getattr(oc_client, "close", None)
@@ -388,27 +349,22 @@ async def opencode_secret_save(
 
     async with get_api_client(request) as api:
         try:
-            # Save project/region to DB (non-secret config) last, now that any
-            # gateway pushes above have already run. ADC JSON and the Gemini API
-            # key are NOT stored in the Swarmer DB — both are pushed exclusively
-            # to the OpenShell gateway above so credentials never persist in
-            # Swarmer (ACM-37263). The API layer only overwrites
-            # google_api_key/application_default_credentials when a non-blank
-            # value is submitted, so passing "" here never clears a legacy
-            # pre-migration key still stored for a workspace that hasn't
-            # rotated it yet (see api/v1/secrets.py:save_credentials).
+            # Save project/region and provider markers through the REST API.
+            # ADC JSON, provider keys, and the EnMaaS key are not persisted in
+            # the Swarmer DB: they are sent only to OpenShell. The EnMaaS token
+            # is configured by this authorized backend operation. Passing
+            # blank legacy fields preserves any pre-migration values.
             await api.save_credentials(
                 ws_id,
                 google_cloud_project=google_cloud_project,
                 vertex_location=vertex_location,
                 google_api_key="",  # intentionally empty — gateway is the store
                 openai_api_key="",  # intentionally empty — gateway is the store
-                enmaas_api_key="",  # intentionally empty — gateway is the store
+                enmaas_api_key=enmaas_key,  # backend authorizes before gateway mutation
                 application_default_credentials="",  # intentionally empty — gateway is the store
                 gemini_configured=True if gemini_configured else None,
                 openai_configured=True if openai_configured else None,
                 vertex_configured=True if vertex_configured else None,
-                enmaas_configured=True if enmaas_configured else None,
                 shared=bool(shared),
             )
         except APIError as exc:

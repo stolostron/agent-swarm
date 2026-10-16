@@ -299,9 +299,9 @@ the Swarmer dashboard, not the agent sandbox.
   EnMaaS pattern, ACM-48198) skip the encrypted property for the token entirely — persist
   only a boolean marker column, push the token to the workspace Gateway provider at save
   time, and add marker reset to `gateway_version.py` plus redaction for the token's key
-  name. Non-secret endpoint configuration may ride on the encrypted credential row (the
-  EnMaaS gateway URL) but must be validated (`config.validate_enmaas_base_url`) and
-  manager-gated before it can affect provider profiles or network policy.
+  name. The non-secret EnMaaS endpoint is operator-managed through `ENMAAS_BASE_URL`,
+  validated (`config.validate_enmaas_base_url`), and cannot be stored in or overridden by
+  workspace credential metadata. Provider profiles and network policy use that setting.
 - Add an agent tool: implement `AgentToolStrategy`, register it, add model/config/image
   settings, then update OpenShell launch tests.
 - Change a deployment version or image tag: update the owning Makefile/default contract and
