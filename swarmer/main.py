@@ -196,6 +196,8 @@ async def _track_default_gateway_version() -> None:
 
 async def _restart_prompt_pollers() -> None:
     """Re-launch background monitors for prompt sessions still active after a restart."""
+    from datetime import datetime, timezone
+
     from sqlalchemy import select
 
     from swarmer.database import get_db
@@ -278,25 +280,57 @@ async def _restart_prompt_pollers() -> None:
                     )
 
                     _enmaas_url = configured_enmaas_base_url()
-                    _enmaas_available = bool(
-                        _enmaas_url and enmaas_endpoint_from_url(_enmaas_url)
+                    _enmaas_endpoint = (
+                        enmaas_endpoint_from_url(_enmaas_url) if _enmaas_url else None
                     )
+                    _enmaas_available = _enmaas_endpoint is not None
                     if _enmaas_available:
                         try:
                             _oc_client = await openshell_client.get_client_for_workspace(
                                 s.workspace_id, db
                             )
-                            _enmaas_available = await openshell_client.provider_exists(
-                                f"swarmer-ws-{s.workspace_id}-enmaas",
-                                client=_oc_client,
+                            _enmaas_profile_id = f"enmaas-ws-{s.workspace_id}"
+                            _enmaas_provider_name = f"swarmer-ws-{s.workspace_id}-enmaas"
+                            _enmaas_available = (
+                                await openshell_client.provider_exists(
+                                    _enmaas_provider_name,
+                                    client=_oc_client,
+                                )
+                                and await openshell_client.provider_profile_endpoint_matches(
+                                    _enmaas_profile_id,
+                                    _enmaas_endpoint,
+                                    client=_oc_client,
+                                )
                             )
-                        except Exception:
+                        except Exception:  # noqa: BLE001 — EnMaaS must fail closed on gateway errors
                             _enmaas_available = False
                     if not _enmaas_available:
+                        _failed_at = datetime.now(timezone.utc)
+                        _failure_detail = (
+                            "EnMaaS provider is unavailable; this run was not resumed. "
+                            "Restore the configured provider and launch again."
+                        )
+                        if s.run_started_at:
+                            from swarmer.session_runs import record_session_run
+
+                            await record_session_run(
+                                db,
+                                s,
+                                phase="failed",
+                                status_detail=_failure_detail,
+                                last_output=s.last_output,
+                                raw_output=s.raw_output,
+                                completed_at=_failed_at,
+                            )
+                        s.phase = "failed"
+                        s.status_detail = _failure_detail
+                        s.run_completed_at = _failed_at
+                        s.active_schedule_id = None
                         log.warning(
-                            "_restart_prompt_pollers: EnMaaS unavailable for session %d — skipping resume",
+                            "_restart_prompt_pollers: EnMaaS unavailable for session %d — marked failed",
                             s.id,
                         )
+                        await db.commit()
                         continue
 
                 # s.provider is a family preset name ("claude"/"gemini"/"openai"/"enmaas", ACM-37232);

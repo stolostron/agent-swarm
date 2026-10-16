@@ -830,6 +830,48 @@ async def provider_exists(name: str, client=None) -> bool:
     return result
 
 
+async def provider_profile_endpoint_matches(
+    profile_id: str,
+    endpoint: tuple[str, int] | None,
+    client=None,
+) -> bool:
+    """Check that a gateway provider profile has exactly the configured endpoint.
+
+    Unlike provider existence, this check is deliberately not cached: startup
+    resume must not trust a stale workspace profile after reconciliation failed.
+    """
+    if not endpoint:
+        return False
+
+    import grpc
+    from openshell._proto import openshell_pb2
+
+    if client is None:
+        client = _get_client()
+
+    def _do_check() -> bool:
+        req = openshell_pb2.GetProviderProfileRequest(id=profile_id)
+        if hasattr(req, "workspace"):
+            req.workspace = ""
+        try:
+            response = client._stub.GetProviderProfile(req, timeout=client._timeout)
+        except grpc.RpcError as exc:
+            if isinstance(exc, grpc.Call) and exc.code() == grpc.StatusCode.NOT_FOUND:
+                return False
+            raise
+
+        profile = getattr(response, "profile", None)
+        endpoints = getattr(profile, "endpoints", ()) if profile is not None else ()
+        actual = [
+            (str(item.host).lower().rstrip("."), int(item.port))
+            for item in endpoints
+        ]
+        expected = [(endpoint[0].lower().rstrip("."), int(endpoint[1]))]
+        return actual == expected
+
+    return await asyncio.to_thread(_do_check)
+
+
 async def create_google_cloud_provider(
     name: str,
     project: str,

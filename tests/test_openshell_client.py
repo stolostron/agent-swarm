@@ -1038,6 +1038,41 @@ async def test_import_enmaas_profile_uses_operator_url(sdk_client, monkeypatch):
         assert await oc.import_enmaas_profile(3, base_url=_ENMAAS_TEST_URL) is False
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("endpoints", "matches"),
+    [
+        ([("enmaas-gateway.example.com", 443)], True),
+        ([("stale-gateway.example.com", 443)], False),
+        (
+            [
+                ("enmaas-gateway.example.com", 443),
+                ("other.example.com", 443),
+            ],
+            False,
+        ),
+        ([], False),
+    ],
+)
+async def test_provider_profile_endpoint_matches_operator_endpoint(
+    sdk_client, endpoints, matches
+):
+    """Resume validation accepts only the exact operator-bound profile."""
+    from types import SimpleNamespace
+
+    response = MagicMock()
+    response.profile.endpoints = [
+        SimpleNamespace(host=host, port=port) for host, port in endpoints
+    ]
+    sdk_client._stub.GetProviderProfile.return_value = response
+
+    assert await oc.provider_profile_endpoint_matches(
+        "enmaas-ws-3", ("enmaas-gateway.example.com", 443), client=sdk_client
+    ) is matches
+    request = sdk_client._stub.GetProviderProfile.call_args.args[0]
+    assert request.id == "enmaas-ws-3"
+
+
 def test_build_provider_profile_serializes_plain_wire_strings():
     """Endpoint metadata must stay plain wire strings — the gateway reads them verbatim.
 

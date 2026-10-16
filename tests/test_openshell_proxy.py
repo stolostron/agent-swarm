@@ -1903,16 +1903,20 @@ class TestRestartPromptPollersArgs:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
-        ("endpoint", "provider_available", "should_resume"),
+        ("endpoint", "provider_available", "profile_matches", "should_resume"),
         [
-            ("https://enmaas-gateway.example.com/v1", True, True),
-            ("", True, False),
-            ("https://enmaas-gateway.example.com/v1", False, False),
+            ("https://enmaas-gateway.example.com/v1", True, True, True),
+            ("https://enmaas-gateway.example.com/v1", True, False, False),
+            ("", True, True, False),
+            ("https://enmaas-gateway.example.com/v1", False, True, False),
         ],
     )
     async def test_scheduled_enmaas_provider_is_preserved_and_fails_closed(
-        self, client, monkeypatch, endpoint, provider_available, should_resume
+        self, client, monkeypatch, endpoint, provider_available, profile_matches,
+        should_resume
     ):
+        from datetime import UTC, datetime
+
         from swarmer.config import settings
         from swarmer.models.session import Session as _Session
         from swarmer.models.session_schedule import SessionSchedule
@@ -1925,6 +1929,7 @@ class TestRestartPromptPollersArgs:
             session_obj = await db.get(_Session, s["id"])
             session_obj.phase = "running"
             session_obj.sandbox_name = "sandbox-enmaas-restart"
+            session_obj.run_started_at = datetime.now(UTC)
             schedule = SessionSchedule(
                 session_id=s["id"], provider="enmaas", instruction_prompt="scheduled"
             )
@@ -1937,6 +1942,7 @@ class TestRestartPromptPollersArgs:
         mock_run = AsyncMock()
         mock_get_client = AsyncMock(return_value=MagicMock())
         mock_provider_exists = AsyncMock(return_value=provider_available)
+        mock_profile_endpoint = AsyncMock(return_value=profile_matches)
         with (
             patch("swarmer.routers.sessions._run_openshell_agent", new=mock_run),
             patch("swarmer.database.get_db", new=_override_get_db),
@@ -1947,6 +1953,10 @@ class TestRestartPromptPollersArgs:
             patch(
                 "swarmer.openshell_client.provider_exists",
                 new=mock_provider_exists,
+            ),
+            patch(
+                "swarmer.openshell_client.provider_profile_endpoint_matches",
+                new=mock_profile_endpoint,
             ),
         ):
             from swarmer.main import _restart_prompt_pollers
@@ -1964,14 +1974,33 @@ class TestRestartPromptPollersArgs:
                 f"swarmer-ws-{ws['id']}-enmaas",
                 client=mock_get_client.return_value,
             )
+            mock_profile_endpoint.assert_awaited_once_with(
+                f"enmaas-ws-{ws['id']}",
+                ("enmaas-gateway.example.com", 443),
+                client=mock_get_client.return_value,
+            )
         else:
             mock_run.assert_not_called()
             if endpoint:
                 mock_get_client.assert_awaited_once()
                 mock_provider_exists.assert_awaited_once()
+                if provider_available:
+                    mock_profile_endpoint.assert_awaited_once()
+                else:
+                    mock_profile_endpoint.assert_not_awaited()
             else:
                 mock_get_client.assert_not_awaited()
                 mock_provider_exists.assert_not_awaited()
+                mock_profile_endpoint.assert_not_awaited()
+
+            async with _TestSession() as db:
+                session_obj = await db.get(_Session, s["id"])
+                assert session_obj.phase == "failed"
+                assert session_obj.status_detail.startswith(
+                    "EnMaaS provider is unavailable"
+                )
+                assert session_obj.run_completed_at is not None
+                assert session_obj.active_schedule_id is None
 
 
 # ===========================================================================
