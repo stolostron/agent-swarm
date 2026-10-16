@@ -217,6 +217,7 @@ async def _restart_prompt_pollers() -> None:
             from swarmer.agent_tools.registry import get as _get_tool
             from swarmer.routers.sessions import (
                 _resolve_schedule_prompt,
+                _resolve_schedule_provider,
                 _resolve_session_prompt,
                 _run_openshell_agent,
             )
@@ -258,6 +259,46 @@ async def _restart_prompt_pollers() -> None:
                 )
             else:
                 _raw_model = s.provider or _tool.get_default_model(False)
+                if s.active_schedule_id:
+                    _raw_model, _ = await _resolve_schedule_provider(
+                        s.active_schedule_id, s, db
+                    )
+                    _raw_model = _raw_model or _tool.get_default_model(False)
+
+                # EnMaaS schedule overrides are intentionally not copied into
+                # Session.provider. On restart, resume the selected provider
+                # only while the operator endpoint and workspace gateway
+                # provider are still available; never substitute a paid model.
+                _model_provider = _raw_model.split("/", 1)[0]
+                if _tool.requires_ai_model() and _model_provider == "enmaas":
+                    from swarmer import openshell_client
+                    from swarmer.config import (
+                        configured_enmaas_base_url,
+                        enmaas_endpoint_from_url,
+                    )
+
+                    _enmaas_url = configured_enmaas_base_url()
+                    _enmaas_available = bool(
+                        _enmaas_url and enmaas_endpoint_from_url(_enmaas_url)
+                    )
+                    if _enmaas_available:
+                        try:
+                            _oc_client = await openshell_client.get_client_for_workspace(
+                                s.workspace_id, db
+                            )
+                            _enmaas_available = await openshell_client.provider_exists(
+                                f"swarmer-ws-{s.workspace_id}-enmaas",
+                                client=_oc_client,
+                            )
+                        except Exception:
+                            _enmaas_available = False
+                    if not _enmaas_available:
+                        log.warning(
+                            "_restart_prompt_pollers: EnMaaS unavailable for session %d — skipping resume",
+                            s.id,
+                        )
+                        continue
+
                 # s.provider is a family preset name ("claude"/"gemini"/"openai"/"enmaas", ACM-37232);
                 # resolve it to a concrete provider/model@version ID for the CLI flag.
                 _model = _tool.resolve_build_model(_raw_model)

@@ -1901,6 +1901,78 @@ class TestRestartPromptPollersArgs:
         assert call_args[4] == "prompt"
         assert call_args[5] == "opencode"
 
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("endpoint", "provider_available", "should_resume"),
+        [
+            ("https://enmaas-gateway.example.com/v1", True, True),
+            ("", True, False),
+            ("https://enmaas-gateway.example.com/v1", False, False),
+        ],
+    )
+    async def test_scheduled_enmaas_provider_is_preserved_and_fails_closed(
+        self, client, monkeypatch, endpoint, provider_available, should_resume
+    ):
+        from swarmer.config import settings
+        from swarmer.models.session import Session as _Session
+        from swarmer.models.session_schedule import SessionSchedule
+
+        ws = await _create_workspace(client)
+        s = await _create_session(
+            client, ws["id"], mode="prompt", agent_tool="opencode"
+        )
+        async with _TestSession() as db:
+            session_obj = await db.get(_Session, s["id"])
+            session_obj.phase = "running"
+            session_obj.sandbox_name = "sandbox-enmaas-restart"
+            schedule = SessionSchedule(
+                session_id=s["id"], provider="enmaas", instruction_prompt="scheduled"
+            )
+            db.add(schedule)
+            await db.flush()
+            session_obj.active_schedule_id = schedule.id
+            await db.commit()
+
+        monkeypatch.setattr(settings, "enmaas_base_url", endpoint)
+        mock_run = AsyncMock()
+        mock_get_client = AsyncMock(return_value=MagicMock())
+        mock_provider_exists = AsyncMock(return_value=provider_available)
+        with (
+            patch("swarmer.routers.sessions._run_openshell_agent", new=mock_run),
+            patch("swarmer.database.get_db", new=_override_get_db),
+            patch(
+                "swarmer.openshell_client.get_client_for_workspace",
+                new=mock_get_client,
+            ),
+            patch(
+                "swarmer.openshell_client.provider_exists",
+                new=mock_provider_exists,
+            ),
+        ):
+            from swarmer.main import _restart_prompt_pollers
+
+            await _restart_prompt_pollers()
+            await asyncio.sleep(0)
+
+        if should_resume:
+            mock_run.assert_called_once()
+            command = mock_run.call_args.args[3]
+            assert "--model enmaas/" in command[-1]
+            assert "google/" not in command[-1]
+            mock_get_client.assert_awaited_once()
+            mock_provider_exists.assert_awaited_once_with(
+                f"swarmer-ws-{ws['id']}-enmaas",
+                client=mock_get_client.return_value,
+            )
+        else:
+            mock_run.assert_not_called()
+            if endpoint:
+                mock_get_client.assert_awaited_once()
+                mock_provider_exists.assert_awaited_once()
+            else:
+                mock_get_client.assert_not_awaited()
+                mock_provider_exists.assert_not_awaited()
+
 
 # ===========================================================================
 # 7. TUI WebSocket — OpenShell path (unit-level)
