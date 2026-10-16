@@ -1757,11 +1757,14 @@ class TestSecrets:
 
         with caplog.at_level(logging.WARNING, logger="swarmer.routers.secrets"):
             response = await opencode_secret_save(
-                ws_id=ws["id"], request=request, enmaas_api_key="<test-enmaas-key>"
+                ws_id=ws["id"],
+                request=request,
+                enmaas_api_key="<test-enmaas-key>",
+                adc_file=None,
             )
 
         assert response.status_code == 302
-        assert str(ws["id"]) not in caplog.text
+        assert all(str(ws["id"]) not in record.getMessage() for record in caplog.records)
         assert sentinel not in caplog.text
         assert "Traceback" not in caplog.text
         assert "error_type=RuntimeError" in caplog.text
@@ -1938,8 +1941,11 @@ class TestSecrets:
         sentinel = "SENTINEL_ENMAAS_SECRET"
         caplog.set_level(logging.WARNING, logger="swarmer.api.v1.secrets")
 
-        async def _fake_ensure_provider(_name, _provider_type, _config, _credentials, **_kwargs):
+        async def _fake_ensure_provider(
+            _name, _provider_type, _config, credentials=None, **_kwargs
+        ):
             """Raise an error containing a sentinel to test log redaction."""
+            assert credentials == {"ENMAAS_KEY": "<test-enmaas-key>"}
             raise RuntimeError(f"provider failed with {sentinel}")
 
         monkeypatch.setattr("swarmer.openshell_client.ensure_provider", _fake_ensure_provider)
@@ -1955,7 +1961,7 @@ class TestSecrets:
         assert resp.json()["detail"] == "failed to configure EnMaaS provider on OpenShell"
         assert sentinel not in resp.text
         assert sentinel not in caplog.text
-        assert str(ws["id"]) not in caplog.text
+        assert all(str(ws["id"]) not in record.getMessage() for record in caplog.records)
         assert "Traceback" not in caplog.text
         assert "error_type=RuntimeError" in caplog.text
 
