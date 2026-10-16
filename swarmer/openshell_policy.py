@@ -394,18 +394,21 @@ def _build_agent_api_block(
 
     if _is_enmaas:
         # EnMaaS sessions (ACM-48198): endpoint-scoped HTTPS access to the
-        # workspace's configured EnMaaS gateway host only — no Google/OpenAI
+        # operator-configured EnMaaS gateway host only — no Google/OpenAI
         # inference endpoints merely because EnMaaS is selected. The OpenCode
         # service endpoints (models.dev metadata, opencode.ai) are preserved,
-        # and the gateway endpoint derives from the same validated workspace
+        # and the gateway endpoint derives from the same validated operator
         # URL as the OpenShell provider profile.
         endpoints = [
             _endpoint("opencode.ai"),
             _endpoint("models.opencode.ai"),
             _endpoint("models.dev"),
         ]
-        if enmaas_endpoint is not None:
-            _gw_host, _gw_port = enmaas_endpoint
+        from swarmer.config import configured_enmaas_endpoint
+
+        _configured_endpoint = configured_enmaas_endpoint()
+        if _configured_endpoint is not None:
+            _gw_host, _gw_port = _configured_endpoint
             endpoints.append(_endpoint(_gw_host, _gw_port))
     else:
         endpoints = [
@@ -472,9 +475,8 @@ def build_session_policy(
     has_slack_webhook: when True (workspace has SLACK_WEBHOOK_URL), grant
     egress to hooks.slack.com for curl/python digest posts.
 
-    enmaas_endpoint: the (host, port) of the workspace's EnMaaS gateway
-    endpoint, granted as egress for EnMaaS model sessions (ACM-48198). None when the
-    workspace gateway URL is not configured.
+    enmaas_endpoint: retained for compatibility; the operator-managed host
+    and port are resolved internally.
 
     Returns a SandboxPolicy proto object to be set on SandboxSpec.policy.
     """
@@ -529,8 +531,8 @@ def build_session_network_policies(
     has_slack_webhook: when True, include hooks.slack.com egress for workspace
     Slack Incoming Webhook posts (SLACK_WEBHOOK_URL).
 
-    enmaas_endpoint: (host, port) of the workspace's EnMaaS gateway endpoint,
-    used by the agent-api block for EnMaaS model sessions (ACM-48198).
+    enmaas_endpoint: retained for compatibility; the agent-api block resolves
+    the operator-managed EnMaaS endpoint directly (ACM-48198).
     """
     network_policies_dict: dict = {}
 

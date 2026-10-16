@@ -165,7 +165,7 @@ class TestMigrateDbDropsLegacyColumns:
     async def test_enmaas_columns_added_to_existing_schema(self):
         """ACM-48198: existing databases gain the EnMaaS gateway-only
         credential marker column (server_default 0) and the encrypted
-        workspace gateway URL column (server_default '') via migrate_db()."""
+        legacy URL column (server_default '') via migrate_db()."""
         async with _engine.begin() as conn:
             await conn.execute(
                 text("ALTER TABLE opencode_secrets DROP COLUMN enmaas_configured")

@@ -379,12 +379,9 @@ async def _get_provider_options(
         select(OpencodeSecret).where(OpencodeSecret.workspace_id == ws_id)
     )
     oc = result.scalars().first()
-    # The EnMaaS gateway URL is workspace-scoped configuration — resolve it
-    # across all credential rows (a shared row saved by a manager may hold it
-    # even when `oc` — the first row — does not).
-    from swarmer.models.opencode_secret import workspace_enmaas_base_url
+    from swarmer.config import configured_enmaas_base_url
 
-    _enmaas_url = await workspace_enmaas_base_url(db, ws_id, prefer=oc)
+    _enmaas_url = configured_enmaas_base_url()
     # Check gateway for Vertex AI provider — ADC is stored on OpenShell, not Swarmer DB.
     has_vertex = False
     has_gemini = False
@@ -1502,15 +1499,10 @@ async def _do_launch_openshell(
         "enmaas": f"swarmer-ws-{session.workspace_id}-enmaas",
     }
     # EnMaaS is available only when its workspace gateway provider exists and
-    # the workspace's stored gateway URL is valid. The URL is workspace-scoped
-    # configuration entered in the AI Tokens form; it may live on any
-    # credential row for the workspace.
-    from swarmer.config import enmaas_endpoint_from_url
-    from swarmer.models.opencode_secret import workspace_enmaas_base_url
+    # the operator-managed endpoint is valid.
+    from swarmer.config import configured_enmaas_base_url, enmaas_endpoint_from_url
 
-    _enmaas_base_url = await workspace_enmaas_base_url(
-        db, session.workspace_id, prefer=oc_secret
-    )
+    _enmaas_base_url = configured_enmaas_base_url()
     _enmaas_endpoint = (
         enmaas_endpoint_from_url(_enmaas_base_url) if _enmaas_base_url else None
     )
@@ -1564,13 +1556,13 @@ async def _do_launch_openshell(
             # to another (paid) provider.
             if _provider_exists.get("enmaas") and _enmaas_endpoint is None:
                 raise ValueError(
-                    "EnMaaS gateway URL is not configured or valid. Set the "
-                    "gateway URL in Settings > AI Tokens "
+                    "EnMaaS gateway URL is not configured or valid. Contact the "
+                    "operator to configure ENMAAS_BASE_URL "
                     "(no fallback to paid providers)"
                 )
             raise ValueError(
                 "EnMaaS provider is not configured for this workspace — add an "
-                "EnMaaS key in Settings > Token (no fallback to paid providers)"
+                "EnMaaS key in Settings > AI Tokens (no fallback to paid providers)"
             )
         # Empty/unresolvable selection: fall back to the first available
         # provider. EnMaaS is last so mixed-provider workspaces keep their

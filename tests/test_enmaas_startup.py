@@ -1,4 +1,4 @@
-"""Startup reconciliation must fail closed on workspace gateway resolution."""
+"""Startup reconciliation must fail closed on gateway resolution."""
 
 from unittest.mock import AsyncMock
 
@@ -8,6 +8,9 @@ import pytest
 @pytest.mark.asyncio
 async def test_reconcile_skips_workspace_when_gateway_resolution_fails(monkeypatch):
     from swarmer import main, openshell_client
+    from swarmer.config import settings
+
+    monkeypatch.setattr(settings, "enmaas_base_url", "https://operator.example/v1")
 
     class _Result:
         def scalars(self):
@@ -18,7 +21,7 @@ async def test_reconcile_skips_workspace_when_gateway_resolution_fails(monkeypat
                 type(
                     "Secret",
                     (),
-                    {"workspace_id": 17, "enmaas_base_url": "https://operator.example/v1"},
+                    {"workspace_id": 17},
                 )()
             ]
 
@@ -42,22 +45,23 @@ async def test_reconcile_skips_workspace_when_gateway_resolution_fails(monkeypat
 
 
 @pytest.mark.asyncio
-async def test_reconcile_imports_each_workspace_with_its_stored_url(monkeypatch):
-    """Reconciliation binds each workspace profile to that workspace's own
-    stored gateway URL (not a deployment-level setting)."""
+async def test_reconcile_uses_same_operator_url_for_each_workspace(monkeypatch):
+    """Every workspace profile uses the shared operator-managed endpoint."""
     from swarmer import main, openshell_client
+    from swarmer.config import settings
+
+    monkeypatch.setattr(settings, "enmaas_base_url", "https://operator.example/v1")
 
     secrets = [
         type(
             "Secret",
             (),
-            {"workspace_id": 1, "enmaas_base_url": "https://alpha.example/v1"},
+            {"workspace_id": 1},
         )(),
-        type("Secret", (), {"workspace_id": 2, "enmaas_base_url": ""})(),
         type(
             "Secret",
             (),
-            {"workspace_id": 3, "enmaas_base_url": "https://gamma.example/v1"},
+            {"workspace_id": 3},
         )(),
     ]
 
@@ -87,11 +91,11 @@ async def test_reconcile_imports_each_workspace_with_its_stored_url(monkeypatch)
 
     await main._reconcile_workspace_enmaas_profiles()
 
-    # Workspace 2 is skipped (no URL); 1 and 3 import with their own URLs.
+    # Both configured workspaces use the same operator endpoint.
     assert import_profile.await_count == 2
     first = import_profile.await_args_list[0]
     second = import_profile.await_args_list[1]
     assert first.args[0] == 1
-    assert first.kwargs["base_url"] == "https://alpha.example/v1"
+    assert first.kwargs["base_url"] == "https://operator.example/v1"
     assert second.args[0] == 3
-    assert second.kwargs["base_url"] == "https://gamma.example/v1"
+    assert second.kwargs["base_url"] == "https://operator.example/v1"

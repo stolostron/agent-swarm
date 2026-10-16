@@ -439,10 +439,6 @@ class CredentialsSave(BaseModel):
     # gateway provider and never persisted by Swarmer; blank preserves the
     # existing gateway credential.
     enmaas_api_key: str = ""
-    # Workspace EnMaaS gateway URL (https://, no credentials/query/fragment).
-    # Stored encrypted on the credential row; blank preserves the existing
-    # value. Only workspace managers may set it.
-    enmaas_base_url: str = ""
     application_default_credentials: str = ""
     shared: bool = False
     # Non-secret markers used by the console when credentials are stored only
@@ -466,8 +462,8 @@ class CredentialsOut(BaseModel):
     openai_configured: bool
     vertex_configured: bool
     enmaas_configured: bool
-    # Workspace-resolved EnMaaS gateway URL ("" when unset). Non-secret
-    # configuration — the token itself never leaves the gateway.
+    # Operator-configured EnMaaS gateway URL ("" when unset). Non-secret
+    # configuration — workspace request data cannot set or override it.
     enmaas_base_url: str
     has_gemini: bool
     has_openai: bool

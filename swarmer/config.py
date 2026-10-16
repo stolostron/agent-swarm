@@ -47,6 +47,9 @@ class Settings(BaseSettings):
     openshell_tls_verify: bool = True   # verify gateway server certificates
     openshell_bearer_token: str = ""    # bearer token for gateway/supervisor auth
     agent_swarm_internal_url: str = ""  # internal URL used by the Agent Swarm MCP
+    # Operator-managed EnMaaS inference endpoint. Workspace settings may
+    # configure credentials, but never the destination receiving ENMAAS_KEY.
+    enmaas_base_url: str = ""
 
     sandbox_gc_interval: int = 300      # seconds between sandbox GC sweeps
     log_level: str = "INFO"             # Python logging level: DEBUG, INFO, WARNING, ERROR
@@ -92,7 +95,7 @@ settings = Settings()
 
 
 def validate_enmaas_base_url(raw: str) -> str:
-    """Validate and normalize a workspace-supplied EnMaaS gateway base URL.
+    """Validate and normalize an EnMaaS gateway base URL.
 
     Returns the normalized URL (trailing slashes stripped, ``/v1`` style path
     retained), or ``""`` when *raw* is empty/unset. Raises ``ValueError`` for
@@ -123,8 +126,7 @@ def sanitize_enmaas_base_url(raw: str) -> str:
     """Return the validated EnMaaS gateway base URL, or "" when not configured.
 
     Invalid values also return "" (with a warning log) so UI render paths
-    degrade to "not configured" instead of raising. The value comes from the
-    workspace's stored gateway URL (entered in the AI Tokens form).
+    degrade to "not configured" instead of raising.
     """
     import logging
 
@@ -141,19 +143,29 @@ def sanitize_enmaas_base_url(raw: str) -> str:
         return ""
 
 
+def configured_enmaas_base_url() -> str:
+    """Return the validated, operator-managed EnMaaS endpoint, if configured."""
+    return sanitize_enmaas_base_url(settings.enmaas_base_url)
+
+
 def enmaas_endpoint_from_url(base_url: str) -> tuple[str, int] | None:
     """Return the (host, port) of an EnMaaS gateway URL, or None when unset.
 
     Invalid values also return None — display paths degrade to
     "not configured". Shared by the OpenShell provider profile and the
     sandbox network policy so both always derive their endpoint from the
-    same validated workspace gateway URL.
+    same validated operator-managed endpoint.
     """
     base = sanitize_enmaas_base_url(base_url)
     if not base:
         return None
     parsed = urlparse(base)
     return (parsed.hostname or "", parsed.port or 443)
+
+
+def configured_enmaas_endpoint() -> tuple[str, int] | None:
+    """Return the operator-managed EnMaaS host/port after URL validation."""
+    return enmaas_endpoint_from_url(configured_enmaas_base_url())
 
 
 def get_agent_swarm_internal_url() -> str:

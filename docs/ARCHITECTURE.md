@@ -155,13 +155,12 @@ and `openai/gpt-6-luna` for both build and small; the ConfigMap values override 
 defaults in deployed environments. The EnMaaS preset (ACM-48198) defaults every role to
 `enmaas/rits/zai-org/glm-5-3` on the business-provided zero-cost gateway; because `enmaas`
 is not a built-in OpenCode provider, `build_config_data()` emits a native
-`providers.enmaas` block (openai-compatible package, workspace-configured `baseURL`,
+`providers.enmaas` block (openai-compatible package, operator-configured `baseURL`,
 `ENMAAS_KEY` env reference) and enables only the enmaas provider for EnMaaS sessions. The
-gateway URL is entered by a workspace manager in the Settings > AI Tokens form, stored
-encrypted on the workspace's credential row, and validated
-(`config.validate_enmaas_base_url`); it is bound to per-workspace OpenShell profile types
-(`enmaas-ws-{id}`) so workspace credential rows stay isolated. There is no
-deployment-level setting for it.
+gateway URL is set by the deployment operator through `ENMAAS_BASE_URL` and validated
+(`config.validate_enmaas_base_url`). Workspace credential rows cannot override it. The
+validated endpoint is shared by generated config, per-workspace OpenShell profiles
+(`enmaas-ws-{id}`), and the sandbox's endpoint-scoped egress rule.
 
 | Use case | Swarmer behavior | OpenShell behavior |
 |---|---|---|
@@ -286,9 +285,10 @@ the Swarmer dashboard, not the agent sandbox.
   pre-migration ADC/Gemini/OpenAI keys. EnMaaS (ACM-48198) has no token column at all —
   just the `enmaas_configured` marker — and its token never appears in API responses,
   rendered HTML, logs, generated `opencode.json`, or sandbox `extra_env`. The EnMaaS gateway
-  endpoint is workspace configuration: a manager enters it in the AI Tokens form, it is
-  stored encrypted (`enmaas_base_url_enc`), and it drives provider profiles, sandbox
-  network policy, and the generated agent config.
+  endpoint comes from the validated operator setting `ENMAAS_BASE_URL`; the legacy
+  encrypted `enmaas_base_url_enc` column is retained for database compatibility and is
+  ignored by active code. Generated config, provider profiles, and sandbox network policy
+  use the operator setting; workspace users can only configure the gateway credential.
 
 ## Change Routing
 
