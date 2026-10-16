@@ -337,14 +337,17 @@ class OpenCodeStrategy(AgentToolStrategy):
         _vertex_reason = "" if has_vertex else "Vertex AI not configured — add credentials in Secrets."
         _gemini_reason = "" if has_gemini else "Google AI Studio API key not set — add it in Secrets."
         _openai_reason = "" if has_openai else "OpenAI API key not set — add it in Secrets."
-        # The endpoint is workspace configuration entered in the AI Tokens
-        # form, validated from the caller-resolved stored value.
+        # The endpoint is operator-controlled deployment configuration,
+        # validated from the configured value supplied by the caller.
         from swarmer.config import sanitize_enmaas_base_url
 
         _enmaas_endpoint_ok = bool(sanitize_enmaas_base_url(enmaas_base_url))
         _enmaas_available = has_enmaas and _enmaas_endpoint_ok
         if not _enmaas_endpoint_ok:
-            _enmaas_reason = "EnMaaS gateway URL not set — add it in AI Tokens."
+            _enmaas_reason = (
+                "EnMaaS gateway is not configured or valid — contact your operator "
+                "to configure ENMAAS_BASE_URL."
+            )
         else:
             _enmaas_reason = "" if has_enmaas else "EnMaaS key not set — add it in Secrets."
 

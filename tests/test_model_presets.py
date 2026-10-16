@@ -386,8 +386,10 @@ class TestEnmaasModelOptions:
         options = _opencode.get_model_options(has_enmaas=True, enmaas_base_url="")
         enmaas = next(o for o in options if o["value"] == "enmaas")
         assert enmaas["available"] is False
-        assert "gateway URL" in enmaas["reason"]
-        assert "AI Tokens" in enmaas["reason"]
+        assert "gateway" in enmaas["reason"]
+        assert "contact your operator" in enmaas["reason"]
+        assert "ENMAAS_BASE_URL" in enmaas["reason"]
+        assert "AI Tokens" not in enmaas["reason"]
 
     def test_enmaas_invalid_workspace_url_degrades_to_unavailable(self):
         """An invalid endpoint degrades to not-configured, never a 500."""
@@ -396,7 +398,9 @@ class TestEnmaasModelOptions:
         )
         enmaas = next(o for o in options if o["value"] == "enmaas")
         assert enmaas["available"] is False
-        assert "gateway URL" in enmaas["reason"]
+        assert "gateway" in enmaas["reason"]
+        assert "contact your operator" in enmaas["reason"]
+        assert "ENMAAS_BASE_URL" in enmaas["reason"]
 
     def test_enmaas_unavailable_reason_when_key_missing(self):
         options = _opencode.get_model_options(
