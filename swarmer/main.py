@@ -326,10 +326,7 @@ async def _restart_prompt_pollers() -> None:
                         s.status_detail = _failure_detail
                         s.run_completed_at = _failed_at
                         s.active_schedule_id = None
-                        log.warning(
-                            "_restart_prompt_pollers: EnMaaS unavailable for session %d — marked failed",
-                            s.id,
-                        )
+                        log.warning("_restart_prompt_pollers: EnMaaS unavailable; session marked failed")
                         await db.commit()
                         continue
 

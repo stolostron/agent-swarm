@@ -9,6 +9,7 @@ Written test-first (TDD) before implementation. Tests cover:
   - Scheduler: _process_queue() FIFO, cooldown, cron capacity check
 """
 
+import logging
 import os
 import sys
 from datetime import datetime, timedelta, timezone
@@ -1092,6 +1093,33 @@ class TestListPageLaunchModeCoercion:
         async with _TestSession() as db:
             sess = await db.get(Session, s["id"])
             assert sess.event_context == ""
+
+    @pytest.mark.asyncio
+    async def test_failed_launch_logs_only_generic_diagnostic(self, client, caplog):
+        """Launch failures must not log session IDs or exception details."""
+        ws = await _create_workspace(client)
+        s = await _create_session(client, ws["id"], "failed-launch-redaction", mode="prompt")
+        sentinel = "SENSITIVE_LAUNCH_EXCEPTION"
+
+        async def _fail_launch(*_args, **_kwargs):
+            raise RuntimeError(sentinel)
+
+        with (
+            patch("swarmer.routers.sessions._do_launch", new=_fail_launch),
+            caplog.at_level(logging.ERROR, logger="swarmer.routers.sessions"),
+        ):
+            resp = await client.post(
+                f"/workspaces/{ws['id']}/sessions/{s['id']}/launch",
+                data={"redirect_to": "list"},
+                follow_redirects=True,
+            )
+
+        assert resp.status_code == 200
+        assert "Session launch failed" in caplog.text
+        assert str(s["id"]) not in caplog.text
+        assert sentinel not in caplog.text
+        assert "Traceback" not in caplog.text
+        assert sentinel not in resp.text
 
     @pytest.mark.asyncio
     async def test_confirmed_launch_remembers_settings_but_not_instructions(self, client):

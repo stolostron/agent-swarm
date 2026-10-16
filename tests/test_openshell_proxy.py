@@ -1909,11 +1909,12 @@ class TestRestartPromptPollersArgs:
             ("https://enmaas-gateway.example.com/v1", True, False, False),
             ("", True, True, False),
             ("https://enmaas-gateway.example.com/v1", False, True, False),
+            ("https://enmaas-gateway.example.com/v1", "error", False, False),
         ],
     )
     async def test_scheduled_enmaas_provider_is_preserved_and_fails_closed(
         self, client, monkeypatch, endpoint, provider_available, profile_matches,
-        should_resume
+        should_resume, caplog
     ):
         from datetime import UTC, datetime
 
@@ -1941,7 +1942,12 @@ class TestRestartPromptPollersArgs:
         monkeypatch.setattr(settings, "enmaas_base_url", endpoint)
         mock_run = AsyncMock()
         mock_get_client = AsyncMock(return_value=MagicMock())
-        mock_provider_exists = AsyncMock(return_value=provider_available)
+        sentinel = "SENSITIVE_PROVIDER_EXCEPTION"
+        mock_provider_exists = (
+            AsyncMock(side_effect=RuntimeError(sentinel))
+            if provider_available == "error"
+            else AsyncMock(return_value=provider_available)
+        )
         mock_profile_endpoint = AsyncMock(return_value=profile_matches)
         with (
             patch("swarmer.routers.sessions._run_openshell_agent", new=mock_run),
@@ -1958,6 +1964,7 @@ class TestRestartPromptPollersArgs:
                 "swarmer.openshell_client.provider_profile_endpoint_matches",
                 new=mock_profile_endpoint,
             ),
+            caplog.at_level(logging.WARNING, logger="swarmer.main"),
         ):
             from swarmer.main import _restart_prompt_pollers
 
@@ -1981,10 +1988,14 @@ class TestRestartPromptPollersArgs:
             )
         else:
             mock_run.assert_not_called()
+            assert "EnMaaS unavailable; session marked failed" in caplog.text
+            assert str(s["id"]) not in caplog.text
+            assert sentinel not in caplog.text
+            assert "Traceback" not in caplog.text
             if endpoint:
                 mock_get_client.assert_awaited_once()
                 mock_provider_exists.assert_awaited_once()
-                if provider_available:
+                if provider_available is True:
                     mock_profile_endpoint.assert_awaited_once()
                 else:
                     mock_profile_endpoint.assert_not_awaited()

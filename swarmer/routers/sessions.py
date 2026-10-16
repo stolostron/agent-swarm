@@ -2864,9 +2864,9 @@ async def session_launch(
         )
         if session.phase == "queued":
             flash(request, f"Session queued — {session.status_detail}", "info")
-    except Exception as exc:
-        log.error("session_launch failed for session %d: %s", sid, exc, exc_info=True)
-        flash(request, f"Launch failed: {exc}", "danger")
+    except Exception:
+        log.error("Session launch failed")
+        flash(request, "Session launch failed. Check the session status or try again.", "danger")
 
     dest = (
         f"/workspaces/{ws_id}/sessions"
