@@ -2050,6 +2050,7 @@ class TestSecrets:
         assert resp.json()["detail"] == "failed to update EnMaaS gateway endpoint on OpenShell"
 
         from sqlalchemy import select
+
         from swarmer.models.opencode_secret import OpencodeSecret
 
         async for db in _override_get_db():
