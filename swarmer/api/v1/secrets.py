@@ -293,6 +293,10 @@ async def save_credentials(
                     {},
                     credentials={"ENMAAS_KEY": enmaas_key},
                     enmaas_base_url=enmaas_url,
+                    strict_profile_reconciliation=(
+                        bool(enmaas_url_input)
+                        and enmaas_url_input != previous_enmaas_url
+                    ),
                     **ensure_kwargs,
                 )
             except ValueError as exc:
