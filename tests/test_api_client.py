@@ -325,27 +325,42 @@ class TestSecretsOps:
         assert cred["masked_api_key"]
 
     @pytest.mark.asyncio
-    async def test_save_credentials_enmaas_key_and_marker(self, api_client, monkeypatch):
-        """The console submits the gateway key/marker, not the endpoint."""
+    async def test_save_credentials_enmaas_fields_forwarded(self, api_client, monkeypatch):
+        """Forward the gateway-only key and workspace URL through the client."""
         ws = await api_client.create_workspace("WS")
-        from swarmer.config import settings
+        imported = {}
 
-        monkeypatch.setattr(settings, "enmaas_base_url", "https://operator.example/v1")
+        async def _fake_import_enmaas_profile(ws_id, client=None, base_url=""):
+            imported["ws_id"] = ws_id
+            imported["base_url"] = base_url
+            return True
+
+        monkeypatch.setattr(
+            "swarmer.openshell_client.import_enmaas_profile",
+            _fake_import_enmaas_profile,
+        )
+        workspace_url = "https://workspace-gateway.example/v1"
         cred = await api_client.save_credentials(
             ws["id"],
             enmaas_api_key="<test-enmaas-key>",
+            enmaas_base_url=workspace_url,
             enmaas_configured=True,
         )
         assert cred["enmaas_configured"] is True
         assert cred["has_enmaas"] is True
-        assert cred["enmaas_base_url"] == "https://operator.example/v1"
+        assert cred["enmaas_base_url"] == workspace_url
         # No token material in the response.
         assert "<test-enmaas-key>" not in str(cred)
 
-        # Blank credential input leaves the marker and configured endpoint.
+        # URL-only changes rebind the profile; blank keeps the stored URL.
+        next_url = "https://next-gateway.example/v1"
+        cred = await api_client.save_credentials(ws["id"], enmaas_base_url=next_url)
+        assert imported == {"ws_id": ws["id"], "base_url": next_url}
+        assert cred["enmaas_base_url"] == next_url
+
         cred = await api_client.save_credentials(ws["id"], enmaas_configured=False)
         assert cred["enmaas_configured"] is False
-        assert cred["enmaas_base_url"] == "https://operator.example/v1"
+        assert cred["enmaas_base_url"] == next_url
 
     @pytest.mark.asyncio
     async def test_pat_crud(self, api_client):

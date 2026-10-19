@@ -656,10 +656,10 @@ The Secrets page has three tabs:
 
 #### Provider Credentials
 
-Credentials for AI model providers, entered through **Settings > AI Tokens** (the workspace Secrets
-page's credentials tab). Vertex AI (ADC), Gemini, OpenAI, and EnMaaS credentials are stored
-directly on the OpenShell gateway — never in the Swarmer database — and injected into session
-sandboxes at launch time.
+AI provider settings are managed through **Settings > AI Tokens** (the workspace Secrets
+page's credentials tab). Gateway-held provider tokens are injected into session sandboxes at
+launch time. For EnMaaS, the API key is stored only on OpenShell; the workspace gateway URL
+is encrypted in the credential record.
 
 | Field | Description |
 |---|---|
@@ -668,6 +668,7 @@ sandboxes at launch time.
 | ADC JSON | Application Default Credentials JSON for Vertex AI |
 | Google API Key | API key for Google Gemini (AI Studio) |
 | OpenAI API Key | API key for OpenAI models |
+| EnMaaS Gateway URL | Workspace-specific HTTPS URL for the OpenAI-compatible gateway (e.g. `https://gateway.example.com/v1`) |
 | EnMaaS API Key | API key for the EnMaaS gateway (GLM-5.3, zero-cost) |
 
 **EnMaaS / GLM-5.3 (ACM-48198).** The business-provided EnMaaS model gateway serves GLM-5.3
@@ -677,11 +678,12 @@ at zero model cost over an OpenAI-compatible API:
   gateway provider `swarmer-ws-{workspace_id}-enmaas`; it is never persisted in Swarmer's
   database, API responses, logs, or generated sandbox config. Blank submissions keep the
   existing token; Delete removes the gateway provider.
-- The **gateway URL** is configured by the deployment operator through `ENMAAS_BASE_URL`.
-  Swarmer validates that it is an `https://` URL without embedded credentials, a query
-  string, or a fragment. Workspace users can configure the key but cannot change where it
-  is sent; generated config, OpenShell provider profiles, and sandbox egress use this same
-  operator-managed endpoint.
+- A workspace manager enters the **gateway URL** here alongside the key. Swarmer validates
+  that it is an `https://` URL without embedded credentials, a query string, or a fragment,
+  then stores it encrypted with workspace credential metadata. Blank submissions keep the
+  current URL. Changing the URL rebinds the workspace provider without requiring the key
+  again. Use the gateway URL supplied for your workspace; the app has no hardcoded URL or
+  deployment-level EnMaaS endpoint setting.
 - The **GLM-5.3 (EnMaaS)** preset is selectable for sessions and schedules. All three roles
   (plan/build/small) resolve to `enmaas/rits/zai-org/glm-5-3` with a 1,000,000-token context,
   65,536-token output limit, and zero configured cost.
@@ -690,8 +692,8 @@ at zero model cost over an OpenAI-compatible API:
   credential deletion, gateway probe failure, or process restart). An EnMaaS-only workspace
   selects EnMaaS automatically; mixed workspaces keep their existing defaults unless EnMaaS
   is chosen explicitly.
-- Rotate the token from this page. After an operator changes the endpoint, re-enter the key
-  to restore the provider at the configured destination.
+- Rotate the token or update the URL from this page. After changing the URL, the next launch
+  uses the new workspace endpoint; running sessions may need to be restarted.
 
 > **Note:** Despite the legacy model name `OpencodeSecret`, this stores credentials for AI providers used by OpenCode.
 

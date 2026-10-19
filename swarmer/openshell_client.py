@@ -204,18 +204,16 @@ def enmaas_profile_type(ws_id: int) -> str:
 
 
 def _enmaas_profile(profile_type: str, base_url: str = "") -> dict | None:
-    """Build a workspace-scoped profile bound to the operator gateway URL.
+    """Build a workspace-scoped profile bound to its configured gateway URL.
 
     *profile_type* is the workspace-scoped type id (``enmaas-ws-{id}``,
-    see ``enmaas_profile_type``). Returns None when the operator endpoint is
-    unset or invalid — callers surface a clear error instead of registering a
-    profile with no endpoint.
-    ``base_url`` is retained for caller compatibility but ignored. The
-    endpoint here and sandbox network policy use the validated operator URL.
+    see ``enmaas_profile_type``). Returns None when *base_url* is unset or
+    invalid — callers surface a clear error instead of registering a profile
+    with no endpoint. Sandbox network policy uses this same validated URL.
     """
-    from swarmer.config import configured_enmaas_endpoint
+    from swarmer.config import enmaas_endpoint_from_url
 
-    endpoint = configured_enmaas_endpoint()
+    endpoint = enmaas_endpoint_from_url(base_url)
     if endpoint is None:
         return None
     host, port = endpoint
@@ -253,8 +251,8 @@ def _custom_profile_for(
 
     Dynamic profiles (agent-swarm, enmaas-ws-*) are built from live
     configuration; static profiles come from CUSTOM_PROVIDER_PROFILES. The
-    per-workspace EnMaaS types bind to the operator-managed gateway URL; a
-    workspace-supplied URL cannot override the endpoint.
+    per-workspace EnMaaS types bind to that workspace's stored URL. Provider
+    config fields cannot override the endpoint.
     """
     if profile_type == "agent-swarm":
         return _agent_swarm_profile()
@@ -714,8 +712,8 @@ async def ensure_provider(
     Credentials are stored server-side (returned as REDACTED); use UpdateProvider
     on subsequent launches to rotate keys.
 
-    *enmaas_base_url* is retained for compatibility; EnMaaS profile endpoints
-    are resolved from operator-managed configuration.
+    *enmaas_base_url* supplies the validated workspace URL for ``enmaas-ws-*``
+    profile types.
     """
     from openshell._proto import openshell_pb2
     import grpc
@@ -725,14 +723,14 @@ async def ensure_provider(
 
     # Custom Swarmer-owned profiles are imported on the resolved client so
     # dedicated remote gateways and fresh setups behave consistently. EnMaaS
-    # profiles use only the operator-managed gateway URL.
+    # profiles use only the explicitly resolved workspace URL.
     custom_profile = _custom_profile_for(profile_type, config, enmaas_base_url)
     if custom_profile is None and profile_type.startswith("enmaas-ws-"):
-        # Never register an endpoint-less EnMaaS profile — the operator must
-        # configure a gateway URL before EnMaaS credentials can be configured
+        # Never register an endpoint-less EnMaaS profile — the workspace must
+        # have a gateway URL before EnMaaS credentials can be configured
         # (ACM-48198).
         raise ValueError(
-            "EnMaaS gateway URL is missing or invalid — configure ENMAAS_BASE_URL."
+            "EnMaaS gateway URL is missing or invalid — set it in Settings > Tokens."
         )
     if custom_profile is not None:
         await import_provider_profiles([custom_profile], client=client)

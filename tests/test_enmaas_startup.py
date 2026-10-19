@@ -9,10 +9,6 @@ import pytest
 async def test_reconcile_skips_workspace_when_gateway_resolution_fails(monkeypatch, caplog):
     """Skip an unresolved workspace and keep identifiers out of its warning."""
     from swarmer import main, openshell_client
-    from swarmer.config import settings
-
-    monkeypatch.setattr(settings, "enmaas_base_url", "https://operator.example/v1")
-
     class _Result:
         def scalars(self):
             """Provide the scalar result interface used by the query handler."""
@@ -24,7 +20,11 @@ async def test_reconcile_skips_workspace_when_gateway_resolution_fails(monkeypat
                 type(
                     "Secret",
                     (),
-                    {"workspace_id": 17},
+                    {
+                        "workspace_id": 17,
+                        "enmaas_configured": True,
+                        "enmaas_base_url": "https://workspace-gateway.example/v1",
+                    },
                 )()
             ]
 
@@ -58,9 +58,6 @@ async def test_reconcile_skips_workspace_when_gateway_resolution_fails(monkeypat
 async def test_reconcile_profile_failure_logs_only_safe_classification(monkeypatch, caplog):
     """Redact workspace IDs and exception details on profile import failure."""
     from swarmer import main, openshell_client
-    from swarmer.config import settings
-
-    monkeypatch.setattr(settings, "enmaas_base_url", "https://operator.example/v1")
 
     class _Result:
         def scalars(self):
@@ -69,7 +66,17 @@ async def test_reconcile_profile_failure_logs_only_safe_classification(monkeypat
 
         def all(self):
             """Return the fake workspace credential row for reconciliation."""
-            return [type("Secret", (), {"workspace_id": 27})()]
+            return [
+                type(
+                    "Secret",
+                    (),
+                    {
+                        "workspace_id": 27,
+                        "enmaas_configured": True,
+                        "enmaas_base_url": "https://workspace-gateway.example/v1",
+                    },
+                )()
+            ]
 
     class _Database:
         async def execute(self, _query):
@@ -101,23 +108,37 @@ async def test_reconcile_profile_failure_logs_only_safe_classification(monkeypat
 
 
 @pytest.mark.asyncio
-async def test_reconcile_uses_same_operator_url_for_each_workspace(monkeypatch):
-    """Every workspace profile uses the shared operator-managed endpoint."""
+async def test_reconcile_uses_each_workspace_url(monkeypatch):
+    """Each profile is restored with that workspace's encrypted URL."""
     from swarmer import main, openshell_client
-    from swarmer.config import settings
-
-    monkeypatch.setattr(settings, "enmaas_base_url", "https://operator.example/v1")
 
     secrets = [
         type(
             "Secret",
             (),
-            {"workspace_id": 1},
+            {
+                "workspace_id": 1,
+                "enmaas_configured": True,
+                "enmaas_base_url": "https://alpha.example/v1",
+            },
         )(),
         type(
             "Secret",
             (),
-            {"workspace_id": 3},
+            {
+                "workspace_id": 2,
+                "enmaas_configured": True,
+                "enmaas_base_url": "",
+            },
+        )(),
+        type(
+            "Secret",
+            (),
+            {
+                "workspace_id": 3,
+                "enmaas_configured": True,
+                "enmaas_base_url": "https://gamma.example/v1",
+            },
         )(),
     ]
 
@@ -152,11 +173,11 @@ async def test_reconcile_uses_same_operator_url_for_each_workspace(monkeypatch):
 
     await main._reconcile_workspace_enmaas_profiles()
 
-    # Both configured workspaces use the same operator endpoint.
+    # Workspace 2 has no URL and is skipped; the others keep their own values.
     assert import_profile.await_count == 2
     first = import_profile.await_args_list[0]
     second = import_profile.await_args_list[1]
     assert first.args[0] == 1
-    assert first.kwargs["base_url"] == "https://operator.example/v1"
+    assert first.kwargs["base_url"] == "https://alpha.example/v1"
     assert second.args[0] == 3
-    assert second.kwargs["base_url"] == "https://operator.example/v1"
+    assert second.kwargs["base_url"] == "https://gamma.example/v1"

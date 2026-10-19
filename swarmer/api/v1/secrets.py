@@ -52,7 +52,7 @@ async def get_credentials(
     db: AsyncSession = Depends(get_db),
     user: str = Depends(get_current_user),
 ):
-    """Return the caller's workspace credentials with the configured endpoint."""
+    """Return the caller's credentials and resolved workspace EnMaaS URL."""
     result = await db.execute(
         select(OpencodeSecret).where(
             OpencodeSecret.workspace_id == ws_id,
@@ -73,9 +73,9 @@ async def get_credentials(
         secret = all_secrets[0]
     if secret is None:
         return None
-    from swarmer.config import configured_enmaas_base_url
+    from swarmer.models.opencode_secret import workspace_enmaas_base_url
 
-    url = configured_enmaas_base_url()
+    url = await workspace_enmaas_base_url(db, ws_id, prefer=secret)
     return CredentialsOut.model_validate(secret).model_copy(
         update={"enmaas_base_url": url}
     )
@@ -241,12 +241,32 @@ async def save_credentials(
                     detail="failed to configure OpenAI provider on OpenShell",
                 ) from exc
             secret.openai_configured = True
-        # EnMaaS (ACM-48198): the token is gateway-only. Its destination is
-        # fixed by the operator-managed ENMAAS_BASE_URL setting.
+        # EnMaaS (ACM-48198): the token is gateway-only. Workspace managers
+        # configure the workspace URL here; the URL is encrypted on credential
+        # rows and passed explicitly to the workspace-scoped gateway profile.
         enmaas_key = body.enmaas_api_key.strip()
-        from swarmer.config import configured_enmaas_base_url
+        enmaas_url_input = body.enmaas_base_url.strip()
+        from swarmer.config import validate_enmaas_base_url
+        from swarmer.models.opencode_secret import workspace_enmaas_base_url
 
-        enmaas_url = configured_enmaas_base_url()
+        if enmaas_url_input:
+            if not is_manager:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Only workspace managers can configure workspace AI providers.",
+                )
+            try:
+                enmaas_url_input = validate_enmaas_base_url(enmaas_url_input)
+            except ValueError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail=str(exc),
+                ) from exc
+
+        previous_enmaas_url = await workspace_enmaas_base_url(
+            db, ws_id, prefer=secret
+        )
+        enmaas_url = enmaas_url_input or previous_enmaas_url
         if enmaas_key:
             if not is_manager:
                 raise HTTPException(
@@ -257,7 +277,8 @@ async def save_credentials(
                 raise HTTPException(
                     status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                     detail=(
-                        "EnMaaS gateway URL is not configured by the operator."
+                        "EnMaaS gateway URL is not configured for this workspace. "
+                        "Set it in Settings > Tokens."
                     ),
                 )
             try:
@@ -275,7 +296,7 @@ async def save_credentials(
                     **ensure_kwargs,
                 )
             except ValueError as exc:
-                # Operator URL configuration problem — actionable 422, not a
+                # Workspace URL configuration problem — actionable 422, not a
                 # gateway outage.
                 raise HTTPException(
                     status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -291,6 +312,41 @@ async def save_credentials(
                     detail="failed to configure EnMaaS provider on OpenShell",
                 ) from exc
             secret.enmaas_configured = True
+        elif enmaas_url_input and enmaas_url_input != previous_enmaas_url:
+            # A URL-only change rebinds the OpenShell profile while leaving its
+            # existing gateway-held token untouched.
+            try:
+                from swarmer import openshell_client
+
+                if oc_client is None:
+                    oc_client = await openshell_client.get_client_for_workspace(
+                        ws_id, db
+                    )
+                import_kwargs = {"client": oc_client} if oc_client is not None else {}
+                await openshell_client.import_enmaas_profile(
+                    ws_id, base_url=enmaas_url_input, **import_kwargs
+                )
+            except Exception as exc:
+                log.warning(
+                    "save_credentials: failed to rebind EnMaaS profile for workspace %d (error_type=%s)",
+                    ws_id,
+                    type(exc).__name__,
+                )
+                raise HTTPException(
+                    status_code=status.HTTP_502_BAD_GATEWAY,
+                    detail="failed to update EnMaaS gateway endpoint on OpenShell",
+                ) from exc
+
+        if enmaas_url_input:
+            # The endpoint is workspace-scoped even though legacy schema stores
+            # it on credential rows. Keep those rows consistent so a user's
+            # private credential cannot shadow the manager's latest URL.
+            rows = await db.execute(
+                select(OpencodeSecret).where(OpencodeSecret.workspace_id == ws_id)
+            )
+            for row in rows.scalars().all():
+                row.enmaas_base_url = enmaas_url_input
+            secret.enmaas_base_url = enmaas_url_input
         adc = body.application_default_credentials.strip()
         if adc:
             if not is_manager:
@@ -350,9 +406,9 @@ async def save_credentials(
     await db.commit()
     await db.refresh(secret)
 
-    from swarmer.config import configured_enmaas_base_url
+    from swarmer.models.opencode_secret import workspace_enmaas_base_url
 
-    url = configured_enmaas_base_url()
+    url = await workspace_enmaas_base_url(db, ws_id, prefer=secret)
     return CredentialsOut.model_validate(secret).model_copy(
         update={"enmaas_base_url": url}
     )
@@ -385,6 +441,11 @@ async def delete_credential(
     is_manager = await workspace_acl.can_manage_members(
         db, ws, identity.username, identity.groups
     )
+    if provider_suffix == "enmaas" and not is_manager:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only workspace managers can delete the workspace EnMaaS provider.",
+        )
 
     result = await db.execute(
         select(OpencodeSecret).where(
@@ -446,10 +507,14 @@ async def delete_credential(
         secret.google_api_key = ""
         secret.gemini_configured = False
     elif provider_suffix == "enmaas":
-        # Gateway-only credential — clear the metadata marker and any legacy
-        # stored URL (the token itself lives only on OpenShell).
-        secret.enmaas_configured = False
-        secret.enmaas_base_url = ""
+        # The provider and URL are workspace-scoped; clear their metadata on
+        # every credential row after removing the gateway-held provider.
+        rows = await db.execute(
+            select(OpencodeSecret).where(OpencodeSecret.workspace_id == ws_id)
+        )
+        for row in rows.scalars().all():
+            row.enmaas_configured = False
+            row.enmaas_base_url = ""
     else:
         secret.openai_api_key_enc = ""
         secret.openai_configured = False

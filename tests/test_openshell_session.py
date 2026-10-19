@@ -111,10 +111,8 @@ async def _setup_db(monkeypatch):
     from swarmer.config import settings
     orig_ns = settings.k8s_namespace
     orig_max = settings.max_concurrent_agents
-    orig_enmaas_url = settings.enmaas_base_url
     settings.k8s_namespace = ""  # must be empty to allow workspace creation
     settings.max_concurrent_agents = 0  # unlimited by default for these tests
-    settings.enmaas_base_url = ""
 
     monkeypatch.setattr("swarmer.k8s.ensure_namespace", lambda namespace: None)
     monkeypatch.setattr("swarmer.k8s.delete_namespace", lambda namespace: None)
@@ -128,7 +126,6 @@ async def _setup_db(monkeypatch):
         await conn.run_sync(Base.metadata.drop_all)
     settings.k8s_namespace = orig_ns
     settings.max_concurrent_agents = orig_max
-    settings.enmaas_base_url = orig_enmaas_url
 
 
 @pytest_asyncio.fixture
@@ -166,10 +163,21 @@ async def _create_workspace(client: AsyncClient, name: str = "Test WS") -> dict:
 
 
 async def _set_workspace_enmaas_url(ws_id: int, url: str) -> None:
-    """Set the operator-managed EnMaaS endpoint used by launch tests."""
-    from swarmer.config import settings
+    """Store the encrypted workspace EnMaaS URL used by launch tests."""
+    from sqlalchemy import select
 
-    settings.enmaas_base_url = url
+    from swarmer.models.opencode_secret import OpencodeSecret
+
+    async with _TestSession() as db:
+        result = await db.execute(
+            select(OpencodeSecret).where(OpencodeSecret.workspace_id == ws_id)
+        )
+        secret = result.scalars().first()
+        if secret is None:
+            secret = OpencodeSecret(workspace_id=ws_id, user_id="test-user")
+            db.add(secret)
+        secret.enmaas_base_url = url
+        await db.commit()
 
 
 async def _create_session(
@@ -302,6 +310,10 @@ class TestDoLaunchOpenshell:
             "ensure_provider": patch(
                 "swarmer.openshell_client.ensure_provider",
                 new=AsyncMock(),
+            ),
+            "profile_endpoint_matches": patch(
+                "swarmer.openshell_client.provider_profile_endpoint_matches",
+                new=AsyncMock(return_value=True),
             ),
             "configure_vertex_provider": patch(
                 "swarmer.openshell_client.configure_vertex_provider",
@@ -466,7 +478,7 @@ class TestDoLaunchOpenshell:
         s = await _create_session(client, ws["id"])
 
         patches = self._patch_openshell()
-        with patches["create_provider"], patches["ensure_provider"], \
+        with patches["create_provider"], patches["ensure_provider"], patches["profile_endpoint_matches"], \
              patches["configure_provider_credential"], patches["attach_sandbox_provider"], \
              patches["create_sandbox"], \
              patches["write_agent_config"], \
@@ -495,7 +507,7 @@ class TestDoLaunchOpenshell:
         s = await _create_session(client, ws["id"])
 
         patches = self._patch_openshell(sandbox_name="sandbox-xyz-789")
-        with patches["create_provider"], patches["ensure_provider"], \
+        with patches["create_provider"], patches["ensure_provider"], patches["profile_endpoint_matches"], \
              patches["configure_provider_credential"], patches["attach_sandbox_provider"], \
              patches["create_sandbox"], \
              patches["write_agent_config"], \
@@ -521,7 +533,7 @@ class TestDoLaunchOpenshell:
         s = await _create_session(client, ws["id"])
 
         patches = self._patch_openshell()
-        with patches["create_provider"], patches["ensure_provider"], \
+        with patches["create_provider"], patches["ensure_provider"], patches["profile_endpoint_matches"], \
              patches["configure_provider_credential"], patches["attach_sandbox_provider"], \
              patches["create_sandbox"], \
              patches["write_agent_config"] as mock_cfg, \
@@ -733,6 +745,7 @@ class TestDoLaunchOpenshell:
         patches = self._patch_openshell()
         with patches["create_provider"], \
              patches["ensure_provider"] as mock_ensure, \
+             patches["profile_endpoint_matches"], \
              patches["configure_provider_credential"], patches["attach_sandbox_provider"], \
              patches["create_sandbox"], patches["write_agent_config"], \
              patches["write_agents_md"], patches["exec_command"], \
@@ -852,6 +865,7 @@ class TestDoLaunchOpenshell:
         patches = self._patch_openshell()
         with patches["create_provider"], \
              patches["ensure_provider"] as mock_ensure, \
+             patches["profile_endpoint_matches"], \
              patches["configure_provider_credential"], patches["attach_sandbox_provider"], \
              patches["create_sandbox"], patches["write_agent_config"], \
              patches["write_agents_md"], patches["exec_command"], \
@@ -1021,8 +1035,7 @@ class TestDoLaunchOpenshell:
     async def _save_enmaas_credentials(
         self, client, ws_id: int, base_url: str = "https://enmaas.example/v1"
     ) -> None:
-        """Store EnMaaS credentials with the operator-configured endpoint."""
-        await _set_workspace_enmaas_url(ws_id, base_url)
+        """Store EnMaaS credentials with the workspace-configured endpoint."""
         with patch(
             "swarmer.openshell_client.ensure_provider",
             new=AsyncMock(),
@@ -1052,6 +1065,7 @@ class TestDoLaunchOpenshell:
         patches = self._patch_openshell()
         with patches["create_provider"], \
              patches["ensure_provider"] as mock_ensure, \
+             patches["profile_endpoint_matches"], \
              patches["configure_provider_credential"], patches["attach_sandbox_provider"], \
               patches["create_sandbox"], patches["write_agent_config"], \
               patches["write_agents_md"], patches["exec_command"], \
@@ -1101,6 +1115,7 @@ class TestDoLaunchOpenshell:
         with (
             patches["create_provider"],
             patches["ensure_provider"],
+            patches["profile_endpoint_matches"],
             patches["configure_provider_credential"],
             patches["attach_sandbox_provider"],
             patches["create_sandbox"],
@@ -1149,6 +1164,7 @@ class TestDoLaunchOpenshell:
 
         patches = self._patch_openshell()
         with patches["create_provider"], patches["ensure_provider"], \
+             patches["profile_endpoint_matches"], \
              patches["configure_provider_credential"], patches["attach_sandbox_provider"], \
               patches["create_sandbox"], patches["write_agent_config"], \
               patches["write_agents_md"], patches["exec_command"], \
@@ -1187,6 +1203,7 @@ class TestDoLaunchOpenshell:
 
         patches = self._patch_openshell()
         with patches["create_provider"], patches["ensure_provider"], \
+             patches["profile_endpoint_matches"], \
              patches["configure_provider_credential"], patches["attach_sandbox_provider"], \
               patches["create_sandbox"], patches["write_agent_config"], \
               patches["write_agents_md"], patches["exec_command"], \
@@ -1302,7 +1319,7 @@ class TestDoLaunchOpenshell:
 
         assert resp.status_code == 500
         assert "EnMaaS gateway URL is not configured or valid" in resp.text
-        assert "configure ENMAAS_BASE_URL" in resp.text
+        assert "Settings &gt; Tokens" in resp.text or "Settings > Tokens" in resp.text
         assert "no fallback to paid providers" in resp.text
         assert "EnMaaS key in Settings > AI Tokens" not in resp.text
         mock_setup.assert_not_called()

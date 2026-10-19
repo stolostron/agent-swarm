@@ -113,9 +113,8 @@ async def _ensure_openshell_provider_profiles() -> None:
         )
     except Exception:
         log.warning("Failed to import OpenShell provider profiles — sessions may lack Google AI Studio support", exc_info=True)
-    # EnMaaS profiles are per-workspace for credential isolation, and each
-    # binds to the operator-managed endpoint. Reconcile configured workspaces
-    # so profile bindings survive gateway restarts.
+    # EnMaaS profiles are per-workspace for credential isolation and bind to
+    # each workspace's encrypted URL. Reconcile them after gateway restarts.
     try:
         await _reconcile_workspace_enmaas_profiles()
     except Exception as exc:
@@ -130,21 +129,21 @@ async def _reconcile_workspace_enmaas_profiles() -> None:
     from sqlalchemy import select
 
     from swarmer import openshell_client
-    from swarmer.config import configured_enmaas_base_url
+    from swarmer.config import sanitize_enmaas_base_url
     from swarmer.database import get_db
     from swarmer.models.opencode_secret import OpencodeSecret
 
-    base_url = configured_enmaas_base_url()
-    if not base_url:
-        return
-    workspace_ids: list[int] = []
+    workspace_urls: dict[int, str] = {}
     async for db in get_db():
         result = await db.execute(
             select(OpencodeSecret).where(OpencodeSecret.enmaas_configured.is_(True))
         )
-        workspace_ids = list({s.workspace_id for s in result.scalars().all()})
+        for secret in result.scalars().all():
+            url = sanitize_enmaas_base_url(secret.enmaas_base_url or "")
+            if url:
+                workspace_urls[secret.workspace_id] = url
         break
-    for ws_id in workspace_ids:
+    for ws_id, base_url in workspace_urls.items():
         client = None
         try:
             try:
@@ -269,21 +268,20 @@ async def _restart_prompt_pollers() -> None:
 
                 # EnMaaS schedule overrides are intentionally not copied into
                 # Session.provider. On restart, resume the selected provider
-                # only while the operator endpoint and workspace gateway
-                # provider are still available; never substitute a paid model.
+                # only while its workspace URL and gateway profile are valid;
+                # never substitute a paid model.
                 _model_provider = _raw_model.split("/", 1)[0]
                 if _tool.requires_ai_model() and _model_provider == "enmaas":
                     from swarmer import openshell_client
-                    from swarmer.config import (
-                        configured_enmaas_base_url,
-                        enmaas_endpoint_from_url,
-                    )
+                    from swarmer.config import enmaas_endpoint_from_url
+                    from swarmer.models.opencode_secret import workspace_enmaas_base_url
 
-                    _enmaas_url = configured_enmaas_base_url()
+                    _enmaas_url = await workspace_enmaas_base_url(db, s.workspace_id)
                     _enmaas_endpoint = (
                         enmaas_endpoint_from_url(_enmaas_url) if _enmaas_url else None
                     )
                     _enmaas_available = _enmaas_endpoint is not None
+                    _oc_client = None
                     if _enmaas_available:
                         try:
                             _oc_client = await openshell_client.get_client_for_workspace(
@@ -302,13 +300,53 @@ async def _restart_prompt_pollers() -> None:
                                     client=_oc_client,
                                 )
                             )
-                        except Exception:  # noqa: BLE001 — EnMaaS must fail closed on gateway errors
+                            if _enmaas_available:
+                                # Refresh persisted config if the manager changed
+                                # this workspace URL while Swarmer was down.
+                                from swarmer.models.mcp_server import McpServer
+
+                                try:
+                                    _mcp_ids = [
+                                        int(value)
+                                        for value in json.loads(s.mcp_server_ids or "[]")
+                                    ]
+                                except (TypeError, ValueError, json.JSONDecodeError):
+                                    _mcp_ids = []
+                                _mcp_rows = []
+                                if _mcp_ids:
+                                    _mcp_result = await db.execute(
+                                        select(McpServer).where(
+                                            McpServer.workspace_id == s.workspace_id,
+                                            McpServer.id.in_(_mcp_ids),
+                                        )
+                                    )
+                                    _mcp_rows = list(_mcp_result.scalars().all())
+                                _config_data = _tool.build_config_data(
+                                    model=_raw_model,
+                                    mcp_servers=_mcp_rows,
+                                    enmaas_base_url=_enmaas_url,
+                                )
+                                await openshell_client.write_agent_config(
+                                    sandbox_name=s.sandbox_name,
+                                    tool_name=s.agent_tool,
+                                    config_json=_config_data.get(
+                                        f"{s.agent_tool}.json", "{}"
+                                    ),
+                                    client=_oc_client,
+                                )
+                        except Exception:  # noqa: BLE001 — fail closed on gateway errors
                             _enmaas_available = False
+                        finally:
+                            if _oc_client is not None:
+                                close = getattr(_oc_client, "close", None)
+                                if callable(close):
+                                    close()
                     if not _enmaas_available:
                         _failed_at = datetime.now(timezone.utc)
                         _failure_detail = (
                             "EnMaaS provider is unavailable; this run was not resumed. "
-                            "Restore the configured provider and launch again."
+                            "Configure the workspace gateway URL/key in Settings > Tokens "
+                            "and launch again."
                         )
                         if s.run_started_at:
                             from swarmer.session_runs import record_session_run

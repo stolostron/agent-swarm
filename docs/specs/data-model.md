@@ -175,7 +175,7 @@ Unique key: `(workspace_id, user_id)`.
 | `openai_api_key_enc` | Encrypted compatibility key |
 | `gemini_configured`, `openai_configured`, `vertex_configured` | Non-secret provider markers |
 | `enmaas_configured` | Non-secret EnMaaS marker (ACM-48198). Gateway-only credential: the ENMAAS_KEY token lives exclusively on the OpenShell provider `swarmer-ws-{workspace_id}-enmaas` — there is deliberately no token column |
-| `enmaas_base_url_enc` | Legacy encrypted workspace endpoint retained for database compatibility; active code ignores it. `ENMAAS_BASE_URL` is the validated operator-managed source for generated config, provider profiles, and sandbox egress. |
+| `enmaas_base_url_enc` | Encrypted workspace EnMaaS URL entered by a workspace manager in Settings > AI Tokens; used for generated config, provider profiles, and sandbox egress. |
 | `created_at`, `updated_at` | Audit timestamps |
 
 New provider credentials are normally registered with OpenShell. These rows
