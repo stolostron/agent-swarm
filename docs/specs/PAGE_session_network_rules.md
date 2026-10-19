@@ -28,6 +28,12 @@ This rule is distinct from the OpenShell provider profile: the provider
 profile supplies endpoint enforcement, binary attribution, and the bearer
 credential binding required for `AGENT_SWARM_API_TOKEN` injection.
 
+For `enmaas` sessions, the `agent_api` policy block grants HTTPS egress only to
+the workspace's validated EnMaaS gateway `(host, port)` and OpenCode metadata
+endpoints (`opencode.ai`, `models.opencode.ai`, `models.dev`), omitting Google,
+Vertex AI, and OpenAI inference endpoints. Draft-chunk auto-approval
+(`_build_expected_hosts`) includes the workspace EnMaaS gateway hostname.
+
 ## Promotion algorithm
 
 1. Load draft chunks live from OpenShell when active, otherwise use snapshot.

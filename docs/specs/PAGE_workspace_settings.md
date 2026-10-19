@@ -30,8 +30,12 @@ security behavior.
 
 ## Component responsibilities
 
-- AI tokens: save/delete supported provider credentials and show health without
-  returning secret material.
+- AI tokens: save/delete supported provider credentials (Vertex AI ADC, Gemini,
+  OpenAI, and EnMaaS) and show health without returning secret material. For
+  EnMaaS, workspace managers also configure the workspace HTTPS gateway URL
+  (`enmaas_base_url`), which is validated (`validate_enmaas_base_url`), stored
+  encrypted across the workspace's `opencode_secrets` rows, and used to bind or
+  rebind the per-workspace OpenShell profile (`enmaas-ws-{ws_id}`).
 - GitHub PAT/App: provide repository discovery and session authentication;
   private keys remain encrypted and never enter a sandbox.
 - MCP servers: store endpoint/auth metadata, test health, enable/disable, and
@@ -59,3 +63,8 @@ security behavior.
   tokens remain encrypted at rest and are never returned in API responses.
 - Gateway configuration replacement must preserve all intended fields and must
   be connection-tested before reporting success.
+- EnMaaS credential and gateway URL mutations (`POST /secrets/credentials` with
+  EnMaaS fields and `DELETE /secrets/credentials/enmaas`) require workspace
+  manager permissions (`403` for non-managers). The `ENMAAS_KEY` token is stored
+  only on the OpenShell provider `swarmer-ws-{ws_id}-enmaas` and never persisted
+  in SQLite.

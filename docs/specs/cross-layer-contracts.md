@@ -91,9 +91,10 @@ including scheduled/background runs.
 
 ### 5.3 Schedule provider on create
 
-The schedule create schema and MCP tool accept `provider`, but the REST create
-handler must persist it. Otherwise the value is silently discarded. Add a
-regression test covering create, response, and subsequent launch resolution.
+Both REST (`ScheduleEntryCreate` / `ScheduleEntryUpdate`) and MCP schedule tools
+accept and persist `provider` (`""`, `"claude"`, `"gemini"`, `"openai"`, or
+`"enmaas"`). At launch, a non-empty schedule `provider` overrides the session
+provider for that run only without mutating `Session.provider`.
 
 ### 5.4 Schedule prompt validation on update
 

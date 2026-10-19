@@ -32,7 +32,8 @@ an actionable GitHub event.
 3. For cron, require a valid expression and calculate `cron_next_run`.
 4. For event, store condition and author scope and clear cron fields.
 5. Require a prompt belonging to the same workspace.
-6. Validate provider override and delay range `0..1440` minutes.
+6. Validate provider override (`claude`, `gemini`, `openai`, `enmaas`, or empty
+   to inherit the session provider) and delay range `0..1440` minutes.
 7. Persist enabled state on create; toggle it only through the toggle action.
 8. Emit `scheduleListChanged` and reload the list partial.
 
@@ -51,3 +52,5 @@ an actionable GitHub event.
 - Editing a schedule does not unexpectedly disable it.
 - Event context is included only when configured.
 - Each scheduler invocation records its source in run history.
+- Schedule provider overrides (including `enmaas`) apply only to the scheduled
+  run and do not overwrite `Session.provider`.
