@@ -1005,6 +1005,7 @@ async def test_ensure_provider_auto_imports_enmaas_profile(sdk_client):
 @pytest.mark.asyncio
 async def test_import_enmaas_profile_uses_workspace_url(sdk_client):
     """Reconciliation binds the profile to the workspace URL without key mutation."""
+    sdk_client._stub.GetProviderProfile.return_value.profile.resource_version = 0
     with patch.object(oc, "_get_client", return_value=sdk_client):
         imported = await oc.import_enmaas_profile(3, base_url=_ENMAAS_TEST_URL)
         assert imported is True
@@ -1221,6 +1222,39 @@ async def test_import_provider_profiles_updates_existing_profile_on_already_exis
     assert up_req.profile.profile.resource_version == 5
     assert len(up_req.profile.profile.endpoints) == 1
     assert up_req.profile.profile.endpoints[0].host == "redhat.atlassian.net"
+
+
+@pytest.mark.asyncio
+async def test_import_enmaas_profile_propagates_rejected_update():
+    """A rejected URL rebind must reach the caller instead of looking successful."""
+    import grpc
+
+    mock_client = MagicMock()
+    mock_client._timeout = 10
+
+    class MockAlreadyExists(grpc.RpcError, grpc.Call):
+        def code(self):
+            return grpc.StatusCode.ALREADY_EXISTS
+
+    class MockUnavailable(grpc.RpcError, grpc.Call):
+        def code(self):
+            return grpc.StatusCode.UNAVAILABLE
+
+    mock_client._stub.ImportProviderProfiles.side_effect = MockAlreadyExists()
+    existing_resp = MagicMock()
+    existing_resp.profile.resource_version = 5
+    mock_client._stub.GetProviderProfile.return_value = existing_resp
+    rejected_update = MockUnavailable()
+    mock_client._stub.UpdateProviderProfiles.side_effect = rejected_update
+
+    with pytest.raises(MockUnavailable):
+        await oc.import_enmaas_profile(
+            42,
+            client=mock_client,
+            base_url="https://workspace-gateway.example.com/v1",
+        )
+
+    mock_client._stub.UpdateProviderProfiles.assert_called_once()
 
 
 @pytest.mark.asyncio

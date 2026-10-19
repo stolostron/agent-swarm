@@ -2011,6 +2011,61 @@ class TestSecrets:
         assert resp.json()["enmaas_base_url"] == next_url
 
     @pytest.mark.asyncio
+    async def test_url_only_change_does_not_persist_when_profile_update_is_rejected(
+        self, client, monkeypatch
+    ):
+        """Keep the encrypted workspace URL unchanged when OpenShell rejects rebinding."""
+        ws = await _create_workspace(client)
+
+        async def _fake_ensure_provider(*_args, **_kwargs):
+            return None
+
+        monkeypatch.setattr("swarmer.openshell_client.ensure_provider", _fake_ensure_provider)
+        monkeypatch.setattr(
+            "swarmer.openshell_client.get_client_for_workspace",
+            AsyncMock(return_value=None),
+        )
+        previous_url = "https://previous-gateway.example.com/v1"
+        rejected_url = "https://rejected-gateway.example.com/v1"
+
+        resp = await client.post(
+            f"/api/v1/workspaces/{ws['id']}/secrets/credentials",
+            json={"enmaas_api_key": "<test-enmaas-key>", "enmaas_base_url": previous_url},
+        )
+        assert resp.status_code == 200, resp.text
+
+        async def _reject_profile_update(*_args, **_kwargs):
+            raise RuntimeError("gateway rejected profile update")
+
+        monkeypatch.setattr(
+            "swarmer.openshell_client.import_enmaas_profile",
+            _reject_profile_update,
+        )
+        resp = await client.post(
+            f"/api/v1/workspaces/{ws['id']}/secrets/credentials",
+            json={"enmaas_base_url": rejected_url},
+        )
+
+        assert resp.status_code == 502
+        assert resp.json()["detail"] == "failed to update EnMaaS gateway endpoint on OpenShell"
+
+        from sqlalchemy import select
+        from swarmer.models.opencode_secret import OpencodeSecret
+
+        async for db in _override_get_db():
+            row = (
+                await db.execute(
+                    select(OpencodeSecret).where(
+                        OpencodeSecret.workspace_id == ws["id"]
+                    )
+                )
+            ).scalars().first()
+            assert row.enmaas_base_url == previous_url
+            assert row.enmaas_base_url_enc != previous_url
+            assert rejected_url not in row.enmaas_base_url_enc
+            break
+
+    @pytest.mark.asyncio
     async def test_save_enmaas_key_without_url_returns_422(self, client, monkeypatch):
         """A key cannot be configured until this workspace has a valid URL."""
         ws = await _create_workspace(client)

@@ -272,7 +272,10 @@ async def import_enmaas_profile(
     profile = _enmaas_profile(enmaas_profile_type(ws_id), base_url)
     if profile is None:
         return False
-    await import_provider_profiles([profile], client=client)
+    # URL-only workspace updates must not be treated as successful when the
+    # gateway cannot reconcile an existing profile. Other profile imports can
+    # retain their best-effort behavior during startup.
+    await import_provider_profiles([profile], client=client, strict=True)
     return True
 
 
@@ -1484,11 +1487,15 @@ def _build_provider_profile(p: dict, resource_version: int = 0):
     return profile
 
 
-async def import_provider_profiles(profiles: list[dict], client=None) -> None:
+async def import_provider_profiles(
+    profiles: list[dict], client=None, strict: bool = False
+) -> None:
     """Import custom provider type profiles into the gateway (idempotent).
 
     If profiles already exist, updates each profile via UpdateProviderProfiles
     so new or modified endpoints/credentials take effect on running gateways.
+    In strict mode, reconciliation errors are propagated instead of logged so
+    callers do not persist configuration that the gateway did not apply.
     """
     import grpc
     from openshell._proto import openshell_pb2
@@ -1508,6 +1515,8 @@ async def import_provider_profiles(profiles: list[dict], client=None) -> None:
         except grpc.RpcError as exc:
             if not (isinstance(exc, grpc.Call) and exc.code() == grpc.StatusCode.ALREADY_EXISTS):
                 if isinstance(exc, grpc.Call) and exc.code() == grpc.StatusCode.UNIMPLEMENTED:
+                    if strict:
+                        raise
                     return
                 raise
 
@@ -1517,6 +1526,8 @@ async def import_provider_profiles(profiles: list[dict], client=None) -> None:
         update_method = getattr(getattr(client, "_stub", None), "UpdateProviderProfiles", None)
         get_method = getattr(getattr(client, "_stub", None), "GetProviderProfile", None)
         if not callable(update_method) or not callable(get_method):
+            if strict:
+                raise RuntimeError("OpenShell cannot reconcile provider profiles")
             return
 
         for p in profiles:
@@ -1580,12 +1591,20 @@ async def import_provider_profiles(profiles: list[dict], client=None) -> None:
                         continue
                     except Exception as s_exc:
                         log.warning("import_provider_profiles: failed to re-import missing profile %s: %s", pid, s_exc)
+                        if strict:
+                            raise
                         continue
                 if isinstance(u_exc, grpc.Call) and u_exc.code() == grpc.StatusCode.UNIMPLEMENTED:
+                    if strict:
+                        raise
                     continue
                 log.warning("import_provider_profiles: failed to update existing profile %s: %s", pid, u_exc)
+                if strict:
+                    raise
             except Exception as u_exc:
                 log.warning("import_provider_profiles: failed to update existing profile %s: %s", pid, u_exc)
+                if strict:
+                    raise
 
     await asyncio.to_thread(_do_import)
 
