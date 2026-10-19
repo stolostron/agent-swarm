@@ -1,3 +1,5 @@
+from urllib.parse import urlparse
+
 from pydantic_settings import BaseSettings
 
 
@@ -45,6 +47,10 @@ class Settings(BaseSettings):
     openshell_tls_verify: bool = True   # verify gateway server certificates
     openshell_bearer_token: str = ""    # bearer token for gateway/supervisor auth
     agent_swarm_internal_url: str = ""  # internal URL used by the Agent Swarm MCP
+    # Operator-managed EnMaaS inference endpoint. Workspace settings may
+    # configure credentials, but never the destination receiving ENMAAS_KEY.
+    enmaas_base_url: str = ""
+
     sandbox_gc_interval: int = 300      # seconds between sandbox GC sweeps
     log_level: str = "INFO"             # Python logging level: DEBUG, INFO, WARNING, ERROR
 
@@ -71,6 +77,13 @@ class Settings(BaseSettings):
     openai_preset_plan_model: str = "openai/gpt-6.1-sol"
     openai_preset_build_model: str = "openai/gpt-6-luna"
     openai_preset_small_model: str = "openai/gpt-6-luna"
+    # EnMaaS preset role models — every default role stays within EnMaaS so an
+    # EnMaaS session can never silently select a paid provider model. The
+    # upstream model IDs contain slashes; references are always split at the
+    # FIRST "/" only (provider prefix = "enmaas").
+    enmaas_preset_plan_model: str = "enmaas/rits/zai-org/glm-5-3"
+    enmaas_preset_build_model: str = "enmaas/rits/zai-org/glm-5-3"
+    enmaas_preset_small_model: str = "enmaas/rits/zai-org/glm-5-3"
     # Enables the opencode plan agent so the preset "plan" model is actually used
     # by `opencode run` (see docs/USER_GUIDE.md — Model Selection).
     opencode_experimental_plan_mode: bool = True
@@ -79,6 +92,80 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+
+def validate_enmaas_base_url(raw: str) -> str:
+    """Validate and normalize an EnMaaS gateway base URL.
+
+    Returns the normalized URL (trailing slashes stripped, ``/v1`` style path
+    retained), or ``""`` when *raw* is empty/unset. Raises ``ValueError`` for
+    invalid input: non-HTTPS scheme, missing hostname, embedded credentials
+    (user info), query strings, or fragments.
+    """
+    cleaned = (raw or "").strip()
+    if not cleaned:
+        return ""
+    parsed = urlparse(cleaned)
+    if parsed.scheme != "https":
+        raise ValueError("EnMaaS gateway base URL must use https.")
+    if not parsed.hostname:
+        raise ValueError("EnMaaS gateway base URL must include a hostname.")
+    if parsed.username or parsed.password:
+        raise ValueError("EnMaaS gateway base URL must not include credentials.")
+    if parsed.query or parsed.fragment:
+        raise ValueError("EnMaaS gateway base URL must not include a query string or fragment.")
+    # Reassemble without credentials/query/fragment; strip trailing slashes so
+    # consumers can append paths predictably. The configured path (e.g. /v1)
+    # is retained verbatim.
+    netloc = parsed.hostname if parsed.port is None else f"{parsed.hostname}:{parsed.port}"
+    path = parsed.path.rstrip("/")
+    return f"https://{netloc}{path}"
+
+
+def sanitize_enmaas_base_url(raw: str) -> str:
+    """Return the validated EnMaaS gateway base URL, or "" when not configured.
+
+    Invalid values also return "" (with a warning log) so UI render paths
+    degrade to "not configured" instead of raising.
+    """
+    import logging
+
+    cleaned = (raw or "").strip()
+    if not cleaned:
+        return ""
+    try:
+        return validate_enmaas_base_url(cleaned)
+    except ValueError:
+        logging.getLogger(__name__).warning(
+            "Ignoring invalid EnMaaS gateway base URL (must be an https:// "
+            "URL without credentials, query string, or fragment)",
+        )
+        return ""
+
+
+def configured_enmaas_base_url() -> str:
+    """Return the validated, operator-managed EnMaaS endpoint, if configured."""
+    return sanitize_enmaas_base_url(settings.enmaas_base_url)
+
+
+def enmaas_endpoint_from_url(base_url: str) -> tuple[str, int] | None:
+    """Return the (host, port) of an EnMaaS gateway URL, or None when unset.
+
+    Invalid values also return None — display paths degrade to
+    "not configured". Shared by the OpenShell provider profile and the
+    sandbox network policy so both always derive their endpoint from the
+    same validated operator-managed endpoint.
+    """
+    base = sanitize_enmaas_base_url(base_url)
+    if not base:
+        return None
+    parsed = urlparse(base)
+    return (parsed.hostname or "", parsed.port or 443)
+
+
+def configured_enmaas_endpoint() -> tuple[str, int] | None:
+    """Return the operator-managed EnMaaS host/port after URL validation."""
+    return enmaas_endpoint_from_url(configured_enmaas_base_url())
 
 
 def get_agent_swarm_internal_url() -> str:

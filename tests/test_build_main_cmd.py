@@ -57,6 +57,16 @@ def test_opencode_prompt_runs_standalone():
     assert cmd.startswith("opencode run --standalone")
 
 
+def test_opencode_prompt_enmaas_model_with_embedded_slashes():
+    """The EnMaaS model reference contains slashes — it must be passed
+    through verbatim (split at the FIRST "/" only upstream) and survive
+    shell quoting."""
+    session = _FakeSession(mode="prompt", instruction_prompt="Do the thing")
+    cmd = _opencode.build_main_cmd(session, model="enmaas/rits/zai-org/glm-5-3")
+    assert cmd.startswith("opencode run --standalone")
+    assert "enmaas/rits/zai-org/glm-5-3" in cmd
+
+
 def test_opencode_prompt_with_prompt_text():
     session = _FakeSession(mode="prompt", instruction_prompt="Fix the bug")
     cmd = _opencode.build_main_cmd(session, model="google-vertex/claude-sonnet-5@default")

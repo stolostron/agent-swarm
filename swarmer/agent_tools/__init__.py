@@ -12,15 +12,18 @@ class AgentToolStrategy(ABC):
     @property
     @abstractmethod
     def name(self) -> str:
+        """Return the stable identifier used to select this agent tool."""
         ...
 
     @property
     @abstractmethod
     def display_name(self) -> str:
+        """Return the human-readable name shown for this tool."""
         ...
 
     @abstractmethod
     def get_image(self) -> str:
+        """Return the container image used to run this tool."""
         ...
 
     @abstractmethod
@@ -30,27 +33,34 @@ class AgentToolStrategy(ABC):
         mcp_servers: "list[McpServer] | None" = None,
         use_inference_local: bool = False,
         model: str = "",
+        enmaas_base_url: str = "",
     ) -> dict[str, str]:
+        """Build sandbox configuration files for the selected model and providers."""
         ...
 
     @abstractmethod
     def get_container_name(self) -> str:
+        """Return the executable container name for the tool."""
         ...
 
     @abstractmethod
     def get_server_port(self) -> int | None:
+        """Return the service port, or ``None`` when the tool has no server."""
         ...
 
     @abstractmethod
     def get_share_dir(self) -> str:
+        """Return the persistent data directory used by the tool."""
         ...
 
     @abstractmethod
     def build_share_setup_cmd(self) -> str:
+        """Return shell setup commands for the persistent data directory."""
         ...
 
     @abstractmethod
     def build_model_setup_cmd(self, model: str) -> str:
+        """Return setup commands that prepare the selected model for execution."""
         ...
 
     @abstractmethod
@@ -96,11 +106,15 @@ class AgentToolStrategy(ABC):
         has_vertex: bool = False,
         has_gemini: bool = False,
         has_openai: bool = False,
+        has_enmaas: bool = False,
+        enmaas_base_url: str = "",
     ) -> list[dict]:
+        """List models available for this tool and the configured credentials."""
         ...
 
     @abstractmethod
     def get_default_model(self, has_adc: bool) -> str:
+        """Choose the default model based on the available credentials."""
         ...
 
     def get_preset_options(
@@ -108,8 +122,10 @@ class AgentToolStrategy(ABC):
         has_vertex: bool = False,
         has_gemini: bool = False,
         has_openai: bool = False,
+        has_enmaas: bool = False,
+        enmaas_base_url: str = "",
     ) -> list[dict]:
-        """Return family-level model presets (e.g. Claude/Gemini/OpenAI) for the UI.
+        """Return family-level model presets (e.g. Claude/Gemini/OpenAI/EnMaaS) for the UI.
 
         Each dict has: value (preset name), label, group, and available (bool)
         indicating whether the required provider credential is configured.

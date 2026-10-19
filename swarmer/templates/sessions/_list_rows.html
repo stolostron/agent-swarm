@@ -40,7 +40,7 @@
         {% if s.has_pending_chunks %}
         <span class="pending-net-rules-dot" role="img" aria-label="Pending net rules need review" title="Pending net rules need review"></span>
         {% endif %}
-        {% set _session_provider = {'claude': 'Vertex AI', 'gemini': 'Gemini', 'openai': 'OpenAI'}.get(s.provider) %}
+        {% set _session_provider = {'claude': 'Vertex AI', 'gemini': 'Gemini', 'openai': 'OpenAI', 'enmaas': 'EnMaaS'}.get(s.provider) %}
         {% if _session_provider in (missing_ai_providers or []) %}
         <span role="img" aria-label="Missing OpenShell AI provider" title="{{ _session_provider }} provider is missing on OpenShell">⚠️</span>
         {% endif %}

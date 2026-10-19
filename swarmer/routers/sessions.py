@@ -128,7 +128,7 @@ _SECRET_KEY_RE = re.compile(
     r"[\"']?"                                       # optional JSON/YAML key quote
     r"(?:api[_-]?key|access[_-]?token|auth[_-]?token|bearer|password|passwd|secret|"
     r"private[_-]?key|gh_token|github_token|google_api_key|jira_access_token|"
-    r"jira_api_token|openai_api_key|anthropic_api_key|slack_token|slack_webhook|"
+    r"jira_api_token|openai_api_key|enmaas_key|anthropic_api_key|slack_token|slack_webhook|"
     r"aws_secret_access_key|aws_session_token|service_account_key"
     r")"
     r"[\"']?\s*[=:]\s*"                             # optional key quote + separator
@@ -379,9 +379,13 @@ async def _get_provider_options(
         select(OpencodeSecret).where(OpencodeSecret.workspace_id == ws_id)
     )
     oc = result.scalars().first()
+    from swarmer.config import configured_enmaas_base_url
+
+    _enmaas_url = configured_enmaas_base_url()
     # Check gateway for Vertex AI provider — ADC is stored on OpenShell, not Swarmer DB.
     has_vertex = False
     has_gemini = False
+    has_enmaas = False
     try:
         from swarmer import openshell_client
         oc_client = await openshell_client.get_client_for_workspace(ws_id, db)
@@ -390,6 +394,10 @@ async def _get_provider_options(
         )
         has_gemini = await openshell_client.provider_exists(
             f"swarmer-ws-{ws_id}-google-ai-studio", client=oc_client
+        )
+        # Use the workspace's selected gateway consistently (ACM-48198).
+        has_enmaas = await openshell_client.provider_exists(
+            f"swarmer-ws-{ws_id}-enmaas", client=oc_client
         )
     except Exception:
         pass
@@ -405,6 +413,8 @@ async def _get_provider_options(
         has_vertex=has_vertex,
         has_gemini=has_gemini,
         has_openai=has_openai,
+        has_enmaas=has_enmaas,
+        enmaas_base_url=_enmaas_url,
     )
 
 router = APIRouter()
@@ -1121,7 +1131,13 @@ async def _get_capacity_summary(workspace_id: int, db: AsyncSession) -> dict:
     }
 
 
-def _build_expected_hosts(model: str, repos_data: list[dict], tool_name: str, mode: str) -> set[str]:
+def _build_expected_hosts(
+    model: str,
+    repos_data: list[dict],
+    tool_name: str,
+    mode: str,
+    enmaas_endpoint: tuple[str, int] | None = None,
+) -> set[str]:
     """Return the set of hostnames this session is expected to reach.
 
     Only draft policy chunks matching these hosts will be auto-approved.
@@ -1142,6 +1158,10 @@ def _build_expected_hosts(model: str, repos_data: list[dict], tool_name: str, mo
         hosts.add("generativelanguage.googleapis.com")
     if provider == "openai":
         hosts.add("api.openai.com")
+    if provider == "enmaas" and enmaas_endpoint is not None:
+        # EnMaaS gateway host (ACM-48198) — endpoint-scoped, from the same
+        # validated workspace URL the provider profile and policy use.
+        hosts.add(enmaas_endpoint[0])
 
     # OpenCode fetches model metadata from models.dev
     if tool_name == "opencode":
@@ -1210,13 +1230,15 @@ async def _resolve_schedule_prompt(schedule_id: int, session: Session, db: Async
     return resolved_prompt
 
 
-async def _resolve_schedule_provider(schedule_id: int, session: Session, db: AsyncSession) -> str:
-    """Return a schedule provider override, or the session provider."""
+async def _resolve_schedule_provider(
+    schedule_id: int, session: Session, db: AsyncSession
+) -> tuple[str, bool]:
+    """Return the effective provider and whether it came from the schedule."""
     from swarmer.models.session_schedule import SessionSchedule
     sched = await db.get(SessionSchedule, schedule_id)
     if sched and sched.provider.strip():
-        return sched.provider.strip()
-    return (session.provider or "").strip()
+        return sched.provider.strip(), True
+    return (session.provider or "").strip(), False
 
 
 async def _build_run_context_snapshot(
@@ -1404,9 +1426,12 @@ async def _do_launch(
     mcp_servers = _select_session_mcp_servers(session, eligible_mcp_servers)
 
     if session.active_schedule_id:
-        session_provider = await _resolve_schedule_provider(session.active_schedule_id, session, db)
+        session_provider, provider_from_schedule = await _resolve_schedule_provider(
+            session.active_schedule_id, session, db
+        )
     else:
         session_provider = (session.provider or "").strip()
+        provider_from_schedule = False
 
     # Queued manual instructions are consumed exactly once when dispatch begins.
     # Clearing and committing before runtime setup means a setup failure cannot
@@ -1434,6 +1459,7 @@ async def _do_launch(
         prompt_sources=prompt_sources,
         user_id=user_id,
         requested_provider=session_provider,
+        persist_provider_default=not provider_from_schedule,
     )
 
 
@@ -1449,6 +1475,7 @@ async def _do_launch_openshell(
     prompt_sources: list | None = None,
     user_id: str = "",
     requested_provider: str = "",
+    persist_provider_default: bool = True,
 ) -> None:
     """Launch a session via the OpenShell sandbox API."""
     from swarmer import openshell_client
@@ -1457,7 +1484,7 @@ async def _do_launch_openshell(
     tool = get_tool(session.agent_tool)
 
     # Resolve the provider first so it is available for provider registration and
-    # policy building. session.provider is a family preset name ("claude"/"gemini"/"openai",
+    # policy building. session.provider is a family preset name ("claude"/"gemini"/"openai"/"enmaas",
     # ACM-37232) — build_config_data() understands it directly. Everything else
     # (network policy, CLI --model flag, model.json state) needs a concrete model
     # ID, so it uses `model` — the provider resolved to its BUILD-role model —
@@ -1469,16 +1496,30 @@ async def _do_launch_openshell(
         "claude": f"swarmer-ws-{session.workspace_id}-google-cloud",
         "gemini": f"swarmer-ws-{session.workspace_id}-google-ai-studio",
         "openai": f"swarmer-ws-{session.workspace_id}-openai",
+        "enmaas": f"swarmer-ws-{session.workspace_id}-enmaas",
     }
+    # EnMaaS is available only when its workspace gateway provider exists and
+    # the operator-managed endpoint is valid.
+    from swarmer.config import configured_enmaas_base_url, enmaas_endpoint_from_url
+
+    _enmaas_base_url = configured_enmaas_base_url()
+    _enmaas_endpoint = (
+        enmaas_endpoint_from_url(_enmaas_base_url) if _enmaas_base_url else None
+    )
     _available_providers: dict[str, bool] = {}
+    _provider_exists: dict[str, bool] = {}
     _probe_failed: set[str] = set()
     oc_client = await openshell_client.get_client_for_workspace(ws, db)
     if tool.requires_ai_model():
         for _name, _gateway_name in _provider_names.items():
             try:
-                _available_providers[_name] = await openshell_client.provider_exists(
+                _provider_available = await openshell_client.provider_exists(
                     _gateway_name, client=oc_client
                 )
+                _provider_exists[_name] = _provider_available
+                if _name == "enmaas":
+                    _provider_available = _provider_available and _enmaas_endpoint is not None
+                _available_providers[_name] = _provider_available
             except Exception:
                 _available_providers[_name] = False
                 _probe_failed.add(_name)
@@ -1491,6 +1532,7 @@ async def _do_launch_openshell(
             "google-vertex-anthropic": "claude",
             "google": "gemini",
             "openai": "openai",
+            "enmaas": "enmaas",
         }.get(_raw_provider, "")
         if _raw_provider_family and tool.is_valid_model(requested_provider):
             _preferred_provider = _raw_provider_family
@@ -1508,7 +1550,24 @@ async def _do_launch_openshell(
             raise ValueError(
                 f"Could not verify the {_preferred_provider!r} provider for this workspace"
             )
-        _fallback = next((p for p in ("claude", "gemini", "openai") if _available_providers.get(p)), "")
+        if _preferred_provider == "enmaas":
+            # Cost-safety (ACM-48198): an explicitly selected but unavailable
+            # EnMaaS provider fails clearly — it must never silently fall back
+            # to another (paid) provider.
+            if _provider_exists.get("enmaas") and _enmaas_endpoint is None:
+                raise ValueError(
+                    "EnMaaS gateway URL is not configured or valid. Contact the "
+                    "operator to configure ENMAAS_BASE_URL "
+                    "(no fallback to paid providers)"
+                )
+            raise ValueError(
+                "EnMaaS provider is not configured for this workspace — add an "
+                "EnMaaS key in Settings > AI Tokens (no fallback to paid providers)"
+            )
+        # Empty/unresolvable selection: fall back to the first available
+        # provider. EnMaaS is last so mixed-provider workspaces keep their
+        # existing defaults and only an EnMaaS-only workspace selects EnMaaS.
+        _fallback = next((p for p in ("claude", "gemini", "openai", "enmaas") if _available_providers.get(p)), "")
         if not _fallback:
             raise ValueError("No AI provider is configured for this workspace")
         raw_model = _fallback or tool.get_default_model(has_adc)
@@ -1524,6 +1583,17 @@ async def _do_launch_openshell(
             )
     raw_model = raw_model.strip("\r\n")  # strip any stray line endings before embedding in shell commands
     model = tool.resolve_build_model(raw_model)
+    # Persist the resolved preset so restart-resume (main.py) and later runs
+    # reuse exactly what launched instead of re-resolving against possibly
+    # different defaults (ACM-48198: resume must not replace EnMaaS
+    # selections). Only fills an empty selection — an explicit choice is
+    # never overwritten.
+    if (
+        persist_provider_default
+        and not (session.provider or "").strip()
+        and raw_model in _provider_names
+    ):
+        session.provider = raw_model
 
     # Query workspace env vars from DB before releasing the connection.
     from sqlalchemy import select as sa_select
@@ -1604,7 +1674,8 @@ async def _do_launch_openshell(
     # Non-AI tools (e.g. shell) never call an AI model — skip AI provider
     # credentials (Google AI Studio, Vertex/google-cloud) for their sandboxes.
     _gemini_pname = f"swarmer-ws-{ws_id}-google-ai-studio"
-    if tool.requires_ai_model():
+    _is_enmaas_model = tool.requires_ai_model() and model.split("/", 1)[0] == "enmaas"
+    if tool.requires_ai_model() and not _is_enmaas_model:
         try:
             if await openshell_client.provider_exists(_gemini_pname, client=oc_client):
                 provider_names.append(_gemini_pname)
@@ -1631,11 +1702,29 @@ async def _do_launch_openshell(
         if not has_openai_provider:
             raise ValueError("OpenAI API key is not configured for this workspace")
         provider_names.append(_openai_pname)
+    # EnMaaS provider (ACM-48198) — key is stored on the gateway (not in
+    # Swarmer DB). Only required for EnMaaS model sessions; never attached to
+    # shell sessions or sessions using other providers.
+    _enmaas_pname = f"swarmer-ws-{ws_id}-enmaas"
+    if tool.requires_ai_model() and model.split("/", 1)[0] == "enmaas":
+        try:
+            has_enmaas_provider = await openshell_client.provider_exists(
+                _enmaas_pname, client=oc_client
+            )
+        except Exception as exc:
+            log.warning(
+                "_do_launch_openshell: could not check enmaas provider (error_type=%s)",
+                type(exc).__name__,
+            )
+            raise ValueError("Could not verify EnMaaS API key configuration for this workspace")
+        if not has_enmaas_provider:
+            raise ValueError("EnMaaS API key is not configured for this workspace")
+        provider_names.append(_enmaas_pname)
     # Vertex AI via google-cloud provider — ADC is stored on the gateway (not in Swarmer DB).
     # Attach the provider if it already exists (created via the secrets UI).
     _vertex_pname = f"swarmer-ws-{ws_id}-google-cloud"
     _has_google_cloud_provider = False
-    if tool.requires_ai_model():
+    if tool.requires_ai_model() and not _is_enmaas_model:
         try:
             if await openshell_client.provider_exists(_vertex_pname, client=oc_client):
                 provider_names.append(_vertex_pname)
@@ -1763,13 +1852,19 @@ async def _do_launch_openshell(
         custom_policies=_custom_policies or None,
         has_google_cloud_provider=_has_google_cloud_provider,
         has_slack_webhook=_has_slack_webhook,
+        enmaas_endpoint=_enmaas_endpoint,
     )
 
     # Capture serialisable data for the background task before committing.
     # ORM objects cannot be used across DB sessions.
     mcp_patch: dict = {}
     if mcp_servers:
-        config_data = tool.build_config_data(secret=oc_secret, mcp_servers=mcp_servers, model=raw_model)
+        config_data = tool.build_config_data(
+            secret=oc_secret,
+            mcp_servers=mcp_servers,
+            model=raw_model,
+            enmaas_base_url=_enmaas_base_url,
+        )
         config_json = config_data.get(f"{tool.name}.json", "{}")
         try:
             mcp_section = _json.loads(config_json).get("mcp", {})
@@ -1862,6 +1957,7 @@ async def _do_launch_openshell(
             mode=session.mode,
             main_cmd=main_cmd,
             resolved_prompt=resolved_prompt_safe,
+            enmaas_base_url=_enmaas_base_url,
             iat_app_id=_iat_app_id,
             iat_installation_id=_iat_installation_id,
             iat_private_key=_iat_private_key,
@@ -1912,6 +2008,9 @@ async def _setup_openshell_sandbox(
     resolved_prompt: str = "",
     config_model: str = "",
     has_git_token: bool = False,
+    # Workspace EnMaaS gateway URL (validated, serialised at launch time) used
+    # to regenerate the sandbox agent config in the background task.
+    enmaas_base_url: str = "",
     # GitHub App IAT refresh loop params (all empty when using PAT fallback)
     iat_app_id: str = "",
     iat_installation_id: str = "",
@@ -2017,6 +2116,7 @@ async def _setup_openshell_sandbox(
         _config_data = _tool.build_config_data(
             mcp_servers=_mcp_list,
             model=config_model or model,
+            enmaas_base_url=enmaas_base_url,
         )
         _config_json = _config_data.get(f"{tool_name}.json", "{}")
         if oc_client is not None:
@@ -2764,9 +2864,9 @@ async def session_launch(
         )
         if session.phase == "queued":
             flash(request, f"Session queued — {session.status_detail}", "info")
-    except Exception as exc:
-        log.error("session_launch failed for session %d: %s", sid, exc, exc_info=True)
-        flash(request, f"Launch failed: {exc}", "danger")
+    except Exception:
+        log.error("Session launch failed")
+        flash(request, "Session launch failed. Check the session status or try again.", "danger")
 
     dest = (
         f"/workspaces/{ws_id}/sessions"
@@ -3032,6 +3132,7 @@ async def schedule_create(
     enabled: str = Form("on"),
     db: AsyncSession = Depends(get_db),
 ):
+    """Validate and create a session schedule submitted from the UI."""
     from croniter import croniter as _croniter
 
     from swarmer.models.session_schedule import EVENT_CONDITIONS, SessionSchedule
@@ -3082,7 +3183,7 @@ async def schedule_create(
         cron_next_run=cron_next_run,
         label=label.strip(),
         prompt_id=pid,
-        provider=provider.strip() if provider.strip() in ("", "claude", "gemini", "openai") else "",
+        provider=provider.strip() if provider.strip() in ("", "claude", "gemini", "openai", "enmaas") else "",
         instruction_prompt=instruction_prompt,
         include_event_context=include_event_context,
         delay_minutes=delay_minutes,
@@ -3115,6 +3216,7 @@ async def schedule_edit(
     delay_minutes: int = Form(0),
     db: AsyncSession = Depends(get_db),
 ):
+    """Update schedule timing, provider, and prompt settings from the UI."""
     from croniter import croniter as _croniter
 
     from swarmer.models.session_schedule import EVENT_CONDITIONS, SessionSchedule
@@ -3167,7 +3269,7 @@ async def schedule_edit(
 
     sched.label = label.strip()
     sched.prompt_id = pid
-    sched.provider = provider.strip() if provider.strip() in ("", "claude", "gemini", "openai") else ""
+    sched.provider = provider.strip() if provider.strip() in ("", "claude", "gemini", "openai", "enmaas") else ""
     sched.instruction_prompt = instruction_prompt
     if trigger_type == "event":
         sched.include_event_context = include_event_context

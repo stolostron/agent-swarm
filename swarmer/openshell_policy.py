@@ -369,36 +369,63 @@ def _build_google_cloud_provider_block(agent_tool: str) -> dict:
 
 # ── Agent API block (tool and model-dependent) ────────────────────────────────
 
-def _endpoint(host: str) -> dict:
+def _endpoint(host: str, port: int = 443) -> dict:
+    """Build an enforced REST egress rule for a host and port."""
     return {
         "host": host,
-        "port": 443,
+        "port": port,
         "protocol": "rest",
         "enforcement": "enforce",
         "access": "full",
     }
 
 
-def _build_agent_api_block(agent_tool: str, model: str) -> dict:
+def _build_agent_api_block(
+    agent_tool: str,
+    model: str,
+    enmaas_endpoint: tuple[str, int] | None = None,
+) -> dict:
+    """Build model-specific outbound access rules for the sandbox agent."""
     # OpenCode V2 canonical provider ID is "google-vertex" (the V1
     # "google-vertex-anthropic" prefix is normalized before reaching here, but
     # is still accepted for sessions launched by older Swarmer versions).
     _provider = model.split("/")[0] if "/" in model else ""
     _is_vertex = _provider in ("google-vertex", "google-vertex-anthropic", "vertexai")
     _is_openai = _provider == "openai"
+    _is_enmaas = _provider == "enmaas"
 
-    endpoints = [
-        _endpoint("generativelanguage.googleapis.com"),
-        _endpoint("oauth2.googleapis.com"),
-        _endpoint("opencode.ai"),
-        _endpoint("models.dev"),
-    ]
-    if _is_vertex:
-        endpoints.append(_endpoint("aiplatform.googleapis.com"))
-        endpoints.append(_endpoint("*-aiplatform.googleapis.com"))
-        endpoints.append(_endpoint("aiplatform.*.rep.googleapis.com"))
-    if _is_openai:
-        endpoints.append(_endpoint("api.openai.com"))
+    if _is_enmaas:
+        # EnMaaS sessions (ACM-48198): endpoint-scoped HTTPS access to the
+        # operator-configured EnMaaS gateway host only — no Google/OpenAI
+        # inference endpoints merely because EnMaaS is selected. The OpenCode
+        # service endpoints (models.dev metadata, opencode.ai) are preserved,
+        # and the gateway endpoint derives from the same validated operator
+        # URL as the OpenShell provider profile.
+        endpoints = [
+            _endpoint("opencode.ai"),
+            _endpoint("models.opencode.ai"),
+            _endpoint("models.dev"),
+        ]
+        from swarmer.config import configured_enmaas_endpoint
+
+        _configured_endpoint = configured_enmaas_endpoint()
+        if _configured_endpoint is not None:
+            _gw_host, _gw_port = _configured_endpoint
+            endpoints.append(_endpoint(_gw_host, _gw_port))
+    else:
+        endpoints = [
+            _endpoint("generativelanguage.googleapis.com"),
+            _endpoint("oauth2.googleapis.com"),
+            _endpoint("opencode.ai"),
+            _endpoint("models.opencode.ai"),
+            _endpoint("models.dev"),
+        ]
+        if _is_vertex:
+            endpoints.append(_endpoint("aiplatform.googleapis.com"))
+            endpoints.append(_endpoint("*-aiplatform.googleapis.com"))
+            endpoints.append(_endpoint("aiplatform.*.rep.googleapis.com"))
+        if _is_openai:
+            endpoints.append(_endpoint("api.openai.com"))
     block = {
         "name": "agent-api",
         "endpoints": endpoints,
@@ -432,6 +459,7 @@ def build_session_policy(
     custom_policies: list[dict] | None = None,
     has_google_cloud_provider: bool = False,
     has_slack_webhook: bool = False,
+    enmaas_endpoint: tuple[str, int] | None = None,
 ):
     """Assemble a complete OpenShell SandboxPolicy proto for this session.
 
@@ -449,6 +477,9 @@ def build_session_policy(
     has_slack_webhook: when True (workspace has SLACK_WEBHOOK_URL), grant
     egress to hooks.slack.com for curl/python digest posts.
 
+    enmaas_endpoint: retained for compatibility; the operator-managed host
+    and port are resolved internally.
+
     Returns a SandboxPolicy proto object to be set on SandboxSpec.policy.
     """
     from google.protobuf.json_format import ParseDict
@@ -460,6 +491,7 @@ def build_session_policy(
         custom_policies=custom_policies,
         has_google_cloud_provider=has_google_cloud_provider,
         has_slack_webhook=has_slack_webhook,
+        enmaas_endpoint=enmaas_endpoint,
     )
 
     policy_dict = {
@@ -486,6 +518,7 @@ def build_session_network_policies(
     custom_policies: list[dict] | None = None,
     has_google_cloud_provider: bool = False,
     has_slack_webhook: bool = False,
+    enmaas_endpoint: tuple[str, int] | None = None,
 ) -> dict:
     """Return the computed network_policies dict for this session.
 
@@ -499,6 +532,9 @@ def build_session_network_policies(
 
     has_slack_webhook: when True, include hooks.slack.com egress for workspace
     Slack Incoming Webhook posts (SLACK_WEBHOOK_URL).
+
+    enmaas_endpoint: retained for compatibility; the agent-api block resolves
+    the operator-managed EnMaaS endpoint directly (ACM-48198).
     """
     network_policies_dict: dict = {}
 
@@ -510,7 +546,9 @@ def build_session_network_policies(
     # the canonical check is get_tool(agent_tool).requires_ai_model().
     from swarmer.agent_tools.registry import get as _get_tool
     if _get_tool(agent_tool).requires_ai_model():
-        network_policies_dict.update(_build_agent_api_block(agent_tool, model))
+        network_policies_dict.update(
+            _build_agent_api_block(agent_tool, model, enmaas_endpoint=enmaas_endpoint)
+        )
 
         # Google Cloud provider: grant aiplatform.googleapis.com + api.github.com
         # when the workspace's google-cloud provider is attached to this sandbox.

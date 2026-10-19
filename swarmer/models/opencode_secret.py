@@ -1,5 +1,4 @@
 from datetime import datetime
-
 from sqlalchemy import DateTime, ForeignKey, Integer, Text, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -44,6 +43,19 @@ class OpencodeSecret(Base):
     vertex_configured: Mapped[bool] = mapped_column(
         nullable=False, default=False, server_default="0"
     )
+    # EnMaaS (ACM-48198): non-secret marker that the workspace EnMaaS provider
+    # was configured on the OpenShell gateway. There is deliberately NO token
+    # column — the ENMAAS_KEY credential is gateway-only, mirroring the OpenAI
+    # flow, so the flag is the sole active Swarmer-side state for the key.
+    enmaas_configured: Mapped[bool] = mapped_column(
+        nullable=False, default=False, server_default="0"
+    )
+    # Retained for compatibility with databases created by older versions.
+    # Active code ignores this legacy workspace-editable endpoint; the
+    # operator-managed ENMAAS_BASE_URL setting is authoritative.
+    enmaas_base_url_enc: Mapped[str] = mapped_column(
+        Text, nullable=False, default="", server_default=""
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, server_default=func.now()
     )
@@ -86,6 +98,24 @@ class OpencodeSecret(Base):
     @property
     def has_openai(self) -> bool:
         return self.openai_configured or bool(self.openai_api_key_enc)
+
+    @property
+    def has_enmaas(self) -> bool:
+        """Report the gateway credential marker without retrieving its token."""
+        # Marker only — the token itself lives on the OpenShell gateway.
+        return self.enmaas_configured
+
+    @property
+    def enmaas_base_url(self) -> str:
+        """Decrypt the stored workspace EnMaaS endpoint, if one is present."""
+        if not self.enmaas_base_url_enc:
+            return ""
+        return crypto.decrypt(self.enmaas_base_url_enc)
+
+    @enmaas_base_url.setter
+    def enmaas_base_url(self, value: str) -> None:
+        """Encrypt a workspace EnMaaS endpoint before storing it."""
+        self.enmaas_base_url_enc = crypto.encrypt(value) if value else ""
 
     # ---------- display helpers (safe to send to browser) ----------
 

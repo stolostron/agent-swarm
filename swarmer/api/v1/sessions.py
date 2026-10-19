@@ -787,6 +787,7 @@ async def create_schedule(
     ws: Workspace = Depends(get_workspace_or_404),
     db: AsyncSession = Depends(get_db),
 ):
+    """Create a validated cron or event schedule for a workspace session."""
     from croniter import croniter
     from swarmer.models.session_schedule import SessionSchedule
     await _get_session_or_404(ws_id, sid, db)
@@ -814,6 +815,9 @@ async def create_schedule(
         cron_next_run=cron_next_run,
         label=body.label,
         prompt_id=body.prompt_id,
+        # Provider preset override — schema-validated against the supported
+        # preset names (claude/gemini/openai/enmaas). Empty = session default.
+        provider=body.provider.strip(),
         instruction_prompt=body.instruction_prompt,
         include_event_context=body.include_event_context,
         delay_minutes=body.delay_minutes,

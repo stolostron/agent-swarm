@@ -682,6 +682,7 @@ class AgentSwarmMCPServer:
     # ==================================================================
 
     def _register_tools(self) -> None:
+        """Register the MCP tools that expose Agent Swarm operations."""
         mcp = self.mcp
 
         @mcp.tool()
@@ -1004,7 +1005,7 @@ class AgentSwarmMCPServer:
                 name: Unique session name within the workspace.
                 agent_tool: Agent tool. One of: opencode, shell. Default: opencode.
                 mode: Execution mode. One of: prompt, tui, server. Default: prompt.
-                provider: AI provider preset. One of: claude, gemini, openai. Empty string
+                provider: AI provider preset. One of: claude, gemini, openai, enmaas. Empty string
                           uses the tool default (based on configured credentials).
                 persist: Keep workspace volume between runs. Default: false.
                 working_branch: Git branch to create/checkout in the sandbox.
@@ -1047,7 +1048,7 @@ class AgentSwarmMCPServer:
                 session_id: The session id.
                 name: New session name.
                 mode: New mode (prompt/tui/server).
-                provider: New AI provider preset (claude/gemini/openai).
+                provider: New AI provider preset (claude/gemini/openai/enmaas).
                 agent_tool: New agent tool (opencode/shell).
                 instruction_prompt: New additional instructions (or raw command for shell).
                 prompt_id: New base prompt id.
@@ -1420,7 +1421,7 @@ class AgentSwarmMCPServer:
                 fix_authors: Comma-separated GitHub logins for 'self' author scope.
                 label: Human-readable name for this trigger.
                 prompt_id: Required ID of the workspace prompt to run.
-                provider: Optional AI provider override ('claude', 'gemini', or 'openai').
+                provider: Optional AI provider override ('claude', 'gemini', 'openai', or 'enmaas').
                     Empty means use the session provider.
                 instruction_prompt: Additional instructions; overrides session default when set.
                 include_event_context: Include triggering event data in the agent prompt.
@@ -1469,7 +1470,8 @@ class AgentSwarmMCPServer:
                 fix_authors: Comma-separated GitHub logins for 'self' author scope.
                 label: New label.
                 prompt_id: New prompt id. Existing schedules retain their prompt when omitted.
-                provider: AI provider override; empty uses the session provider.
+                provider: AI provider override; empty uses the session provider
+                    (one of 'claude', 'gemini', 'openai', 'enmaas').
                 instruction_prompt: New additional instructions.
                 include_event_context: Include triggering event data in the agent prompt.
                  enabled: Enable or disable the schedule.

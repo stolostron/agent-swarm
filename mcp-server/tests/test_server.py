@@ -306,6 +306,43 @@ async def test_session_mcp_selection_is_propagated():
 
 
 @pytest.mark.asyncio
+async def test_session_and_schedule_preserve_enmaas_provider():
+    """ACM-48198 MCP parity: the enmaas preset passes through session and
+    schedule tool calls unchanged (no credential management exposed)."""
+    server = make_server()
+    server.client.create_session = AsyncMock(return_value={
+        "id": 14, "name": "enmaas-session", "provider": "enmaas",
+    })
+    result = await server._create_session(1, "enmaas-session", provider="enmaas")
+    server.client.create_session.assert_awaited_once_with(
+        1, "enmaas-session", mode="prompt", provider="enmaas", agent_tool="opencode",
+        instruction_prompt="", github_pat_id=None, prompt_id=None, persist=False,
+        working_branch="", mcp_server_ids=None, mcp_selection=None,
+    )
+    assert result["provider"] == "enmaas"
+
+    server.client.update_session = AsyncMock(return_value={
+        "id": 14, "name": "enmaas-session", "provider": "enmaas",
+    })
+    await server._update_session(1, 14, provider="enmaas")
+    server.client.update_session.assert_awaited_once_with(1, 14, provider="enmaas")
+
+    server.client.create_session_schedule = AsyncMock(return_value={
+        "id": 3, "provider": "enmaas", "cron_schedule": "0 * * * *",
+    })
+    sched = await server._add_session_schedule(
+        1, 14, "0 * * * *", prompt_id=7, provider="enmaas"
+    )
+    server.client.create_session_schedule.assert_awaited_once_with(
+        1, 14, "0 * * * *",
+        trigger_type="cron", event_condition="", author_scope="all", fix_authors="",
+        label="", prompt_id=7, provider="enmaas", instruction_prompt="",
+        include_event_context=True, enabled=True, delay_minutes=0,
+    )
+    assert sched["provider"] == "enmaas"
+
+
+@pytest.mark.asyncio
 async def test_list_workspace_mcp_servers_uses_safe_inventory_api():
     server = make_server()
     inventory = [{"id": 5, "slug": "jira", "display_name": "Jira", "auth_status": "active"}]

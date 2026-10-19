@@ -36,6 +36,8 @@ relying only on text search.
 - Google Gemini can be used through Google AI Studio credentials.
 - Anthropic models can be used through Vertex AI.
 - OpenAI models can be selected through OpenAI provider credentials.
+- GLM-5.3 can be used at zero model cost through the business-provided EnMaaS gateway
+  (OpenAI-compatible; operator-configured endpoint, workspace token stored only on OpenShell).
 - OpenCode and shell sessions can use custom container images.
 - Python-capable images support repository scripts, audits, dependency tools,
   and automation.
