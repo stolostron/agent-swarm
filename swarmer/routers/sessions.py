@@ -379,9 +379,9 @@ async def _get_provider_options(
         select(OpencodeSecret).where(OpencodeSecret.workspace_id == ws_id)
     )
     oc = result.scalars().first()
-    from swarmer.config import configured_enmaas_base_url
+    from swarmer.models.opencode_secret import workspace_enmaas_base_url
 
-    _enmaas_url = configured_enmaas_base_url()
+    _enmaas_url = await workspace_enmaas_base_url(db, ws_id, prefer=oc)
     # Check gateway for Vertex AI provider — ADC is stored on OpenShell, not Swarmer DB.
     has_vertex = False
     has_gemini = False
@@ -1499,10 +1499,13 @@ async def _do_launch_openshell(
         "enmaas": f"swarmer-ws-{session.workspace_id}-enmaas",
     }
     # EnMaaS is available only when its workspace gateway provider exists and
-    # the operator-managed endpoint is valid.
-    from swarmer.config import configured_enmaas_base_url, enmaas_endpoint_from_url
+    # its encrypted workspace URL is valid.
+    from swarmer.config import enmaas_endpoint_from_url
+    from swarmer.models.opencode_secret import workspace_enmaas_base_url
 
-    _enmaas_base_url = configured_enmaas_base_url()
+    _enmaas_base_url = await workspace_enmaas_base_url(
+        db, session.workspace_id, prefer=oc_secret
+    )
     _enmaas_endpoint = (
         enmaas_endpoint_from_url(_enmaas_base_url) if _enmaas_base_url else None
     )
@@ -1556,8 +1559,8 @@ async def _do_launch_openshell(
             # to another (paid) provider.
             if _provider_exists.get("enmaas") and _enmaas_endpoint is None:
                 raise ValueError(
-                    "EnMaaS gateway URL is not configured or valid. Contact the "
-                    "operator to configure ENMAAS_BASE_URL "
+                    "EnMaaS gateway URL is not configured or valid. Set it in "
+                    "Settings > Tokens "
                     "(no fallback to paid providers)"
                 )
             raise ValueError(
@@ -1711,6 +1714,18 @@ async def _do_launch_openshell(
             has_enmaas_provider = await openshell_client.provider_exists(
                 _enmaas_pname, client=oc_client
             )
+            if has_enmaas_provider and _enmaas_endpoint is not None:
+                _profile_id = openshell_client.enmaas_profile_type(ws_id)
+                if not await openshell_client.provider_profile_endpoint_matches(
+                    _profile_id, _enmaas_endpoint, client=oc_client
+                ):
+                    await openshell_client.import_enmaas_profile(
+                        ws_id, client=oc_client, base_url=_enmaas_base_url
+                    )
+                    has_enmaas_provider = await openshell_client.provider_profile_endpoint_matches(
+                        _profile_id, _enmaas_endpoint, client=oc_client
+                    )
+            has_enmaas_provider = has_enmaas_provider and _enmaas_endpoint is not None
         except Exception as exc:
             log.warning(
                 "_do_launch_openshell: could not check enmaas provider (error_type=%s)",

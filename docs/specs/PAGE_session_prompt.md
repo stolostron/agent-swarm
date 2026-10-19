@@ -28,7 +28,10 @@ records the result without maintaining an interactive terminal or chat service.
 3. Apply tool/provider, repository, branch, MCP, environment, and policy setup.
 4. Execute once, stream output, and persist processed/raw values and run state.
 5. On completion, expose output/history; on success, clean up the sandbox.
-6. On process restart, resume monitoring for surviving prompt executions.
+6. On process restart, resume monitoring for surviving prompt executions. For
+   EnMaaS prompt runs, verify that the workspace gateway URL and OpenShell
+   provider/profile remain valid and refresh the sandbox's `opencode.json` before
+   resuming; if unavailable, fail closed without substituting a paid provider.
 
 ## API references
 

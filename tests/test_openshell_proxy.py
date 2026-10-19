@@ -232,6 +232,24 @@ async def _create_session(client, ws_id, name="s1", mode="server", agent_tool="o
     return resp.json()
 
 
+async def _set_workspace_enmaas_url(ws_id: int, url: str) -> None:
+    from sqlalchemy import select
+
+    from swarmer.models.opencode_secret import OpencodeSecret
+
+    async with _TestSession() as db:
+        result = await db.execute(
+            select(OpencodeSecret).where(OpencodeSecret.workspace_id == ws_id)
+        )
+        secret = result.scalars().first()
+        if secret is None:
+            secret = OpencodeSecret(workspace_id=ws_id, user_id="test-user")
+            db.add(secret)
+        secret.enmaas_base_url = url
+        secret.enmaas_configured = True
+        await db.commit()
+
+
 # ---------------------------------------------------------------------------
 # Fake SDK client
 # ---------------------------------------------------------------------------
@@ -1918,7 +1936,6 @@ class TestRestartPromptPollersArgs:
     ):
         from datetime import UTC, datetime
 
-        from swarmer.config import settings
         from swarmer.models.session import Session as _Session
         from swarmer.models.session_schedule import SessionSchedule
 
@@ -1939,7 +1956,7 @@ class TestRestartPromptPollersArgs:
             session_obj.active_schedule_id = schedule.id
             await db.commit()
 
-        monkeypatch.setattr(settings, "enmaas_base_url", endpoint)
+        await _set_workspace_enmaas_url(ws["id"], endpoint)
         mock_run = AsyncMock()
         mock_get_client = AsyncMock(return_value=MagicMock())
         sentinel = "SENSITIVE_PROVIDER_EXCEPTION"
@@ -1964,6 +1981,7 @@ class TestRestartPromptPollersArgs:
                 "swarmer.openshell_client.provider_profile_endpoint_matches",
                 new=mock_profile_endpoint,
             ),
+            patch("swarmer.openshell_client.write_agent_config", new=AsyncMock()),
             caplog.at_level(logging.WARNING, logger="swarmer.main"),
         ):
             from swarmer.main import _restart_prompt_pollers

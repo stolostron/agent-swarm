@@ -102,7 +102,7 @@ async def _secrets_context(api, ws_id: int) -> dict:
             pass  # gateway may be unreachable in local dev without OpenShell
 
         # Check gateway for the EnMaaS provider (ACM-48198) — same gateway-only
-        # pattern as OpenAI. Its destination is operator-managed.
+        # pattern as OpenAI. The URL itself is workspace configuration.
         enmaas_provider_configured = False
         enmaas_provider_check_failed = False
         try:
@@ -128,9 +128,7 @@ async def _secrets_context(api, ws_id: int) -> dict:
     gemini_intent = bool(secret and secret.get("has_gemini"))
     openai_intent = bool(secret and secret.get("has_openai"))
     enmaas_intent = bool(secret and secret.get("has_enmaas"))
-    from swarmer.config import configured_enmaas_base_url
-
-    enmaas_endpoint_url = configured_enmaas_base_url()
+    enmaas_endpoint_url = (secret or {}).get("enmaas_base_url", "")
 
     return {
         "secret": secret,
@@ -142,7 +140,6 @@ async def _secrets_context(api, ws_id: int) -> dict:
         "openai_provider_configured": openai_provider_configured,
         "enmaas_provider_configured": enmaas_provider_configured,
         "enmaas_endpoint_configured": bool(enmaas_endpoint_url),
-        "enmaas_endpoint_url": enmaas_endpoint_url,
         "vertex_provider_missing": vertex_intent and not vertex_provider_configured and not vertex_provider_check_failed,
         "gemini_provider_missing": gemini_intent and not gemini_provider_configured and not gemini_provider_check_failed,
         "openai_provider_missing": openai_intent and not openai_provider_configured and not openai_provider_check_failed,
@@ -212,11 +209,17 @@ async def opencode_secret_save(
     google_api_key: str = Form(""),
     openai_api_key: str = Form(""),
     enmaas_api_key: str = Form(""),
+    enmaas_base_url: str = Form(""),
     shared: str = Form(""),
     adc_file: UploadFile | None = File(None),
 ):
     """Validate and save provider credentials submitted from the secrets form."""
     import json as _json
+
+    # Direct calls in tests and internal helpers receive FastAPI's Form object
+    # default instead of dependency-injected form data.
+    if not isinstance(enmaas_base_url, str):
+        enmaas_base_url = ""
 
     adc_content = ""
     if adc_file and adc_file.filename:
@@ -365,6 +368,7 @@ async def opencode_secret_save(
                 google_api_key="",  # intentionally empty — gateway is the store
                 openai_api_key="",  # intentionally empty — gateway is the store
                 enmaas_api_key=enmaas_key,  # backend authorizes before gateway mutation
+                enmaas_base_url=enmaas_base_url.strip(),
                 application_default_credentials="",  # intentionally empty — gateway is the store
                 gemini_configured=True if gemini_configured else None,
                 openai_configured=True if openai_configured else None,

@@ -449,31 +449,24 @@ def test_agent_api_block_vertex_includes_regional_aiplatform_endpoints():
     assert "aiplatform.*.rep.googleapis.com" in hosts
 
 
-def test_agent_api_block_enmaas_includes_gateway_endpoint(monkeypatch):
-    """EnMaaS sessions get endpoint-scoped access to the operator gateway."""
-    from swarmer.config import settings
-
-    monkeypatch.setattr(settings, "enmaas_base_url", "https://operator.example.com/v1")
+def test_agent_api_block_enmaas_includes_gateway_endpoint():
+    """EnMaaS sessions get endpoint-scoped access to their workspace gateway."""
     net = _bnet(
         model="enmaas/rits/zai-org/glm-5-3",
-        enmaas_endpoint=("attacker.example.net", 443),
+        enmaas_endpoint=("workspace-gateway.example", 443),
     )
     agent_api = next(v for k, v in net.items() if k == "agent_api")
     endpoints = {(ep["host"], ep["port"]) for ep in agent_api["endpoints"]}
-    assert ("operator.example.com", 443) in endpoints
-    assert ("attacker.example.net", 443) not in endpoints
+    assert ("workspace-gateway.example", 443) in endpoints
     # OpenCode service endpoints are preserved.
     assert any(h == "models.dev" for h, _ in endpoints)
     assert any(h == "opencode.ai" for h, _ in endpoints)
     assert ("models.opencode.ai", 443) in endpoints
 
 
-def test_agent_api_block_enmaas_excludes_paid_inference_endpoints(monkeypatch):
+def test_agent_api_block_enmaas_excludes_paid_inference_endpoints():
     """No Google/OpenAI inference endpoints merely because EnMaaS is
     selected — cost-safety and least-privilege (ACM-48198)."""
-    from swarmer.config import settings
-
-    monkeypatch.setattr(settings, "enmaas_base_url", "https://operator.example.com/v1")
     hosts = _bhosts(
         model="enmaas/rits/zai-org/glm-5-3",
         enmaas_endpoint=("enmaas-gateway.example.com", 443),
@@ -484,15 +477,12 @@ def test_agent_api_block_enmaas_excludes_paid_inference_endpoints(monkeypatch):
     assert "aiplatform.googleapis.com" not in hosts
 
 
-def test_agent_api_block_enmaas_unset_url_keeps_service_endpoints(monkeypatch):
-    """With no operator gateway URL the block must not gain a bogus endpoint
+def test_agent_api_block_enmaas_unset_url_keeps_service_endpoints():
+    """With no workspace gateway URL, no gateway egress is granted
     — the launch path blocks EnMaaS sessions long before policy building."""
-    from swarmer.config import settings
-
-    monkeypatch.setattr(settings, "enmaas_base_url", "")
     net = _bnet(
         model="enmaas/rits/zai-org/glm-5-3",
-        enmaas_endpoint=("attacker.example.net", 443),
+        enmaas_endpoint=None,
     )
     agent_api = next(v for k, v in net.items() if k == "agent_api")
     hosts = {ep["host"] for ep in agent_api["endpoints"]}

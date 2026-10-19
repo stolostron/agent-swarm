@@ -1,9 +1,14 @@
 from datetime import datetime
+from typing import TYPE_CHECKING
+
 from sqlalchemy import DateTime, ForeignKey, Integer, Text, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 import swarmer.crypto as crypto
 from swarmer.database import Base
+
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
 
 
 class OpencodeSecret(Base):
@@ -50,9 +55,10 @@ class OpencodeSecret(Base):
     enmaas_configured: Mapped[bool] = mapped_column(
         nullable=False, default=False, server_default="0"
     )
-    # Retained for compatibility with databases created by older versions.
-    # Active code ignores this legacy workspace-editable endpoint; the
-    # operator-managed ENMAAS_BASE_URL setting is authoritative.
+    # Encrypted workspace EnMaaS gateway URL, entered in the AI Tokens form.
+    # Only workspace managers may set it. It drives provider registration,
+    # generated OpenCode config, and sandbox egress; the token itself stays
+    # gateway-only.
     enmaas_base_url_enc: Mapped[str] = mapped_column(
         Text, nullable=False, default="", server_default=""
     )
@@ -117,6 +123,7 @@ class OpencodeSecret(Base):
         """Encrypt a workspace EnMaaS endpoint before storing it."""
         self.enmaas_base_url_enc = crypto.encrypt(value) if value else ""
 
+
     # ---------- display helpers (safe to send to browser) ----------
 
     @property
@@ -139,3 +146,33 @@ class OpencodeSecret(Base):
         if len(key) <= 8:
             return "****"
         return "****" + key[-4:]
+
+
+async def workspace_enmaas_base_url(
+    db: "AsyncSession",
+    ws_id: int,
+    prefer: "OpencodeSecret | None" = None,
+) -> str:
+    """Resolve a validated EnMaaS URL from this workspace's credential rows.
+
+    The URL is workspace-scoped and may be stored on a manager's shared
+    credential row while another member's row is selected for the session.
+    Check *prefer* first, then other rows, returning an empty string if none
+    contains a valid URL.
+    """
+    from sqlalchemy import select
+
+    from swarmer.config import sanitize_enmaas_base_url
+
+    result = await db.execute(
+        select(OpencodeSecret).where(OpencodeSecret.workspace_id == ws_id)
+    )
+    rows = list(result.scalars().all())
+    ordered = ([prefer] if prefer is not None else []) + [
+        row for row in rows if row is not prefer
+    ]
+    for row in ordered:
+        url = sanitize_enmaas_base_url(row.enmaas_base_url or "")
+        if url:
+            return url
+    return ""

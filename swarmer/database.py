@@ -72,8 +72,8 @@ async def migrate_db() -> None:
         # ACM-48198: EnMaaS gateway-only credential marker (no token column —
         # the ENMAAS_KEY lives exclusively on the OpenShell gateway).
         "ALTER TABLE opencode_secrets ADD COLUMN enmaas_configured BOOLEAN NOT NULL DEFAULT 0",
-        # ACM-48198: compatibility-only storage for encrypted workspace URLs;
-        # active EnMaaS endpoints come from operator-managed ENMAAS_BASE_URL.
+        # ACM-48198: encrypted workspace EnMaaS URL entered by a manager in
+        # Settings > Tokens; the token itself remains gateway-only.
         "ALTER TABLE opencode_secrets ADD COLUMN enmaas_base_url_enc TEXT NOT NULL DEFAULT ''",
         "ALTER TABLE sessions ADD COLUMN status_detail VARCHAR(255) NOT NULL DEFAULT ''",
         "ALTER TABLE sessions ADD COLUMN run_started_at DATETIME",

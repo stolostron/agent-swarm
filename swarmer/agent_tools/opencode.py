@@ -48,8 +48,8 @@ def _enmaas_provider_config(model_ids: list[str], base_url: str) -> dict:
 
     *model_ids* is the list of upstream model IDs (the part after the first
     "/" of each reference — embedded slashes are significant and preserved).
-    *base_url* is retained for compatibility; the active endpoint is always
-    read from operator-managed configuration (ACM-48198).
+    *base_url* is the validated workspace URL entered through Settings >
+    Tokens (ACM-48198).
     OpenCode V2 uses ``package`` for the provider runtime and ``settings``
     for package-specific settings such as ``baseURL``. The ``env`` list is a
     name reference: OpenCode reads the credential from that environment
@@ -60,7 +60,8 @@ def _enmaas_provider_config(model_ids: list[str], base_url: str) -> dict:
     """
     if not base_url:
         raise ValueError(
-            "EnMaaS gateway URL is not configured by the operator."
+            "EnMaaS gateway URL is not configured for this workspace — set it "
+            "in Settings > Tokens before launching EnMaaS sessions."
         )
     models: dict[str, dict] = {}
     for mid in model_ids:
@@ -137,11 +138,11 @@ class OpenCodeStrategy(AgentToolStrategy):
         enmaas_base_url: str = "",
     ) -> dict[str, str]:
         """Generate OpenCode files without embedding gateway-held credentials."""
-        # Never allow a workspace-derived argument or stored value to choose
-        # the destination for ENMAAS_KEY.
-        from swarmer.config import configured_enmaas_base_url
+        # The workspace URL is manager-configured and encrypted in its
+        # credential row; the key remains gateway-only.
+        from swarmer.config import sanitize_enmaas_base_url
 
-        _enmaas_base_url = configured_enmaas_base_url()
+        _enmaas_base_url = sanitize_enmaas_base_url(enmaas_base_url)
         preset = self.resolve_preset(model)
         _plan_model = ""
         _plan_mode = ""
@@ -222,7 +223,7 @@ class OpenCodeStrategy(AgentToolStrategy):
         # Native OpenCode V2 provider definition for EnMaaS (ACM-48198). Unlike
         # google/google-vertex/openai, "enmaas" is not a built-in OpenCode
         # provider, so the generated config must define it: the
-        # openai-compatible runtime package, the operator-managed gateway
+        # openai-compatible runtime package, the workspace-configured gateway
         # baseURL, the ENMAAS_KEY credential env var, and an explicit model
         # entry per referenced model. No secret values ever appear here — the
         # key is injected by the OpenShell gateway provider at runtime.
@@ -341,17 +342,13 @@ class OpenCodeStrategy(AgentToolStrategy):
         _vertex_reason = "" if has_vertex else "Vertex AI not configured — add credentials in Secrets."
         _gemini_reason = "" if has_gemini else "Google AI Studio API key not set — add it in Secrets."
         _openai_reason = "" if has_openai else "OpenAI API key not set — add it in Secrets."
-        # The endpoint is operator-controlled deployment configuration,
-        # validated from the configured value supplied by the caller.
+        # The endpoint is workspace configuration entered in Settings > Tokens.
         from swarmer.config import sanitize_enmaas_base_url
 
         _enmaas_endpoint_ok = bool(sanitize_enmaas_base_url(enmaas_base_url))
         _enmaas_available = has_enmaas and _enmaas_endpoint_ok
         if not _enmaas_endpoint_ok:
-            _enmaas_reason = (
-                "EnMaaS gateway is not configured or valid — contact your operator "
-                "to configure ENMAAS_BASE_URL."
-            )
+            _enmaas_reason = "EnMaaS gateway URL not set — add it in Settings > Tokens."
         else:
             _enmaas_reason = "" if has_enmaas else "EnMaaS key not set — add it in Secrets."
 

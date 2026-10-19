@@ -155,12 +155,13 @@ and `openai/gpt-6-luna` for both build and small; the ConfigMap values override 
 defaults in deployed environments. The EnMaaS preset (ACM-48198) defaults every role to
 `enmaas/rits/zai-org/glm-5-3` on the business-provided zero-cost gateway; because `enmaas`
 is not a built-in OpenCode provider, `build_config_data()` emits a native
-`providers.enmaas` block (openai-compatible package, operator-configured `baseURL`,
+`providers.enmaas` block (openai-compatible package, workspace-configured `baseURL`,
 `ENMAAS_KEY` env reference) and enables only the enmaas provider for EnMaaS sessions. The
-gateway URL is set by the deployment operator through `ENMAAS_BASE_URL` and validated
-(`config.validate_enmaas_base_url`). Workspace credential rows cannot override it. The
-validated endpoint is shared by generated config, per-workspace OpenShell profiles
-(`enmaas-ws-{id}`), and the sandbox's endpoint-scoped egress rule.
+gateway URL is entered by a workspace manager in Settings > AI Tokens, validated
+(`config.validate_enmaas_base_url`), and stored encrypted in workspace credential metadata.
+The token remains gateway-only. The validated workspace endpoint is shared by generated
+config, per-workspace OpenShell profiles (`enmaas-ws-{id}`), and the sandbox's
+endpoint-scoped egress rule. There is no deployment-level URL setting or default.
 
 | Use case | Swarmer behavior | OpenShell behavior |
 |---|---|---|
@@ -279,16 +280,14 @@ the Swarmer dashboard, not the agent sandbox.
   `SYSLOG`; the deployment grants the required SCCs automatically when `oc` is available.
 - Swarmer runs as non-root UID 1001. `/data` and `/auth` must be writable through the
   deployment's group permissions.
-- `OpencodeSecret` is a legacy model name for AI provider settings. UI-saved ADC, Gemini,
-  OpenAI, and EnMaaS credentials go to Gateway providers (`swarmer-ws-{id}-{provider}`) and
-  are never stored in Swarmer's database; legacy encrypted columns remain only for
-  pre-migration ADC/Gemini/OpenAI keys. EnMaaS (ACM-48198) has no token column at all —
-  just the `enmaas_configured` marker — and its token never appears in API responses,
-  rendered HTML, logs, generated `opencode.json`, or sandbox `extra_env`. The EnMaaS gateway
-  endpoint comes from the validated operator setting `ENMAAS_BASE_URL`; the legacy
-  encrypted `enmaas_base_url_enc` column is retained for database compatibility and is
-  ignored by active code. Generated config, provider profiles, and sandbox network policy
-  use the operator setting; workspace users can only configure the gateway credential.
+- `OpencodeSecret` is a legacy model name for AI provider settings. Gateway-held provider
+  tokens use workspace-scoped OpenShell providers (`swarmer-ws-{id}-{provider}`); legacy
+  encrypted credential columns remain for compatibility. EnMaaS (ACM-48198) has no token
+  column — only the
+  `enmaas_configured` marker and encrypted workspace URL in `enmaas_base_url_enc`. Its
+  token never appears in API responses, rendered HTML, logs, generated `opencode.json`, or
+  sandbox `extra_env`. The manager-entered URL drives generated config, the per-workspace
+  OpenShell profile, and endpoint-scoped sandbox network policy.
 
 ## Change Routing
 
@@ -299,9 +298,9 @@ the Swarmer dashboard, not the agent sandbox.
   EnMaaS pattern, ACM-48198) skip the encrypted property for the token entirely — persist
   only a boolean marker column, push the token to the workspace Gateway provider at save
   time, and add marker reset to `gateway_version.py` plus redaction for the token's key
-  name. The non-secret EnMaaS endpoint is operator-managed through `ENMAAS_BASE_URL`,
-  validated (`config.validate_enmaas_base_url`), and cannot be stored in or overridden by
-  workspace credential metadata. Provider profiles and network policy use that setting.
+  name. EnMaaS also stores its manager-configured URL encrypted in workspace credential
+  metadata; validate it with `config.validate_enmaas_base_url` and use it consistently for
+  generated provider config, OpenShell profiles, and sandbox egress.
 - Add an agent tool: implement `AgentToolStrategy`, register it, add model/config/image
   settings, then update OpenShell launch tests.
 - Change a deployment version or image tag: update the owning Makefile/default contract and

@@ -447,9 +447,10 @@ Body:
 }
 ```
 
-`prompt_id` is required and must reference a prompt in the same workspace. Cron schedules
-require a valid cron expression. Event schedules use event filters and do not
-require a cron expression.
+`prompt_id` is required and must reference a prompt in the same workspace.
+`provider` accepts `""`, `"claude"`, `"gemini"`, `"openai"`, or `"enmaas"` (empty
+inherits the session provider). Cron schedules require a valid cron expression.
+Event schedules use event filters and do not require a cron expression.
 
 #### `PUT /api/v1/workspaces/{ws_id}/sessions/{sid}/schedules/{sched_id}`
 
@@ -500,6 +501,22 @@ GET/POST/DELETE /api/v1/workspaces/{ws_id}/secrets/pull-secret
 AI credential saves may configure OpenShell providers and therefore can return
 `502` when the gateway operation fails. Shared provider configuration is
 manager-only.
+
+For EnMaaS (`enmaas_api_key`, `enmaas_base_url`, `enmaas_configured` on
+`POST /credentials`, and `DELETE /credentials/enmaas`):
+
+- Setting `enmaas_base_url`, `enmaas_api_key`, or `enmaas_configured`, or
+  deleting the `enmaas` credential, requires workspace-manager access (`403`
+  otherwise).
+- `enmaas_base_url` must be a valid `https://` URL without credentials, query
+  string, or fragment (`422` when invalid, or when `enmaas_api_key` is submitted
+  without a new or previously saved workspace URL). Blank preserves the stored
+  URL.
+- A URL-only change rebinds the workspace OpenShell profile
+  (`enmaas-ws-{ws_id}`) while preserving the existing gateway-held token.
+- `CredentialsOut` returns `enmaas_configured`, `has_enmaas`, and the resolved
+  workspace `enmaas_base_url`; `enmaas_api_key` is never stored in SQLite or
+  returned.
 
 ### 6.9 Environment variables
 

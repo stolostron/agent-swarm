@@ -204,18 +204,16 @@ def enmaas_profile_type(ws_id: int) -> str:
 
 
 def _enmaas_profile(profile_type: str, base_url: str = "") -> dict | None:
-    """Build a workspace-scoped profile bound to the operator gateway URL.
+    """Build a workspace-scoped profile bound to its configured gateway URL.
 
     *profile_type* is the workspace-scoped type id (``enmaas-ws-{id}``,
-    see ``enmaas_profile_type``). Returns None when the operator endpoint is
-    unset or invalid — callers surface a clear error instead of registering a
-    profile with no endpoint.
-    ``base_url`` is retained for caller compatibility but ignored. The
-    endpoint here and sandbox network policy use the validated operator URL.
+    see ``enmaas_profile_type``). Returns None when *base_url* is unset or
+    invalid — callers surface a clear error instead of registering a profile
+    with no endpoint. Sandbox network policy uses this same validated URL.
     """
-    from swarmer.config import configured_enmaas_endpoint
+    from swarmer.config import enmaas_endpoint_from_url
 
-    endpoint = configured_enmaas_endpoint()
+    endpoint = enmaas_endpoint_from_url(base_url)
     if endpoint is None:
         return None
     host, port = endpoint
@@ -253,8 +251,8 @@ def _custom_profile_for(
 
     Dynamic profiles (agent-swarm, enmaas-ws-*) are built from live
     configuration; static profiles come from CUSTOM_PROVIDER_PROFILES. The
-    per-workspace EnMaaS types bind to the operator-managed gateway URL; a
-    workspace-supplied URL cannot override the endpoint.
+    per-workspace EnMaaS types bind to that workspace's stored URL. Provider
+    config fields cannot override the endpoint.
     """
     if profile_type == "agent-swarm":
         return _agent_swarm_profile()
@@ -274,7 +272,10 @@ async def import_enmaas_profile(
     profile = _enmaas_profile(enmaas_profile_type(ws_id), base_url)
     if profile is None:
         return False
-    await import_provider_profiles([profile], client=client)
+    # URL-only workspace updates must not be treated as successful when the
+    # gateway cannot reconcile an existing profile. Other profile imports can
+    # retain their best-effort behavior during startup.
+    await import_provider_profiles([profile], client=client, strict=True)
     return True
 
 
@@ -706,6 +707,7 @@ async def ensure_provider(
     credentials: dict[str, str] | None = None,
     client=None,
     enmaas_base_url: str = "",
+    strict_profile_reconciliation: bool = False,
 ) -> None:
     """Create or update a named provider on the gateway with its credentials.
 
@@ -714,8 +716,9 @@ async def ensure_provider(
     Credentials are stored server-side (returned as REDACTED); use UpdateProvider
     on subsequent launches to rotate keys.
 
-    *enmaas_base_url* is retained for compatibility; EnMaaS profile endpoints
-    are resolved from operator-managed configuration.
+    *enmaas_base_url* supplies the validated workspace URL for ``enmaas-ws-*``
+    profile types. ``strict_profile_reconciliation`` propagates profile import
+    failures for URL changes that must not be reported as successful otherwise.
     """
     from openshell._proto import openshell_pb2
     import grpc
@@ -725,17 +728,19 @@ async def ensure_provider(
 
     # Custom Swarmer-owned profiles are imported on the resolved client so
     # dedicated remote gateways and fresh setups behave consistently. EnMaaS
-    # profiles use only the operator-managed gateway URL.
+    # profiles use only the explicitly resolved workspace URL.
     custom_profile = _custom_profile_for(profile_type, config, enmaas_base_url)
     if custom_profile is None and profile_type.startswith("enmaas-ws-"):
-        # Never register an endpoint-less EnMaaS profile — the operator must
-        # configure a gateway URL before EnMaaS credentials can be configured
+        # Never register an endpoint-less EnMaaS profile — the workspace must
+        # have a gateway URL before EnMaaS credentials can be configured
         # (ACM-48198).
         raise ValueError(
-            "EnMaaS gateway URL is missing or invalid — configure ENMAAS_BASE_URL."
+            "EnMaaS gateway URL is missing or invalid — set it in Settings > Tokens."
         )
     if custom_profile is not None:
-        await import_provider_profiles([custom_profile], client=client)
+        await import_provider_profiles(
+            [custom_profile], client=client, strict=strict_profile_reconciliation
+        )
 
     def _build_provider(req_provider):
         req_provider.metadata.name = name
@@ -1486,11 +1491,15 @@ def _build_provider_profile(p: dict, resource_version: int = 0):
     return profile
 
 
-async def import_provider_profiles(profiles: list[dict], client=None) -> None:
+async def import_provider_profiles(
+    profiles: list[dict], client=None, strict: bool = False
+) -> None:
     """Import custom provider type profiles into the gateway (idempotent).
 
     If profiles already exist, updates each profile via UpdateProviderProfiles
     so new or modified endpoints/credentials take effect on running gateways.
+    In strict mode, reconciliation errors are propagated instead of logged so
+    callers do not persist configuration that the gateway did not apply.
     """
     import grpc
     from openshell._proto import openshell_pb2
@@ -1510,6 +1519,8 @@ async def import_provider_profiles(profiles: list[dict], client=None) -> None:
         except grpc.RpcError as exc:
             if not (isinstance(exc, grpc.Call) and exc.code() == grpc.StatusCode.ALREADY_EXISTS):
                 if isinstance(exc, grpc.Call) and exc.code() == grpc.StatusCode.UNIMPLEMENTED:
+                    if strict:
+                        raise
                     return
                 raise
 
@@ -1519,6 +1530,8 @@ async def import_provider_profiles(profiles: list[dict], client=None) -> None:
         update_method = getattr(getattr(client, "_stub", None), "UpdateProviderProfiles", None)
         get_method = getattr(getattr(client, "_stub", None), "GetProviderProfile", None)
         if not callable(update_method) or not callable(get_method):
+            if strict:
+                raise RuntimeError("OpenShell cannot reconcile provider profiles")
             return
 
         for p in profiles:
@@ -1582,12 +1595,20 @@ async def import_provider_profiles(profiles: list[dict], client=None) -> None:
                         continue
                     except Exception as s_exc:
                         log.warning("import_provider_profiles: failed to re-import missing profile %s: %s", pid, s_exc)
+                        if strict:
+                            raise
                         continue
                 if isinstance(u_exc, grpc.Call) and u_exc.code() == grpc.StatusCode.UNIMPLEMENTED:
+                    if strict:
+                        raise
                     continue
                 log.warning("import_provider_profiles: failed to update existing profile %s: %s", pid, u_exc)
+                if strict:
+                    raise
             except Exception as u_exc:
                 log.warning("import_provider_profiles: failed to update existing profile %s: %s", pid, u_exc)
+                if strict:
+                    raise
 
     await asyncio.to_thread(_do_import)
 
