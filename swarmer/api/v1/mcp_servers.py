@@ -103,7 +103,7 @@ async def add_from_catalog(
     ws: Workspace = Depends(get_workspace_or_404),
     db: AsyncSession = Depends(get_db),
     identity: TokenIdentity = Depends(require_human_api_auth),
-):
+) -> McpServer:
     await _require_workspace_manager(db, ws, identity)
     entry = get_catalog_entry(body.catalog_slug)
     if entry is None:

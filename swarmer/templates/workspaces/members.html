@@ -25,7 +25,8 @@
   Users who can see and manage workspace <code>{{ ws.display_name }}</code>. Access is a database-backed
   ACL — no Kubernetes namespace or RBAC grant is required.
   {% if not can_manage %}
-  Only the workspace owner, a workspace admin, or a global administrator can add or remove members.
+  Only the workspace owner, a workspace admin, or a global administrator can add or remove members;
+  while the workspace is unclaimed, any authenticated user can manage its membership.
   {% endif %}
 </p>
 
