@@ -7,6 +7,7 @@ Overrides the auth dependency and uses an in-memory SQLite database.
 import json
 import logging
 import os
+import secrets
 import sys
 from unittest.mock import AsyncMock
 
@@ -1231,6 +1232,7 @@ class TestSessions:
         from swarmer.k8s_auth import TokenIdentity
         from swarmer.main import app
 
+        jira_token = secrets.token_urlsafe(32)
         ws = await _create_workspace(client)
         added = await client.post(
             f"/api/v1/workspaces/{ws['id']}/members",
@@ -1261,7 +1263,7 @@ class TestSessions:
                     json={
                         "jira_server_url": "https://example.atlassian.net",
                         "jira_email": "helper@example.com",
-                        "jira_access_token": "jira-tok-secret",
+                        "jira_access_token": jira_token,
                     },
                 )
             assert save.status_code == 200, save.text
@@ -1290,6 +1292,7 @@ class TestSessions:
         from swarmer.k8s_auth import TokenIdentity
         from swarmer.main import app
 
+        jira_token = secrets.token_urlsafe(32)
         home_ws = await _create_workspace(client, "Home WS")
         other_ws = await _create_workspace(client, "Other WS")
         await client.post(
@@ -1328,7 +1331,7 @@ class TestSessions:
                 json={
                     "jira_server_url": "https://example.atlassian.net",
                     "jira_email": "helper@example.com",
-                    "jira_access_token": "jira-tok-secret",
+                    "jira_access_token": jira_token,
                 },
             )
             toggle = await client.post(

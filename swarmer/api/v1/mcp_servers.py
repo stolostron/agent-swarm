@@ -104,6 +104,7 @@ async def add_from_catalog(
     db: AsyncSession = Depends(get_db),
     identity: TokenIdentity = Depends(require_human_api_auth),
 ) -> McpServer:
+    """Create a catalog server shared with workspace members."""
     await _require_workspace_manager(db, ws, identity)
     entry = get_catalog_entry(body.catalog_slug)
     if entry is None:

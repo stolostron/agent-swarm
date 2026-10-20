@@ -420,6 +420,7 @@ async def workspace_delete(
 
 @router.get("/workspaces/{ws_id}/members", dependencies=[Depends(require_auth)])
 async def workspace_members(ws_id: int, request: Request):
+    """Render workspace members and whether the caller can manage them."""
     async with get_api_client(request) as api:
         try:
             ws = await api.get_workspace(ws_id)

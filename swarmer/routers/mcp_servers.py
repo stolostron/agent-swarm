@@ -69,6 +69,7 @@ async def _caller_can_manage(api, ws: dict) -> bool:
     dependencies=[Depends(require_auth)],
 )
 async def mcp_servers_list(ws_id: int, request: Request):
+    """Render the workspace MCP server inventory and management controls."""
     async with get_api_client(request) as api:
         try:
             ws = await api.get_workspace(ws_id)
