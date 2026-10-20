@@ -329,15 +329,6 @@ def _workspace_selector(workspace: str = _OPENSHELL_WORKSPACE):
     return datamodel_pb2.WorkspaceSelector(workspace=workspace)
 
 
-def _all_workspaces_selector():
-    """Select global resources such as provider profiles."""
-    from openshell._proto import datamodel_pb2
-
-    return datamodel_pb2.WorkspaceSelector(
-        all_workspaces=datamodel_pb2.AllWorkspaces()
-    )
-
-
 def _set_workspace(request, workspace: str = _OPENSHELL_WORKSPACE) -> None:
     """Set the required OpenShell 0.1.x workspace selector."""
     request.workspace_scope.CopyFrom(_workspace_selector(workspace))
@@ -932,10 +923,10 @@ async def provider_profile_endpoint_matches(
         client = _get_client()
 
     def _do_check() -> bool:
-        req = openshell_pb2.GetProviderProfileRequest(
-            id=profile_id,
-            workspace_scope=_all_workspaces_selector(),
-        )
+        # Provider profiles are platform-scoped in OpenShell 0.1.x: the
+        # workspace selector must be omitted for platform profiles. Sending
+        # all_workspaces here fails with INVALID_ARGUMENT.
+        req = openshell_pb2.GetProviderProfileRequest(id=profile_id)
         try:
             response = client._stub.GetProviderProfile(req, timeout=client._timeout)
         except grpc.RpcError as exc:
@@ -1587,9 +1578,11 @@ async def import_provider_profiles(
         client = _get_client()
 
     def _do_import():
-        req = openshell_pb2.ImportProviderProfilesRequest(
-            workspace_scope=_all_workspaces_selector()
-        )
+        # Provider profiles are platform-scoped in OpenShell 0.1.x: the
+        # workspace selector must be omitted for platform profiles. Sending
+        # all_workspaces fails with INVALID_ARGUMENT ("all_workspaces is not
+        # supported by this request"), which broke every credential save.
+        req = openshell_pb2.ImportProviderProfilesRequest()
         for p in profiles:
             profile = _build_provider_profile(p)
             req.profiles.append(openshell_pb2.ProviderProfileImportItem(profile=profile, source="swarmer"))
@@ -1603,11 +1596,8 @@ async def import_provider_profiles(
         # imported profile using its current resource version.
         for p in profiles:
             pid = p["id"]
-            scope = _all_workspaces_selector()
             try:
-                get_req = openshell_pb2.GetProviderProfileRequest(
-                    id=pid, workspace_scope=scope
-                )
+                get_req = openshell_pb2.GetProviderProfileRequest(id=pid)
                 existing = client._stub.GetProviderProfile(
                     get_req, timeout=client._timeout
                 )
@@ -1632,7 +1622,6 @@ async def import_provider_profiles(
                 updated_profile = _build_provider_profile(p, resource_version=rv)
                 item = openshell_pb2.ProviderProfileImportItem(profile=updated_profile, source="swarmer")
                 up_req = openshell_pb2.UpdateProviderProfilesRequest(
-                    workspace_scope=scope,
                     id=pid,
                     profile=item,
                     expected_resource_version=rv,

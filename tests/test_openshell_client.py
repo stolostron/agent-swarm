@@ -1149,6 +1149,8 @@ async def test_provider_profile_endpoint_matches_workspace_endpoint(
     ) is matches
     request = sdk_client._stub.GetProviderProfile.call_args.args[0]
     assert request.id == "enmaas-ws-3"
+    # Platform profiles require the workspace selector to be omitted.
+    assert not request.HasField("workspace_scope")
 
 
 def test_build_provider_profile_uses_typed_network_enums():
@@ -1370,12 +1372,15 @@ async def test_import_provider_profiles_fails_if_imported_profile_is_not_visible
 
 
 @pytest.mark.asyncio
-async def test_import_provider_profiles_uses_global_workspace_selector(sdk_client):
+async def test_import_provider_profiles_omits_workspace_scope(sdk_client):
+    """Platform profiles must omit the selector — all_workspaces is INVALID_ARGUMENT on 0.1.4."""
     with patch.object(oc, "_get_client", return_value=sdk_client):
         await oc.import_provider_profiles([{"id": "test-profile"}])
 
     request = sdk_client._stub.ImportProviderProfiles.call_args.args[0]
-    assert request.workspace_scope.HasField("all_workspaces")
+    assert not request.HasField("workspace_scope")
+    get_req = sdk_client._stub.GetProviderProfile.call_args.args[0]
+    assert not get_req.HasField("workspace_scope")
 
 
 def test_gemini_provider_profile_binds_all_gemini_credentials_and_endpoints():
@@ -1441,4 +1446,4 @@ async def test_ensure_provider_imports_platform_profile_on_fresh_gateway(sdk_cli
     request = sdk_client._stub.ImportProviderProfiles.call_args.args[0]
     ids = [item.profile.id for item in request.profiles]
     assert ids == ["github"]
-    assert request.workspace_scope.HasField("all_workspaces")
+    assert not request.HasField("workspace_scope")

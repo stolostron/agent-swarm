@@ -334,5 +334,7 @@ async def test_import_provider_profiles_idempotent_on_already_exists():
     # Existing profile is explicitly updated after the idempotent import.
     await import_provider_profiles([{"id": "openai"}], client=mock_client)
     request = mock_client._stub.ImportProviderProfiles.call_args.args[0]
-    assert request.workspace_scope.HasField("all_workspaces")
+    assert not request.HasField("workspace_scope")
     mock_client._stub.UpdateProviderProfiles.assert_called_once()
+    update_request = mock_client._stub.UpdateProviderProfiles.call_args.args[0]
+    assert not update_request.HasField("workspace_scope")
