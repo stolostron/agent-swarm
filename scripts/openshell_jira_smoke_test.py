@@ -45,6 +45,10 @@ FAIL = "✗"
 _results: list[tuple[str, bool, str]] = []
 
 
+def _exec(client, sandbox_name: str, command, **kwargs):
+    return client.exec(sandbox_name, command, workspace="default", **kwargs)
+
+
 def step(label: str, passed: bool, detail: str = "") -> bool:
     marker = PASS if passed else FAIL
     print(f"  {marker}  {label}", end="")
@@ -55,31 +59,24 @@ def step(label: str, passed: bool, detail: str = "") -> bool:
     return passed
 
 
-def _cleanup_provider(client, provider_name: str, openshell_pb2) -> None:
+async def _cleanup_provider(client, provider_name: str) -> None:
     """Detach and delete a gateway provider, ignoring errors."""
+    from swarmer.openshell_client import (
+        delete_provider,
+        detach_sandbox_provider,
+        list_sandboxes,
+    )
+
     try:
-        attached = client._stub.ListSandboxes(openshell_pb2.ListSandboxesRequest(), timeout=10)
-        for asb in attached.sandboxes:
+        for sandbox_name in await list_sandboxes(client=client):
             try:
-                provs = client._stub.ListSandboxProviders(
-                    openshell_pb2.ListSandboxProvidersRequest(sandbox_name=asb.metadata.name),
-                    timeout=10,
-                )
-                if any(p.metadata.name == provider_name for p in provs.providers):
-                    client._stub.DetachSandboxProvider(
-                        openshell_pb2.DetachSandboxProviderRequest(
-                            sandbox_name=asb.metadata.name, provider_name=provider_name
-                        ),
-                        timeout=10,
-                    )
+                await detach_sandbox_provider(sandbox_name, provider_name, client=client)
             except Exception:
                 pass
     except Exception:
         pass
     try:
-        client._stub.DeleteProvider(
-            openshell_pb2.DeleteProviderRequest(name=provider_name), timeout=10
-        )
+        await delete_provider(provider_name, client=client)
         step("Delete test provider", True)
     except Exception as exc:
         step("Delete test provider", False, str(exc))
@@ -87,7 +84,9 @@ def _cleanup_provider(client, provider_name: str, openshell_pb2) -> None:
 
 async def run_jira_smoke_test(model: str) -> bool:
     from swarmer.crypto import init_crypto
-    from swarmer.openshell_client import _get_client, ensure_provider, create_sandbox
+    from swarmer.openshell_client import (
+        _get_client, ensure_provider, create_sandbox, delete_sandbox,
+    )
     from swarmer.agent_tools.opencode import OpenCodeStrategy
     from swarmer.openshell_policy import build_session_policy
     from openshell._proto import openshell_pb2
@@ -176,11 +175,11 @@ async def run_jira_smoke_test(model: str) -> bool:
                   f"endpoints: {jira_endpoints}")
         step("jira_mcp binaries", has_jira_block, f"{jira_binaries}")
         if not ok:
-            _cleanup_provider(client, provider_name, openshell_pb2)
+            await _cleanup_provider(client, provider_name)
             return False
     except Exception as exc:
         step("Policy computation", False, str(exc))
-        _cleanup_provider(client, provider_name, openshell_pb2)
+        await _cleanup_provider(client, provider_name)
         return False
 
     policy = build_session_policy(fake_session, [], [fake_mcp], "opencode", model)
@@ -201,17 +200,16 @@ async def run_jira_smoke_test(model: str) -> bool:
         step("CreateSandbox + WaitReady", True, ref.name)
     except Exception as exc:
         step("CreateSandbox + WaitReady", False, str(exc))
-        _cleanup_provider(client, provider_name, openshell_pb2)
+        await _cleanup_provider(client, provider_name)
         return False
 
-    sid = ref.id
     sandbox_name = ref.name
     all_passed = True
 
     def xec(cmd, timeout=30, stdin=None):
         if isinstance(cmd, str):
-            return client.exec(sid, ["sh", "-c", cmd], timeout_seconds=timeout, stdin=stdin)
-        return client.exec(sid, cmd, timeout_seconds=timeout, stdin=stdin)
+            return _exec(client, sandbox_name, ["sh", "-c", cmd], timeout_seconds=timeout, stdin=stdin)
+        return _exec(client, sandbox_name, cmd, timeout_seconds=timeout, stdin=stdin)
 
     # ── 6. Write JIRA_* vars into sandbox via stdin ───────────────────────────
     # spec.environment only reaches supervisor-launched processes, not ad-hoc
@@ -410,12 +408,12 @@ async def run_jira_smoke_test(model: str) -> bool:
     # ── Cleanup ───────────────────────────────────────────────────────────────
     print("\n[cleanup]")
     try:
-        client.delete(sandbox_name)
+        await delete_sandbox(sandbox_name, client=client)
         step("Delete sandbox", True, sandbox_name)
     except Exception as exc:
         step("Delete sandbox", False, str(exc))
 
-    _cleanup_provider(client, provider_name, openshell_pb2)
+    await _cleanup_provider(client, provider_name)
 
     # ── Summary ───────────────────────────────────────────────────────────────
     passed = sum(1 for _, ok, _ in _results if ok)

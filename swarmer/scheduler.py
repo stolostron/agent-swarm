@@ -196,11 +196,21 @@ async def _collect_orphaned_sandboxes(db) -> None:
 
         def _sandbox_age_ok(name: str) -> bool:
             try:
+                from swarmer import openshell_client as _oc
+
                 c = client or _get_client_local()
                 resp = c._stub.GetSandbox(
-                    _pb.GetSandboxRequest(name=name), timeout=10
+                    _pb.GetSandboxRequest(
+                        name=name,
+                        workspace_scope=_oc._workspace_selector(),
+                    ), timeout=10
                 )
-                created_ms = resp.sandbox.metadata.created_at_ms if resp.sandbox.metadata else 0
+                created_ms = (
+                    resp.sandbox.metadata.created_time.ToMilliseconds()
+                    if resp.sandbox.metadata
+                    and resp.sandbox.metadata.HasField("created_time")
+                    else 0
+                )
                 age_ms = now_ms - created_ms
                 return age_ms >= _grace_ms
             except Exception:

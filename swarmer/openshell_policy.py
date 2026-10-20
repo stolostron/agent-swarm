@@ -10,24 +10,14 @@ the sandbox starts with all required network access pre-approved.  This avoids
 the fragile probe-deny-approve cycle that depended on a hardcoded sleep timer
 and was the root cause of intermittent git clone failures (ACM-34909).
 
-IMPORTANT — harness: True on all binary entries:
-  OPA resolves binary paths by traversing /proc/{pid}/root inside the sandbox
-  container.  This fails with "Cannot access container filesystem for symlink
-  resolution" for binaries that are installed at paths OPA cannot traverse.
-  Setting harness=True tells OPA to use its process harness for binary matching
-  instead of symlink resolution, which works reliably regardless of the binary's
-  installation path.  The supervisor generates harness=True automatically when it
-  creates draft chunks from denial analysis — we must match that behaviour in all
-  statically pre-set rules (confirmed by inspecting live sandbox draft chunk state).
-
 Returns a SandboxPolicy proto object that is set directly on SandboxSpec.policy.
 All filesystem paths use /sandbox/ — /workspace/ is never referenced.
 """
 
 
 def _bin(path: str) -> dict:
-    """Binary entry with harness=True so OPA uses process harness matching."""
-    return {"path": path, "harness": True}
+    """Build a typed OpenShell 0.1.x network binary entry."""
+    return {"path": path}
 
 
 # opencode ships as a native binary installed via npm. V2 (@opencode/cli)
@@ -288,7 +278,7 @@ def _build_raw_github_block(
     prompts or skills reference shared tools, common scripts, or cross-repo
     dependencies (e.g. swarm-helpers, agentic-sdlc).
 
-    In OpenShell 0.0.116+, the L7 proxy strictly enforces path matching.
+    OpenShell's L7 proxy strictly enforces path matching.
     Granting read-only access to raw.githubusercontent.com and github.com for
     read binaries (curl and python3) avoids silent L7 denials on external
     references without allowing write methods.
@@ -496,11 +486,30 @@ def build_session_policy(
         "process": {"run_as_group": "sandbox", "run_as_user": "sandbox"},
         "network_policies": network_policies_dict,
     }
+    enforcement_modes = {
+        "enforce": "NETWORK_ENFORCEMENT_MODE_ENFORCE",
+        "audit": "NETWORK_ENFORCEMENT_MODE_AUDIT",
+    }
+    access_presets = {
+        "read-only": "NETWORK_ACCESS_PRESET_READ_ONLY",
+        "read-write": "NETWORK_ACCESS_PRESET_READ_WRITE",
+        "full": "NETWORK_ACCESS_PRESET_FULL",
+    }
+    for rule in policy_dict["network_policies"].values():
+        # NetworkBinary in OpenShell 0.1.x is path-only. Custom rules already
+        # persisted before this cutover may carry the removed harness field.
+        rule["binaries"] = [{"path": binary["path"]} for binary in rule.get("binaries", [])]
+        for endpoint in rule.get("endpoints", []):
+            endpoint.pop("tls", None)
+            if endpoint.get("enforcement") in enforcement_modes:
+                endpoint["enforcement"] = enforcement_modes[endpoint["enforcement"]]
+            if endpoint.get("access") in access_presets:
+                endpoint["access"] = access_presets[endpoint["access"]]
     # Import SandboxPolicy directly from sandbox_pb2 — SandboxSpec().policy may
     # be None when unset in newer SDK versions, so deriving the class from the
     # instance is not reliable.
     policy_instance = sandbox_pb2.SandboxPolicy()
-    return ParseDict(policy_dict, policy_instance, ignore_unknown_fields=True)
+    return ParseDict(policy_dict, policy_instance)
 
 
 def build_session_network_policies(
@@ -600,7 +609,7 @@ def build_session_network_policies(
     # both "access" and "rules" — guards against rules stored before the
     # promotion-time fix was applied (the gateway rejects such endpoints with
     # "protocol requires rules or access to define allowed traffic").
-    # Backfill enforcement="enforce" so OpenShell 0.0.116+ endpoint ambiguity
+    # Backfill enforcement="enforce" so current OpenShell endpoint ambiguity
     # validation doesn't reject overlapping endpoints (enforce vs audit).
     for i, rule in enumerate(custom_policies or []):
         rule_name = rule.get("name", "")

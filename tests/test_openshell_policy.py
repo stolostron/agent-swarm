@@ -26,7 +26,7 @@ from swarmer.openshell_policy import (
 
 # Tests that call build_session_policy() need the real openshell protobuf
 # classes to construct a SandboxPolicy proto.  The stub package on PyPI
-# (0.0.0a0) provides the proto classes but they get replaced by MagicMock
+# Minimal stub distribution provides no usable protobuf classes and is replaced by MagicMock
 # stubs in other test files when the full suite runs.  Skip these tests when
 # the real SDK (identified by the presence of SandboxClient) is not available.
 try:
@@ -249,15 +249,8 @@ def test_github_git_block_includes_both_git_binary_paths():
     assert "/usr/bin/git" in binaries, f"/usr/bin/git missing from binaries: {binaries}"
 
 
-def test_all_binary_entries_have_harness_true():
-    """Every binary entry in every network policy block must have harness=True.
-
-    OPA resolves binary paths via /proc/{pid}/root symlink traversal, which
-    fails inside sandbox containers ('Cannot access container filesystem for
-    symlink resolution'). harness=True tells OPA to use process harness matching
-    instead, which is what the supervisor uses when generating draft chunks.
-    Without this, all binary-scoped rules are silently inert (ACM-34909).
-    """
+def test_network_binary_entries_use_the_01_path_contract():
+    """OpenShell 0.1.x NetworkBinary entries contain only a path."""
     repo = _make_repo(org="stolostron", name="agent-swarm")
     session = _make_session(language="golang")
     mcp = _make_mcp("jira")
@@ -267,12 +260,7 @@ def test_all_binary_entries_have_harness_true():
 
     for block_name, block in net.items():
         for binary in block.get("binaries", []):
-            path = binary.get("path", "?")
-            harness = binary.get("harness", False)
-            assert harness is True, (
-                f"Block '{block_name}' binary '{path}' has harness={harness!r}, expected True. "
-                f"OPA symlink resolution fails in sandbox containers — harness=True is required."
-            )
+            assert set(binary) == {"path"}, f"unexpected NetworkBinary fields in {block_name}: {binary}"
 
 
 def test_two_repos_generate_two_github_block_pairs():
@@ -328,10 +316,10 @@ def test_slack_webhook_block_absent_by_default():
     assert "hooks.slack.com" not in _bhosts()
 
 
-def test_slack_webhook_all_binaries_have_harness():
+def test_slack_webhook_uses_typed_network_binary_fields():
     from swarmer.openshell_policy import _SLACK_WEBHOOK_BLOCK
     for b in _SLACK_WEBHOOK_BLOCK["binaries"]:
-        assert b.get("harness") is True, f"expected harness=True for {b}"
+        assert set(b) == {"path"}
 
 
 @pytest.mark.parametrize(
@@ -431,10 +419,7 @@ def test_opencode_default_policy_includes_models_opencode_ai_and_binary():
     assert endpoint["port"] == 443
     assert endpoint["protocol"] == "rest"
     assert endpoint["access"] == "full"
-    assert {
-        "path": "/usr/local/share/npm-global/lib/node_modules/@opencode/cli/bin/opencode.exe",
-        "harness": True,
-    } in agent_api["binaries"]
+    assert {"path": "/usr/local/share/npm-global/lib/node_modules/@opencode/cli/bin/opencode.exe"} in agent_api["binaries"]
 
 
 def test_agent_api_block_openai_includes_openai_endpoint():
@@ -612,7 +597,7 @@ def test_custom_policies_merged_into_network_policies():
         {
             "name": "vuln-go-dev",
             "endpoints": [{"host": "vuln.go.dev", "port": 443, "protocol": "rest"}],
-            "binaries": [{"path": "/usr/local/go/bin/govulncheck", "harness": True}],
+            "binaries": [{"path": "/usr/local/go/bin/govulncheck"}],
         }
     ]
     net = build_session_network_policies(
@@ -709,7 +694,7 @@ def test_custom_policy_endpoint_missing_access_gets_backfilled():
             "endpoints": [
                 {"host": "raw.githubusercontent.com", "port": 443, "protocol": "rest"}
             ],
-            "binaries": [{"path": "/usr/bin/curl", "harness": True}],
+            "binaries": [{"path": "/usr/bin/curl"}],
         }
     ]
     net = build_session_network_policies(
@@ -862,7 +847,7 @@ def test_custom_policy_filters_out_empty_host_endpoints():
         {
             "name": "allow__443",
             "endpoints": [{"host": "", "port": 443, "protocol": "rest"}],
-            "binaries": [{"path": "/usr/local/bin/python3.14", "harness": True}],
+            "binaries": [{"path": "/usr/local/bin/python3.14"}],
         },
         {
             "name": "allow_valid_443",
@@ -870,7 +855,7 @@ def test_custom_policy_filters_out_empty_host_endpoints():
                 {"host": "   ", "port": 443, "protocol": "rest"},
                 {"host": "example.com", "port": 443, "protocol": "rest"},
             ],
-            "binaries": [{"path": "/usr/bin/curl", "harness": True}],
+            "binaries": [{"path": "/usr/bin/curl"}],
         },
     ]
     net = build_session_network_policies(

@@ -86,22 +86,24 @@ async def test_resolve_gateway_config_custom_workspace():
 @pytest.mark.asyncio
 async def test_probe_gateway_connectivity_mock():
     cfg = GatewayConfig(gateway_url="https://gw.example.com", auth_mode="none")
-    mock_client = MagicMock(spec_set=["list"])
-    mock_client.list.return_value = ["sb-1", "sb-2"]
+    mock_client = MagicMock()
+    mock_client.list_all.return_value = ["sb-1", "sb-2"]
+    mock_client._stub.GetGatewayInfo.return_value.gateway_version = "0.1.4"
 
     with patch("swarmer.openshell_client.get_client_for_config", return_value=mock_client):
         res = await probe_gateway_connectivity(cfg)
         assert res["status"] == "ok"
         assert res["sandboxes_count"] == 2
-        mock_client.list.assert_called_once_with()
+        assert res["gateway_version"] == "0.1.4"
+        mock_client.list_all.assert_called_once_with(workspace="default")
+        mock_client.close.assert_called_once_with()
 
 
 @pytest.mark.asyncio
 async def test_probe_gateway_connectivity_get_gateway_info_failure_is_non_fatal():
     cfg = GatewayConfig(gateway_url="https://gw.example.com", auth_mode="none")
     mock_client = MagicMock()
-    mock_client.list.return_value = ["sb-1"]
-    mock_client.list_for_all_workspaces.return_value = ["sb-1"]
+    mock_client.list_all.return_value = ["sb-1"]
     mock_client._stub.GetGatewayInfo.side_effect = RuntimeError("RPC failed")
 
     with patch("swarmer.openshell_client.get_client_for_config", return_value=mock_client):
@@ -315,7 +317,7 @@ async def test_resolve_gateway_config_with_client_secret():
 
 @pytest.mark.asyncio
 async def test_import_provider_profiles_idempotent_on_already_exists():
-    """Verify import_provider_profiles ignores ALREADY_EXISTS and UNIMPLEMENTED errors."""
+    """ALREADY_EXISTS is reconciled against the global 0.1.x profile resource."""
     import grpc
     from swarmer.openshell_client import import_provider_profiles
 
@@ -326,7 +328,11 @@ async def test_import_provider_profiles_idempotent_on_already_exists():
             return grpc.StatusCode.ALREADY_EXISTS
 
     mock_client._stub.ImportProviderProfiles.side_effect = MockRpcError()
+    mock_client._stub.GetProviderProfile.return_value.profile.resource_version = 0
     mock_client._timeout = 10
 
-    # Should succeed idempotently without raising
+    # Existing profile is explicitly updated after the idempotent import.
     await import_provider_profiles([{"id": "openai"}], client=mock_client)
+    request = mock_client._stub.ImportProviderProfiles.call_args.args[0]
+    assert request.workspace_scope.HasField("all_workspaces")
+    mock_client._stub.UpdateProviderProfiles.assert_called_once()

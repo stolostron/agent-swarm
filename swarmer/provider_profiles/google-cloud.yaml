@@ -1,0 +1,52 @@
+# SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-License-Identifier: Apache-2.0
+# Based on NVIDIA/OpenShell providers/google-cloud.yaml at v0.1.4.
+id: google-cloud
+display_name: Google Cloud (GCP APIs)
+description: Native GCP SDK credentials via the gateway metadata emulator
+category: other
+inference_capable: false
+credentials:
+  - name: service_account_token
+    description: GCP access token minted from service account JWT
+    env_vars: [GCP_SA_ACCESS_TOKEN]
+    required: false
+    auth_style: bearer
+    header_name: authorization
+    refresh:
+      strategy: google_service_account_jwt
+      token_url: https://oauth2.googleapis.com/token
+      scopes: [https://www.googleapis.com/auth/cloud-platform]
+      refresh_before_seconds: 300
+      max_lifetime_seconds: 3600
+      material:
+        - name: client_email
+          required: true
+        - name: private_key
+          required: true
+          secret: true
+        - name: subject
+  - name: adc_token
+    description: GCP access token from gcloud application default credentials
+    env_vars: [GCP_ADC_ACCESS_TOKEN]
+    required: false
+    auth_style: bearer
+    header_name: authorization
+    refresh:
+      strategy: oauth2_refresh_token
+      token_url: https://oauth2.googleapis.com/token
+      scopes: [https://www.googleapis.com/auth/cloud-platform]
+      refresh_before_seconds: 300
+      max_lifetime_seconds: 3600
+      material:
+        - name: client_id
+          required: true
+        - name: client_secret
+          required: true
+          secret: true
+        - name: refresh_token
+          required: true
+          secret: true
+discovery:
+  credentials: [service_account_token, adc_token]
+binaries: []

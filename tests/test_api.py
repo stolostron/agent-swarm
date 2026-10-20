@@ -569,10 +569,10 @@ class TestWorkspaceGatewayAPI:
         async def _fake_probe(cfg):
             nonlocal captured_config
             captured_config = cfg
-            return {"status": "ok", "sandboxes_count": 0, "gateway_version": "0.0.116"}
+            return {"status": "ok", "sandboxes_count": 0, "gateway_version": "0.1.4"}
 
         with patch("swarmer.openshell_client.probe_gateway_connectivity", side_effect=_fake_probe), \
-             patch("swarmer.gateway_version.observe_gateway_version", return_value="0.0.116"):
+             patch("swarmer.gateway_version.observe_gateway_version", return_value="0.1.4"):
             resp = await client.post(
                 "/api/v1/workspaces/gateway/test-connection",
                 json={

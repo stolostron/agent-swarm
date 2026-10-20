@@ -35,7 +35,7 @@ Dashboard: http://localhost:8080
 
 See the [User Guide](docs/USER_GUIDE.md) for OpenShift deployment, Kustomize overlays, and all other options.
 
-Additional setup guides: [Slack notifications](docs/SLACK_NOTIFICATIONS.md) · [GitHub App auth](docs/GITHUB_APP_SETUP.md) · [OpenShell local dev](docs/OPENSHELL_LOCAL_SETUP.md)
+Additional setup guides: [Slack notifications](docs/SLACK_NOTIFICATIONS.md) · [GitHub App auth](docs/GITHUB_APP_SETUP.md) · [OpenShell local and remote gateways](docs/OPENSHELL_LOCAL_SETUP.md)
 
 See [Agent Swarm Use Cases](docs/USE_CASES.md) for interactive development,
 model/runtime, OpenShell security, and autonomous SDLC workflows.

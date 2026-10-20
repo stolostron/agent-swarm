@@ -319,10 +319,6 @@ class TestDoLaunchOpenshell:
                 "swarmer.openshell_client.configure_vertex_provider",
                 new=AsyncMock(),
             ),
-            "set_cluster_inference": patch(
-                "swarmer.openshell_client.set_cluster_inference",
-                new=AsyncMock(),
-            ),
             "configure_provider_credential": patch(
                 "swarmer.openshell_client.configure_provider_credential",
                 new=AsyncMock(),
@@ -393,7 +389,7 @@ class TestDoLaunchOpenshell:
         """Enter all patches in the standard set."""
         return (
             patches["create_provider"], patches["ensure_provider"],
-            patches["configure_vertex_provider"], patches["set_cluster_inference"],
+            patches["configure_vertex_provider"],
             patches["configure_provider_credential"], patches["attach_sandbox_provider"],
             patches["create_sandbox"], patches["write_agent_config"],
             patches["write_agents_md"],
@@ -2567,7 +2563,10 @@ class TestExecCommandTimeout:
         with patch("swarmer.openshell_client._get_client", return_value=mock_client):
             result = await exec_command("sb-name", ["echo", "hi"], client=None, timeout_seconds=120)
 
-        mock_client.exec.assert_called_once_with("test-id", ["echo", "hi"], stdin=None, timeout_seconds=120, env={})
+        mock_client.exec.assert_called_once_with(
+            "sb-name", ["echo", "hi"], workspace="default",
+            stdin=None, timeout_seconds=120, env={},
+        )
         assert result.stdout == "ok"
 
     @pytest.mark.asyncio
@@ -2583,7 +2582,10 @@ class TestExecCommandTimeout:
         with patch("swarmer.openshell_client._get_client", return_value=mock_client):
             await exec_command("sb-name", ["ls"], client=None)
 
-        mock_client.exec.assert_called_once_with("test-id", ["ls"], stdin=None, timeout_seconds=None, env={})
+        mock_client.exec.assert_called_once_with(
+            "sb-name", ["ls"], workspace="default",
+            stdin=None, timeout_seconds=None, env={},
+        )
 
     @pytest.mark.asyncio
     async def test_exec_command_default_client_is_none(self):
@@ -2599,7 +2601,10 @@ class TestExecCommandTimeout:
             # Positional call omitting client completely — must not raise TypeError
             await exec_command("sb-name", ["echo", "test"])
 
-        mock_client.exec.assert_called_once_with("test-id-default", ["echo", "test"], stdin=None, timeout_seconds=None, env={})
+        mock_client.exec.assert_called_once_with(
+            "sb-name", ["echo", "test"], workspace="default",
+            stdin=None, timeout_seconds=None, env={},
+        )
 
 
 
@@ -2749,7 +2754,7 @@ class TestSandboxGC:
         """Make age checks deterministic while exercising the real safety path."""
         client = MagicMock()
         response = MagicMock()
-        response.sandbox.metadata.created_at_ms = 0
+        response.sandbox.metadata.created_time.ToMilliseconds.return_value = 0
         client._stub.GetSandbox.return_value = response
         monkeypatch.setattr("swarmer.openshell_client._get_client", lambda: client)
 
@@ -3233,7 +3238,7 @@ class TestPolicyRulesEndpoints:
             "status": "pending",
             "rule_name": "vuln-go-dev",
             "endpoints": [{"host": "vuln.go.dev", "port": 443, "protocol": "rest"}],
-            "binaries": [{"path": "/usr/local/go/bin/govulncheck", "harness": True}],
+            "binaries": [{"path": "/usr/local/go/bin/govulncheck"}],
         }
         resp = await client.post(
             f"/workspaces/{ws['id']}/sessions/{s['id']}/policy-rules/add",
@@ -3378,7 +3383,7 @@ class TestPolicyRulesEndpoints:
             "endpoints": [
                 {"host": "raw.githubusercontent.com", "port": 443, "protocol": "rest"}
             ],
-            "binaries": [{"path": "/usr/bin/curl", "harness": True}],
+            "binaries": [{"path": "/usr/bin/curl"}],
         }
         resp = await client.post(
             f"/workspaces/{ws['id']}/sessions/{s['id']}/policy-rules/add",
@@ -3493,7 +3498,7 @@ class TestPolicyRulesEndpoints:
             "status": "pending",
             "rule_name": "allow-vuln-go-dev-443",
             "endpoints": [{"host": "vuln.go.dev", "port": 443, "protocol": "rest"}],
-            "binaries": [{"path": "/sandbox/.gopath/bin/govulncheck", "harness": True}],
+            "binaries": [{"path": "/sandbox/.gopath/bin/govulncheck"}],
         }
 
         # Step 1: promote the chunk to Net Rules.
@@ -3564,7 +3569,7 @@ class TestPolicyRulesEndpoints:
             "status": "pending",
             "rule_name": "allow-vuln-go-dev-443",
             "endpoints": [{"host": "vuln.go.dev", "port": 443, "protocol": "rest"}],
-            "binaries": [{"path": "/sandbox/.gopath/bin/govulncheck", "harness": True}],
+            "binaries": [{"path": "/sandbox/.gopath/bin/govulncheck"}],
         }
         resp = await client.post(
             f"/workspaces/{ws['id']}/sessions/{s['id']}/policy-rules/add",
@@ -3578,7 +3583,7 @@ class TestPolicyRulesEndpoints:
             "status": "pending",
             "rule_name": "allow-vuln-go-dev-443",
             "endpoints": [{"host": "vuln.go.dev", "port": 443, "protocol": "rest"}],
-            "binaries": [{"path": "/usr/bin/curl", "harness": True}],
+            "binaries": [{"path": "/usr/bin/curl"}],
         }
 
         from sqlalchemy import text
@@ -3628,7 +3633,7 @@ class TestPolicyRulesLiveApplyRevoke:
             "status": "pending",
             "rule_name": "allow-vuln-go-dev-443",
             "endpoints": [{"host": "vuln.go.dev", "port": 443, "protocol": "rest"}],
-            "binaries": [{"path": "/usr/local/go/bin/govulncheck", "harness": True}],
+            "binaries": [{"path": "/usr/local/go/bin/govulncheck"}],
         }
 
         with patch("swarmer.openshell_client.approve_chunks_by_id", new=AsyncMock(return_value=1)) as mock_approve:

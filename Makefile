@@ -41,8 +41,8 @@ TOKEN_DURATION ?= 8h
 AC_DEFAULTS ?= .push-defaults
 
 # OpenShell gateway
-OPENSHELL_VERSION        ?= 0.0.116
-AGENT_SANDBOX_VERSION    ?= v1.0.6
+OPENSHELL_VERSION        ?= 0.1.4
+AGENT_SANDBOX_VERSION    ?= v1.0.4
 OPENSHELL_NAMESPACE      ?= openshell
 OPENSHELL_TLS_DIR        ?= auth/openshell
 # Default size of the workspace PVC (backing each sandbox's /sandbox mount) at the
@@ -78,8 +78,7 @@ update-deps:  ## Fetch the latest stable OpenShell dependencies and update pins
 	@echo "$(LATEST_AGENT_SANDBOX)" | grep -Eq '^v?[0-9]+(\.[0-9]+)+([a-zA-Z0-9_.-]+)?$$' || \
 	  (echo "Error: invalid Agent Sandbox version format: $(LATEST_AGENT_SANDBOX)" >&2 && exit 1)
 	@curl -fsI "https://github.com/kubernetes-sigs/agent-sandbox/releases/download/$(LATEST_AGENT_SANDBOX)/sandbox.yaml" >/dev/null 2>&1 || \
-	 curl -fsI "https://github.com/kubernetes-sigs/agent-sandbox/releases/download/$(LATEST_AGENT_SANDBOX)/manifest.yaml" >/dev/null 2>&1 || \
-	 (echo "Error: neither sandbox.yaml nor manifest.yaml found for Agent Sandbox $(LATEST_AGENT_SANDBOX)" >&2 && exit 1)
+	 (echo "Error: sandbox.yaml not found for Agent Sandbox $(LATEST_AGENT_SANDBOX)" >&2 && exit 1)
 	@echo "OpenShell: $(OPENSHELL_VERSION) -> $(LATEST_OPENSHELL)"
 	@echo "Agent Sandbox: $(AGENT_SANDBOX_VERSION) -> $(LATEST_AGENT_SANDBOX)"
 	@# Portable in-place edit: GNU sed's `-i` and BSD/macOS sed's `-i` take backup-suffix
@@ -380,9 +379,6 @@ _deploy-resolved:
 	if ! helm status openshell -n $(OPENSHELL_NAMESPACE) > /dev/null 2>&1; then \
 	  echo "OpenShell not found — installing $(OPENSHELL_VERSION)..."; \
 	  MANIFEST_URL="https://github.com/kubernetes-sigs/agent-sandbox/releases/download/$(AGENT_SANDBOX_VERSION)/sandbox.yaml"; \
-	  if ! curl -fsI "$$MANIFEST_URL" > /dev/null 2>&1; then \
-	    MANIFEST_URL="https://github.com/kubernetes-sigs/agent-sandbox/releases/download/$(AGENT_SANDBOX_VERSION)/manifest.yaml"; \
-	  fi; \
 	  kubectl apply -f "$$MANIFEST_URL"; \
 	  kubectl create namespace $(OPENSHELL_NAMESPACE) --dry-run=client -o yaml | kubectl apply -f -; \
 	  if command -v oc > /dev/null 2>&1; then \

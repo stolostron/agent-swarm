@@ -1,6 +1,6 @@
 # OpenShell Local Development Setup
 
-Step-by-step guide to running Swarmer with a live OpenShell sandbox backend, either on a local kind cluster or an existing Kubernetes/OpenShift cluster.
+Step-by-step guide to running Swarmer with OpenShell 0.1.4 and Agent Sandbox v1.0.4, using either a locally hosted or remote/hosted gateway.
 
 ## Prerequisites
 
@@ -11,9 +11,21 @@ Step-by-step guide to running Swarmer with a live OpenShell sandbox backend, eit
 | `helm` | 3.8+ | Required for OCI chart support |
 | `oc` | any | OpenShift only — grants SCC policies |
 | Python | 3.12 | `python3 --version` |
-| `openshell` CLI | 0.0.116+ | `openshell --version` — must match or be compatible with gateway version |
+| `openshell` CLI | 0.1.4 | `openshell --version` — use the exact pinned gateway release |
 
-> **CLI version matters.** The `openshell` CLI version must be compatible with the deployed gateway. Run `openshell --version` and compare with `OPENSHELL_VERSION` in the Makefile. Use `make update-deps` to discover the latest pinned release, then install the matching release from [NVIDIA/OpenShell releases](https://github.com/NVIDIA/OpenShell/releases).
+> **Version matters.** The Python SDK, CLI, and gateway use the OpenShell 0.1.4 API. Keep the `openshell` CLI at the same release as `OPENSHELL_VERSION` in the Makefile.
+
+## Clean gateway/session migration
+
+Swarmer is pinned to OpenShell 0.1.4 and Agent Sandbox v1.0.4. The gateway API,
+protobufs, and sandbox runtime are a clean cutover; old gateway clients and
+sandbox instances are not supported. Before upgrading an existing deployment,
+stop active sessions while the old gateway is still available and save any
+provider configuration needed to re-enter. Deploy the pinned gateway and CRDs,
+restart Swarmer, and launch new sessions. Re-enter provider credentials through
+Swarmer so secrets are stored on the gateway; do not move credentials into
+Swarmer environment variables or sandbox specifications. Swarmer imports its
+required GitHub, Google, and application provider profiles on each gateway.
 
 ## Deployment: `make deploy`
 
@@ -27,8 +39,8 @@ configured flags are cleared; raw AI credentials are never stored by Swarmer.
 
 What `make deploy` does:
 
-1. **Installs Agent Sandbox CRDs** from `AGENT_SANDBOX_VERSION` (applying `sandbox.yaml`, with automatic fallback to `manifest.yaml` for legacy releases).
-2. **Installs or upgrades OpenShell on every run**: `helm upgrade --install oci://ghcr.io/nvidia/openshell/helm-chart --version $(OPENSHELL_VERSION) --set server.workspaceDefaultStorageSize=$(OPENSHELL_WORKSPACE_STORAGE)` on first install; on subsequent runs (OpenShell already installed) it runs `helm upgrade --reset-values` with chart defaults and explicit `--set` flags, so bumping `OPENSHELL_VERSION` or `OPENSHELL_WORKSPACE_STORAGE` in the Makefile **is** applied automatically on the next `make deploy` — no manual `helm upgrade` needed. `server.workspaceDefaultStorageSize` (Makefile default `10Gi`) controls the size of the per-sandbox `workspace-{name}` PVC mounted at `/sandbox` (OpenShell's own built-in default `2Gi`) — this is the actual fix for large-repo Go CVE scans exhausting disk (ACM-38172). It is a gateway-wide ceiling, distinct from the sandbox pod's ephemeral-storage compute resource (container writable layer / unsized emptyDirs), which is hardcoded to `10Gi` in `openshell_client.create_sandbox()` (ACM-39804; a per-session dropdown for this existed under ACM-38184 but was removed — it never affected `/sandbox`, and there is no OpenShell API, verified through gateway/SDK 0.0.97, to size `/sandbox` per sandbox). Note: only newly created sandbox PVCs pick up a changed size — existing sandboxes are unaffected until relaunched.
+1. **Installs Agent Sandbox CRDs** from the pinned `AGENT_SANDBOX_VERSION` release manifest.
+2. **Installs or upgrades OpenShell** from the pinned OCI chart. The `OPENSHELL_WORKSPACE_STORAGE` setting controls the per-sandbox `/sandbox` PVC size; it is gateway-wide, and a new size applies to newly created sandboxes.
 3. **Grants OpenShift SCCs** (if `oc` is on PATH — no-op on plain Kubernetes):
    - `anyuid` for `agent-sandbox-controller` in `agent-sandbox-system`
    - `anyuid` and `privileged` for both `openshell` and `openshell-sandbox` service accounts
@@ -71,6 +83,30 @@ make deploy          # install/update OpenShell + Swarmer, extract certs, regist
 ```
 
 On OpenShift, ensure `oc` is on your PATH so the SCC grants are applied automatically.
+
+---
+
+## Remote or hosted gateway
+
+Use this path when Swarmer should connect to a gateway managed outside the
+Swarmer cluster. Create or edit a workspace and select **Custom OpenShell
+Gateway**. Enter the HTTPS gateway URL (host and optional port; no URL path),
+choose the gateway's configured authentication mode, fill in its OIDC issuer and
+client details or bearer token, then use **Test Gateway Connection** before
+saving. OIDC over HTTPS is recommended for hosted gateways. Use `None` only for
+a deliberately unauthenticated gateway on a trusted private network.
+
+For local development against a remote gateway, set `OPENSHELL_GATEWAY_URL` and
+the matching `OPENSHELL_BEARER_TOKEN` or TLS settings in the untracked `.env`.
+Publicly trusted HTTPS endpoints use system CA roots. Configure
+`OPENSHELL_TLS_CA` (and client certificate/key when required) for a private CA
+or mTLS gateway. Never commit tokens, private keys, or certificate contents.
+
+Remote gateways must be able to pull the configured agent image. Swarmer imports
+the pinned provider profiles on each gateway before creating providers, and
+continues to store provider credentials on the gateway. The session lifecycle,
+pagination, cleanup, and service exposure use the same OpenShell 0.1.4 API for
+local and remote gateways.
 
 ---
 

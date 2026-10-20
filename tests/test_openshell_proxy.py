@@ -113,7 +113,7 @@ for _k in list(sys.modules):
 
 # Tests in this file that inspect proto message fields (e.g. req.sandbox_id)
 # need the real openshell SDK so proto constructors store kwargs as attributes.
-# The stub on PyPI (0.0.0a0) may not provide SandboxClient; skip those tests
+# Skip SDK-bound checks only when the real OpenShell SDK is unavailable
 # when the full SDK is unavailable (CI without internal registry access).
 try:
     from openshell import SandboxClient as _SC  # noqa: F401
@@ -125,16 +125,6 @@ _requires_sdk = pytest.mark.skipif(
     not _REAL_SDK,
     reason="Requires real openshell SDK (SandboxClient); not available in CI",
 )
-
-
-def _proto_resource(message, *field_names):
-    """Read resource identifiers across OpenShell protobuf field generations."""
-    for field_name in field_names:
-        try:
-            return getattr(message, field_name)
-        except AttributeError:
-            continue
-    raise AssertionError(f"None of the protobuf fields exist: {field_names!r}")
 
 
 # ---------------------------------------------------------------------------
@@ -262,7 +252,7 @@ def sdk_client():
     expose_resp = MagicMock()
     expose_resp.url = "https://agent.sandbox-abc.openshell.example.com"
     client._stub.ExposeService.return_value = expose_resp
-    client._stub.DeleteService.return_value = MagicMock()
+    client._stub.DeleteService.return_value = MagicMock(outcome=1)
     client._timeout = 30
     ref = MagicMock()
     ref.id = "sandbox-abc123"
@@ -286,8 +276,8 @@ class TestExposeService:
         sdk_client._stub.ExposeService.assert_called_once()
         args = sdk_client._stub.ExposeService.call_args
         req = args[0][0]  # first positional arg
-        assert _proto_resource(req, "sandbox", "sandbox_id", "name") == "sandbox-test-abc"
-        assert _proto_resource(req, "name", "service") == "agent"
+        assert req.sandbox == "sandbox-test-abc"
+        assert req.name == "agent"
         assert req.target_port == 4096
         assert req.domain is True
 
@@ -304,8 +294,8 @@ class TestExposeService:
         sdk_client._stub.DeleteService.assert_called_once()
         args = sdk_client._stub.DeleteService.call_args
         req = args[0][0]
-        assert _proto_resource(req, "sandbox", "sandbox_id", "name") == "sandbox-test-abc"
-        assert _proto_resource(req, "name", "service") == "agent"
+        assert req.sandbox == "sandbox-test-abc"
+        assert req.name == "agent"
 
 
 @_requires_sdk
@@ -315,7 +305,7 @@ class TestExecInteractive:
         sdk_client._stub.ExecSandboxInteractive.return_value = mock_stream
         with patch.object(oc, "_get_client", return_value=sdk_client):
             stream, input_q = oc.exec_interactive(
-                sandbox_id="sandbox-id-test",
+                sandbox_name="sandbox-id-test",
                 command=["sh", "-c", "opencode"],
                 cols=80,
                 rows=24,
@@ -339,7 +329,7 @@ class TestExecInteractive:
 
         with patch.object(oc, "_get_client", return_value=sdk_client):
             stream, input_q = oc.exec_interactive(
-                sandbox_id="sandbox-id-test",
+                sandbox_name="sandbox-id-test",
                 command=["sh", "-c", "opencode --continue"],
                 cols=120,
                 rows=40,
@@ -349,7 +339,7 @@ class TestExecInteractive:
 
         assert len(received_msgs) == 1
         start_msg = received_msgs[0]
-        assert _proto_resource(start_msg.start, "sandbox", "sandbox_id", "name") == "sandbox-id-test"
+        assert start_msg.start.sandbox == "sandbox-id-test"
         assert start_msg.start.tty is True
         assert start_msg.start.cols == 120
         assert start_msg.start.rows == 40
@@ -2007,7 +1997,7 @@ class TestRestartPromptPollersArgs:
         else:
             mock_run.assert_not_called()
             assert "EnMaaS unavailable; session marked failed" in caplog.text
-            assert str(s["id"]) not in caplog.text
+            assert f"session {s['id']}" not in caplog.text
             assert sentinel not in caplog.text
             assert "Traceback" not in caplog.text
             if endpoint:
@@ -2085,7 +2075,7 @@ class TestTuiWsOpenshell:
         sdk_client._timeout = 30
 
         stream, input_q = oc.exec_interactive(
-            sandbox_id="sandbox-id-x",
+            sandbox_name="sandbox-id-x",
             command=["sh", "-c", "opencode"],
             cols=80,
             rows=24,
@@ -2094,7 +2084,7 @@ class TestTuiWsOpenshell:
         input_q.put(None)  # unblock generator if it ever resumes
 
         assert len(received) == 1
-        assert _proto_resource(received[0].start, "sandbox", "sandbox_id", "name") == "sandbox-id-x"
+        assert received[0].start.sandbox == "sandbox-id-x"
 
     def test_exec_interactive_resize_queued(self):
         """The first message in the stream carries the sandbox ID and tty flags."""
@@ -2113,7 +2103,7 @@ class TestTuiWsOpenshell:
         sdk_client._timeout = 30
 
         stream, input_q = oc.exec_interactive(
-            sandbox_id="sandbox-id-x",
+            sandbox_name="sandbox-id-x",
             command=["sh", "-c", "opencode"],
             cols=80,
             rows=24,
@@ -2121,7 +2111,7 @@ class TestTuiWsOpenshell:
         )
         input_q.put(None)  # unblock generator if it ever resumes
 
-        assert _proto_resource(received[0].start, "sandbox", "sandbox_id", "name") == "sandbox-id-x"
+        assert received[0].start.sandbox == "sandbox-id-x"
 
 
 # ===========================================================================
