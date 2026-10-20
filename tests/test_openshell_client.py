@@ -638,7 +638,7 @@ async def test_configure_google_cloud_provider_service_account(sdk_client):
     assert sdk_client._stub.ConfigureProviderRefresh.called
     from openshell._proto import openshell_pb2
     assert req_mock.strategy == openshell_pb2.PROVIDER_CREDENTIAL_REFRESH_STRATEGY_GOOGLE_SERVICE_ACCOUNT_JWT
-    assert req_mock.credential_key == "GCP_SA_ACCESS_TOKEN"
+    assert req_mock.credential_key == "service_account_token"
     assert req_mock.material["client_email"] == adc["client_email"]
     assert req_mock.material["private_key"] == adc["private_key"]
     assert "private_key" in req_mock.secret_material_keys
@@ -669,7 +669,7 @@ async def test_configure_google_cloud_provider_authorized_user(sdk_client):
     assert sdk_client._stub.ConfigureProviderRefresh.called
     from openshell._proto import openshell_pb2
     assert req_mock.strategy == openshell_pb2.PROVIDER_CREDENTIAL_REFRESH_STRATEGY_OAUTH2_REFRESH_TOKEN
-    assert req_mock.credential_key == "GCP_ADC_ACCESS_TOKEN"
+    assert req_mock.credential_key == "adc_token"
     assert req_mock.material["client_id"] == adc["client_id"]
     assert req_mock.material["refresh_token"] == adc["refresh_token"]
     assert "client_secret" in req_mock.secret_material_keys
@@ -686,6 +686,70 @@ async def test_configure_google_cloud_provider_unsupported_type_raises(sdk_clien
             await oc.configure_google_cloud_provider(
                 "swarmer-ws-1-google-cloud", json.dumps(adc)
             )
+
+
+@pytest.mark.asyncio
+async def test_configure_vertex_provider_service_account_uses_profile_credential(sdk_client):
+    """Vertex service-account refresh targets the profile's service_account_token."""
+    import json
+
+    adc = {
+        "type": "service_account",
+        "client_email": "<SERVICE_ACCOUNT_EMAIL>",
+        "private_key": "<PRIVATE_KEY>",
+    }
+    req_mock = MagicMock()
+    req_mock.material = {}
+    req_mock.secret_material_keys = []
+    sdk_client._stub.ConfigureProviderRefresh = MagicMock()
+
+    with patch.object(oc, "_get_client", return_value=sdk_client):
+        with patch("openshell._proto.openshell_pb2.ConfigureProviderRefreshRequest",
+                   return_value=req_mock):
+            await oc.configure_vertex_provider(
+                "swarmer-ws-1-google-vertex-ai", json.dumps(adc), "<PROJECT>", "<REGION>"
+            )
+
+    assert sdk_client._stub.ConfigureProviderRefresh.called
+    from openshell._proto import openshell_pb2
+    assert req_mock.strategy == openshell_pb2.PROVIDER_CREDENTIAL_REFRESH_STRATEGY_GOOGLE_SERVICE_ACCOUNT_JWT
+    assert req_mock.credential_key == "service_account_token"
+    assert req_mock.material["client_email"] == adc["client_email"]
+    assert req_mock.material["private_key"] == adc["private_key"]
+    assert "private_key" in req_mock.secret_material_keys
+
+
+@pytest.mark.asyncio
+async def test_configure_vertex_provider_authorized_user_uses_profile_credential(sdk_client):
+    """Vertex ADC refresh targets the profile's gcloud_adc_token."""
+    import json
+
+    adc = {
+        "type": "authorized_user",
+        "client_id": "<CLIENT_ID>",
+        "client_secret": "<CLIENT_SECRET>",
+        "refresh_token": "<REFRESH_TOKEN>",
+    }
+    req_mock = MagicMock()
+    req_mock.material = {}
+    req_mock.secret_material_keys = []
+    sdk_client._stub.ConfigureProviderRefresh = MagicMock()
+
+    with patch.object(oc, "_get_client", return_value=sdk_client):
+        with patch("openshell._proto.openshell_pb2.ConfigureProviderRefreshRequest",
+                   return_value=req_mock):
+            await oc.configure_vertex_provider(
+                "swarmer-ws-1-google-vertex-ai", json.dumps(adc), "<PROJECT>", "<REGION>"
+            )
+
+    assert sdk_client._stub.ConfigureProviderRefresh.called
+    from openshell._proto import openshell_pb2
+    assert req_mock.strategy == openshell_pb2.PROVIDER_CREDENTIAL_REFRESH_STRATEGY_OAUTH2_REFRESH_TOKEN
+    assert req_mock.credential_key == "gcloud_adc_token"
+    assert req_mock.material["client_id"] == adc["client_id"]
+    assert req_mock.material["refresh_token"] == adc["refresh_token"]
+    assert "client_secret" in req_mock.secret_material_keys
+    assert "refresh_token" in req_mock.secret_material_keys
 
 
 # ---------------------------------------------------------------------------

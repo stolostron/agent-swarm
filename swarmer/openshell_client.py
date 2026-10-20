@@ -992,10 +992,10 @@ async def configure_google_cloud_provider(
     - service_account → GOOGLE_SERVICE_ACCOUNT_JWT (gateway signs JWTs from SA key)
     - authorized_user → OAUTH2_REFRESH_TOKEN (gateway exchanges refresh token)
 
-    Credential keys follow the imported google-cloud profile: service-account
-    credentials use GCP_SA_ACCESS_TOKEN and user ADC uses GCP_ADC_ACCESS_TOKEN.
-    The GCE metadata emulator inside the sandbox resolves this placeholder so GCP SDKs
-    that bypass HTTP_PROXY still receive a valid access token.
+    Refresh credential keys use the names declared by the imported google-cloud
+    profile: service-account credentials use ``service_account_token`` and user
+    ADC uses ``adc_token``. Their profile env vars are resolved by the GCE metadata
+    emulator inside the sandbox, including for GCP SDKs that bypass HTTP_PROXY.
     """
     import json as _json
     from openshell._proto import openshell_pb2
@@ -1012,13 +1012,13 @@ async def configure_google_cloud_provider(
         req.provider = provider_name
 
         if adc_type == "service_account":
-            req.credential_key = "GCP_SA_ACCESS_TOKEN"
+            req.credential_key = "service_account_token"
             req.strategy = openshell_pb2.PROVIDER_CREDENTIAL_REFRESH_STRATEGY_GOOGLE_SERVICE_ACCOUNT_JWT
             req.material["client_email"] = adc.get("client_email", "")
             req.material["private_key"] = adc.get("private_key", "")
             req.secret_material_keys.append("private_key")
         elif adc_type == "authorized_user":
-            req.credential_key = "GCP_ADC_ACCESS_TOKEN"
+            req.credential_key = "adc_token"
             req.strategy = openshell_pb2.PROVIDER_CREDENTIAL_REFRESH_STRATEGY_OAUTH2_REFRESH_TOKEN
             req.material["client_id"] = adc.get("client_id", "")
             req.material["client_secret"] = adc.get("client_secret", "")
@@ -1111,18 +1111,18 @@ async def configure_vertex_provider(
         if adc_type == "service_account":
             # The google-vertex-ai profile's service-account credential is distinct
             # from its user ADC credential.
-            # Gateway refreshes via GOOGLE_SERVICE_ACCOUNT_JWT and injects the resulting
-            # token as GOOGLE_VERTEX_AI_SERVICE_ACCOUNT_TOKEN inside the sandbox.
-            req.credential_key = "GOOGLE_VERTEX_AI_SERVICE_ACCOUNT_TOKEN"
+            # Gateway refreshes via GOOGLE_SERVICE_ACCOUNT_JWT and injects the
+            # profile's service_account_token as the Vertex service-account env var.
+            req.credential_key = "service_account_token"
             req.strategy = openshell_pb2.PROVIDER_CREDENTIAL_REFRESH_STRATEGY_GOOGLE_SERVICE_ACCOUNT_JWT
             req.material["client_email"] = adc.get("client_email", "")
             req.material["private_key"] = adc.get("private_key", "")
             req.secret_material_keys.append("private_key")
         elif adc_type == "authorized_user":
-            # The google-vertex-ai profile's ADC credential key is GOOGLE_VERTEX_AI_TOKEN.
+            # The google-vertex-ai profile's ADC credential key is gcloud_adc_token.
             # Gateway refreshes via OAUTH2_REFRESH_TOKEN (token_url and scopes are
             # defined in the built-in profile, not in the material).
-            req.credential_key = "GOOGLE_VERTEX_AI_TOKEN"
+            req.credential_key = "gcloud_adc_token"
             req.strategy = openshell_pb2.PROVIDER_CREDENTIAL_REFRESH_STRATEGY_OAUTH2_REFRESH_TOKEN
             req.material["client_id"] = adc.get("client_id", "")
             req.material["client_secret"] = adc.get("client_secret", "")
