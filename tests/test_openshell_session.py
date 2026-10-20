@@ -2451,6 +2451,8 @@ class TestRunOpenshellAgent:
         """OpenCode V2 unification: TUI mode starts the shared service and
         exposes it, exactly like server mode — the TUI WebSocket client
         attaches to this persistent backend and can reconnect to it."""
+        from swarmer.openshell_client import GatewayConfig
+
         ws = await _create_workspace(client)
         s = await _create_session(client, ws["id"], mode="tui")
 
@@ -2462,9 +2464,13 @@ class TestRunOpenshellAgent:
             await db.commit()
 
         mock_expose = AsyncMock(return_value="https://agent.sandbox.example.com")
+        gateway_config = GatewayConfig(
+            gateway_url="https://test-gateway.example.com", auth_mode="none", workspace_id=ws["id"],
+        )
         with patch("swarmer.database.get_db", new=_make_test_db_provider()), \
              patch("swarmer.openshell_client.start_agent", new=AsyncMock()) as mock_start, \
              patch("swarmer.openshell_client.expose_service", new=mock_expose), \
+             patch("swarmer.openshell_client.resolve_gateway_config", new=AsyncMock(return_value=gateway_config)), \
              patch("swarmer.routers.sessions.asyncio.sleep", new=AsyncMock()):
             from swarmer.routers.sessions import _run_openshell_agent
             await _run_openshell_agent(
@@ -2472,7 +2478,10 @@ class TestRunOpenshellAgent:
             )
 
         mock_start.assert_called_once()
-        mock_expose.assert_called_once_with("sandbox-tui", "agent", 4096)
+        mock_expose.assert_called_once()
+        assert mock_expose.call_args.args == ("sandbox-tui", "agent", 4096)
+        assert mock_expose.call_args.kwargs["gateway_config"] is gateway_config
+        assert mock_expose.call_args.kwargs["client"] is not None
 
         async with _TestSession() as db:
             from sqlalchemy import select

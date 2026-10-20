@@ -310,6 +310,26 @@ class TestExposeService:
         assert url == "https://agent.sandbox-abc.openshell.example.com:17670"
 
     @pytest.mark.asyncio
+    async def test_expose_service_uses_default_port_for_remote_gateway(self, sdk_client):
+        from swarmer.openshell_client import GatewayConfig
+
+        sdk_client._stub.ExposeService.return_value.url = (
+            "https://agent.sandbox-abc.openshell.example.com:8080"
+        )
+        remote_gateway = GatewayConfig(
+            gateway_url="https://remote-gateway.example.com",
+            auth_mode="none",
+            workspace_id=42,
+        )
+        with patch.object(oc, "_get_client", return_value=sdk_client):
+            url = await oc.expose_service(
+                "sandbox-test-abc", "agent", 4096,
+                client=sdk_client, gateway_config=remote_gateway,
+            )
+
+        assert url == "https://agent.sandbox-abc.openshell.example.com:443"
+
+    @pytest.mark.asyncio
     async def test_delete_service_calls_stub(self, sdk_client):
         with patch.object(oc, "_get_client", return_value=sdk_client):
             await oc.delete_service("sandbox-test-abc", "agent")
@@ -823,11 +843,15 @@ class TestServerModeExposeService:
     async def test_server_mode_calls_expose_service(self, client):
         """_run_openshell_agent server mode calls expose_service after start_agent."""
         from swarmer.routers.sessions import _run_openshell_agent
+        from swarmer.openshell_client import GatewayConfig
 
         expose_mock = AsyncMock(return_value="https://agent.sandbox.example.com")
         start_mock = AsyncMock()
 
         ws = await _create_workspace(client)
+        gateway_config = GatewayConfig(
+            gateway_url="https://test-gateway.example.com", auth_mode="none", workspace_id=ws["id"],
+        )
         s = await _create_session(client, ws["id"], mode="server")
         async with _TestSession() as db:
             from swarmer.models.session import Session as _Session
@@ -837,6 +861,7 @@ class TestServerModeExposeService:
 
         with patch("swarmer.openshell_client.start_agent", start_mock), \
              patch("swarmer.openshell_client.expose_service", expose_mock), \
+             patch("swarmer.openshell_client.resolve_gateway_config", new=AsyncMock(return_value=gateway_config)), \
              patch("swarmer.database.get_db", _test_get_db), \
              patch("swarmer.routers.sessions.asyncio.sleep", AsyncMock()):
             await _run_openshell_agent(
@@ -851,18 +876,22 @@ class TestServerModeExposeService:
         start_mock.assert_called_once()
         expose_mock.assert_called_once()
         assert expose_mock.call_args.args == ("sandbox-test-abc", "agent", 4096)
-        assert expose_mock.call_args.kwargs["gateway_config"].gateway_url
+        assert expose_mock.call_args.kwargs["gateway_config"] is gateway_config
 
     @pytest.mark.asyncio
     async def test_tui_mode_calls_expose_service(self, client):
         """OpenCode V2 unification: TUI mode runs the shared service and
         exposes it, exactly like server mode."""
         from swarmer.routers.sessions import _run_openshell_agent
+        from swarmer.openshell_client import GatewayConfig
 
         expose_mock = AsyncMock(return_value="https://agent.sandbox.example.com")
         start_mock = AsyncMock()
 
         ws = await _create_workspace(client)
+        gateway_config = GatewayConfig(
+            gateway_url="https://test-gateway.example.com", auth_mode="none", workspace_id=ws["id"],
+        )
         s = await _create_session(client, ws["id"], mode="tui")
         async with _TestSession() as db:
             from swarmer.models.session import Session as _Session
@@ -872,6 +901,7 @@ class TestServerModeExposeService:
 
         with patch("swarmer.openshell_client.start_agent", start_mock), \
              patch("swarmer.openshell_client.expose_service", expose_mock), \
+             patch("swarmer.openshell_client.resolve_gateway_config", new=AsyncMock(return_value=gateway_config)), \
              patch("swarmer.database.get_db", _test_get_db), \
              patch("swarmer.routers.sessions.asyncio.sleep", AsyncMock()):
             await _run_openshell_agent(
@@ -886,7 +916,7 @@ class TestServerModeExposeService:
         start_mock.assert_called_once()
         expose_mock.assert_called_once()
         assert expose_mock.call_args.args == ("sandbox-test-abc", "agent", 4096)
-        assert expose_mock.call_args.kwargs["gateway_config"].gateway_url
+        assert expose_mock.call_args.kwargs["gateway_config"] is gateway_config
 
     @pytest.mark.asyncio
     async def test_tui_mode_exposure_does_not_log_service_url(self, client, caplog):

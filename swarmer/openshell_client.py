@@ -2257,7 +2257,17 @@ async def expose_service(
         # the port from the same gateway config used for this exposure.
         gw = gateway_config.gateway_url or ""
         gw_with_scheme = gw if "://" in gw else f"//{gw}"
-        gw_port = urlparse(gw_with_scheme).port
+        gateway_url = urlparse(gw_with_scheme)
+        gw_port = gateway_url.port
+        if gw_port is None:
+            # A hosted gateway URL commonly omits the default HTTPS port.
+            # The service URL returned by OpenShell still carries its internal
+            # port, so use the effective gateway port when rewriting it.
+            scheme = gateway_url.scheme.lower()
+            if scheme in ("https", "grpcs", "wss"):
+                gw_port = 443
+            elif scheme in ("http", "grpc", "ws"):
+                gw_port = 80
         if gw_port:
             from urllib.parse import urlunparse
             p = urlparse(url)
