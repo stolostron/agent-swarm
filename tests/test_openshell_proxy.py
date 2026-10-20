@@ -288,6 +288,28 @@ class TestExposeService:
         assert url == "https://agent.sandbox-abc.openshell.example.com"
 
     @pytest.mark.asyncio
+    async def test_expose_service_uses_workspace_gateway_port(self, sdk_client):
+        from swarmer.config import settings
+        from swarmer.openshell_client import GatewayConfig
+
+        sdk_client._stub.ExposeService.return_value.url = (
+            "https://agent.sandbox-abc.openshell.example.com:8080"
+        )
+        workspace_gateway = GatewayConfig(
+            gateway_url="https://remote-gateway.example.com:17670",
+            auth_mode="none",
+            workspace_id=42,
+        )
+        with patch.object(oc, "_get_client", return_value=sdk_client), \
+             patch.object(settings, "openshell_gateway_url", "http://local-gateway:8080"):
+            url = await oc.expose_service(
+                "sandbox-test-abc", "agent", 4096,
+                client=sdk_client, gateway_config=workspace_gateway,
+            )
+
+        assert url == "https://agent.sandbox-abc.openshell.example.com:17670"
+
+    @pytest.mark.asyncio
     async def test_delete_service_calls_stub(self, sdk_client):
         with patch.object(oc, "_get_client", return_value=sdk_client):
             await oc.delete_service("sandbox-test-abc", "agent")
@@ -827,7 +849,9 @@ class TestServerModeExposeService:
             )
 
         start_mock.assert_called_once()
-        expose_mock.assert_called_once_with("sandbox-test-abc", "agent", 4096)
+        expose_mock.assert_called_once()
+        assert expose_mock.call_args.args == ("sandbox-test-abc", "agent", 4096)
+        assert expose_mock.call_args.kwargs["gateway_config"].gateway_url
 
     @pytest.mark.asyncio
     async def test_tui_mode_calls_expose_service(self, client):
@@ -860,7 +884,9 @@ class TestServerModeExposeService:
             )
 
         start_mock.assert_called_once()
-        expose_mock.assert_called_once_with("sandbox-test-abc", "agent", 4096)
+        expose_mock.assert_called_once()
+        assert expose_mock.call_args.args == ("sandbox-test-abc", "agent", 4096)
+        assert expose_mock.call_args.kwargs["gateway_config"].gateway_url
 
     @pytest.mark.asyncio
     async def test_tui_mode_exposure_does_not_log_service_url(self, client, caplog):

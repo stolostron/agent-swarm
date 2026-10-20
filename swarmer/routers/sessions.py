@@ -2700,13 +2700,15 @@ async def _run_openshell_agent(
                 try:
                     await _update_db(status_detail="Waiting for server to start…")
                     await asyncio.sleep(8)  # let the server process start listening
+                    gateway_config = await openshell_client.resolve_gateway_config(workspace_id)
                     if oc_client is not None:
                         service_url = await openshell_client.expose_service(
-                            sandbox_name, "agent", port, client=oc_client
+                            sandbox_name, "agent", port, client=oc_client,
+                            gateway_config=gateway_config,
                         )
                     else:
                         service_url = await openshell_client.expose_service(
-                            sandbox_name, "agent", port
+                            sandbox_name, "agent", port, gateway_config=gateway_config
                         )
                     # Transition to running and store the URL atomically so the
                     # Chat tab is only accessible once it's reachable.

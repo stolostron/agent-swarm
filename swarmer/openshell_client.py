@@ -2228,12 +2228,16 @@ async def expose_service(
     service_name: str,
     target_port: int,
     client=None,
+    gateway_config: GatewayConfig | None = None,
 ) -> str:
     """Expose a sandbox's port via the OpenShell gateway and return the routable URL."""
     from openshell._proto import openshell_pb2
 
     if client is None:
-        client = _get_client()
+        client = _get_client(gateway_config)
+
+    if gateway_config is None:
+        gateway_config = default_gateway_config()
 
     def _do():
         req = openshell_pb2.ExposeServiceRequest(
@@ -2248,18 +2252,20 @@ async def expose_service(
         # The returned URL embeds the gateway hostname; it is stored on the
         # session row but must never be written to log output.
         log.info("expose_service %s/%s", sandbox_name, service_name)
-        # The gateway returns the internal cluster port (e.g. 8080) but in local
-        # dev with kubectl port-forward the gateway is accessible on a different
-        # port (e.g. 17670). Rewrite to the configured gateway port so Swarmer
-        # can reach it from the host.
-        from swarmer.config import settings
-        gw = settings.openshell_gateway_url or ""
-        gw_port = gw.rsplit(":", 1)[-1] if ":" in gw else ""
-        if gw_port and gw_port.isdigit():
-            from urllib.parse import urlparse, urlunparse
+        # The gateway returns the internal cluster port (e.g. 8080), but a
+        # workspace gateway may be reachable on a different port. Rewrite to
+        # the port from the same gateway config used for this exposure.
+        gw = gateway_config.gateway_url or ""
+        gw_with_scheme = gw if "://" in gw else f"//{gw}"
+        gw_port = urlparse(gw_with_scheme).port
+        if gw_port:
+            from urllib.parse import urlunparse
             p = urlparse(url)
-            if p.port and str(p.port) != gw_port:
-                url = urlunparse(p._replace(netloc=f"{p.hostname}:{gw_port}"))
+            if p.port and p.port != gw_port:
+                host = p.hostname or ""
+                if ":" in host:
+                    host = f"[{host}]"
+                url = urlunparse(p._replace(netloc=f"{host}:{gw_port}"))
                 log.info("expose_service: rewrote port %s → %s", p.port, gw_port)
         return url
 

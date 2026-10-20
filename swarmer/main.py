@@ -468,7 +468,11 @@ async def _restart_server_sessions() -> None:
                 try:
                     _tool = _get_tool(s.agent_tool)
                     port = _tool.get_server_port() or 4096
-                    service_url = await openshell_client.expose_service(sandbox_name, "agent", port, client=oc_client)
+                    gateway_config = await openshell_client.resolve_gateway_config(s.workspace_id, db)
+                    service_url = await openshell_client.expose_service(
+                        sandbox_name, "agent", port, client=oc_client,
+                        gateway_config=gateway_config,
+                    )
                     s.service_url = service_url
                     s.phase = "running"
                     # The service URL embeds the gateway hostname; keep it out
