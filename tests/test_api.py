@@ -1380,7 +1380,7 @@ class TestSessions:
             app.dependency_overrides[get_current_user] = _override_get_current_user
 
         assert response.status_code == 403, response.text
-        assert response.json()["detail"] == "Session credentials cannot use this endpoint"
+        assert response.json()["detail"] == "Only workspace managers can update shared MCP servers."
         inventory = await client.get(f"/api/v1/workspaces/{ws['id']}/mcp-servers")
         # Only the auto-provisioned agent-swarm row may exist — the member's
         # catalog add must not have created anything.
@@ -1406,6 +1406,7 @@ class TestSessions:
             app.dependency_overrides[require_api_auth] = _override_require_api_auth
 
         assert response.status_code == 403, response.text
+        assert response.json()["detail"] == "Session credentials cannot use this endpoint"
         inventory = await client.get(f"/api/v1/workspaces/{ws['id']}/mcp-servers")
         assert "atlassian-jira" not in {item["slug"] for item in inventory.json()}
 
