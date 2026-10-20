@@ -235,9 +235,10 @@ stolostron/agent-containers main/VERSION
   its metadata commits.
 - `swarmer/config.py` reads `AGENT_IMAGE_OPENCODE`; `opencode.py:get_image()` supplies it
   to sandbox creation. The image is not selected from the model or hardcoded in Python.
-- OpenShell SDK and chart versions are pinned independently in this repository's `Makefile`
-  as `OPENSHELL_VERSION` and `AGENT_SANDBOX_VERSION`; `make update-deps` updates both and
-  the matching `requirements.txt` SDK pin.
+- OpenShell SDK and chart versions are pinned to 0.1.4, and Agent Sandbox CRDs to v1.0.4,
+  in `requirements.txt` and this repository's `Makefile`. This is a clean API/runtime cutover;
+  old gateway clients and sandbox instances are not supported. See
+  [OpenShell setup and migration](OPENSHELL_LOCAL_SETUP.md).
 
 ## OpenShell Deployment Contract
 
@@ -249,7 +250,9 @@ time. Do not replace those placeholders with environment-specific values in git.
 2. Install Agent Sandbox CRDs from the pinned `AGENT_SANDBOX_VERSION` if needed.
 3. Install or upgrade the OCI chart
    `oci://ghcr.io/nvidia/openshell/helm-chart` at `OPENSHELL_VERSION`.
-4. Use these required chart settings:
+4. Import the pinned GitHub, Google, and Swarmer provider profiles on fresh gateways before
+   provider creation; `swarmer/main.py` performs this initialization.
+5. Use these required chart settings:
    - `server.auth.allowUnauthenticatedUsers=true`: port-forward/mTLS deployment does not
      require an additional Gateway JWT.
    - `server.drivers.kubernetes.workspaceMode=shared`.
@@ -258,11 +261,11 @@ time. Do not replace those placeholders with environment-specific values in git.
    - `server.workspaceDefaultStorageSize=$(OPENSHELL_WORKSPACE_STORAGE)`: size for newly
      created `/sandbox` PVCs; distinct from sandbox pod ephemeral-storage compute, which is
      hardcoded in `openshell_client.py`.
-5. Extract `openshell-client-tls` to `auth/openshell/`, mirror it as `openshell-tls` in the
+6. Extract `openshell-client-tls` to `auth/openshell/`, mirror it as `openshell-tls` in the
    Swarmer namespace, and mount it at `/auth/openshell`.
-6. Discover the Gateway service URL and substitute it, the agent image, OAuth URL, pull
+7. Discover the Gateway service URL and substitute it, the agent image, OAuth URL, pull
    policy, filesystem group, and concurrency limit into the Swarmer Deployment.
-7. On OpenShift, apply the Route/OAuthClient and grant `anyuid` plus `privileged` SCCs to
+8. On OpenShift, apply the Route/OAuthClient and grant `anyuid` plus `privileged` SCCs to
    the OpenShell and sandbox service accounts. Generic Kubernetes uses the standard Service
    path and token-only login.
 

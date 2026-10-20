@@ -1,0 +1,82 @@
+# SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES.
+# SPDX-License-Identifier: Apache-2.0
+# Based on NVIDIA/OpenShell providers/google-vertex-ai.yaml at v0.1.4.
+id: google-vertex-ai
+display_name: Google Vertex AI
+description: Google Vertex AI inference provider
+category: inference
+inference_capable: true
+credentials:
+  - name: service_account_key
+    description: Service-account refresh bootstrap material; not injected
+    env_vars: [GOOGLE_SERVICE_ACCOUNT_KEY]
+    required: false
+  - name: service_account_token
+    description: Google access token refreshed from service-account JWT material
+    env_vars: [GOOGLE_VERTEX_AI_SERVICE_ACCOUNT_TOKEN, VERTEX_AI_SERVICE_ACCOUNT_TOKEN]
+    required: false
+    auth_style: bearer
+    header_name: authorization
+    refresh:
+      strategy: google_service_account_jwt
+      token_url: https://oauth2.googleapis.com/token
+      scopes: [https://www.googleapis.com/auth/cloud-platform]
+      refresh_before_seconds: 300
+      max_lifetime_seconds: 3600
+      material:
+        - name: client_email
+          required: true
+        - name: private_key
+          required: true
+          secret: true
+        - name: subject
+  - name: gcloud_adc_token
+    description: Google access token refreshed via gcloud ADC
+    env_vars: [GOOGLE_VERTEX_AI_TOKEN, VERTEX_AI_TOKEN]
+    required: false
+    auth_style: bearer
+    header_name: authorization
+    refresh:
+      strategy: oauth2_refresh_token
+      token_url: https://oauth2.googleapis.com/token
+      scopes: [https://www.googleapis.com/auth/cloud-platform]
+      refresh_before_seconds: 300
+      max_lifetime_seconds: 3600
+      material:
+        - name: client_id
+          required: true
+        - name: client_secret
+          required: true
+          secret: true
+        - name: refresh_token
+          required: true
+          secret: true
+discovery:
+  credentials: [service_account_token, gcloud_adc_token]
+endpoints:
+  - host: "*-aiplatform.googleapis.com"
+    port: 443
+    protocol: rest
+    access: read-write
+    enforcement: enforce
+  - host: aiplatform.googleapis.com
+    port: 443
+    protocol: rest
+    access: read-write
+    enforcement: enforce
+  - host: aiplatform.us.rep.googleapis.com
+    port: 443
+    protocol: rest
+    access: read-write
+    enforcement: enforce
+  - host: aiplatform.eu.rep.googleapis.com
+    port: 443
+    protocol: rest
+    access: read-write
+    enforcement: enforce
+binaries:
+  - /usr/local/share/npm-global/lib/node_modules/@opencode/cli-linux-x64/bin/opencode
+  - /usr/local/share/npm-global/lib/node_modules/@opencode/cli/bin/opencode.exe
+  - /usr/local/share/npm-global/lib/node_modules/opencode-linux-x64/bin/opencode
+  - /usr/local/share/npm-global/bin/opencode
+  - /usr/local/share/npm-global/lib/node_modules/opencode-ai/bin/opencode.exe

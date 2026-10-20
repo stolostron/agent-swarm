@@ -34,6 +34,12 @@ FAIL = "✗"
 _results: list[tuple[str, bool, str]] = []
 
 
+def _exec(client, sandbox_name: str, command, **kwargs):
+    return client.exec(
+        sandbox_name, command, workspace="default", **kwargs
+    )
+
+
 def step(label: str, passed: bool, detail: str = "") -> bool:
     marker = PASS if passed else FAIL
     print(f"  {marker}  {label}", end="")
@@ -64,6 +70,7 @@ async def run_smoke_test(model: str) -> bool:
     from swarmer.crypto import init_crypto
     from swarmer.openshell_client import (
         _get_client, ensure_provider, create_sandbox, write_agent_config,
+        delete_provider, delete_sandbox, detach_sandbox_provider, list_sandboxes,
     )
     from swarmer.agent_tools.opencode import OpenCodeStrategy
     from swarmer.openshell_policy import build_session_policy
@@ -126,20 +133,18 @@ async def run_smoke_test(model: str) -> bool:
         step("CreateSandbox + WaitReady", False, str(exc))
         # Clean up provider and bail
         try:
-            client._stub.DeleteProvider(
-                openshell_pb2.DeleteProviderRequest(name=provider_name), timeout=10)
+            await delete_provider(provider_name, client=client)
         except Exception:
             pass
         return False
 
-    sid = ref.id
     sandbox_name = ref.name
 
     def xec(cmd, timeout=20, stdin=None):
         """Execute a command in the sandbox and return ExecResult."""
         if isinstance(cmd, str):
-            return client.exec(sid, ["sh", "-c", cmd], timeout_seconds=timeout, stdin=stdin)
-        return client.exec(sid, cmd, timeout_seconds=timeout, stdin=stdin)
+            return _exec(client, sandbox_name, ["sh", "-c", cmd], timeout_seconds=timeout, stdin=stdin)
+        return _exec(client, sandbox_name, cmd, timeout_seconds=timeout, stdin=stdin)
 
     all_passed = True
 
@@ -272,11 +277,11 @@ async def run_smoke_test(model: str) -> bool:
 
     # ── 9c. Verify sandbox still alive (may have been GC'd during approval wait) ──
     try:
-        client._stub.GetSandbox(openshell_pb2.GetSandboxRequest(name=sandbox_name), timeout=10)
+        client.get(sandbox_name, workspace="default")
     except Exception as exc:
         step("Sandbox still alive", False, f"GC or external deletion: {exc}")
         all_passed = False
-        client._stub.DeleteProvider(openshell_pb2.DeleteProviderRequest(name=provider_name), timeout=10)
+        await delete_provider(provider_name, client=client)
         return all_passed
 
     # ── 10. opencode run ──────────────────────────────────────────────────────
@@ -346,7 +351,7 @@ print(result[:2000] if result else '')
 conn.close()
 """
         xec("cat > /tmp/get_output.py", stdin=db_reader)
-        r2 = client.exec(sid, ["python3", "/tmp/get_output.py"], timeout_seconds=10)
+        r2 = _exec(client, sandbox_name, ["python3", "/tmp/get_output.py"], timeout_seconds=10)
         response = (r2.stdout or "").strip()
 
         # Fall back to stderr if DB query found nothing (e.g. policy_denied error)
@@ -367,7 +372,7 @@ for r in rows:
 conn.close()
 """
             xec("cat > /tmp/get_errors.py", stdin=err_reader)
-            r3 = client.exec(sid, ["python3", "/tmp/get_errors.py"], timeout_seconds=10)
+            r3 = _exec(client, sandbox_name, ["python3", "/tmp/get_errors.py"], timeout_seconds=10)
             if r3.stdout.strip():
                 print(f"  DB errors: {r3.stdout.strip()[:400]}")
 
@@ -386,28 +391,18 @@ conn.close()
     # ── Cleanup ──────────────────────────────────────────────────────────────
     print("\n[cleanup]")
     try:
-        client.delete(sandbox_name)
+        await delete_sandbox(sandbox_name, client=client)
         step("Delete sandbox", True, sandbox_name)
     except Exception as exc:
         step("Delete sandbox", False, str(exc))
     try:
         # Detach from any still-running sandboxes before deleting
         try:
-            attached = client._stub.ListSandboxes(openshell_pb2.ListSandboxesRequest(), timeout=10)
-            for asb in attached.sandboxes:
-                provs = client._stub.ListSandboxProviders(
-                    openshell_pb2.ListSandboxProvidersRequest(sandbox_name=asb.metadata.name), timeout=10
-                )
-                if any(p.metadata.name == provider_name for p in provs.providers):
-                    client._stub.DetachSandboxProvider(
-                        openshell_pb2.DetachSandboxProviderRequest(
-                            sandbox_name=asb.metadata.name, provider_name=provider_name
-                        ), timeout=10
-                    )
+            for asb_name in await list_sandboxes(client=client):
+                await detach_sandbox_provider(asb_name, provider_name, client=client)
         except Exception:
             pass
-        client._stub.DeleteProvider(
-            openshell_pb2.DeleteProviderRequest(name=provider_name), timeout=10)
+        await delete_provider(provider_name, client=client)
         step("Delete test provider", True)
     except Exception as exc:
         step("Delete test provider", False, str(exc))
@@ -445,7 +440,9 @@ async def run_vertex_smoke_test(
     from swarmer.crypto import init_crypto
     from swarmer.openshell_client import (
         _get_client, ensure_provider, configure_vertex_provider,
-        create_sandbox, write_agent_config, enable_providers_v2,
+        create_sandbox, write_agent_config,
+        delete_sandbox, detach_sandbox_provider, delete_provider, list_sandboxes,
+        _workspace_selector,
     )
     from swarmer.openshell_policy import build_session_policy
     from openshell._proto import openshell_pb2
@@ -491,13 +488,6 @@ async def run_vertex_smoke_test(
     model_arg = shlex.quote(model)
     vertex_env_prefix = ""  # no special env prefix needed
 
-    # ── 1b. Enable providers_v2 (required for google-vertex-ai profile) ──
-    try:
-        await enable_providers_v2()
-        step("providers_v2_enabled", True)
-    except Exception as exc:
-        step("providers_v2_enabled", False, str(exc)[:80])
-
     # ── 2. Register google-vertex-ai provider ────────────────────────────────
     print("\n[2] Gateway provider setup (google-vertex-ai, ADC refresh)")
     provider_name = f"swarmer-smoke-vertex-{agent_tool}"
@@ -524,7 +514,7 @@ async def run_vertex_smoke_test(
         step("ConfigureProviderRefresh (ADC)", True)
     except Exception as exc:
         step("ConfigureProviderRefresh", False, str(exc))
-        _cleanup_provider(client, provider_name, openshell_pb2)
+        await _cleanup_provider(client, provider_name)
         return False
 
     # Wait for the gateway to complete the first token refresh (async, takes ~2-5s)
@@ -534,7 +524,10 @@ async def run_vertex_smoke_test(
         _time.sleep(1)
         try:
             sr = client._stub.GetProviderRefreshStatus(
-                openshell_pb2.GetProviderRefreshStatusRequest(provider=provider_name),
+                openshell_pb2.GetProviderRefreshStatusRequest(
+                    provider=provider_name,
+                    workspace_scope=_workspace_selector(),
+                ),
                 timeout=5)
             statuses = {c.credential_key: c.status for c in sr.credentials}
             if statuses.get("gcloud_adc_token") == "configured":
@@ -548,7 +541,7 @@ async def run_vertex_smoke_test(
         print(" timeout")
         prereq_passed = step("Token refreshed", False, "timed out waiting for gcloud_adc_token")
         if not prereq_passed:
-            _cleanup_provider(client, provider_name, openshell_pb2)
+            await _cleanup_provider(client, provider_name)
             return False
 
     # ── 3. Sandbox creation ──────────────────────────────────────────────────
@@ -575,17 +568,16 @@ async def run_vertex_smoke_test(
         step("CreateSandbox + WaitReady", True, ref.name)
     except Exception as exc:
         step("CreateSandbox + WaitReady", False, str(exc))
-        _cleanup_provider(client, provider_name, openshell_pb2)
+        await _cleanup_provider(client, provider_name)
         return False
 
-    sid = ref.id
     sandbox_name = ref.name
     all_passed = True
 
     def xec(cmd, timeout=20, stdin=None):
         if isinstance(cmd, str):
-            return client.exec(sid, ["sh", "-c", cmd], timeout_seconds=timeout, stdin=stdin)
-        return client.exec(sid, cmd, timeout_seconds=timeout, stdin=stdin)
+            return _exec(client, sandbox_name, ["sh", "-c", cmd], timeout_seconds=timeout, stdin=stdin)
+        return _exec(client, sandbox_name, cmd, timeout_seconds=timeout, stdin=stdin)
 
     # ── 4. Check provider token injection ────────────────────────────────────
     print("\n[4] Provider token injection")
@@ -641,8 +633,8 @@ async def run_vertex_smoke_test(
         all_passed = all_passed and ok
         agent_block = computed_net.get("agent_api", {})
         agent_endpoints = [ep.get("host", "") for ep in agent_block.get("endpoints", [])]
-        has_vertex = any("aiplatform" in h or "inference.local" in h for h in agent_endpoints)
-        ok = step("agent_api block covers VertexAI/inference.local endpoints", has_vertex,
+        has_vertex = any("aiplatform" in h for h in agent_endpoints)
+        ok = step("agent_api block covers native Vertex AI endpoints", has_vertex,
                   f"endpoints: {agent_endpoints}")
         all_passed = all_passed and ok
     except Exception as exc:
@@ -754,7 +746,7 @@ except Exception:
 conn.close()
 """
         xec("cat > /tmp/get_output.py", stdin=db_reader)
-        r2 = client.exec(sid, ["python3", "/tmp/get_output.py"], timeout_seconds=10)
+        r2 = _exec(client, sandbox_name, ["python3", "/tmp/get_output.py"], timeout_seconds=10)
         response = (r2.stdout or "").strip()
         if not response:
             # Dump message roles and parts to diagnose
@@ -803,7 +795,7 @@ for row in conn.execute('SELECT type, data FROM event ORDER BY id DESC LIMIT 3')
 conn.close()
 """
             xec("cat > /tmp/diag.py", stdin=diag)
-            rd = client.exec(sid, ["python3", "/tmp/diag.py"], timeout_seconds=10)
+            rd = _exec(client, sandbox_name, ["python3", "/tmp/diag.py"], timeout_seconds=10)
             if rd.stdout:
                 print(f"  DB diagnostic:\n{rd.stdout[:1200]}")
             if r.stdout and r.stdout.strip():
@@ -826,11 +818,11 @@ conn.close()
     # ── Cleanup ──────────────────────────────────────────────────────────────
     print("\n[cleanup]")
     try:
-        client.delete(sandbox_name)
+        await delete_sandbox(sandbox_name, client=client)
         step("Delete sandbox", True, sandbox_name)
     except Exception as exc:
         step("Delete sandbox", False, str(exc))
-    _cleanup_provider(client, provider_name, openshell_pb2)
+    await _cleanup_provider(client, provider_name)
 
     passed = sum(1 for _, ok, _ in _results if ok)
     total = len(_results)
@@ -844,28 +836,24 @@ conn.close()
     return all_passed
 
 
-def _cleanup_provider(client, provider_name: str, openshell_pb2) -> None:
+async def _cleanup_provider(client, provider_name: str) -> None:
     """Detach and delete a gateway provider, ignoring errors."""
+    from swarmer.openshell_client import (
+        delete_provider,
+        detach_sandbox_provider,
+        list_sandboxes,
+    )
+
     try:
-        attached = client._stub.ListSandboxes(openshell_pb2.ListSandboxesRequest(), timeout=10)
-        for asb in attached.sandboxes:
+        for sandbox_name in await list_sandboxes(client=client):
             try:
-                provs = client._stub.ListSandboxProviders(
-                    openshell_pb2.ListSandboxProvidersRequest(sandbox_name=asb.metadata.name), timeout=10
-                )
-                if any(p.metadata.name == provider_name for p in provs.providers):
-                    client._stub.DetachSandboxProvider(
-                        openshell_pb2.DetachSandboxProviderRequest(
-                            sandbox_name=asb.metadata.name, provider_name=provider_name
-                        ), timeout=10
-                    )
+                await detach_sandbox_provider(sandbox_name, provider_name, client=client)
             except Exception:
                 pass
     except Exception:
         pass
     try:
-        client._stub.DeleteProvider(
-            openshell_pb2.DeleteProviderRequest(name=provider_name), timeout=10)
+        await delete_provider(provider_name, client=client)
         step("Delete test provider", True)
     except Exception as exc:
         step("Delete test provider", False, str(exc))
@@ -894,7 +882,9 @@ async def run_policy_extract(
           --agent opencode --language golang
     """
     from swarmer.crypto import init_crypto
-    from swarmer.openshell_client import _get_client, ensure_provider, create_sandbox
+    from swarmer.openshell_client import (
+        _get_client, ensure_provider, create_sandbox, delete_sandbox,
+    )
     from swarmer.openshell_policy import build_session_policy, build_session_network_policies
     from swarmer.agent_tools.opencode import OpenCodeStrategy
     from openshell._proto import openshell_pb2
@@ -979,17 +969,16 @@ async def run_policy_extract(
         step("CreateSandbox + WaitReady (policy pre-applied)", True, ref.name)
     except Exception as exc:
         step("CreateSandbox", False, str(exc))
-        _cleanup_provider(client, provider_name, openshell_pb2)
+        await _cleanup_provider(client, provider_name)
         return False
 
-    sid = ref.id
     sandbox_name = ref.name
     all_passed = True
 
     def xec(cmd, timeout=30, stdin=None):
         if isinstance(cmd, str):
-            return client.exec(sid, ["sh", "-c", cmd], timeout_seconds=timeout, stdin=stdin)
-        return client.exec(sid, cmd, timeout_seconds=timeout, stdin=stdin)
+            return _exec(client, sandbox_name, ["sh", "-c", cmd], timeout_seconds=timeout, stdin=stdin)
+        return _exec(client, sandbox_name, cmd, timeout_seconds=timeout, stdin=stdin)
 
     # ── 4. Git clone each repo — no probe-approve cycle ─────────────────────
     # The sandbox started with github.com network access already approved via
@@ -1030,11 +1019,11 @@ async def run_policy_extract(
     # ── Cleanup ──────────────────────────────────────────────────────────────
     print("\n[cleanup]")
     try:
-        client.delete(sandbox_name)
+        await delete_sandbox(sandbox_name, client=client)
         step("Delete sandbox", True, sandbox_name)
     except Exception as exc:
         step("Delete sandbox", False, str(exc))
-    _cleanup_provider(client, provider_name, openshell_pb2)
+    await _cleanup_provider(client, provider_name)
 
     passed = sum(1 for _, ok, _ in _results if ok)
     total = len(_results)

@@ -113,7 +113,7 @@ for _k in list(sys.modules):
 
 # Tests in this file that inspect proto message fields (e.g. req.sandbox_id)
 # need the real openshell SDK so proto constructors store kwargs as attributes.
-# The stub on PyPI (0.0.0a0) may not provide SandboxClient; skip those tests
+# Skip SDK-bound checks only when the real OpenShell SDK is unavailable
 # when the full SDK is unavailable (CI without internal registry access).
 try:
     from openshell import SandboxClient as _SC  # noqa: F401
@@ -125,16 +125,6 @@ _requires_sdk = pytest.mark.skipif(
     not _REAL_SDK,
     reason="Requires real openshell SDK (SandboxClient); not available in CI",
 )
-
-
-def _proto_resource(message, *field_names):
-    """Read resource identifiers across OpenShell protobuf field generations."""
-    for field_name in field_names:
-        try:
-            return getattr(message, field_name)
-        except AttributeError:
-            continue
-    raise AssertionError(f"None of the protobuf fields exist: {field_names!r}")
 
 
 # ---------------------------------------------------------------------------
@@ -262,7 +252,7 @@ def sdk_client():
     expose_resp = MagicMock()
     expose_resp.url = "https://agent.sandbox-abc.openshell.example.com"
     client._stub.ExposeService.return_value = expose_resp
-    client._stub.DeleteService.return_value = MagicMock()
+    client._stub.DeleteService.return_value = MagicMock(outcome=1)
     client._timeout = 30
     ref = MagicMock()
     ref.id = "sandbox-abc123"
@@ -286,8 +276,8 @@ class TestExposeService:
         sdk_client._stub.ExposeService.assert_called_once()
         args = sdk_client._stub.ExposeService.call_args
         req = args[0][0]  # first positional arg
-        assert _proto_resource(req, "sandbox", "sandbox_id", "name") == "sandbox-test-abc"
-        assert _proto_resource(req, "name", "service") == "agent"
+        assert req.sandbox == "sandbox-test-abc"
+        assert req.name == "agent"
         assert req.target_port == 4096
         assert req.domain is True
 
@@ -298,14 +288,56 @@ class TestExposeService:
         assert url == "https://agent.sandbox-abc.openshell.example.com"
 
     @pytest.mark.asyncio
+    async def test_expose_service_uses_workspace_gateway_port(self, sdk_client):
+        from swarmer.config import settings
+        from swarmer.openshell_client import GatewayConfig
+
+        sdk_client._stub.ExposeService.return_value.url = (
+            "https://agent.sandbox-abc.openshell.example.com:8080"
+        )
+        workspace_gateway = GatewayConfig(
+            gateway_url="https://remote-gateway.example.com:17670",
+            auth_mode="none",
+            workspace_id=42,
+        )
+        with patch.object(oc, "_get_client", return_value=sdk_client), \
+             patch.object(settings, "openshell_gateway_url", "http://local-gateway:8080"):
+            url = await oc.expose_service(
+                "sandbox-test-abc", "agent", 4096,
+                client=sdk_client, gateway_config=workspace_gateway,
+            )
+
+        assert url == "https://agent.sandbox-abc.openshell.example.com:17670"
+
+    @pytest.mark.asyncio
+    async def test_expose_service_uses_default_port_for_remote_gateway(self, sdk_client):
+        from swarmer.openshell_client import GatewayConfig
+
+        sdk_client._stub.ExposeService.return_value.url = (
+            "https://agent.sandbox-abc.openshell.example.com:8080"
+        )
+        remote_gateway = GatewayConfig(
+            gateway_url="https://remote-gateway.example.com",
+            auth_mode="none",
+            workspace_id=42,
+        )
+        with patch.object(oc, "_get_client", return_value=sdk_client):
+            url = await oc.expose_service(
+                "sandbox-test-abc", "agent", 4096,
+                client=sdk_client, gateway_config=remote_gateway,
+            )
+
+        assert url == "https://agent.sandbox-abc.openshell.example.com:443"
+
+    @pytest.mark.asyncio
     async def test_delete_service_calls_stub(self, sdk_client):
         with patch.object(oc, "_get_client", return_value=sdk_client):
             await oc.delete_service("sandbox-test-abc", "agent")
         sdk_client._stub.DeleteService.assert_called_once()
         args = sdk_client._stub.DeleteService.call_args
         req = args[0][0]
-        assert _proto_resource(req, "sandbox", "sandbox_id", "name") == "sandbox-test-abc"
-        assert _proto_resource(req, "name", "service") == "agent"
+        assert req.sandbox == "sandbox-test-abc"
+        assert req.name == "agent"
 
 
 @_requires_sdk
@@ -315,7 +347,7 @@ class TestExecInteractive:
         sdk_client._stub.ExecSandboxInteractive.return_value = mock_stream
         with patch.object(oc, "_get_client", return_value=sdk_client):
             stream, input_q = oc.exec_interactive(
-                sandbox_id="sandbox-id-test",
+                sandbox_name="sandbox-id-test",
                 command=["sh", "-c", "opencode"],
                 cols=80,
                 rows=24,
@@ -339,7 +371,7 @@ class TestExecInteractive:
 
         with patch.object(oc, "_get_client", return_value=sdk_client):
             stream, input_q = oc.exec_interactive(
-                sandbox_id="sandbox-id-test",
+                sandbox_name="sandbox-id-test",
                 command=["sh", "-c", "opencode --continue"],
                 cols=120,
                 rows=40,
@@ -349,7 +381,7 @@ class TestExecInteractive:
 
         assert len(received_msgs) == 1
         start_msg = received_msgs[0]
-        assert _proto_resource(start_msg.start, "sandbox", "sandbox_id", "name") == "sandbox-id-test"
+        assert start_msg.start.sandbox == "sandbox-id-test"
         assert start_msg.start.tty is True
         assert start_msg.start.cols == 120
         assert start_msg.start.rows == 40
@@ -811,11 +843,15 @@ class TestServerModeExposeService:
     async def test_server_mode_calls_expose_service(self, client):
         """_run_openshell_agent server mode calls expose_service after start_agent."""
         from swarmer.routers.sessions import _run_openshell_agent
+        from swarmer.openshell_client import GatewayConfig
 
         expose_mock = AsyncMock(return_value="https://agent.sandbox.example.com")
         start_mock = AsyncMock()
 
         ws = await _create_workspace(client)
+        gateway_config = GatewayConfig(
+            gateway_url="https://test-gateway.example.com", auth_mode="none", workspace_id=ws["id"],
+        )
         s = await _create_session(client, ws["id"], mode="server")
         async with _TestSession() as db:
             from swarmer.models.session import Session as _Session
@@ -825,6 +861,7 @@ class TestServerModeExposeService:
 
         with patch("swarmer.openshell_client.start_agent", start_mock), \
              patch("swarmer.openshell_client.expose_service", expose_mock), \
+             patch("swarmer.openshell_client.resolve_gateway_config", new=AsyncMock(return_value=gateway_config)), \
              patch("swarmer.database.get_db", _test_get_db), \
              patch("swarmer.routers.sessions.asyncio.sleep", AsyncMock()):
             await _run_openshell_agent(
@@ -837,18 +874,24 @@ class TestServerModeExposeService:
             )
 
         start_mock.assert_called_once()
-        expose_mock.assert_called_once_with("sandbox-test-abc", "agent", 4096)
+        expose_mock.assert_called_once()
+        assert expose_mock.call_args.args == ("sandbox-test-abc", "agent", 4096)
+        assert expose_mock.call_args.kwargs["gateway_config"] is gateway_config
 
     @pytest.mark.asyncio
     async def test_tui_mode_calls_expose_service(self, client):
         """OpenCode V2 unification: TUI mode runs the shared service and
         exposes it, exactly like server mode."""
         from swarmer.routers.sessions import _run_openshell_agent
+        from swarmer.openshell_client import GatewayConfig
 
         expose_mock = AsyncMock(return_value="https://agent.sandbox.example.com")
         start_mock = AsyncMock()
 
         ws = await _create_workspace(client)
+        gateway_config = GatewayConfig(
+            gateway_url="https://test-gateway.example.com", auth_mode="none", workspace_id=ws["id"],
+        )
         s = await _create_session(client, ws["id"], mode="tui")
         async with _TestSession() as db:
             from swarmer.models.session import Session as _Session
@@ -858,6 +901,7 @@ class TestServerModeExposeService:
 
         with patch("swarmer.openshell_client.start_agent", start_mock), \
              patch("swarmer.openshell_client.expose_service", expose_mock), \
+             patch("swarmer.openshell_client.resolve_gateway_config", new=AsyncMock(return_value=gateway_config)), \
              patch("swarmer.database.get_db", _test_get_db), \
              patch("swarmer.routers.sessions.asyncio.sleep", AsyncMock()):
             await _run_openshell_agent(
@@ -870,7 +914,9 @@ class TestServerModeExposeService:
             )
 
         start_mock.assert_called_once()
-        expose_mock.assert_called_once_with("sandbox-test-abc", "agent", 4096)
+        expose_mock.assert_called_once()
+        assert expose_mock.call_args.args == ("sandbox-test-abc", "agent", 4096)
+        assert expose_mock.call_args.kwargs["gateway_config"] is gateway_config
 
     @pytest.mark.asyncio
     async def test_tui_mode_exposure_does_not_log_service_url(self, client, caplog):
@@ -2007,7 +2053,7 @@ class TestRestartPromptPollersArgs:
         else:
             mock_run.assert_not_called()
             assert "EnMaaS unavailable; session marked failed" in caplog.text
-            assert str(s["id"]) not in caplog.text
+            assert f"session {s['id']}" not in caplog.text
             assert sentinel not in caplog.text
             assert "Traceback" not in caplog.text
             if endpoint:
@@ -2085,7 +2131,7 @@ class TestTuiWsOpenshell:
         sdk_client._timeout = 30
 
         stream, input_q = oc.exec_interactive(
-            sandbox_id="sandbox-id-x",
+            sandbox_name="sandbox-id-x",
             command=["sh", "-c", "opencode"],
             cols=80,
             rows=24,
@@ -2094,7 +2140,7 @@ class TestTuiWsOpenshell:
         input_q.put(None)  # unblock generator if it ever resumes
 
         assert len(received) == 1
-        assert _proto_resource(received[0].start, "sandbox", "sandbox_id", "name") == "sandbox-id-x"
+        assert received[0].start.sandbox == "sandbox-id-x"
 
     def test_exec_interactive_resize_queued(self):
         """The first message in the stream carries the sandbox ID and tty flags."""
@@ -2113,7 +2159,7 @@ class TestTuiWsOpenshell:
         sdk_client._timeout = 30
 
         stream, input_q = oc.exec_interactive(
-            sandbox_id="sandbox-id-x",
+            sandbox_name="sandbox-id-x",
             command=["sh", "-c", "opencode"],
             cols=80,
             rows=24,
@@ -2121,7 +2167,7 @@ class TestTuiWsOpenshell:
         )
         input_q.put(None)  # unblock generator if it ever resumes
 
-        assert _proto_resource(received[0].start, "sandbox", "sandbox_id", "name") == "sandbox-id-x"
+        assert received[0].start.sandbox == "sandbox-id-x"
 
 
 # ===========================================================================

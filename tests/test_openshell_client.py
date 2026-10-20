@@ -86,7 +86,13 @@ def sdk_client():
     client.get = MagicMock(return_value=ref)
     client.wait_ready = MagicMock(return_value=ref)
     client.exec = MagicMock(return_value=MagicMock(exit_code=0, stdout=""))
-    client.delete = MagicMock(return_value=True)
+    from openshell.mutations import DeletionOutcome, DeletionResult
+    client.delete = MagicMock(
+        return_value=DeletionResult(DeletionOutcome.COMPLETED)
+    )
+    client._stub.DeleteProvider.return_value.outcome = DeletionOutcome.COMPLETED
+    client._stub.DeleteService.return_value.outcome = DeletionOutcome.COMPLETED
+    client._stub.GetProviderProfile.return_value.profile.resource_version = 0
     return client
 
 
@@ -126,8 +132,6 @@ def github_pat():
 # ---------------------------------------------------------------------------
 # 1. Provider creation
 # ---------------------------------------------------------------------------
-
-
 @pytest.mark.asyncio
 async def test_create_provider_returns_empty_for_no_mcp(sdk_client, session, workspace_secret):
     """AI credentials no longer go via env vars — create_provider returns only MCP vars."""
@@ -340,7 +344,39 @@ async def test_stop_calls_delete_sandbox(sdk_client):
     sandbox_name = "sandbox-s42-abc1"
     with patch.object(oc, "_get_client", return_value=sdk_client):
         await oc.delete_sandbox(sandbox_name=sandbox_name)
-    sdk_client.delete.assert_called_once_with(sandbox_name)
+    sdk_client.delete.assert_called_once_with(
+        sandbox_name, workspace="default", allow_missing=True
+    )
+
+
+@pytest.mark.asyncio
+async def test_delete_sandbox_waits_for_accepted_deletion(sdk_client):
+    from openshell.mutations import DeletionOutcome, DeletionResult
+
+    sdk_client.delete.return_value = DeletionResult(
+        DeletionOutcome.ACCEPTED, "sandbox-id"
+    )
+    with patch.object(oc, "_get_client", return_value=sdk_client):
+        await oc.delete_sandbox("sandbox-s42-abc1")
+    sdk_client.wait_deleted.assert_called_once_with(
+        "sandbox-s42-abc1",
+        workspace="default",
+        expected_sandbox_id="sandbox-id",
+    )
+
+
+@pytest.mark.asyncio
+async def test_list_sandboxes_uses_paginating_sdk_collection(sdk_client):
+    sdk_client.list_all.return_value = [
+        MagicMock(name="sandbox-a"),
+        MagicMock(name="sandbox-b"),
+    ]
+    sdk_client.list_all.return_value[0].name = "sandbox-a"
+    sdk_client.list_all.return_value[1].name = "sandbox-b"
+    with patch.object(oc, "_get_client", return_value=sdk_client):
+        result = await oc.list_sandboxes()
+    assert result == ["sandbox-a", "sandbox-b"]
+    sdk_client.list_all.assert_called_once_with(workspace="default")
 
 
 # ---------------------------------------------------------------------------
@@ -358,7 +394,6 @@ async def test_get_draft_chunks_returns_serializable_list(sdk_client):
 
     fake_bin = MagicMock()
     fake_bin.path = "/usr/local/go/bin/govulncheck"
-    fake_bin.harness = True
 
     fake_chunk = MagicMock()
     fake_chunk.id = "chunk-abc"
@@ -382,7 +417,7 @@ async def test_get_draft_chunks_returns_serializable_list(sdk_client):
     assert c["endpoints"][0]["host"] == "vuln.go.dev"
     assert c["endpoints"][0]["port"] == 443
     assert c["binaries"][0]["path"] == "/usr/local/go/bin/govulncheck"
-    assert c["binaries"][0]["harness"] is True
+    assert c["binaries"][0] == {"path": "/usr/local/go/bin/govulncheck"}
 
 
 @pytest.mark.asyncio
@@ -446,9 +481,10 @@ async def test_provider_exists_returns_false_on_not_found(sdk_client):
 async def test_provider_exists_cache_hit_skips_grpc(sdk_client):
     """provider_exists() uses cached result and skips the gRPC call."""
     import time
-    oc._provider_cache["swarmer-ws-2-google-cloud"] = (True, time.monotonic() + 30)
+    name = "swarmer-ws-2-google-cloud"
+    oc._provider_cache[oc._provider_cache_key(sdk_client, name)] = (True, time.monotonic() + 30)
     with patch.object(oc, "_get_client", return_value=sdk_client):
-        result = await oc.provider_exists("swarmer-ws-2-google-cloud")
+        result = await oc.provider_exists(name)
     assert result is True
     sdk_client._stub.GetProvider.assert_not_called()
 
@@ -457,22 +493,60 @@ async def test_provider_exists_cache_hit_skips_grpc(sdk_client):
 async def test_provider_exists_cache_miss_calls_grpc(sdk_client):
     """provider_exists() calls gRPC when cache entry is expired."""
     import time
-    oc._provider_cache["swarmer-ws-3-google-cloud"] = (True, time.monotonic() - 1)  # expired
+    name = "swarmer-ws-3-google-cloud"
+    oc._provider_cache[oc._provider_cache_key(sdk_client, name)] = (True, time.monotonic() - 1)  # expired
     sdk_client._stub.GetProvider.return_value = MagicMock()
     with patch.object(oc, "_get_client", return_value=sdk_client):
-        result = await oc.provider_exists("swarmer-ws-3-google-cloud")
+        result = await oc.provider_exists(name)
     assert result is True
     sdk_client._stub.GetProvider.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_provider_exists_cache_is_scoped_to_gateway():
+    """A local provider result must not leak into a remote gateway cache entry."""
+    import grpc
+    import time
+    from openshell.errors import GatewayError
+
+    name = "same-provider-name"
+    local = MagicMock()
+    local._endpoint = "localhost:17671"
+    remote = MagicMock()
+    remote._endpoint = "gateway.example.com:443"
+
+    class _NotFound(grpc.RpcError, grpc.Call):
+        def code(self):
+            return grpc.StatusCode.NOT_FOUND
+
+        def details(self):
+            return "provider not found"
+
+        def trailing_metadata(self):
+            return ()
+
+    remote._stub.GetProvider.side_effect = GatewayError(_NotFound())
+    oc._provider_cache.clear()
+    oc._provider_cache[oc._provider_cache_key(local, name)] = (
+        True, time.monotonic() + 30
+    )
+
+    result = await oc.provider_exists(name, client=remote)
+
+    assert result is False
+    remote._stub.GetProvider.assert_called_once()
 
 
 @pytest.mark.asyncio
 async def test_delete_provider_invalidates_cache(sdk_client):
     """delete_provider() removes the name from _provider_cache."""
     import time
-    oc._provider_cache["swarmer-ws-4-google-cloud"] = (True, time.monotonic() + 30)
+    name = "swarmer-ws-4-google-cloud"
+    key = oc._provider_cache_key(sdk_client, name)
+    oc._provider_cache[key] = (True, time.monotonic() + 30)
     with patch.object(oc, "_get_client", return_value=sdk_client):
-        await oc.delete_provider("swarmer-ws-4-google-cloud")
-    assert "swarmer-ws-4-google-cloud" not in oc._provider_cache
+        await oc.delete_provider(name)
+    assert key not in oc._provider_cache
 
 
 @pytest.mark.asyncio
@@ -487,12 +561,13 @@ async def test_ensure_provider_refreshes_stale_cached_false(sdk_client):
     """
     import time
     pname = "swarmer-ws-9-google-ai-studio"
-    oc._provider_cache[pname] = (False, time.monotonic() + 30)  # stale, not yet expired
+    cache_key = oc._provider_cache_key(sdk_client, pname)
+    oc._provider_cache[cache_key] = (False, time.monotonic() + 30)  # stale, not yet expired
     with patch.object(oc, "_get_client", return_value=sdk_client):
         await oc.ensure_provider(
             pname, "google-ai-studio", {},
         )
-    assert oc._provider_cache[pname][0] is True
+    assert oc._provider_cache[cache_key][0] is True
     # provider_exists() must now see the refreshed cache without another gRPC call.
     with patch.object(oc, "_get_client", return_value=sdk_client):
         result = await oc.provider_exists(pname)
@@ -515,13 +590,14 @@ async def test_create_google_cloud_provider_creates_correct_type(sdk_client):
         await oc.create_google_cloud_provider(
             "swarmer-ws-1-google-cloud", "my-project", "us-central1"
         )
-    mock_delete.assert_awaited_once_with("swarmer-ws-1-google-cloud", client=None)
+    mock_delete.assert_awaited_once_with("swarmer-ws-1-google-cloud", client=sdk_client)
     mock_ensure.assert_awaited_once()
     _args, _kwargs = mock_ensure.call_args
     assert _args[0] == "swarmer-ws-1-google-cloud"
     assert _args[1] == "google-cloud"
     assert _kwargs["config"] == {"project_id": "my-project", "region": "us-central1"}
     assert "GCP_ADC_ACCESS_TOKEN" in _kwargs["credentials"]
+    assert "GCP_SA_ACCESS_TOKEN" in _kwargs["credentials"]
 
 
 @pytest.mark.asyncio
@@ -534,7 +610,8 @@ async def test_create_google_cloud_provider_populates_cache(sdk_client):
         await oc.create_google_cloud_provider(
             "swarmer-ws-5-google-cloud", "proj", "us-east1"
         )
-    assert oc._provider_cache.get("swarmer-ws-5-google-cloud", (False,))[0] is True
+    cache_key = oc._provider_cache_key(sdk_client, "swarmer-ws-5-google-cloud")
+    assert oc._provider_cache.get(cache_key, (False,))[0] is True
 
 
 @pytest.mark.asyncio
@@ -561,7 +638,7 @@ async def test_configure_google_cloud_provider_service_account(sdk_client):
     assert sdk_client._stub.ConfigureProviderRefresh.called
     from openshell._proto import openshell_pb2
     assert req_mock.strategy == openshell_pb2.PROVIDER_CREDENTIAL_REFRESH_STRATEGY_GOOGLE_SERVICE_ACCOUNT_JWT
-    assert req_mock.credential_key == "GCP_ADC_ACCESS_TOKEN"
+    assert req_mock.credential_key == "service_account_token"
     assert req_mock.material["client_email"] == adc["client_email"]
     assert req_mock.material["private_key"] == adc["private_key"]
     assert "private_key" in req_mock.secret_material_keys
@@ -592,7 +669,7 @@ async def test_configure_google_cloud_provider_authorized_user(sdk_client):
     assert sdk_client._stub.ConfigureProviderRefresh.called
     from openshell._proto import openshell_pb2
     assert req_mock.strategy == openshell_pb2.PROVIDER_CREDENTIAL_REFRESH_STRATEGY_OAUTH2_REFRESH_TOKEN
-    assert req_mock.credential_key == "GCP_ADC_ACCESS_TOKEN"
+    assert req_mock.credential_key == "adc_token"
     assert req_mock.material["client_id"] == adc["client_id"]
     assert req_mock.material["refresh_token"] == adc["refresh_token"]
     assert "client_secret" in req_mock.secret_material_keys
@@ -609,6 +686,70 @@ async def test_configure_google_cloud_provider_unsupported_type_raises(sdk_clien
             await oc.configure_google_cloud_provider(
                 "swarmer-ws-1-google-cloud", json.dumps(adc)
             )
+
+
+@pytest.mark.asyncio
+async def test_configure_vertex_provider_service_account_uses_profile_credential(sdk_client):
+    """Vertex service-account refresh targets the profile's service_account_token."""
+    import json
+
+    adc = {
+        "type": "service_account",
+        "client_email": "<SERVICE_ACCOUNT_EMAIL>",
+        "private_key": "<PRIVATE_KEY>",
+    }
+    req_mock = MagicMock()
+    req_mock.material = {}
+    req_mock.secret_material_keys = []
+    sdk_client._stub.ConfigureProviderRefresh = MagicMock()
+
+    with patch.object(oc, "_get_client", return_value=sdk_client):
+        with patch("openshell._proto.openshell_pb2.ConfigureProviderRefreshRequest",
+                   return_value=req_mock):
+            await oc.configure_vertex_provider(
+                "swarmer-ws-1-google-vertex-ai", json.dumps(adc), "<PROJECT>", "<REGION>"
+            )
+
+    assert sdk_client._stub.ConfigureProviderRefresh.called
+    from openshell._proto import openshell_pb2
+    assert req_mock.strategy == openshell_pb2.PROVIDER_CREDENTIAL_REFRESH_STRATEGY_GOOGLE_SERVICE_ACCOUNT_JWT
+    assert req_mock.credential_key == "service_account_token"
+    assert req_mock.material["client_email"] == adc["client_email"]
+    assert req_mock.material["private_key"] == adc["private_key"]
+    assert "private_key" in req_mock.secret_material_keys
+
+
+@pytest.mark.asyncio
+async def test_configure_vertex_provider_authorized_user_uses_profile_credential(sdk_client):
+    """Vertex ADC refresh targets the profile's gcloud_adc_token."""
+    import json
+
+    adc = {
+        "type": "authorized_user",
+        "client_id": "<CLIENT_ID>",
+        "client_secret": "<CLIENT_SECRET>",
+        "refresh_token": "<REFRESH_TOKEN>",
+    }
+    req_mock = MagicMock()
+    req_mock.material = {}
+    req_mock.secret_material_keys = []
+    sdk_client._stub.ConfigureProviderRefresh = MagicMock()
+
+    with patch.object(oc, "_get_client", return_value=sdk_client):
+        with patch("openshell._proto.openshell_pb2.ConfigureProviderRefreshRequest",
+                   return_value=req_mock):
+            await oc.configure_vertex_provider(
+                "swarmer-ws-1-google-vertex-ai", json.dumps(adc), "<PROJECT>", "<REGION>"
+            )
+
+    assert sdk_client._stub.ConfigureProviderRefresh.called
+    from openshell._proto import openshell_pb2
+    assert req_mock.strategy == openshell_pb2.PROVIDER_CREDENTIAL_REFRESH_STRATEGY_OAUTH2_REFRESH_TOKEN
+    assert req_mock.credential_key == "gcloud_adc_token"
+    assert req_mock.material["client_id"] == adc["client_id"]
+    assert req_mock.material["refresh_token"] == adc["refresh_token"]
+    assert "client_secret" in req_mock.secret_material_keys
+    assert "refresh_token" in req_mock.secret_material_keys
 
 
 # ---------------------------------------------------------------------------
@@ -857,10 +998,10 @@ def test_get_client_for_config_rejects_endpoint_with_path():
 
 
 @pytest.mark.parametrize(
-    "gateway_url", ["grpc://gw.example.com:443", "  GRPC://gw.example.com:443  "]
+    "gateway_url", ["grpc://gw.example.com:443", "  GRPC://gw.example.com:443  ", "gw.example.com:443"]
 )
 def test_get_client_for_config_rejects_bearer_over_plaintext_grpc(gateway_url):
-    """Bearer credentials must never be sent over an insecure gRPC channel."""
+    """Bearer credentials must never be sent to a remote gateway without TLS."""
     fake_module = MagicMock()
     fake_module.SandboxClient = MagicMock()
     fake_module.TlsConfig = MagicMock()
@@ -871,10 +1012,27 @@ def test_get_client_for_config_rejects_bearer_over_plaintext_grpc(gateway_url):
     )
 
     with patch.dict(sys.modules, {"openshell": fake_module}):
-        with pytest.raises(ValueError, match="bearer-authenticated grpc:// gateways require TLS"):
+        with pytest.raises(ValueError, match="bearer-authenticated remote gateways require TLS"):
             oc.get_client_for_config(config)
 
     fake_module.SandboxClient.assert_not_called()
+
+
+def test_get_client_for_config_uses_tls_for_remote_bearer_gateway(sdk_client):
+    fake_module = MagicMock()
+    fake_module.SandboxClient = MagicMock(return_value=sdk_client)
+    fake_module.TlsConfig = MagicMock()
+    config = oc.GatewayConfig(
+        gateway_url="https://gateway.example.com:443",
+        auth_mode="bearer",
+        bearer_token="<test-token>",
+    )
+
+    with patch.dict(sys.modules, {"openshell": fake_module}):
+        oc.get_client_for_config(config)
+
+    fake_module.TlsConfig.assert_called_once_with()
+    assert fake_module.SandboxClient.call_args.kwargs["bearer_token"] == "<test-token>"
 
 
 def test_get_client_normalizes_https_url_endpoint(sdk_client):
@@ -1055,16 +1213,12 @@ async def test_provider_profile_endpoint_matches_workspace_endpoint(
     ) is matches
     request = sdk_client._stub.GetProviderProfile.call_args.args[0]
     assert request.id == "enmaas-ws-3"
+    # Platform profiles require the workspace selector to be omitted.
+    assert not request.HasField("workspace_scope")
 
 
-def test_build_provider_profile_serializes_plain_wire_strings():
-    """Endpoint metadata must stay plain wire strings — the gateway reads them verbatim.
-
-    OpenShell's endpoint ambiguity validation only recognizes "enforce" and
-    classifies any other value (e.g. NETWORK_ENFORCEMENT_MODE_ENFORCE) as
-    "audit". A provider rule marked audit that overlaps a user policy rule
-    marked enforce fails CreateSandbox with FAILED_PRECONDITION.
-    """
+def test_build_provider_profile_uses_typed_network_enums():
+    """Provider profile endpoint fields use the OpenShell 0.1.x enum contract."""
     profile_dict = {
         "id": "openai",
         "display_name": "OpenAI",
@@ -1076,17 +1230,17 @@ def test_build_provider_profile_serializes_plain_wire_strings():
                 "protocol": "rest",
                 "access": "read-write",
                 "enforcement": "enforce",
-                "tls": "passthrough",
             }
         ],
     }
 
     profile = oc._build_provider_profile(profile_dict)
     ep = profile.endpoints[0]
+    from openshell._proto import sandbox_pb2
 
-    assert ep.enforcement == "enforce"
-    assert ep.access == "read-write"
-    assert ep.tls == "passthrough"
+    assert ep.enforcement == sandbox_pb2.NETWORK_ENFORCEMENT_MODE_ENFORCE
+    assert ep.access == sandbox_pb2.NETWORK_ACCESS_PRESET_READ_WRITE
+    assert ep.tls == 0
 
 
 @pytest.mark.asyncio
@@ -1118,8 +1272,9 @@ async def test_import_provider_profiles_maps_endpoints_and_binaries(sdk_client):
     assert p.id == "test-prof"
     assert len(p.endpoints) == 1
     assert p.endpoints[0].host == "api.example.com"
-    assert p.endpoints[0].enforcement == "enforce"
-    assert p.endpoints[0].access == "read-write"
+    from openshell._proto import sandbox_pb2
+    assert p.endpoints[0].enforcement == sandbox_pb2.NETWORK_ENFORCEMENT_MODE_ENFORCE
+    assert p.endpoints[0].access == sandbox_pb2.NETWORK_ACCESS_PRESET_READ_WRITE
     assert len(p.binaries) == 1
     assert p.binaries[0].path == "/usr/bin/curl"
 
@@ -1258,8 +1413,8 @@ async def test_import_enmaas_profile_propagates_rejected_update():
 
 
 @pytest.mark.asyncio
-async def test_import_provider_profiles_handles_mixed_existing_and_missing_profiles():
-    """When batch import hits ALREADY_EXISTS, existing profiles are updated and missing profiles are imported."""
+async def test_import_provider_profiles_fails_if_imported_profile_is_not_visible():
+    """A successful import must be observable before provider creation proceeds."""
     import grpc
 
     mock_client = MagicMock()
@@ -1272,180 +1427,24 @@ async def test_import_provider_profiles_handles_mixed_existing_and_missing_profi
         def code(self):
             return grpc.StatusCode.NOT_FOUND
 
-    import_calls = []
-
-    def mock_import(req, timeout=None):
-        import_calls.append(req)
-        if len(import_calls) == 1:
-            raise MockAlreadyExists()
-        return MagicMock()
-
-    mock_client._stub.ImportProviderProfiles.side_effect = mock_import
+    mock_client._stub.ImportProviderProfiles.return_value = MagicMock()
     mock_client._timeout = 10
+    mock_client._stub.GetProviderProfile.side_effect = MockNotFound()
 
-    existing_resp = MagicMock()
-    existing_resp.profile.resource_version = 7
-
-    def mock_get(req, timeout=None):
-        if req.id == "existing-p":
-            return existing_resp
-        raise MockNotFound()
-
-    mock_client._stub.GetProviderProfile.side_effect = mock_get
-
-    profiles = [
-        {"id": "existing-p", "display_name": "Existing"},
-        {"id": "missing-p", "display_name": "Missing"},
-    ]
-
-    await oc.import_provider_profiles(profiles, client=mock_client)
-
-    # Verify GetProviderProfile called for both profiles
-    assert mock_client._stub.GetProviderProfile.call_count >= 2
-
-    # Verify UpdateProviderProfiles called for existing-p
-    mock_client._stub.UpdateProviderProfiles.assert_called_once()
-    up_req = mock_client._stub.UpdateProviderProfiles.call_args.args[0]
-    assert up_req.id == "existing-p"
-    assert up_req.expected_resource_version == 7
-
-    # Verify ImportProviderProfiles called a second time to import missing-p individually
-    assert len(import_calls) == 2
-    single_req = import_calls[1]
-    assert len(single_req.profiles) == 1
-    assert single_req.profiles[0].profile.id == "missing-p"
-    assert getattr(single_req, "workspace", "") == ""
+    with pytest.raises(RuntimeError, match="did not register imported provider profile"):
+        await oc.import_provider_profiles([{"id": "missing-p"}], client=mock_client)
 
 
 @pytest.mark.asyncio
-async def test_import_provider_profiles_preserves_global_workspace_on_reimport_after_fallback_check():
-    """When global GetProviderProfile fails and fallback lookup also fails, re-import retains empty workspace."""
-    import grpc
+async def test_import_provider_profiles_omits_workspace_scope(sdk_client):
+    """Platform profiles must omit the selector — all_workspaces is INVALID_ARGUMENT on 0.1.4."""
+    with patch.object(oc, "_get_client", return_value=sdk_client):
+        await oc.import_provider_profiles([{"id": "test-profile"}])
 
-    mock_client = MagicMock()
-
-    class MockAlreadyExists(grpc.RpcError, grpc.Call):
-        def code(self):
-            return grpc.StatusCode.ALREADY_EXISTS
-
-    class MockNotFound(grpc.RpcError, grpc.Call):
-        def code(self):
-            return grpc.StatusCode.NOT_FOUND
-
-    import_calls = []
-
-    def mock_import(req, timeout=None):
-        import_calls.append(req)
-        if len(import_calls) == 1:
-            raise MockAlreadyExists()
-        return MagicMock()
-
-    mock_client._stub.ImportProviderProfiles.side_effect = mock_import
-    mock_client._timeout = 10
-
-    class FakeGetReq:
-        def __init__(self, id=""):
-            self.id = id
-            self.workspace = ""
-
-    class FakeImportReq:
-        def __init__(self):
-            self.workspace = ""
-            self.profiles = []
-
-    get_workspaces = []
-
-    def mock_get(req, timeout=None):
-        get_workspaces.append(getattr(req, "workspace", ""))
-        raise MockNotFound()
-
-    mock_client._stub.GetProviderProfile.side_effect = mock_get
-
-    from openshell._proto import openshell_pb2
-    profiles = [{"id": "global-missing", "display_name": "Global Missing"}]
-    with patch.object(openshell_pb2, "GetProviderProfileRequest", FakeGetReq), \
-         patch.object(openshell_pb2, "ImportProviderProfilesRequest", FakeImportReq):
-        await oc.import_provider_profiles(profiles, client=mock_client)
-
-    # First lookup was global (""), second lookup was default ("default")
-    assert get_workspaces == ["", "default"]
-
-    # Re-import must use global workspace (""), NOT the fallback "default"
-    assert len(import_calls) == 2
-    single_req = import_calls[1]
-    assert getattr(single_req, "workspace", "") == ""
-
-
-@pytest.mark.asyncio
-async def test_import_provider_profiles_uses_matched_workspace_on_update_not_found():
-    """When a profile matched in default workspace raises NOT_FOUND on update, recovery import uses matched workspace."""
-    import grpc
-
-    mock_client = MagicMock()
-
-    class MockAlreadyExists(grpc.RpcError, grpc.Call):
-        def code(self):
-            return grpc.StatusCode.ALREADY_EXISTS
-
-    class MockNotFound(grpc.RpcError, grpc.Call):
-        def code(self):
-            return grpc.StatusCode.NOT_FOUND
-
-    import_calls = []
-
-    def mock_import(req, timeout=None):
-        import_calls.append(req)
-        if len(import_calls) == 1:
-            raise MockAlreadyExists()
-        return MagicMock()
-
-    mock_client._stub.ImportProviderProfiles.side_effect = mock_import
-    mock_client._timeout = 10
-
-    class FakeGetReq:
-        def __init__(self, id=""):
-            self.id = id
-            self.workspace = ""
-
-    class FakeImportReq:
-        def __init__(self):
-            self.workspace = ""
-            self.profiles = []
-
-    class FakeUpdateReq:
-        def __init__(self, id="", profile=None, expected_resource_version=0):
-            self.id = id
-            self.profile = profile
-            self.expected_resource_version = expected_resource_version
-            self.workspace = ""
-
-    existing_resp = MagicMock()
-    existing_resp.profile.resource_version = 3
-
-    def mock_get(req, timeout=None):
-        if getattr(req, "workspace", "") == "default":
-            return existing_resp
-        raise MockNotFound()
-
-    mock_client._stub.GetProviderProfile.side_effect = mock_get
-    mock_client._stub.UpdateProviderProfiles.side_effect = MockNotFound()
-
-    from openshell._proto import openshell_pb2
-    profiles = [{"id": "default-scoped", "display_name": "Default Scoped"}]
-    with patch.object(openshell_pb2, "GetProviderProfileRequest", FakeGetReq), \
-         patch.object(openshell_pb2, "ImportProviderProfilesRequest", FakeImportReq), \
-         patch.object(openshell_pb2, "UpdateProviderProfilesRequest", FakeUpdateReq):
-        await oc.import_provider_profiles(profiles, client=mock_client)
-
-    # UpdateProviderProfiles was called with matched_workspace ("default")
-    mock_client._stub.UpdateProviderProfiles.assert_called_once()
-    up_req = mock_client._stub.UpdateProviderProfiles.call_args.args[0]
-    assert getattr(up_req, "workspace", "") == "default"
-
-    # Recovery ImportProviderProfiles was called with matched_workspace ("default")
-    assert len(import_calls) == 2
-    recovery_req = import_calls[1]
-    assert getattr(recovery_req, "workspace", "") == "default"
+    request = sdk_client._stub.ImportProviderProfiles.call_args.args[0]
+    assert not request.HasField("workspace_scope")
+    get_req = sdk_client._stub.GetProviderProfile.call_args.args[0]
+    assert not get_req.HasField("workspace_scope")
 
 
 def test_gemini_provider_profile_binds_all_gemini_credentials_and_endpoints():
@@ -1489,13 +1488,26 @@ async def test_ensure_provider_auto_imports_gemini_profile(sdk_client):
     assert imported_profile.endpoints[0].host == "generativelanguage.googleapis.com"
 
 
-@pytest.mark.asyncio
-async def test_import_provider_profiles_registers_globally_with_empty_workspace(sdk_client):
-    """Custom provider profiles must be imported into global scope (workspace='') so all workspaces and supervisors find them."""
-    with patch.object(oc, "_get_client", return_value=sdk_client):
-        await oc.import_provider_profiles([{"id": "test-profile"}])
+def test_required_platform_profiles_match_pinned_openshell_sdk():
+    """Fresh gateways receive the required 0.1.4 profiles, including typed refresh material."""
+    profiles = {p["id"]: oc._build_provider_profile(p) for p in oc.all_provider_profiles()}
+    assert {"github", "google-cloud", "google-vertex-ai", "agent-swarm", "jira"} <= set(profiles)
+    assert profiles["google-cloud"].credentials[1].refresh.strategy
+    assert profiles["google-vertex-ai"].endpoints
+    assert profiles["github"].endpoints
 
-    sdk_client._stub.ImportProviderProfiles.assert_called_once()
-    import_req = sdk_client._stub.ImportProviderProfiles.call_args.args[0]
-    if hasattr(import_req, "workspace"):
-        assert import_req.workspace == ""
+
+@pytest.mark.asyncio
+async def test_ensure_provider_imports_platform_profile_on_fresh_gateway(sdk_client):
+    with patch.object(oc, "_get_client", return_value=sdk_client):
+        await oc.ensure_provider(
+            "workspace-github-provider",
+            "github",
+            {},
+            credentials={"GITHUB_TOKEN": "<test-token>"},
+        )
+
+    request = sdk_client._stub.ImportProviderProfiles.call_args.args[0]
+    ids = [item.profile.id for item in request.profiles]
+    assert ids == ["github"]
+    assert not request.HasField("workspace_scope")

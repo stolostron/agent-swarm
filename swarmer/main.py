@@ -21,7 +21,6 @@ from swarmer.config import settings
 from swarmer.crypto import derive_session_secret, init_crypto
 from swarmer.database import checkpoint_db, create_tables, migrate_db, init_db
 from swarmer.deps import NotAuthenticated
-from swarmer.openshell_client import CUSTOM_PROVIDER_PROFILES as _OPENSHELL_CUSTOM_PROFILES
 from swarmer.api.v1 import router as api_v1_router
 from swarmer.routers import admins as admins_router
 from swarmer.routers import auth as auth_router
@@ -97,22 +96,17 @@ async def _sync_k8s_workspace_members() -> None:
 
 
 async def _ensure_openshell_provider_profiles() -> None:
-    """Import custom provider profiles into the OpenShell gateway (idempotent)."""
+    """Import required platform and Swarmer provider profiles into the gateway."""
     from swarmer import openshell_client
+    profiles = openshell_client.all_provider_profiles()
     try:
-        # Enable providers_v2 so google-vertex-ai type is supported for inference routing.
-        await openshell_client.enable_providers_v2()
-        log.info("OpenShell providers_v2_enabled set")
-    except Exception:
-        log.warning("Failed to enable OpenShell providers_v2 — VertexAI inference routing may not work", exc_info=True)
-    try:
-        await openshell_client.import_provider_profiles(list(_OPENSHELL_CUSTOM_PROFILES))
+        await openshell_client.import_provider_profiles(profiles)
         log.info(
             "OpenShell provider profiles registered: %s",
-            [p["id"] for p in _OPENSHELL_CUSTOM_PROFILES],
+            [p["id"] for p in profiles],
         )
     except Exception:
-        log.warning("Failed to import OpenShell provider profiles — sessions may lack Google AI Studio support", exc_info=True)
+        log.warning("Failed to import required OpenShell provider profiles", exc_info=True)
     # EnMaaS profiles are per-workspace for credential isolation and bind to
     # each workspace's encrypted URL. Reconcile them after gateway restarts.
     try:
@@ -474,7 +468,11 @@ async def _restart_server_sessions() -> None:
                 try:
                     _tool = _get_tool(s.agent_tool)
                     port = _tool.get_server_port() or 4096
-                    service_url = await openshell_client.expose_service(sandbox_name, "agent", port, client=oc_client)
+                    gateway_config = await openshell_client.resolve_gateway_config(s.workspace_id, db)
+                    service_url = await openshell_client.expose_service(
+                        sandbox_name, "agent", port, client=oc_client,
+                        gateway_config=gateway_config,
+                    )
                     s.service_url = service_url
                     s.phase = "running"
                     # The service URL embeds the gateway hostname; keep it out

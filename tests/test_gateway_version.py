@@ -39,14 +39,14 @@ async def test_gateway_version_change_resets_ai_provider_flags():
         await db.commit()
 
         config = SimpleNamespace(gateway_url="https://gateway.example", workspace_id=None)
-        info = SimpleNamespace(gateway_version="0.0.116")
+        info = SimpleNamespace(gateway_version="0.1.4")
         client = SimpleNamespace(_stub=SimpleNamespace(GetGatewayInfo=lambda *args, **kwargs: info))
 
         await observe_gateway_version(config, client, db)
         secret = (await db.execute(select(OpencodeSecret))).scalar_one()
         assert secret.gemini_configured is True
 
-        info.gateway_version = "0.0.117"
+        info.gateway_version = "0.1.5"
         await observe_gateway_version(config, client, db)
         secret = (await db.execute(select(OpencodeSecret))).scalar_one()
         assert secret.gemini_configured is False
@@ -83,20 +83,20 @@ async def test_dedicated_gateway_version_change_resets_all_matching_workspaces()
         await db.commit()
 
         config = SimpleNamespace(gateway_url=gw_url, workspace_id=ws1.id)
-        info = SimpleNamespace(gateway_version="0.0.116")
+        info = SimpleNamespace(gateway_version="0.1.4")
         client = SimpleNamespace(_stub=SimpleNamespace(GetGatewayInfo=lambda *args, **kwargs: info))
 
         await observe_gateway_version(config, client, db)
-        assert gw1.gateway_version == "0.0.116"
-        assert gw2.gateway_version == "0.0.116"
+        assert gw1.gateway_version == "0.1.4"
+        assert gw2.gateway_version == "0.1.4"
 
-        info.gateway_version = "0.0.117"
+        info.gateway_version = "0.1.5"
         await observe_gateway_version(config, client, db)
         await db.refresh(sec1)
         await db.refresh(sec2)
         assert sec1.gemini_configured is False
         assert sec2.gemini_configured is False
-        assert gw1.gateway_version == "0.0.117"
-        assert gw2.gateway_version == "0.0.117"
+        assert gw1.gateway_version == "0.1.5"
+        assert gw2.gateway_version == "0.1.5"
 
     await engine.dispose()
