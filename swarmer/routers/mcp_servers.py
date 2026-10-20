@@ -31,6 +31,39 @@ templates = Jinja2Templates(directory="swarmer/templates")
 # MCP Servers List
 # ============================================================
 
+async def _caller_can_manage(api, ws: dict) -> bool:
+    """Mirror ``workspace_acl.can_manage_members`` for console rendering.
+
+    Console routes only talk to the REST API (never the DB directly), so
+    rebuild the manager check from ``/me`` (global admin) plus the
+    workspace members list (owner / workspace-admin role). Unclaimed
+    workspaces (no owner) stay manageable by anyone, matching the ACL.
+    """
+    try:
+        me = await api.get_me()
+    except APIError:
+        return False
+    if me.get("is_admin"):
+        return True
+    owner_id = ws.get("owner_id")
+    if not owner_id:
+        return True
+    username = me.get("username") or ""
+    if not username:
+        return False
+    if username == owner_id:
+        return True
+    try:
+        members = await api.list_workspace_members(ws.get("id"))
+    except APIError:
+        return False
+    return any(
+        m.get("user_id") == username
+        and (m.get("role") or "").strip().lower() == "admin"
+        for m in members
+    )
+
+
 @router.get(
     "/workspaces/{ws_id}/mcp-servers",
     dependencies=[Depends(require_auth)],
@@ -47,10 +80,17 @@ async def mcp_servers_list(ws_id: int, request: Request):
         except APIError:
             servers = []
 
+        can_manage = await _caller_can_manage(api, ws)
+
     return templates.TemplateResponse(
         request,
         "mcp_servers/list.html",
-        {"ws": ws, "servers": servers, "catalog": MCP_SERVER_CATALOG},
+        {
+            "ws": ws,
+            "servers": servers,
+            "catalog": MCP_SERVER_CATALOG,
+            "can_manage": can_manage,
+        },
     )
 
 

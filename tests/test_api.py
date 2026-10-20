@@ -1222,6 +1222,195 @@ class TestSessions:
         assert owner_delete_response.status_code == 200
 
     @pytest.mark.asyncio
+    async def test_workspace_admin_role_can_mutate_shared_mcp_servers(self, client):
+        """ACM-48496: a member granted the admin role is a workspace manager
+        and may add/configure/toggle/delete shared MCP servers there."""
+        from unittest.mock import AsyncMock as _AsyncMock, patch as _patch
+
+        from swarmer.api.deps import get_current_user, require_api_auth
+        from swarmer.k8s_auth import TokenIdentity
+        from swarmer.main import app
+
+        ws = await _create_workspace(client)
+        added = await client.post(
+            f"/api/v1/workspaces/{ws['id']}/members",
+            json={"user_id": "helper", "role": "admin"},
+        )
+        assert added.status_code == 201, added.text
+
+        app.dependency_overrides[require_api_auth] = lambda: TokenIdentity(
+            username="helper", uid="uid-helper"
+        )
+        app.dependency_overrides[get_current_user] = lambda: "helper"
+        try:
+            # Add from catalog as the workspace admin
+            jira = await client.post(
+                f"/api/v1/workspaces/{ws['id']}/mcp-servers",
+                json={"catalog_slug": "atlassian-jira"},
+            )
+            assert jira.status_code == 201, jira.text
+            server_id = jira.json()["id"]
+
+            # Save credentials (mock the Jira probe so it reports valid)
+            with _patch(
+                "swarmer.routers.mcp_servers._probe_jira_token",
+                new=_AsyncMock(return_value=True),
+            ):
+                save = await client.post(
+                    f"/api/v1/workspaces/{ws['id']}/mcp-servers/{server_id}/save",
+                    json={
+                        "jira_server_url": "https://example.atlassian.net",
+                        "jira_email": "helper@example.com",
+                        "jira_access_token": "jira-tok-secret",
+                    },
+                )
+            assert save.status_code == 200, save.text
+            assert save.json()["auth_status"] == "active"
+
+            toggle = await client.post(
+                f"/api/v1/workspaces/{ws['id']}/mcp-servers/{server_id}/toggle"
+            )
+            assert toggle.status_code == 200, toggle.text
+            assert toggle.json()["enabled"] is False
+
+            delete = await client.delete(
+                f"/api/v1/workspaces/{ws['id']}/mcp-servers/{server_id}"
+            )
+            assert delete.status_code == 200, delete.text
+        finally:
+            app.dependency_overrides[require_api_auth] = _override_require_api_auth
+            app.dependency_overrides[get_current_user] = _override_get_current_user
+
+    @pytest.mark.asyncio
+    async def test_workspace_admin_role_is_scoped_per_workspace(self, client):
+        """ACM-48496: the admin role only grants manager rights inside the
+        workspace where it was granted — an admin of one workspace stays an
+        ordinary member everywhere else."""
+        from swarmer.api.deps import get_current_user, require_api_auth
+        from swarmer.k8s_auth import TokenIdentity
+        from swarmer.main import app
+
+        home_ws = await _create_workspace(client, "Home WS")
+        other_ws = await _create_workspace(client, "Other WS")
+        await client.post(
+            f"/api/v1/workspaces/{home_ws['id']}/members",
+            json={"user_id": "helper", "role": "admin"},
+        )
+        # Ordinary member of the other workspace — can see it, not manage it.
+        await client.post(
+            f"/api/v1/workspaces/{other_ws['id']}/members",
+            json={"user_id": "helper", "role": "member"},
+        )
+        other_jira = await client.post(
+            f"/api/v1/workspaces/{other_ws['id']}/mcp-servers",
+            json={"catalog_slug": "atlassian-jira"},
+        )
+        assert other_jira.status_code == 201, other_jira.text
+        other_server_id = other_jira.json()["id"]
+
+        app.dependency_overrides[require_api_auth] = lambda: TokenIdentity(
+            username="helper", uid="uid-helper"
+        )
+        app.dependency_overrides[get_current_user] = lambda: "helper"
+        try:
+            inventory = await client.get(
+                f"/api/v1/workspaces/{other_ws['id']}/mcp-servers"
+            )
+            assert inventory.status_code == 200
+            assert other_server_id in {item["id"] for item in inventory.json()}
+
+            add = await client.post(
+                f"/api/v1/workspaces/{other_ws['id']}/mcp-servers",
+                json={"catalog_slug": "agent-swarm"},
+            )
+            save = await client.post(
+                f"/api/v1/workspaces/{other_ws['id']}/mcp-servers/{other_server_id}/save",
+                json={
+                    "jira_server_url": "https://example.atlassian.net",
+                    "jira_email": "helper@example.com",
+                    "jira_access_token": "jira-tok-secret",
+                },
+            )
+            toggle = await client.post(
+                f"/api/v1/workspaces/{other_ws['id']}/mcp-servers/{other_server_id}/toggle"
+            )
+            delete = await client.delete(
+                f"/api/v1/workspaces/{other_ws['id']}/mcp-servers/{other_server_id}"
+            )
+        finally:
+            app.dependency_overrides[require_api_auth] = _override_require_api_auth
+            app.dependency_overrides[get_current_user] = _override_get_current_user
+
+        assert add.status_code == 403, add.text
+        assert save.status_code == 403, save.text
+        assert toggle.status_code == 403, toggle.text
+        assert delete.status_code == 403, delete.text
+
+    @pytest.mark.asyncio
+    async def test_members_cannot_add_shared_mcp_servers(self, client):
+        """ACM-48496: adding a shared MCP server is a manager action too —
+        members must not create rows they then cannot configure."""
+        from swarmer.api.deps import get_current_user, require_api_auth
+        from swarmer.k8s_auth import TokenIdentity
+        from swarmer.main import app
+
+        ws = await _create_workspace(client)
+        await client.post(
+            f"/api/v1/workspaces/{ws['id']}/members", json={"user_id": "stranger"}
+        )
+
+        app.dependency_overrides[require_api_auth] = lambda: TokenIdentity(
+            username="stranger", uid="uid-stranger"
+        )
+        app.dependency_overrides[get_current_user] = lambda: "stranger"
+        try:
+            response = await client.post(
+                f"/api/v1/workspaces/{ws['id']}/mcp-servers",
+                json={"catalog_slug": "atlassian-jira"},
+            )
+        finally:
+            app.dependency_overrides[require_api_auth] = _override_require_api_auth
+            app.dependency_overrides[get_current_user] = _override_get_current_user
+
+        assert response.status_code == 403, response.text
+        inventory = await client.get(f"/api/v1/workspaces/{ws['id']}/mcp-servers")
+        # Only the auto-provisioned agent-swarm row may exist — the member's
+        # catalog add must not have created anything.
+        assert "atlassian-jira" not in {item["slug"] for item in inventory.json()}
+
+    @pytest.mark.asyncio
+    async def test_workspace_admin_role_case_insensitive_and_member_management(self, client):
+        """ACM-48496: the admin role is recognized regardless of case, and a
+        workspace admin can also manage members (the ACL manager check)."""
+        from swarmer.api.deps import require_api_auth
+        from swarmer.k8s_auth import TokenIdentity
+        from swarmer.main import app
+
+        ws = await _create_workspace(client)
+        await client.post(
+            f"/api/v1/workspaces/{ws['id']}/members",
+            json={"user_id": "helper", "role": "Admin"},
+        )
+
+        app.dependency_overrides[require_api_auth] = lambda: TokenIdentity(
+            username="helper", uid="uid-helper"
+        )
+        try:
+            # Workspace admins manage members like owners do.
+            resp = await client.post(
+                f"/api/v1/workspaces/{ws['id']}/members",
+                json={"user_id": "teammate", "role": "member"},
+            )
+            assert resp.status_code == 201, resp.text
+
+            remove = await client.delete(
+                f"/api/v1/workspaces/{ws['id']}/members/teammate"
+            )
+            assert remove.status_code == 200, remove.text
+        finally:
+            app.dependency_overrides[require_api_auth] = _override_require_api_auth
+
+    @pytest.mark.asyncio
     async def test_background_mcp_eligibility_includes_workspace_mcp_by_default(self, client):
         from swarmer.models.mcp_server import McpServer
         from swarmer.routers.mcp_servers import get_enabled_mcp_servers

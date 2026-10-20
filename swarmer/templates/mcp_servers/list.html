@@ -26,6 +26,15 @@
   Configured servers are available to all sessions in this workspace.
   API tokens are encrypted at rest.
 </p>
+{% if not can_manage %}
+<div class="pf-v6-c-alert pf-m-info pf-m-inline pf-m-plain" style="margin-bottom:var(--pf-t--global--spacer--lg);">
+  <div class="pf-v6-c-alert__icon"><i class="fas fa-info-circle"></i></div>
+  <p class="pf-v6-c-alert__title">
+    You can view and use these servers, but only the workspace owner, a workspace
+    admin, or a global administrator can add or configure MCP servers.
+  </p>
+</div>
+{% endif %}
 
 {# ── Configured servers ── #}
 {% if servers %}
@@ -52,11 +61,13 @@
         </p>
       </div>
       <div class="pf-v6-c-card__footer" style="display:flex; gap:var(--pf-t--global--spacer--xs); align-items:center;">
+        {% if can_manage %}
         <form method="post" action="/workspaces/{{ ws.id }}/mcp-servers/{{ s.id }}/toggle" style="display:inline;">
           <button type="submit" class="pf-v6-c-button pf-m-tertiary pf-m-small">
             {{ 'Disable' if s.enabled else 'Enable' }}
           </button>
         </form>
+        {% endif %}
       </div>
 
       {% elif s.server_type == "stdio" %}
@@ -68,7 +79,13 @@
           {% if s.auth_status == "expired" %}
           <div id="expired-alert-{{ s.id }}" class="pf-v6-c-alert pf-m-warning pf-m-inline pf-m-plain" style="margin-bottom:var(--pf-t--global--spacer--sm);">
             <div class="pf-v6-c-alert__icon"><i class="fas fa-exclamation-triangle"></i></div>
-            <p class="pf-v6-c-alert__title">Token is no longer valid. Click Edit to update your API token.</p>
+            <p class="pf-v6-c-alert__title">
+              {% if can_manage %}
+              Token is no longer valid. Click Edit to update your API token.
+              {% else %}
+              Token is no longer valid. Ask a workspace manager to update the API token.
+              {% endif %}
+            </p>
           </div>
           {% endif %}
           <dl style="margin:0;">
@@ -87,6 +104,7 @@
           </dl>
         </div>
         <div class="pf-v6-c-card__footer" style="display:flex; gap:var(--pf-t--global--spacer--xs); flex-wrap:wrap; align-items:center;">
+          {% if can_manage %}
           <button type="button" class="pf-v6-c-button pf-m-secondary pf-m-small" onclick="showEdit({{ s.id }})">Edit</button>
           <form method="post" action="/workspaces/{{ ws.id }}/mcp-servers/{{ s.id }}/toggle" style="display:inline;">
             <button type="submit" class="pf-v6-c-button pf-m-tertiary pf-m-small">
@@ -98,11 +116,13 @@
                 onsubmit="return confirm('Remove {{ s.display_name }}? Stored credentials will be deleted.')">
             <button type="submit" class="pf-v6-c-button pf-m-danger pf-m-small">Remove</button>
           </form>
+          {% endif %}
         </div>
       </div>
 
       {# ── Edit mode (shown when not configured, or user clicks Edit) ── #}
       <div id="edit-{{ s.id }}" style="{{ 'display:none;' if s.is_authenticated else '' }}">
+        {% if can_manage %}
         <div class="pf-v6-c-card__body">
           <form method="post" action="/workspaces/{{ ws.id }}/mcp-servers/{{ s.id }}/save" id="form-{{ s.id }}">
             <div class="pf-v6-c-form__group" style="margin-bottom:var(--pf-t--global--spacer--sm);">
@@ -147,6 +167,14 @@
           <button type="button" class="pf-v6-c-button pf-m-link pf-m-small" onclick="showView({{ s.id }})">Cancel</button>
           {% endif %}
         </div>
+        {% else %}
+        <div class="pf-v6-c-card__body">
+          <p style="margin:0; color:var(--pf-t--global--text--color--subtle);">
+            This server is not configured yet. Ask the workspace owner or a
+            workspace admin to connect it.
+          </p>
+        </div>
+        {% endif %}
       </div>
 
       {% else %}
@@ -201,10 +229,16 @@
         </p>
       </div>
       <div class="pf-v6-c-card__footer">
+        {% if can_manage %}
         <form method="post" action="/workspaces/{{ ws.id }}/mcp-servers/add">
           <input type="hidden" name="catalog_slug" value="{{ entry.slug }}">
           <button type="submit" class="pf-v6-c-button pf-m-primary pf-m-small">+ Add to Workspace</button>
         </form>
+        {% else %}
+        <span style="font-size:var(--pf-t--global--font--size--xs); color:var(--pf-t--global--text--color--subtle);">
+          Requires workspace manager
+        </span>
+        {% endif %}
       </div>
     </div>
   </div>

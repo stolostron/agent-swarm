@@ -68,7 +68,8 @@ async def _get_visible_server_or_404(
 async def _require_workspace_manager(
     db: AsyncSession, ws: Workspace, identity: TokenIdentity,
 ) -> None:
-    """Require a human workspace owner or global admin for shared mutations."""
+    """Require a human workspace manager (owner, workspace admin, or global
+    admin) for shared mutations."""
     from swarmer import workspace_acl
 
     if not await workspace_acl.can_manage_members(
@@ -101,8 +102,9 @@ async def add_from_catalog(
     body: McpServerAddFromCatalog,
     ws: Workspace = Depends(get_workspace_or_404),
     db: AsyncSession = Depends(get_db),
-    user: str = Depends(get_current_user),
+    identity: TokenIdentity = Depends(require_human_api_auth),
 ):
+    await _require_workspace_manager(db, ws, identity)
     entry = get_catalog_entry(body.catalog_slug)
     if entry is None:
         raise HTTPException(status_code=400, detail="Unknown MCP server type")
@@ -114,7 +116,7 @@ async def add_from_catalog(
         server_url=entry.get("server_url", ""),
         server_type=entry.get("server_type", "http"),
         jira_server_url=entry.get("default_jira_server_url", ""),
-        user_id=user,
+        user_id=identity.username,
         shared=True,
     )
     db.add(server)

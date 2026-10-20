@@ -441,10 +441,17 @@ async def workspace_members(ws_id: int, request: Request):
     current_user = request.session.get("username", "")
     # Unclaimed workspace (no owner yet): anyone can manage it (and claims it
     # on the first management action — see workspace_acl.claim_ownership_if_unowned).
+    # Members granted the admin role manage too (workspace_acl.can_manage_members).
+    is_workspace_admin = any(
+        m.get("user_id") == current_user
+        and (m.get("role") or "").strip().lower() == "admin"
+        for m in members
+    )
     can_manage = (
         me.get("is_admin")
         or current_user == ws.get("owner_id")
         or not ws.get("owner_id")
+        or is_workspace_admin
     )
 
     # Autocomplete suggestions only — free-text entry is always still allowed.
