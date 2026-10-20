@@ -1231,6 +1231,7 @@ class TestSessions:
         from swarmer.api.deps import get_current_user, require_api_auth
         from swarmer.k8s_auth import TokenIdentity
         from swarmer.main import app
+        from swarmer.models.mcp_server import McpServer
 
         jira_token = secrets.token_urlsafe(32)
         ws = await _create_workspace(client)
@@ -1252,6 +1253,9 @@ class TestSessions:
             )
             assert jira.status_code == 201, jira.text
             server_id = jira.json()["id"]
+            async with _TestSession() as db:
+                server = await db.get(McpServer, server_id)
+                assert server.user_id == "helper"
 
             # Save credentials (mock the Jira probe so it reports valid)
             with _patch(
@@ -1376,6 +1380,7 @@ class TestSessions:
             app.dependency_overrides[get_current_user] = _override_get_current_user
 
         assert response.status_code == 403, response.text
+        assert response.json()["detail"] == "Session credentials cannot use this endpoint"
         inventory = await client.get(f"/api/v1/workspaces/{ws['id']}/mcp-servers")
         # Only the auto-provisioned agent-swarm row may exist — the member's
         # catalog add must not have created anything.
