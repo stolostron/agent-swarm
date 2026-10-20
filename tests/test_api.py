@@ -1382,6 +1382,29 @@ class TestSessions:
         assert "atlassian-jira" not in {item["slug"] for item in inventory.json()}
 
     @pytest.mark.asyncio
+    async def test_session_credentials_cannot_add_shared_mcp_servers(self, client):
+        """ACM-48496: session-bound credentials cannot add shared MCP servers."""
+        from swarmer.api.deps import require_api_auth
+        from swarmer.k8s_auth import TokenIdentity
+        from swarmer.main import app
+
+        ws = await _create_workspace(client)
+        app.dependency_overrides[require_api_auth] = lambda: TokenIdentity(
+            username="session:123", session_id=123, workspace_id=ws["id"]
+        )
+        try:
+            response = await client.post(
+                f"/api/v1/workspaces/{ws['id']}/mcp-servers",
+                json={"catalog_slug": "atlassian-jira"},
+            )
+        finally:
+            app.dependency_overrides[require_api_auth] = _override_require_api_auth
+
+        assert response.status_code == 403, response.text
+        inventory = await client.get(f"/api/v1/workspaces/{ws['id']}/mcp-servers")
+        assert "atlassian-jira" not in {item["slug"] for item in inventory.json()}
+
+    @pytest.mark.asyncio
     async def test_workspace_admin_role_case_insensitive_and_member_management(self, client):
         """ACM-48496: the admin role is recognized regardless of case, and a
         workspace admin can also manage members (the ACL manager check)."""
