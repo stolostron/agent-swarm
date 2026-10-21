@@ -45,14 +45,21 @@
     <form method="post" action="/login" class="pf-v6-c-form">
       <div class="pf-v6-c-form__group">
         <label class="pf-v6-c-form__label" for="token">
-          <span class="pf-v6-c-form__label-text">Bearer Token</span>
+          <span class="pf-v6-c-form__label-text">
+            {% if openshell_auth_mode %}OpenShell Token{% else %}Bearer Token{% endif %}
+          </span>
         </label>
         <div class="pf-v6-c-form__group-control">
           <textarea id="token" name="token" rows="5" required
                     class="pf-v6-c-form-control token-field"
-                    placeholder="Paste your K8s bearer token here"
+                    placeholder="{% if openshell_auth_mode %}{% if openshell_oidc_enabled %}Paste your OIDC token or bootstrap admin token{% else %}Paste your bootstrap admin token{% endif %}{% else %}Paste your K8s bearer token here{% endif %}"
                     autofocus></textarea>
         </div>
+        {% if openshell_auth_mode %}
+        <p class="pf-v6-c-form__helper-text">
+          Use an OIDC token from the configured identity provider or the configured bootstrap admin token.
+        </p>
+        {% endif %}
       </div>
       <div class="pf-v6-c-form__group pf-m-action">
         <div class="pf-v6-c-form__actions">

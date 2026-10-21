@@ -8,9 +8,9 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from markupsafe import escape
 
-from swarmer.deps import require_auth
 from swarmer.config import settings
 from swarmer.csrf import CSRFError, ensure_csrf_token, validate_csrf_token
+from swarmer.deps import require_auth
 from swarmer.flash import flash
 from swarmer.openshell_command_parser import parse_gateway_command_or_json
 from swarmer.openshell_token_parser import parse_token_input
@@ -31,7 +31,10 @@ async def workspace_list(request: Request):
         except APIError:
             me = {}
 
-    can_create = bool(not settings.k8s_namespace and me.get("can_create_workspace"))
+    namespace_scoped = (
+        settings.swarmer_runtime_mode != "openshell" and bool(settings.k8s_namespace)
+    )
+    can_create = bool(not namespace_scoped and me.get("can_create_workspace"))
 
     for workspace in workspaces:
         workspace["ai_provider_warning"] = bool(workspace.get("missing_ai_providers"))
@@ -67,7 +70,7 @@ async def preview_namespace(name: str = ""):
 
 @router.get("/workspaces/new", dependencies=[Depends(require_auth)])
 async def workspace_new(request: Request):
-    if settings.k8s_namespace:
+    if settings.swarmer_runtime_mode != "openshell" and settings.k8s_namespace:
         flash(request, "Workspace creation is disabled in this deployment.", "error")
         return RedirectResponse("/workspaces", status_code=302)
 

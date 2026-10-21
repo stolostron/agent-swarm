@@ -22,6 +22,7 @@ from swarmer.api.schemas import (
     MeOut,
     MessageOut,
 )
+from swarmer.config import settings
 from swarmer.database import get_db
 from swarmer.k8s_auth import TokenIdentity
 
@@ -40,13 +41,20 @@ async def get_me(
     "+ New Workspace" button, the `/admins` page, the bootstrap banner)
     without duplicating ACL logic client-side.
     """
+    bootstrap_available = await workspace_acl.admin_bootstrap_available(db)
+    if (
+        settings.swarmer_runtime_mode == "openshell"
+        and settings.swarmer_admin_token_file.strip()
+    ):
+        bootstrap_available = bootstrap_available and identity.is_bootstrap_admin
+
     return MeOut(
         username=identity.username,
         is_admin=await workspace_acl.is_admin(db, identity.username, identity.groups),
         can_create_workspace=await workspace_acl.can_create_workspace(
             db, identity.username, identity.groups
         ),
-        admin_bootstrap_available=await workspace_acl.admin_bootstrap_available(db),
+        admin_bootstrap_available=bootstrap_available,
     )
 
 
@@ -129,6 +137,18 @@ async def bootstrap_admin(
     admins exist (static or DB). Solves the bootstrap problem: a fresh
     deployment has zero friction, and every deployment after that is managed
     entirely through the `/admins` UI/API."""
+    from swarmer.config import settings
+
+    if (
+        settings.swarmer_runtime_mode == "openshell"
+        and settings.swarmer_admin_token_file.strip()
+        and await workspace_acl.admin_bootstrap_available(db)
+        and not identity.is_bootstrap_admin
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Use the configured bootstrap admin token to initialize the first administrator.",
+        )
     if not await workspace_acl.bootstrap_admin(db, identity.username):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,

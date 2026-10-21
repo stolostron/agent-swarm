@@ -22,6 +22,12 @@ _IMAGE_CACHE_TTL = 300  # seconds
 async def get_image_available(image: str, namespace: str) -> bool:
     if not image:
         return False
+    from swarmer.config import settings
+
+    if settings.swarmer_runtime_mode == "openshell":
+        # OpenShell pulls the sandbox image through its own runtime. A
+        # Kubernetes registry probe is irrelevant and would require K8s auth.
+        return True
     key = (image, namespace)
     cached = _image_cache.get(key)
     if cached is not None and time.monotonic() - cached[1] < _IMAGE_CACHE_TTL:

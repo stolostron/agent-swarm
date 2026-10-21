@@ -326,6 +326,20 @@ class TestWorkspaceRbac:
         finally:
             settings.k8s_namespace = ""
 
+    @pytest.mark.asyncio
+    async def test_openshell_workspace_creation_ignores_kubernetes_namespace_setting(
+        self, client, monkeypatch
+    ):
+        from swarmer.config import settings
+
+        monkeypatch.setattr(settings, "swarmer_runtime_mode", "openshell")
+        settings.k8s_namespace = "shared-ns"
+        response = await client.post(
+            "/api/v1/workspaces",
+            json={"display_name": "OpenShell Workspace", "description": ""},
+        )
+        assert response.status_code == 201, response.text
+
 
 class TestWorkspaceGatewayAPI:
     @staticmethod
@@ -843,6 +857,18 @@ class TestMe:
         resp = await client.get("/api/v1/me")
         assert resp.json()["can_create_workspace"] is False
 
+    @pytest.mark.asyncio
+    async def test_bootstrap_admin_button_is_hidden_from_non_bootstrap_identity(
+        self, client, monkeypatch
+    ):
+        from swarmer.config import settings
+
+        monkeypatch.setattr(settings, "swarmer_runtime_mode", "openshell")
+        monkeypatch.setattr(settings, "swarmer_admin_token_file", "mounted-token-file")
+        response = await client.get("/api/v1/me")
+        assert response.status_code == 200
+        assert response.json()["admin_bootstrap_available"] is False
+
 
 class TestKnownUsers:
     """GET /api/v1/users — visibility-scoped autocomplete suggestions."""
@@ -941,6 +967,30 @@ class TestAdminBootstrap:
         settings.workspace_admin_users = "someone-else"
         resp = await client.post("/api/v1/admins/bootstrap")
         assert resp.status_code == 409
+
+    @pytest.mark.asyncio
+    async def test_openshell_requires_bootstrap_credential_for_first_admin(self, client, monkeypatch):
+        from swarmer.api.deps import require_api_auth
+        from swarmer.config import settings
+        from swarmer.k8s_auth import TokenIdentity
+        from swarmer.main import app
+
+        monkeypatch.setattr(settings, "swarmer_runtime_mode", "openshell")
+        monkeypatch.setattr(settings, "swarmer_admin_token_file", "mounted-token-file")
+
+        response = await client.post("/api/v1/admins/bootstrap")
+        assert response.status_code == 403
+
+        app.dependency_overrides[require_api_auth] = lambda: TokenIdentity(
+            username="bootstrap-admin",
+            groups=["swarmer-bootstrap-admin"],
+            is_bootstrap_admin=True,
+        )
+        try:
+            response = await client.post("/api/v1/admins/bootstrap")
+            assert response.status_code == 201, response.text
+        finally:
+            app.dependency_overrides[require_api_auth] = _override_require_api_auth
 
 
 class TestAdminCrud:
@@ -2906,6 +2956,21 @@ class TestIntegration:
 
         resp = await client.get(f"/api/v1/workspaces/{ws['id']}")
         assert resp.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_openshell_workspace_delete_does_not_call_kubernetes(self, client, monkeypatch):
+        from unittest.mock import patch
+
+        from swarmer.config import settings
+
+        monkeypatch.setattr(settings, "swarmer_runtime_mode", "openshell")
+        ws = await _create_workspace(client)
+
+        with patch("swarmer.api.v1.workspaces.k8s.delete_namespace") as delete_namespace:
+            response = await client.delete(f"/api/v1/workspaces/{ws['id']}")
+
+        assert response.status_code == 200, response.text
+        delete_namespace.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_session_not_found_for_wrong_workspace(self, client):

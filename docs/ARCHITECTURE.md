@@ -12,9 +12,14 @@ repository root; symbols are the preferred code entry points.
   credentials are registered with Gateway providers and injected into sandboxes at launch.
   Workspace environment variables are passed directly to the agent process through
   `ExecSandboxRequest.environment`.
-- **Kubernetes authenticates identity, not workspace authorization.** `k8s_auth.py` uses
-  TokenReview or its fallback identity probe. Workspace access is enforced by the database
-  ACL in `workspace_acl.py`; do not add K8s RBAC checks to workspace operations.
+- **Swarmer uses a machine identity for Gateway calls.** When configured for OIDC client
+  credentials, the OpenShell SDK reads the client secret from a mounted file and manages
+  renewable access tokens in memory. Never inject a developer's CLI tokens or personal
+  mTLS key into the Swarmer sandbox.
+- **Runtime mode selects platform integrations.** The default Kubernetes mode uses
+  `k8s_auth.py` TokenReview or its fallback identity probe. OpenShell-hosted mode must not
+  initialize Kubernetes or require cluster credentials. Both modes use the database ACL in
+  `workspace_acl.py`; do not add K8s RBAC checks to workspace operations.
 - **SQLite is the application state store.** SQLAlchemy async + `aiosqlite` is used with
   `NullPool`; schema creation and manual migrations are in `database.py`. The deployment
   uses `strategy: Recreate` because SQLite has a single-writer model.
@@ -37,14 +42,14 @@ repository root; symbols are the preferred code entry points.
 | Configuration | `swarmer/config.py` | `Settings`, module-level `settings`; env var bindings and application defaults |
 | Model presets | `k8s/swarmer/configmap.yaml`, `swarmer/config.py` | Deployed plan/build/small preset values; Python defaults are fallbacks |
 | HTTP/UI routing | `swarmer/routers/`, `swarmer/api/v1/` | Router modules; REST API is under `/api/v1/` |
-| Authn | `swarmer/k8s_auth.py`, `swarmer/deps.py`, `swarmer/routers/auth.py` | TokenReview, `require_auth`, `get_user_token`, login/OAuth callbacks |
+| Authn | `swarmer/k8s_auth.py`, `swarmer/deps.py`, `swarmer/routers/auth.py` | Kubernetes TokenReview, verified OpenShell OIDC/bootstrap tokens, `require_auth`, login/OAuth callbacks; see [Authentication spec](specs/PAGE_authentication.md) |
 | Workspace authz | `swarmer/workspace_acl.py`, `swarmer/models/workspace_member.py`, `swarmer/models/global_admin.py` | Owner/member/admin checks; `can_access_workspace()` and user discovery |
 | Session orchestration | `swarmer/routers/sessions.py` | `_do_launch()`, `_setup_openshell_sandbox()`, `_run_openshell_agent()`, stop/delete paths |
 | Cron and queue | `swarmer/scheduler.py` | 30-second scheduler tick for cron and queue processing; `_process_queue()` applies a 2-minute retry cooldown when capacity is full; sandbox GC; capacity limit |
 | GitHub PR events | `swarmer/pr_watcher.py` | In-process ETag polling, trust filters, debounce, circuit breaker, event dispatch |
 | OpenShell SDK boundary | `swarmer/openshell_client.py` | `create_sandbox()`, `start_agent()`, `exec_command()`, `exec_interactive()`, `expose_service()` |
 | OpenShell policy | `swarmer/openshell_policy.py` | `build_session_network_policies()`; OPA/Landlock + egress proxy rules |
-| Gateway selection | `swarmer/openshell_client.py`, `swarmer/openshell_oidc.py` | `GatewayConfig`, `resolve_gateway_config()`, `get_client_for_workspace()`, OIDC refresh |
+| Gateway selection | `swarmer/openshell_client.py`, `swarmer/openshell_oidc.py` | `GatewayConfig`, `resolve_gateway_config()`, `get_client_for_workspace()`, OIDC user and service-account auth |
 | Credentials | `swarmer/crypto.py`, `swarmer/github_auth.py`, `swarmer/github_app.py` | Fernet; GitHub PAT/App; IAT minting and refresh |
 | Persistence | `swarmer/database.py`, `swarmer/models/` | `init_db()`, `migrate_db()`, `Base`; import all models in `models/__init__.py` |
 | Agent tool selection | `swarmer/agent_tools/` | `AgentToolStrategy`, `registry.py`, `opencode.py`, `shell.py` |
@@ -90,9 +95,11 @@ OpenShell runtime boundaries.
 
 ### Application startup
 
-`main.py:lifespan()` -> `init_crypto()` -> `init_db()` / `migrate_db()` -> initialize K8s
-and settings -> restart surviving prompt pollers, server/TUI sessions, and GitHub IAT
-refresh loops -> start `scheduler.py` and `pr_watcher.py` background tasks.
+`main.py:lifespan()` -> `init_crypto()` -> `init_db()` / `migrate_db()` -> initialize
+platform integrations selected by `SWARMER_RUNTIME_MODE` (Kubernetes TokenReview and
+legacy membership migration are skipped in OpenShell mode) -> restart surviving prompt
+pollers, server/TUI sessions, and GitHub IAT refresh loops -> start `scheduler.py` and
+`pr_watcher.py` background tasks.
 
 ### Session launch
 
@@ -121,10 +128,13 @@ refresh loops -> start `scheduler.py` and `pr_watcher.py` background tasks.
 
 ### Authentication and authorization
 
-Bearer token -> `deps.py:require_auth()` -> `k8s_auth.py` TokenReview/fallback -> identity
+Bearer token -> `deps.py:require_auth()` -> `k8s_auth.py` runtime-selected backend
+(Kubernetes TokenReview/fallback, or OpenShell bootstrap token / verified OIDC) -> identity
 in session cookie -> `workspace_acl.py:can_access_workspace()` -> owner, explicit member,
-global admin, or configured shared-namespace policy. Handlers must use dependencies and
-ACL helpers; they must not inspect bearer headers or implement ad hoc access checks.
+global admin, or configured shared-namespace policy. OpenShell OIDC requires configured
+issuer and audience and verifies signature/JWKS and standard claims. Handlers must use
+dependencies and ACL helpers; they must not inspect bearer headers or implement ad hoc
+access checks.
 
 ### Cron and queue scheduling
 

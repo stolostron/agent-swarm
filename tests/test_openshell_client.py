@@ -9,10 +9,11 @@ Validates the session lifecycle helpers:
   - delete_sandbox() calls SandboxClient.delete() without touching PVCs
 """
 import os
+import secrets
 import sys
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
@@ -505,8 +506,9 @@ async def test_provider_exists_cache_miss_calls_grpc(sdk_client):
 @pytest.mark.asyncio
 async def test_provider_exists_cache_is_scoped_to_gateway():
     """A local provider result must not leak into a remote gateway cache entry."""
-    import grpc
     import time
+
+    import grpc
     from openshell.errors import GatewayError
 
     name = "same-provider-name"
@@ -1033,6 +1035,81 @@ def test_get_client_for_config_uses_tls_for_remote_bearer_gateway(sdk_client):
 
     fake_module.TlsConfig.assert_called_once_with()
     assert fake_module.SandboxClient.call_args.kwargs["bearer_token"] == "<test-token>"
+
+
+def test_get_client_for_config_uses_renewable_oidc_client_credentials(tmp_path, sdk_client):
+    secret_file = tmp_path / "gateway-client-secret"
+    client_secret = secrets.token_urlsafe(32)
+    secret_file.write_text(f"{client_secret}\n", encoding="utf-8")
+    fake_module = MagicMock()
+    fake_module.SandboxClient = MagicMock(return_value=sdk_client)
+    fake_module.TlsConfig = MagicMock()
+    fake_module.ClientCredentialsAuth = MagicMock(return_value="auth-provider")
+    config = oc.GatewayConfig(
+        gateway_url="https://gateway.example.com:443",
+        auth_mode="oidc-client-credentials",
+        oidc_client_secret_provider=lambda: oc._read_gateway_client_secret(str(secret_file)),
+        oidc_issuer="https://identity.example.com",
+        oidc_client_id="swarmer-service",
+        oidc_audience="openshell-gateway",
+        oidc_scopes=("sandbox:read", "sandbox:write"),
+    )
+
+    with patch.dict(sys.modules, {"openshell": fake_module}):
+        result = oc.get_client_for_config(config)
+
+    assert result is sdk_client
+    auth_kwargs = fake_module.ClientCredentialsAuth.call_args.kwargs
+    assert auth_kwargs["client_secret"]() == client_secret
+    assert auth_kwargs["issuer"] == "https://identity.example.com"
+    assert auth_kwargs["client_id"] == "swarmer-service"
+    assert auth_kwargs["audience"] == "openshell-gateway"
+    assert auth_kwargs["scopes"] == ("sandbox:read", "sandbox:write")
+    assert fake_module.SandboxClient.call_args.kwargs["client_credentials"] == "auth-provider"
+    assert fake_module.SandboxClient.call_args.kwargs["bearer_token"] is None
+
+
+def test_default_gateway_config_reads_client_secret_only_on_demand(tmp_path, monkeypatch):
+    from swarmer.config import settings
+
+    secret_file = tmp_path / "gateway-client-secret"
+    client_secret = secrets.token_urlsafe(32)
+    secret_file.write_text(client_secret, encoding="utf-8")
+    monkeypatch.setattr(settings, "openshell_tls_cert", "")
+    monkeypatch.setattr(settings, "openshell_tls_key", "")
+    monkeypatch.setattr(settings, "openshell_bearer_token", "")
+    monkeypatch.setattr(settings, "swarmer_runtime_mode", "openshell")
+    monkeypatch.setattr(settings, "openshell_gateway_oidc_client_secret_file", str(secret_file))
+    monkeypatch.setattr(settings, "openshell_gateway_oidc_issuer", "https://identity.example.com")
+    monkeypatch.setattr(settings, "openshell_gateway_oidc_client_id", "swarmer-service")
+
+    config = oc.default_gateway_config()
+
+    assert config.auth_mode == "oidc-client-credentials"
+    assert config.oidc_client_secret_provider is not None
+    assert config.oidc_client_secret_provider() == client_secret
+
+
+def test_openshell_mode_prefers_service_identity_over_configured_client_certificate(
+    tmp_path, monkeypatch
+):
+    from swarmer.config import settings
+
+    secret_file = tmp_path / "gateway-client-secret"
+    secret_file.write_text(secrets.token_urlsafe(32), encoding="utf-8")
+    monkeypatch.setattr(settings, "swarmer_runtime_mode", "openshell")
+    monkeypatch.setattr(settings, "openshell_tls_cert", "personal-certificate-file")
+    monkeypatch.setattr(settings, "openshell_tls_key", "personal-key-file")
+    monkeypatch.setattr(settings, "openshell_gateway_oidc_client_secret_file", str(secret_file))
+    monkeypatch.setattr(settings, "openshell_gateway_oidc_issuer", "https://identity.example.com")
+    monkeypatch.setattr(settings, "openshell_gateway_oidc_client_id", "swarmer-service")
+
+    config = oc.default_gateway_config()
+
+    assert config.auth_mode == "oidc-client-credentials"
+    assert config.tls_cert is None
+    assert config.tls_key is None
+    assert config.oidc_client_secret_provider is not None
 
 
 def test_get_client_normalizes_https_url_endpoint(sdk_client):

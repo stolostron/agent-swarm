@@ -7,7 +7,7 @@ for a handful of legacy per-workspace K8s Secret/ConfigMap features (pull
 secrets, extra env vars) which lazily create their namespace on first use.
 
 A user may access a workspace when any of the following hold:
-  - ``settings.k8s_namespace`` is set (shared-namespace deployment) — every
+  - Kubernetes runtime has ``settings.k8s_namespace`` set (shared-namespace deployment) — every
     authenticated user can see every workspace, matching the flat trust model
     that deployment flavor already had (a single shared namespace + Role)
   - they are the workspace owner (``Workspace.owner_id``)
@@ -55,7 +55,11 @@ def is_admin_static(username: str, groups: list[str] | None = None) -> bool:
     admin_groups = _parse_csv(settings.workspace_admin_groups)
     if admin_groups and groups and admin_groups.intersection(groups):
         return True
-    return False
+    return bool(
+        settings.swarmer_runtime_mode == "openshell"
+        and groups
+        and "swarmer-bootstrap-admin" in groups
+    )
 
 
 async def is_admin(db: AsyncSession, username: str, groups: list[str] | None = None) -> bool:
@@ -86,15 +90,27 @@ async def bootstrap_admin(db: AsyncSession, username: str) -> bool:
     """Self-promote *username* to global admin iff no admin exists yet.
 
     Returns True on success, False if an admin already exists (races are
-    resolved by the DB — a second caller sees admin_bootstrap_available()
-    become False, or hits the unique constraint on user_id / a concurrent
-    commit and simply fails the initial check).
+    resolved by an atomic INSERT ... SELECT ... WHERE NOT EXISTS statement,
+    so only one concurrent caller can create the first admin row).
     """
-    if not username or not await admin_bootstrap_available(db):
+    if not username or has_static_admin_config():
         return False
-    db.add(GlobalAdmin(user_id=username, created_by="bootstrap"))
-    await db.commit()
-    return True
+    from sqlalchemy import exists, insert, literal, select
+    from sqlalchemy.exc import IntegrityError
+
+    statement = insert(GlobalAdmin).from_select(
+        ["user_id", "created_by"],
+        select(literal(username), literal("bootstrap")).where(
+            ~exists(select(GlobalAdmin.id))
+        ),
+    )
+    try:
+        result = await db.execute(statement)
+        await db.commit()
+        return result.rowcount == 1
+    except IntegrityError:
+        await db.rollback()
+        return False
 
 
 async def list_global_admins(db: AsyncSession) -> list[GlobalAdmin]:
@@ -144,7 +160,7 @@ async def user_can_access_workspace(
         return False
     if session_workspace_id is not None:
         return ws.id == session_workspace_id
-    if settings.k8s_namespace:
+    if settings.swarmer_runtime_mode != "openshell" and settings.k8s_namespace:
         # Shared-namespace deployment: all workspaces already live in one
         # namespace with one Role/RoleBinding — preserve that flat access
         # model rather than requiring per-workspace membership.
@@ -175,7 +191,7 @@ async def filter_accessible_workspaces(
     """Return the subset of *workspaces* accessible to *username*."""
     if not workspaces or not username:
         return []
-    if settings.k8s_namespace:
+    if settings.swarmer_runtime_mode != "openshell" and settings.k8s_namespace:
         return list(workspaces)
     if await is_admin(db, username, groups):
         return list(workspaces)
@@ -258,6 +274,9 @@ async def _k8s_known_users() -> set[str]:
     """OpenShift `User` objects + K8s ServiceAccounts (the identities
     `make user-token SA_USER=<name>` creates) — best-effort, never raises."""
     import asyncio
+
+    if settings.swarmer_runtime_mode == "openshell":
+        return set()
 
     from swarmer import k8s
 

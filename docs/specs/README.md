@@ -9,6 +9,8 @@ Agent Swarm MCP server contract.
   retention, encryption, and invariants.
 - [REST API](rest-api.md): authentication, authorization, endpoint catalog,
   request/response contracts, errors, and lifecycle semantics.
+- [Authentication](PAGE_authentication.md): login UI, runtime-selected identity
+  validation, bootstrap administration, and session/API token handling.
 - [MCP Server](mcp-server.md): transport, authentication, tool catalog,
   orchestration workflow, and REST mapping.
 - [Cross-Layer Contracts](cross-layer-contracts.md): compatibility rules,

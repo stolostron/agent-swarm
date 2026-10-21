@@ -12,8 +12,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from swarmer import k8s, workspace_acl
-from swarmer.config import settings
-from swarmer.database import get_db
 from swarmer.api.deps import (
     filter_accessible_workspaces,
     get_workspace_or_404,
@@ -35,12 +33,14 @@ from swarmer.api.schemas import (
     WorkspaceOut,
     WorkspaceUpdate,
 )
+from swarmer.config import settings
+from swarmer.database import get_db
 from swarmer.k8s_auth import TokenIdentity
+from swarmer.mcp_catalog import get_catalog_entry
+from swarmer.models.mcp_server import McpServer
 from swarmer.models.workspace import Workspace
 from swarmer.models.workspace_gateway import WorkspaceGateway
 from swarmer.models.workspace_member import WorkspaceMember
-from swarmer.models.mcp_server import McpServer
-from swarmer.mcp_catalog import get_catalog_entry
 from swarmer.openshell_command_parser import parse_gateway_command_or_json
 from swarmer.openshell_oidc import oidc_manager
 from swarmer.openshell_token_parser import parse_token_input
@@ -155,12 +155,12 @@ async def test_gateway_connection_endpoint(
     db: AsyncSession = Depends(get_db),
     identity: TokenIdentity = Depends(require_api_auth),
 ):
+    from swarmer.gateway_version import observe_gateway_version
     from swarmer.openshell_client import (
         GatewayConfig,
         get_client_for_config,
         probe_gateway_connectivity,
     )
-    from swarmer.gateway_version import observe_gateway_version
     from swarmer.openshell_oidc import OidcGatewayAuth
 
     if body.workspace_id is None and not await workspace_acl.can_create_workspace(
@@ -337,7 +337,7 @@ async def create_workspace(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Session credentials cannot create workspaces.",
         )
-    if settings.k8s_namespace:
+    if settings.swarmer_runtime_mode != "openshell" and settings.k8s_namespace:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Workspace creation is disabled in namespace-scoped deployments.",
@@ -483,7 +483,7 @@ async def delete_workspace(
     await db.commit()
 
     try:
-        if not settings.k8s_namespace:
+        if settings.swarmer_runtime_mode != "openshell" and not settings.k8s_namespace:
             k8s.delete_namespace(k8s_ns)
     except Exception:
         log.warning("Failed to delete K8s namespace %s for workspace '%s'", k8s_ns, name)

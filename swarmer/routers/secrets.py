@@ -11,6 +11,7 @@ from fastapi.templating import Jinja2Templates
 from starlette.responses import Response
 
 from swarmer import openshell_client
+from swarmer.config import settings
 from swarmer.csrf import CSRFError, ensure_csrf_token, validate_csrf_token
 from swarmer.deps import require_auth
 from swarmer.flash import flash
@@ -166,6 +167,9 @@ async def secrets_tabs(
 
         if tab not in _VALID_TABS:
             tab = "credentials"
+        k8s_features_enabled = settings.swarmer_runtime_mode != "openshell"
+        if tab == "pull-secret" and not k8s_features_enabled:
+            tab = "credentials"
 
         ctx = await _secrets_context(api, ws_id)
 
@@ -177,6 +181,7 @@ async def secrets_tabs(
             "tab": tab,
             "current_user": _current_user(request),
             "csrf_token": ensure_csrf_token(request),
+            "k8s_features_enabled": k8s_features_enabled,
             **ctx,
         },
     )

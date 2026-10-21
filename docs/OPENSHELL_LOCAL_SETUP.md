@@ -15,6 +15,45 @@ Step-by-step guide to running Swarmer with OpenShell 0.1.4 and Agent Sandbox v1.
 
 > **Version matters.** The Python SDK, CLI, and gateway use the OpenShell 0.1.4 API. Keep the `openshell` CLI at the same release as `OPENSHELL_VERSION` in the Makefile.
 
+## Running Swarmer inside OpenShell
+
+The `SWARMER_RUNTIME_MODE=openshell` application mode is for a Swarmer instance
+running inside an existing OpenShell sandbox. It skips Kubernetes client
+initialization, the legacy Kubernetes workspace-member migration, and
+Kubernetes image-availability probes. The regular Kubernetes deployment remains
+the default and keeps its existing TokenReview authentication.
+
+For hosted identity, configure both `OPENSHELL_OIDC_ISSUER` and
+`OPENSHELL_OIDC_AUDIENCE`. Swarmer validates the token signature using the
+issuer's HTTPS discovery document and JWKS, and checks issuer, audience,
+expiration, issued-at time, and subject. Tokens without these verified claims
+are rejected. JWKS must be served by the issuer origin unless an additional
+HTTPS origin is explicitly listed in `OPENSHELL_OIDC_JWKS_ALLOWED_ORIGINS`.
+The stable JWT `sub` is the ACL username; `OPENSHELL_OIDC_GROUPS_CLAIM` selects
+the groups claim (including dot-separated nested claims).
+For standalone bootstrap, mount the administrator token as a
+file and set `SWARMER_ADMIN_TOKEN_FILE` to that mounted file; do not place the
+token in an ordinary environment variable or command-line argument. The token
+is compared in constant time and grants the configured bootstrap administrator
+identity. Rotate or revoke it by replacing/removing the mounted secret.
+
+Swarmer's identity to the Gateway is separate from users' login tokens. For a
+hosted gateway, configure a dedicated OIDC service account using the
+`OPENSHELL_GATEWAY_OIDC_ISSUER`, `OPENSHELL_GATEWAY_OIDC_CLIENT_ID`,
+`OPENSHELL_GATEWAY_OIDC_AUDIENCE`, and optional `OPENSHELL_GATEWAY_OIDC_SCOPES`
+settings. Set `OPENSHELL_GATEWAY_OIDC_CLIENT_SECRET_FILE` to a mounted secret
+file. The OpenShell Python SDK obtains and renews client-credentials tokens
+lazily; user CLI tokens, refresh tokens, and personal mTLS keys are not needed
+inside the Swarmer sandbox. Restrict the service account's gateway roles and
+workspace membership to only the workspace(s) Swarmer manages.
+
+OpenShell mode does not need a Kubernetes API URL or Kubernetes credentials.
+Kubernetes-only registry pull-secret and namespace-management features are not
+available in this runtime; the pull-secret tab is hidden and legacy REST
+mutations are rejected. Agent sandbox image resolution and pulling are handled
+by the selected OpenShell gateway. User autocomplete omits Kubernetes and
+OpenShift directory results.
+
 ## Clean gateway/session migration
 
 Swarmer is pinned to OpenShell 0.1.4 and Agent Sandbox v1.0.4. The gateway API,

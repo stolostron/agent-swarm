@@ -14,12 +14,11 @@ import pytest
 import pytest_asyncio
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from swarmer.database import Base
+from swarmer import workspace_acl
 from swarmer.config import settings
+from swarmer.database import Base
 from swarmer.models.workspace import Workspace
 from swarmer.models.workspace_member import WorkspaceMember
-from swarmer import workspace_acl
-
 
 _engine = create_async_engine("sqlite+aiosqlite://", echo=False)
 _TestSession = async_sessionmaker(_engine, expire_on_commit=False)
@@ -89,6 +88,18 @@ class TestIsAdminStatic:
         assert workspace_acl.is_admin_static("eve", groups=["platform-admins", "other"])
         assert not workspace_acl.is_admin_static("eve", groups=["other"])
         assert not workspace_acl.is_admin_static("eve", groups=None)
+
+    def test_openshell_bootstrap_identity_is_admin(self, monkeypatch):
+        monkeypatch.setattr(settings, "swarmer_runtime_mode", "openshell")
+        assert workspace_acl.is_admin_static(
+            "bootstrap-admin", groups=["swarmer-bootstrap-admin"]
+        )
+
+    def test_bootstrap_identity_is_not_admin_in_kubernetes_mode(self, monkeypatch):
+        monkeypatch.setattr(settings, "swarmer_runtime_mode", "kubernetes")
+        assert not workspace_acl.is_admin_static(
+            "bootstrap-admin", groups=["swarmer-bootstrap-admin"]
+        )
 
     def test_handles_whitespace_and_empty_entries(self):
         settings.workspace_admin_users = " alice , , bob "
@@ -245,6 +256,18 @@ class TestUserCanAccessWorkspace:
         try:
             ws = await _make_workspace(db, owner_id="alice")
             assert await workspace_acl.user_can_access_workspace(db, ws, "anyone-else")
+        finally:
+            settings.k8s_namespace = ""
+
+    @pytest.mark.asyncio
+    async def test_openshell_runtime_ignores_kubernetes_namespace_access_bypass(
+        self, db, monkeypatch
+    ):
+        monkeypatch.setattr(settings, "swarmer_runtime_mode", "openshell")
+        settings.k8s_namespace = "shared-ns"
+        try:
+            ws = await _make_workspace(db, owner_id="alice")
+            assert not await workspace_acl.user_can_access_workspace(db, ws, "anyone-else")
         finally:
             settings.k8s_namespace = ""
 

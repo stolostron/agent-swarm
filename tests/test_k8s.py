@@ -8,16 +8,36 @@ list_openshift_users, list_user_service_accounts).
 
 import os
 import sys
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
+from swarmer.config import settings
 from swarmer.k8s import (
     app_namespace,
+    get_image_available,
     list_openshift_users,
     list_swarmer_user_role_binding_identities,
     list_user_service_accounts,
 )
+
+
+@pytest.mark.asyncio
+async def test_openshell_image_availability_skips_kubernetes_probe(monkeypatch):
+    monkeypatch.setattr(settings, "swarmer_runtime_mode", "openshell")
+    with patch("swarmer.k8s.check_image_reachable", new=AsyncMock()) as check:
+        assert await get_image_available("agent-image", "workspace") is True
+    check.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_kubernetes_image_availability_still_uses_registry_probe(monkeypatch):
+    monkeypatch.setattr(settings, "swarmer_runtime_mode", "kubernetes")
+    with patch("swarmer.k8s.check_image_reachable", new=AsyncMock(return_value=False)) as check:
+        assert await get_image_available("agent-image", "workspace") is False
+    check.assert_awaited_once_with("agent-image", "workspace")
 
 
 def _role_binding(role_kind, role_name, subjects):

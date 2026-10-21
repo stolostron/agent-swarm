@@ -11,9 +11,11 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from swarmer import k8s
-from swarmer.database import get_db
-from swarmer.k8s_auth import TokenIdentity
-from swarmer.api.deps import get_current_user, get_workspace_or_404, require_human_api_auth
+from swarmer.api.deps import (
+    get_current_user,
+    get_workspace_or_404,
+    require_human_api_auth,
+)
 from swarmer.api.schemas import (
     CredentialsOut,
     CredentialsSave,
@@ -26,6 +28,8 @@ from swarmer.api.schemas import (
     PullSecretCreate,
     PullSecretOut,
 )
+from swarmer.database import get_db
+from swarmer.k8s_auth import TokenIdentity
 from swarmer.models.github_app import GitHubApp
 from swarmer.models.github_pat import GitHubPAT
 from swarmer.models.opencode_secret import OpencodeSecret
@@ -816,6 +820,10 @@ async def get_pull_secret(
     ws_id: int,
     ws: Workspace = Depends(get_workspace_or_404),
 ):
+    from swarmer.config import settings
+
+    if settings.swarmer_runtime_mode == "openshell":
+        return PullSecretOut(exists=False)
     try:
         info = k8s.get_pull_secret_info(ws.k8s_namespace)
         if info:
@@ -832,6 +840,12 @@ async def create_pull_secret(
     ws: Workspace = Depends(get_workspace_or_404),
 ):
     from swarmer.config import settings
+
+    if settings.swarmer_runtime_mode == "openshell":
+        raise HTTPException(
+            status_code=409,
+            detail="Registry pull secrets are managed by the OpenShell gateway in this runtime.",
+        )
 
     try:
         # ACM-41659: workspaces no longer get a K8s namespace at creation
@@ -853,6 +867,13 @@ async def delete_pull_secret(
     ws_id: int,
     ws: Workspace = Depends(get_workspace_or_404),
 ):
+    from swarmer.config import settings
+
+    if settings.swarmer_runtime_mode == "openshell":
+        raise HTTPException(
+            status_code=409,
+            detail="Registry pull secrets are managed by the OpenShell gateway in this runtime.",
+        )
     try:
         k8s.delete_pull_secret(ws.k8s_namespace)
     except Exception as exc:

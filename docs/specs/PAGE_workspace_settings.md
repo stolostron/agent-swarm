@@ -45,6 +45,10 @@ security behavior.
   them through the approved sandbox mechanism.
 - Prompts: manage git-backed prompt sources, refresh them, browse repositories
   and folders, and preview selectable prompts.
+- Kubernetes registry pull secrets: visible and mutable only in Kubernetes
+  runtime mode. In OpenShell mode the tab is hidden; the REST read reports no
+  configured K8s pull secret and mutations return `409` because the gateway
+  owns sandbox image pulls.
 
 ## API references
 

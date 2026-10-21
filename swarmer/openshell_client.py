@@ -384,7 +384,7 @@ SANDBOX_EPHEMERAL_STORAGE = "10Gi"
 class GatewayConfig:
     """Descriptor for connecting to an OpenShell gateway."""
     gateway_url: str
-    auth_mode: str = "default"  # "default", "oidc", "bearer", "mtls", "none"
+    auth_mode: str = "default"  # "default", "oidc", "oidc-client-credentials", "bearer", "mtls", "none"
     tls_ca: str | None = None
     tls_cert: str | None = None
     tls_key: str | None = None
@@ -394,26 +394,63 @@ class GatewayConfig:
     workspace_id: int | None = None
     client_secret: str | None = None
     service_account_subject: str | None = None
+    oidc_client_secret_provider: Callable[[], str] | None = None
+    oidc_issuer: str | None = None
+    oidc_client_id: str | None = None
+    oidc_audience: str | None = None
+    oidc_scopes: tuple[str, ...] = ()
 
 
 def default_gateway_config() -> GatewayConfig:
     """Build GatewayConfig from global settings."""
     from swarmer.config import settings
 
+    client_secret_file = settings.openshell_gateway_oidc_client_secret_file.strip()
+    prefer_machine_identity = (
+        settings.swarmer_runtime_mode == "openshell" and bool(client_secret_file)
+    )
     auth_mode = (
-        "mtls"
-        if settings.openshell_tls_cert
-        else ("bearer" if settings.openshell_bearer_token else "default")
+        "oidc-client-credentials"
+        if prefer_machine_identity
+        else (
+            "mtls"
+            if settings.openshell_tls_cert
+            else (
+                "oidc-client-credentials"
+                if client_secret_file
+                else ("bearer" if settings.openshell_bearer_token else "default")
+            )
+        )
     )
     return GatewayConfig(
         gateway_url=settings.openshell_gateway_url,
         auth_mode=auth_mode,
         tls_ca=settings.openshell_tls_ca or None,
-        tls_cert=settings.openshell_tls_cert or None,
-        tls_key=settings.openshell_tls_key or None,
+        tls_cert=(settings.openshell_tls_cert or None) if auth_mode == "mtls" else None,
+        tls_key=(settings.openshell_tls_key or None) if auth_mode == "mtls" else None,
         tls_verify=settings.openshell_tls_verify,
         bearer_token=settings.openshell_bearer_token or None,
+        oidc_client_secret_provider=(
+            (lambda: _read_gateway_client_secret(client_secret_file))
+            if auth_mode == "oidc-client-credentials"
+            else None
+        ),
+        oidc_issuer=settings.openshell_gateway_oidc_issuer.strip() or None,
+        oidc_client_id=settings.openshell_gateway_oidc_client_id.strip() or None,
+        oidc_audience=settings.openshell_gateway_oidc_audience.strip() or None,
+        oidc_scopes=tuple(settings.openshell_gateway_oidc_scopes.split()),
     )
+
+
+def _read_gateway_client_secret(secret_file: str) -> str:
+    """Read the machine identity secret only when the SDK needs to refresh."""
+    try:
+        value = pathlib.Path(secret_file).read_text(encoding="utf-8").strip()
+    except OSError:
+        value = ""
+    if not value:
+        raise RuntimeError("OpenShell Gateway client secret file is unavailable")
+    return value
 
 
 def _tls_material_path(value: str) -> tuple[pathlib.Path, bool]:
@@ -458,7 +495,11 @@ def get_client_for_config(config: GatewayConfig):
     toggle. ``tls_verify`` is therefore intentionally consumed only by the
     HTTP/WebSocket proxy; SDK connections always use gRPC's verified TLS.
     """
-    from openshell import SandboxClient, TlsConfig  # noqa: F401 (optional dep)
+    from openshell import (  # noqa: F401 (optional dep)
+        ClientCredentialsAuth,
+        SandboxClient,
+        TlsConfig,
+    )
 
     endpoint = _normalize_gateway_endpoint(config.gateway_url)
     gateway_scheme = urlparse(config.gateway_url.strip()).scheme.lower()
@@ -487,6 +528,19 @@ def get_client_for_config(config: GatewayConfig):
             tls = TlsConfig()
 
         bearer = config.bearer_callable or (config.bearer_token if config.auth_mode == "bearer" else None)
+        client_credentials = None
+        if config.oidc_client_secret_provider is not None:
+            if not config.oidc_issuer or not config.oidc_client_id:
+                raise ValueError(
+                    "OpenShell Gateway OIDC client credentials require an issuer and client ID"
+                )
+            client_credentials = ClientCredentialsAuth(
+                client_secret=config.oidc_client_secret_provider,
+                issuer=config.oidc_issuer,
+                client_id=config.oidc_client_id,
+                audience=config.oidc_audience,
+                scopes=config.oidc_scopes or None,
+            )
         endpoint_host = urlparse(
             config.gateway_url.strip()
             if "://" in config.gateway_url
@@ -494,6 +548,8 @@ def get_client_for_config(config: GatewayConfig):
         ).hostname
         if bearer is not None and tls is None and not _is_loopback_host(endpoint_host):
             raise ValueError("bearer-authenticated remote gateways require TLS configuration")
+        if client_credentials is not None and tls is None and not _is_loopback_host(endpoint_host):
+            raise ValueError("OIDC client-credential remote gateways require TLS configuration")
         # SandboxClient reads tls.*_path files synchronously in its
         # constructor (grpc.ssl_channel_credentials(...read_bytes())), so it
         # is safe to delete any temp files in `finally` below once this
@@ -503,6 +559,7 @@ def get_client_for_config(config: GatewayConfig):
             endpoint,
             tls=tls,
             bearer_token=bearer,
+            client_credentials=client_credentials,
         )
     finally:
         for p in temp_paths:

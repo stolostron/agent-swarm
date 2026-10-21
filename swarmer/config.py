@@ -1,3 +1,4 @@
+from typing import Literal
 from urllib.parse import urlparse
 
 from pydantic_settings import BaseSettings
@@ -10,6 +11,22 @@ class Settings(BaseSettings):
     k8s_api_url: str = "https://kubernetes.default.svc"
     database_url: str = "sqlite+aiosqlite:///data/swarmer.db"
     k8s_in_cluster: bool = False
+    # Selects platform integrations. OpenShell-hosted Swarmer must not need
+    # Kubernetes credentials or call Kubernetes-only APIs during startup.
+    swarmer_runtime_mode: Literal["kubernetes", "openshell"] = "kubernetes"
+    openshell_oidc_issuer: str = ""
+    openshell_oidc_audience: str = ""
+    openshell_oidc_jwks_allowed_origins: str = ""
+    openshell_oidc_groups_claim: str = "groups"
+    swarmer_admin_token_file: str = ""
+    swarmer_admin_username: str = "bootstrap-admin"
+    # Non-human OpenShell Gateway identity. The SDK reads the secret lazily
+    # from this file and refreshes its client-credentials token automatically.
+    openshell_gateway_oidc_issuer: str = ""
+    openshell_gateway_oidc_client_id: str = ""
+    openshell_gateway_oidc_audience: str = ""
+    openshell_gateway_oidc_scopes: str = ""
+    openshell_gateway_oidc_client_secret_file: str = ""
     host: str = "0.0.0.0"
     port: int = 8080
     agent_image_opencode: str = ""

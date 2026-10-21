@@ -11,11 +11,22 @@ workspace authorization.
 Every API request must include:
 
 ```http
-Authorization: Bearer <Kubernetes-token>
+Authorization: Bearer <runtime-token>
 ```
 
-The token is validated through Kubernetes TokenReview or the configured
-fallback identity probe. Invalid or expired tokens return `401`.
+In Kubernetes runtime mode, the token is validated through Kubernetes
+TokenReview or the configured fallback identity probe. In OpenShell runtime
+mode, it is validated as either the configured bootstrap administrator token
+or an OIDC token with a valid signature/JWKS, configured issuer and audience,
+expiration, issued-at time, and subject. Invalid or expired tokens return
+`401`. OIDC configuration requires both `OPENSHELL_OIDC_ISSUER` and
+`OPENSHELL_OIDC_AUDIENCE`. The stable `sub` claim is the ACL username; the
+groups claim defaults to `groups` and can be selected with
+`OPENSHELL_OIDC_GROUPS_CLAIM`.
+
+Swarmer-to-Gateway service-account credentials are independent of user bearer
+tokens and use `OPENSHELL_GATEWAY_OIDC_*` deployment settings; the SDK reads the
+client secret from the configured mounted file and renews access tokens.
 
 The API does not accept a Swarmer database session cookie as API
 authentication.
@@ -25,7 +36,7 @@ authentication.
 Workspace endpoints hide inaccessible resources as `404` to avoid revealing
 their existence. Access is granted when any of the following applies:
 
-- The deployment uses a shared namespace.
+- The deployment uses a shared Kubernetes namespace (Kubernetes runtime only).
 - The caller is a global administrator.
 - The caller is `Workspace.owner_id`.
 - The caller has a matching `WorkspaceMember` row.
@@ -121,6 +132,9 @@ mode, trigger_type, event_context
 #### `GET /api/v1/me`
 
 Returns the authenticated username and permission flags.
+When an OpenShell bootstrap token file is configured, the
+`admin_bootstrap_available` flag is shown only to that validated bootstrap
+identity; other OIDC users cannot initiate initial-admin promotion.
 
 Response:
 
@@ -164,7 +178,11 @@ Admin-only. Returns `404` when the identity is not a database administrator.
 #### `POST /api/v1/admins/bootstrap`
 
 Allows the authenticated caller to become the first database administrator
-only when no static or database admin exists. A later call returns `409`.
+only when no static or database admin exists. A later call returns `409`. In
+OpenShell mode, when a bootstrap token file is configured, only that validated
+bootstrap identity may initialize the first database administrator; the
+token-backed identity remains governed by the mounted credential and can be
+rotated or revoked by replacing/removing it.
 
 ### 6.2 Workspace CRUD
 
@@ -497,6 +515,10 @@ PUT/DELETE /api/v1/workspaces/{ws_id}/secrets/pats/{pat_id}
 GET/PUT/DELETE /api/v1/workspaces/{ws_id}/secrets/github-app
 GET/POST/DELETE /api/v1/workspaces/{ws_id}/secrets/pull-secret
 ```
+
+In OpenShell runtime mode, `GET` returns `{ "exists": false }`; `POST` and
+`DELETE` return `409` because image pull credentials are managed by the
+OpenShell gateway rather than Kubernetes Secrets.
 
 AI credential saves may configure OpenShell providers and therefore can return
 `502` when the gateway operation fails. Shared provider configuration is

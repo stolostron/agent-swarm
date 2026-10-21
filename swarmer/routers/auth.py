@@ -6,7 +6,6 @@ to the API.  Post-login workspace access checks use the API client.
 
 import json
 import secrets
-
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, Form, Request
@@ -29,7 +28,7 @@ async def login_page(request: Request):
     if request.session.get("authenticated"):
         return RedirectResponse("/workspaces", status_code=HTTP_303_SEE_OTHER)
     openshift_auth_url = None
-    if settings.openshift_oauth_url:
+    if settings.openshift_oauth_url and settings.swarmer_runtime_mode == "kubernetes":
         state = secrets.token_urlsafe(16)
         request.session["oauth_state"] = state
         if settings.redirect_base_url:
@@ -45,7 +44,11 @@ async def login_page(request: Request):
     return templates.TemplateResponse(
         request,
         "login.html",
-        {"openshift_auth_url": openshift_auth_url},
+        {
+            "openshift_auth_url": openshift_auth_url,
+            "openshell_auth_mode": settings.swarmer_runtime_mode == "openshell",
+            "openshell_oidc_enabled": bool(settings.openshell_oidc_issuer),
+        },
     )
 
 
@@ -58,8 +61,8 @@ async def _validate_and_login(request: Request, token: str):
     # Post-login workspace access check via API client.
     # Use the validated token to list workspaces through the API and
     # verify the user can reach at least one.
-    from swarmer.routers.api_client import APIClient, APIError
     from swarmer.main import app
+    from swarmer.routers.api_client import APIClient, APIError
     async with APIClient(app=app, token=token) as api:
         try:
             await api.list_workspaces()
