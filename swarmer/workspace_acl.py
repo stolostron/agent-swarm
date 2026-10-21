@@ -202,19 +202,20 @@ async def is_workspace_admin(
     admin role in workspace *ws_id*.
 
     This is the workspace-scoped manager grant from the owner/member/admin
-    ACL model (ACM-41659). The role comparison is case-insensitive so
-    hand-entered values like ``Admin`` behave the same as ``admin``.
+    ACL model (ACM-41659). The role comparison ignores surrounding whitespace
+    and is case-insensitive so hand-entered values like `` Admin `` behave
+    the same as ``admin``.
     """
     if not username:
         return False
     result = await db.execute(
-        select(WorkspaceMember.id).where(
+        select(WorkspaceMember.role).where(
             WorkspaceMember.workspace_id == ws_id,
             WorkspaceMember.user_id == username,
-            func.lower(WorkspaceMember.role) == WORKSPACE_ADMIN_ROLE,
         )
     )
-    return result.scalar_one_or_none() is not None
+    role = result.scalar_one_or_none()
+    return (role or "").strip().lower() == WORKSPACE_ADMIN_ROLE
 
 
 async def can_manage_members(

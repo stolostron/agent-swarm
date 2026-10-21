@@ -1226,12 +1226,16 @@ class TestSessions:
     async def test_workspace_admin_role_can_mutate_shared_mcp_servers(self, client):
         """ACM-48496: a member granted the admin role is a workspace manager
         and may add/configure/toggle/delete shared MCP servers there."""
-        from unittest.mock import AsyncMock as _AsyncMock, patch as _patch
+        from unittest.mock import AsyncMock as _AsyncMock
+        from unittest.mock import patch as _patch
+
+        from sqlalchemy import select
 
         from swarmer.api.deps import get_current_user, require_api_auth
         from swarmer.k8s_auth import TokenIdentity
         from swarmer.main import app
         from swarmer.models.mcp_server import McpServer
+        from swarmer.models.workspace_member import WorkspaceMember
 
         jira_token = secrets.token_urlsafe(32)
         ws = await _create_workspace(client)
@@ -1240,6 +1244,16 @@ class TestSessions:
             json={"user_id": "helper", "role": "admin"},
         )
         assert added.status_code == 201, added.text
+        async with _TestSession() as db:
+            membership = await db.scalar(
+                select(WorkspaceMember).where(
+                    WorkspaceMember.workspace_id == ws["id"],
+                    WorkspaceMember.user_id == "helper",
+                )
+            )
+            membership.role = " Admin "
+            await db.commit()
+            assert membership.role == " Admin "
 
         app.dependency_overrides[require_api_auth] = lambda: TokenIdentity(
             username="helper", uid="uid-helper"
