@@ -1,6 +1,7 @@
 from typing import Literal
 from urllib.parse import urlparse
 
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings
 
 
@@ -14,19 +15,53 @@ class Settings(BaseSettings):
     # Selects platform integrations. OpenShell-hosted Swarmer must not need
     # Kubernetes credentials or call Kubernetes-only APIs during startup.
     swarmer_runtime_mode: Literal["kubernetes", "openshell"] = "kubernetes"
-    openshell_oidc_issuer: str = ""
-    openshell_oidc_audience: str = ""
-    openshell_oidc_jwks_allowed_origins: str = ""
-    openshell_oidc_groups_claim: str = "groups"
+    openshell_oidc_issuer: str = Field(
+        default="", validation_alias=AliasChoices("SWARMER_OIDC_ISSUER", "OPENSHELL_OIDC_ISSUER")
+    )
+    openshell_oidc_audience: str = Field(
+        default="", validation_alias=AliasChoices("SWARMER_OIDC_AUDIENCE", "OPENSHELL_OIDC_AUDIENCE")
+    )
+    openshell_oidc_jwks_allowed_origins: str = Field(
+        default="",
+        validation_alias=AliasChoices(
+            "SWARMER_OIDC_JWKS_ALLOWED_ORIGINS", "OPENSHELL_OIDC_JWKS_ALLOWED_ORIGINS"
+        ),
+    )
+    openshell_oidc_groups_claim: str = Field(
+        default="groups",
+        validation_alias=AliasChoices("SWARMER_OIDC_GROUPS_CLAIM", "OPENSHELL_OIDC_GROUPS_CLAIM"),
+    )
     swarmer_admin_token_file: str = ""
     swarmer_admin_username: str = "bootstrap-admin"
     # Non-human OpenShell Gateway identity. The SDK reads the secret lazily
     # from this file and refreshes its client-credentials token automatically.
-    openshell_gateway_oidc_issuer: str = ""
-    openshell_gateway_oidc_client_id: str = ""
-    openshell_gateway_oidc_audience: str = ""
-    openshell_gateway_oidc_scopes: str = ""
-    openshell_gateway_oidc_client_secret_file: str = ""
+    openshell_gateway_oidc_issuer: str = Field(
+        default="",
+        validation_alias=AliasChoices("SWARMER_GATEWAY_OIDC_ISSUER", "OPENSHELL_GATEWAY_OIDC_ISSUER"),
+    )
+    openshell_gateway_oidc_client_id: str = Field(
+        default="",
+        validation_alias=AliasChoices(
+            "SWARMER_GATEWAY_OIDC_CLIENT_ID", "OPENSHELL_GATEWAY_OIDC_CLIENT_ID"
+        ),
+    )
+    openshell_gateway_oidc_audience: str = Field(
+        default="",
+        validation_alias=AliasChoices(
+            "SWARMER_GATEWAY_OIDC_AUDIENCE", "OPENSHELL_GATEWAY_OIDC_AUDIENCE"
+        ),
+    )
+    openshell_gateway_oidc_scopes: str = Field(
+        default="",
+        validation_alias=AliasChoices("SWARMER_GATEWAY_OIDC_SCOPES", "OPENSHELL_GATEWAY_OIDC_SCOPES"),
+    )
+    openshell_gateway_oidc_client_secret_file: str = Field(
+        default="",
+        validation_alias=AliasChoices(
+            "SWARMER_GATEWAY_OIDC_CLIENT_SECRET_FILE",
+            "OPENSHELL_GATEWAY_OIDC_CLIENT_SECRET_FILE",
+        ),
+    )
     host: str = "0.0.0.0"
     port: int = 8080
     agent_image_opencode: str = ""
@@ -56,13 +91,24 @@ class Settings(BaseSettings):
     session_run_history_max_age_days: int = 7
 
     # OpenShell integration — replaces K8s pod/Secret management (ACM-34850)
-    openshell_gateway_url: str = ""
+    openshell_gateway_url: str = Field(
+        default="", validation_alias=AliasChoices("SWARMER_GATEWAY_URL", "OPENSHELL_GATEWAY_URL")
+    )
     openshell_supervisor_url: str = ""
-    openshell_tls_cert: str = ""        # path to client TLS cert
-    openshell_tls_key: str = ""         # path to client TLS key
-    openshell_tls_ca: str = ""          # path to CA bundle
+    openshell_tls_cert: str = Field(
+        default="", validation_alias=AliasChoices("SWARMER_GATEWAY_TLS_CERT", "OPENSHELL_TLS_CERT")
+    )        # path to client TLS cert
+    openshell_tls_key: str = Field(
+        default="", validation_alias=AliasChoices("SWARMER_GATEWAY_TLS_KEY", "OPENSHELL_TLS_KEY")
+    )         # path to client TLS key
+    openshell_tls_ca: str = Field(
+        default="", validation_alias=AliasChoices("SWARMER_GATEWAY_TLS_CA", "OPENSHELL_TLS_CA")
+    )          # path to CA bundle
     openshell_tls_verify: bool = True   # verify gateway server certificates
-    openshell_bearer_token: str = ""    # bearer token for gateway/supervisor auth
+    openshell_bearer_token: str = Field(
+        default="",
+        validation_alias=AliasChoices("SWARMER_GATEWAY_BEARER_TOKEN", "OPENSHELL_BEARER_TOKEN"),
+    )    # bearer token for gateway/supervisor auth
     agent_swarm_internal_url: str = ""  # internal URL used by the Agent Swarm MCP
     sandbox_gc_interval: int = 300      # seconds between sandbox GC sweeps
     log_level: str = "INFO"             # Python logging level: DEBUG, INFO, WARNING, ERROR

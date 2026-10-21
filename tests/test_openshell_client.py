@@ -1090,6 +1090,23 @@ def test_default_gateway_config_reads_client_secret_only_on_demand(tmp_path, mon
     assert config.oidc_client_secret_provider() == client_secret
 
 
+def test_openshell_settings_accept_non_reserved_sandbox_environment_names(monkeypatch):
+    from swarmer.config import Settings
+
+    monkeypatch.setenv("SWARMER_GATEWAY_URL", "https://gateway.example.com:443")
+    monkeypatch.setenv("SWARMER_GATEWAY_OIDC_ISSUER", "https://identity.example.com")
+    monkeypatch.setenv("SWARMER_GATEWAY_OIDC_CLIENT_ID", "swarmer-service")
+    monkeypatch.setenv("SWARMER_GATEWAY_OIDC_CLIENT_SECRET_FILE", "/sandbox/auth/client-secret")
+    monkeypatch.setenv("SWARMER_OIDC_ISSUER", "https://users.example.com")
+    settings_from_env = Settings(_env_file=None)
+
+    assert settings_from_env.openshell_gateway_url == "https://gateway.example.com:443"
+    assert settings_from_env.openshell_gateway_oidc_issuer == "https://identity.example.com"
+    assert settings_from_env.openshell_gateway_oidc_client_id == "swarmer-service"
+    assert settings_from_env.openshell_gateway_oidc_client_secret_file == "/sandbox/auth/client-secret"
+    assert settings_from_env.openshell_oidc_issuer == "https://users.example.com"
+
+
 def test_openshell_mode_prefers_service_identity_over_configured_client_certificate(
     tmp_path, monkeypatch
 ):

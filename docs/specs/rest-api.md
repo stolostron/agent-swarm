@@ -19,14 +19,15 @@ TokenReview or the configured fallback identity probe. In OpenShell runtime
 mode, it is validated as either the configured bootstrap administrator token
 or an OIDC token with a valid signature/JWKS, configured issuer and audience,
 expiration, issued-at time, and subject. Invalid or expired tokens return
-`401`. OIDC configuration requires both `OPENSHELL_OIDC_ISSUER` and
-`OPENSHELL_OIDC_AUDIENCE`. The stable `sub` claim is the ACL username; the
+`401`. OIDC configuration requires both `SWARMER_OIDC_ISSUER` and
+`SWARMER_OIDC_AUDIENCE`. The stable `sub` claim is the ACL username; the
 groups claim defaults to `groups` and can be selected with
-`OPENSHELL_OIDC_GROUPS_CLAIM`.
+`SWARMER_OIDC_GROUPS_CLAIM`.
 
-Swarmer-to-Gateway service-account credentials are independent of user bearer
-tokens and use `OPENSHELL_GATEWAY_OIDC_*` deployment settings; the SDK reads the
-client secret from the configured mounted file and renews access tokens.
+Swarmer-to-Gateway machine credentials are independent of user bearer tokens.
+Hosted deployments use `SWARMER_GATEWAY_OIDC_*` settings; the SDK reads the
+client secret from the configured mounted file and renews access tokens. Local
+Kind can use its gateway-generated client mTLS bundle.
 
 The API does not accept a Swarmer database session cookie as API
 authentication.

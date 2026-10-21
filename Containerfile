@@ -16,7 +16,13 @@ COPY swarmer/ swarmer/
 # Note: PVC mounts overlay /data at runtime; ensure the PVC root is group-0
 # writable (chgrp -R 0 /data on the PVC) for uid 1001 + gid 0 write access.
 USER 0
-RUN mkdir -p /data /auth
+# OpenShell's supervisor UID can differ from the image USER. Keep Python
+# readable there and make the persistent workspace mount writable at runtime;
+# the Swarmer launcher tightens /sandbox/auth before writing credentials.
+RUN microdnf install -y iproute util-linux-core tar && microdnf clean all && \
+    chmod -R a+rX /opt/app-root && \
+    mkdir -p /data /auth /sandbox/auth && \
+    chmod 0777 /sandbox /sandbox/auth
 USER 1001
 
 ENV PYTHONUNBUFFERED=1 \

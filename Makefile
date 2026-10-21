@@ -54,6 +54,31 @@ OPENSHELL_TLS_DIR        ?= auth/openshell
 # up a changed value.
 OPENSHELL_WORKSPACE_STORAGE ?= 10Gi
 
+# Swarmer hosted as an OpenShell sandbox. The local Kind flow builds/loads the
+# image first; remote gateways should use a public registry image reference.
+SWARM_SANDBOX_NAME ?= swarmer
+SWARM_PORT ?= 8080
+SWARM_IMAGE ?= $(IMAGE_REF)
+OPENSHELL_WORKSPACE ?= default
+OPENSHELL_GATEWAY_RUNTIME_HOST ?=
+OPENSHELL_GATEWAY_RUNTIME_PORT ?=
+SWARMER_ADMIN_TOKEN_SOURCE ?=
+SWARMER_GATEWAY_OIDC_CLIENT_SECRET_SOURCE ?=
+SWARMER_GATEWAY_CA_SOURCE ?=
+SWARMER_GATEWAY_TLS_CERT_SOURCE ?=
+SWARMER_GATEWAY_TLS_KEY_SOURCE ?=
+
+export SWARM_SANDBOX_NAME SWARM_PORT SWARM_IMAGE OPENSHELL_WORKSPACE \
+	OPENSHELL_GATEWAY OPENSHELL_GATEWAY_RUNTIME_HOST OPENSHELL_GATEWAY_RUNTIME_PORT \
+	OPENSHELL_NAMESPACE SWARMER_ADMIN_TOKEN_SOURCE \
+	SWARMER_GATEWAY_OIDC_CLIENT_SECRET_SOURCE SWARMER_GATEWAY_CA_SOURCE \
+	SWARMER_GATEWAY_TLS_CERT_SOURCE SWARMER_GATEWAY_TLS_KEY_SOURCE \
+	SWARMER_OIDC_ISSUER SWARMER_OIDC_AUDIENCE SWARMER_OIDC_JWKS_ALLOWED_ORIGINS \
+	SWARMER_OIDC_GROUPS_CLAIM SWARMER_GATEWAY_OIDC_ISSUER \
+	SWARMER_GATEWAY_OIDC_CLIENT_ID SWARMER_GATEWAY_OIDC_AUDIENCE \
+	SWARMER_GATEWAY_OIDC_SCOPES SWARMER_GATEWAY_OIDC_ALLOWED_ORIGINS \
+	AGENT_SWARM_INTERNAL_URL
+
 # ──────────────────────────────────────────────────────────────
 #  Phony targets
 # ──────────────────────────────────────────────────────────────
@@ -61,6 +86,7 @@ OPENSHELL_WORKSPACE_STORAGE ?= 10Gi
         dev lint helm-lint test smoke-test-jira \
         sync-images image-build image-push \
         deploy _deploy-resolved delete connect mcp-setup mcp-api mcp-url api-url openshell-register connect-openshell status \
+        openshell-deploy kind-openshell-deploy \
         kind-deploy _kind-deploy-resolved kind-delete kind-destroy test-e2e-kind \
         help
 
@@ -437,6 +463,7 @@ and pinned version $(OPENSHELL_VERSION) with chart defaults..."; \
 	  -o jsonpath='{.data.tls\.crt}' | base64 -d > $(OPENSHELL_TLS_DIR)/tls.crt
 	@kubectl -n $(OPENSHELL_NAMESPACE) get secret openshell-client-tls \
 	  -o jsonpath='{.data.tls\.key}' | base64 -d > $(OPENSHELL_TLS_DIR)/tls.key
+	@chmod 600 $(OPENSHELL_TLS_DIR)/tls.key
 	@echo "✓ mTLS certs written to $(OPENSHELL_TLS_DIR)/"
 	@# Register / refresh this cluster's OpenShell gateway in the local CLI
 	$(MAKE) openshell-register
@@ -738,6 +765,7 @@ openshell-register:  ## Register (or refresh) the active cluster's OpenShell gat
 	  cp "$$CERTS/ca.crt"  "$$GW_DIR/mtls/ca.crt"; \
 	  cp "$$CERTS/tls.crt" "$$GW_DIR/mtls/tls.crt"; \
 	  cp "$$CERTS/tls.key" "$$GW_DIR/mtls/tls.key"; \
+	  chmod 600 "$$GW_DIR/mtls/tls.key" "$${CERTS}/tls.key"; \
 	  echo "  ✓ mTLS certs installed for '$$GW_NAME'"; \
 	else \
 	  echo "  ⚠ No certs available — run 'make deploy' first"; \
@@ -771,6 +799,31 @@ status:  ## Show OpenShell and swarmer deployment status
 	@echo ""
 	@echo "=== Swarmer deployment ==="
 	@kubectl get deployment swarmer -n $(NAMESPACE) 2>/dev/null || echo "  (not deployed)"
+
+# ──────────────────────────────────────────────────────────────
+#  Swarmer hosted inside an existing OpenShell gateway
+# ──────────────────────────────────────────────────────────────
+
+openshell-deploy:  ## Create or start Swarmer in the selected OpenShell workspace without deleting its persistent workspace
+	@python3 scripts/openshell_deploy.py
+
+
+kind-openshell-deploy:  ## Deploy the usual Kind stack, then run Swarmer in its local OpenShell gateway
+	@command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1 || { \
+	  echo "OpenShell 0.1.4 sandboxes need a Docker-backed Kind provider with seccomp notification support." >&2; \
+	  echo "Rootless Podman-backed Kind is not supported by this local sandbox flow." >&2; exit 1; \
+	}
+	@if kind get clusters 2>/dev/null | grep -q '^$(KIND_CLUSTER)$$'; then \
+	  CURRENT_CONTEXT=$$(kubectl config current-context 2>/dev/null || true); \
+	  EXPECTED_CONTEXT="kind-$(KIND_CLUSTER)"; \
+	  [ "$$CURRENT_CONTEXT" = "$$EXPECTED_CONTEXT" ] || { \
+	    echo "Refusing to deploy: Kind cluster '$(KIND_CLUSTER)' exists, but current kubectl context is '$$CURRENT_CONTEXT'." >&2; \
+	    echo "Select context '$$EXPECTED_CONTEXT' and retry." >&2; exit 1; \
+	  }; \
+	fi
+	$(MAKE) --no-print-directory kind-deploy
+	$(MAKE) --no-print-directory openshell-deploy \
+		SWARM_IMAGE="$(if $(KIND_IMAGE_REF),$(KIND_IMAGE_REF),$(LOCAL_IMAGE_REF))"
 
 # ──────────────────────────────────────────────────────────────
 #  kind (local development cluster)

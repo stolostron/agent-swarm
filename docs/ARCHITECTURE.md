@@ -12,10 +12,10 @@ repository root; symbols are the preferred code entry points.
   credentials are registered with Gateway providers and injected into sandboxes at launch.
   Workspace environment variables are passed directly to the agent process through
   `ExecSandboxRequest.environment`.
-- **Swarmer uses a machine identity for Gateway calls.** When configured for OIDC client
-  credentials, the OpenShell SDK reads the client secret from a mounted file and manages
-  renewable access tokens in memory. Never inject a developer's CLI tokens or personal
-  mTLS key into the Swarmer sandbox.
+- **Swarmer uses a machine identity for Gateway calls.** Local Kind uses its generated
+  gateway client mTLS bundle; hosted gateways use the OpenShell SDK's OIDC
+  client-credentials flow with a mounted secret file and in-memory token renewal. Never
+  inject a developer's OIDC CLI token or personal mTLS key into the Swarmer sandbox.
 - **Runtime mode selects platform integrations.** The default Kubernetes mode uses
   `k8s_auth.py` TokenReview or its fallback identity probe. OpenShell-hosted mode must not
   initialize Kubernetes or require cluster credentials. Both modes use the database ACL in
@@ -48,6 +48,7 @@ repository root; symbols are the preferred code entry points.
 | Cron and queue | `swarmer/scheduler.py` | 30-second scheduler tick for cron and queue processing; `_process_queue()` applies a 2-minute retry cooldown when capacity is full; sandbox GC; capacity limit |
 | GitHub PR events | `swarmer/pr_watcher.py` | In-process ETag polling, trust filters, debounce, circuit breaker, event dispatch |
 | OpenShell SDK boundary | `swarmer/openshell_client.py` | `create_sandbox()`, `start_agent()`, `exec_command()`, `exec_interactive()`, `expose_service()` |
+| Swarmer in OpenShell | `Makefile` (`openshell-deploy`, `kind-openshell-deploy`), `scripts/openshell_deploy.py` | Creates or starts a dedicated control-plane sandbox, uploads mounted credentials as files, generates a scoped egress policy, updates the sandbox policy without deleting workspace data, and exposes the web service; see [OpenShell setup](OPENSHELL_LOCAL_SETUP.md#running-swarmer-inside-openshell) |
 | OpenShell policy | `swarmer/openshell_policy.py` | `build_session_network_policies()`; OPA/Landlock + egress proxy rules |
 | Gateway selection | `swarmer/openshell_client.py`, `swarmer/openshell_oidc.py` | `GatewayConfig`, `resolve_gateway_config()`, `get_client_for_workspace()`, OIDC user and service-account auth |
 | Credentials | `swarmer/crypto.py`, `swarmer/github_auth.py`, `swarmer/github_app.py` | Fernet; GitHub PAT/App; IAT minting and refresh |
@@ -292,7 +293,9 @@ the Swarmer dashboard, not the agent sandbox.
 - OpenShift sandbox capabilities require `NET_ADMIN`, `SYS_ADMIN`, `SYS_PTRACE`, and
   `SYSLOG`; the deployment grants the required SCCs automatically when `oc` is available.
 - Swarmer runs as non-root UID 1001. `/data` and `/auth` must be writable through the
-  deployment's group permissions.
+  deployment's group permissions. In OpenShell-hosted mode, the persistent `/sandbox`
+  workspace holds SQLite and credential files; the container prepares that workspace for
+  the app's non-root UID, and the deployment restricts credential files to owner access.
 - `OpencodeSecret` is a legacy model name for AI provider settings. Gateway-held provider
   tokens use workspace-scoped OpenShell providers (`swarmer-ws-{id}-{provider}`); legacy
   encrypted credential columns remain for compatibility. EnMaaS (ACM-48198) has no token

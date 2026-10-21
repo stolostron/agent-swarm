@@ -23,13 +23,13 @@ initialization, the legacy Kubernetes workspace-member migration, and
 Kubernetes image-availability probes. The regular Kubernetes deployment remains
 the default and keeps its existing TokenReview authentication.
 
-For hosted identity, configure both `OPENSHELL_OIDC_ISSUER` and
-`OPENSHELL_OIDC_AUDIENCE`. Swarmer validates the token signature using the
+For hosted identity, configure both `SWARMER_OIDC_ISSUER` and
+`SWARMER_OIDC_AUDIENCE`. Swarmer validates the token signature using the
 issuer's HTTPS discovery document and JWKS, and checks issuer, audience,
 expiration, issued-at time, and subject. Tokens without these verified claims
 are rejected. JWKS must be served by the issuer origin unless an additional
-HTTPS origin is explicitly listed in `OPENSHELL_OIDC_JWKS_ALLOWED_ORIGINS`.
-The stable JWT `sub` is the ACL username; `OPENSHELL_OIDC_GROUPS_CLAIM` selects
+HTTPS origin is explicitly listed in `SWARMER_OIDC_JWKS_ALLOWED_ORIGINS`.
+The stable JWT `sub` is the ACL username; `SWARMER_OIDC_GROUPS_CLAIM` selects
 the groups claim (including dot-separated nested claims).
 For standalone bootstrap, mount the administrator token as a
 file and set `SWARMER_ADMIN_TOKEN_FILE` to that mounted file; do not place the
@@ -39,11 +39,13 @@ identity. Rotate or revoke it by replacing/removing the mounted secret.
 
 Swarmer's identity to the Gateway is separate from users' login tokens. For a
 hosted gateway, configure a dedicated OIDC service account using the
-`OPENSHELL_GATEWAY_OIDC_ISSUER`, `OPENSHELL_GATEWAY_OIDC_CLIENT_ID`,
-`OPENSHELL_GATEWAY_OIDC_AUDIENCE`, and optional `OPENSHELL_GATEWAY_OIDC_SCOPES`
-settings. Set `OPENSHELL_GATEWAY_OIDC_CLIENT_SECRET_FILE` to a mounted secret
-file. The OpenShell Python SDK obtains and renews client-credentials tokens
-lazily; user CLI tokens, refresh tokens, and personal mTLS keys are not needed
+`SWARMER_GATEWAY_OIDC_ISSUER`, `SWARMER_GATEWAY_OIDC_CLIENT_ID`,
+`SWARMER_GATEWAY_OIDC_AUDIENCE`, and optional `SWARMER_GATEWAY_OIDC_SCOPES`
+settings. Set `SWARMER_GATEWAY_OIDC_CLIENT_SECRET_SOURCE` to the local source
+file; the deployment target uploads it to the sandbox and sets the internal
+`SWARMER_GATEWAY_OIDC_CLIENT_SECRET_FILE` path. The OpenShell Python SDK obtains
+and renews client-credentials tokens lazily; user CLI tokens, refresh tokens,
+and personal mTLS keys are not needed
 inside the Swarmer sandbox. Restrict the service account's gateway roles and
 workspace membership to only the workspace(s) Swarmer manages.
 
@@ -53,6 +55,44 @@ available in this runtime; the pull-secret tab is hidden and legacy REST
 mutations are rejected. Agent sandbox image resolution and pulling are handled
 by the selected OpenShell gateway. User autocomplete omits Kubernetes and
 OpenShift directory results.
+
+For a local end-to-end sandbox deployment, run:
+
+```sh
+make setup-secret
+make kind-openshell-deploy
+```
+
+This combined target requires a Docker-backed Kind provider with seccomp
+notification support. Rootless Podman-backed Kind can install OpenShell and
+deploy the regular Swarmer service, but OpenShell 0.1.4 sandbox startup fails
+its seccomp notification probe in that environment. The GitHub Actions
+OpenShell-on-Kind workflow uses Docker.
+
+`kind-openshell-deploy` builds the existing Swarmer image, deploys the usual
+Kind/OpenShell stack, then creates or starts the `swarmer` OpenShell sandbox
+using that locally loaded image. The helper requires the selected gateway and
+workspace explicitly for each CLI operation, uploads the generated bootstrap
+token and local gateway-issued mTLS bundle as files, and never deletes an
+existing sandbox. It applies the generated default-deny policy on both initial
+creation and later deployment runs. Use `SWARM_SANDBOX_NAME`, `SWARM_PORT`,
+`SWARM_IMAGE`, or `OPENSHELL_WORKSPACE` to override defaults. The deployment
+target reports the gateway service URL; a browser-friendly local tunnel target
+is being added in the next slice.
+
+Credential files use the OpenShell upload protocol when supported. With an
+older supervisor, the helper streams file contents over sandbox exec stdin
+instead; it never puts credential values in command arguments, environment
+variables, or logs.
+
+The GitHub Actions workflow
+(`.github/workflows/openshell-kind-e2e.yml`) exercises the Docker-backed local
+Kind/OpenShell path on relevant pull requests and on manual dispatch.
+
+For a remote gateway, use `make openshell-deploy SWARM_IMAGE=<public-image-ref>`
+after configuring a dedicated Gateway OIDC client credentials source file.
+Never provide a workstation OIDC refresh token or personal CLI certificate as
+the sandbox's Gateway identity.
 
 ## Clean gateway/session migration
 

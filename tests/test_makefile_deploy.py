@@ -10,11 +10,20 @@ import pytest
 REPO_ROOT = os.path.join(os.path.dirname(__file__), "..")
 MAKEFILE_PATH = os.path.join(REPO_ROOT, "Makefile")
 E2E_SCRIPT_PATH = os.path.join(REPO_ROOT, "scripts", "e2e_kind_deploy.py")
+OPENSHELL_DEPLOY_SCRIPT_PATH = os.path.join(REPO_ROOT, "scripts", "openshell_deploy.py")
 E2E_WORKFLOW_PATH = os.path.join(REPO_ROOT, ".github", "workflows", "e2e-kind.yml")
 
 
 def _load_e2e_script():
     spec = importlib.util.spec_from_file_location("e2e_kind_deploy", E2E_SCRIPT_PATH)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _load_openshell_deploy_script():
+    spec = importlib.util.spec_from_file_location("openshell_deploy", OPENSHELL_DEPLOY_SCRIPT_PATH)
     assert spec and spec.loader
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -33,6 +42,19 @@ def test_makefile_agent_sandbox_version_default():
     os_match = re.search(r"^OPENSHELL_VERSION\s*\?=\s*([0-9]+\.[0-9]+\.[0-9]+)", content, re.MULTILINE)
     assert os_match, "OPENSHELL_VERSION not found in Makefile"
     assert os_match.group(1) == "0.1.4"
+
+
+def test_makefile_exposes_explicit_openshell_deployment_targets():
+    with open(MAKEFILE_PATH, "r", encoding="utf-8") as f:
+        content = f.read()
+
+    assert "openshell-deploy:" in content
+    assert "kind-openshell-deploy:" in content
+    assert "docker info" in content
+    assert "seccomp notification support" in content
+    assert "EXPECTED_CONTEXT=\"kind-$(KIND_CLUSTER)\"" in content
+    assert "SWARM_IMAGE ?= $(IMAGE_REF)" in content
+    assert "scripts/openshell_deploy.py" in content
 
 
 def test_makefile_installs_only_pinned_agent_sandbox_manifest():

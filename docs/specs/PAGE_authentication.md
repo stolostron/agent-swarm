@@ -37,13 +37,13 @@ access and administration are enforced separately by the database ACL.
 
 ## OpenShell validation
 
-- OIDC requires an HTTPS `OPENSHELL_OIDC_ISSUER` and an explicit
-  `OPENSHELL_OIDC_AUDIENCE`. Discovery issuer, signing key, signature, algorithm,
+- OIDC requires an HTTPS `SWARMER_OIDC_ISSUER` and an explicit
+  `SWARMER_OIDC_AUDIENCE`. Discovery issuer, signing key, signature, algorithm,
   audience, expiry, issued-at time, and subject are verified. The JWT `sub` is
   the stable ACL username; the groups claim defaults to `groups` and supports a
-  configured dotted path through `OPENSHELL_OIDC_GROUPS_CLAIM`.
+  configured dotted path through `SWARMER_OIDC_GROUPS_CLAIM`.
 - JWKS must be served from the issuer origin unless its HTTPS origin is listed
-  in `OPENSHELL_OIDC_JWKS_ALLOWED_ORIGINS`. Signing keys are cached for five
+  in `SWARMER_OIDC_JWKS_ALLOWED_ORIGINS`. Signing keys are cached for five
   minutes and refreshed for an unknown key ID with a per-issuer refresh limit.
 - The bootstrap credential is read from `SWARMER_ADMIN_TOKEN_FILE` off the
   event loop and compared with `hmac.compare_digest`. Its identity has the
@@ -62,8 +62,11 @@ access and administration are enforced separately by the database ACL.
 - Missing OIDC configuration, invalid discovery/JWKS responses, invalid claims,
   signature failures, missing token files, and token mismatches fail closed.
 - Raw tokens are not logged. The OpenShell Gateway's machine identity is
-  separate from these user credentials; it uses the OpenShell SDK's renewable
-  client-credentials flow and a mounted client-secret file.
+  separate from these user credentials. Local Kind uses its gateway-generated
+  client mTLS bundle; hosted deployments use the OpenShell SDK's renewable
+  client-credentials flow and a mounted client-secret file configured through
+  `SWARMER_GATEWAY_OIDC_*`. Neither mode uses a developer's personal CLI token
+  or private key.
 - `SWARMER_RUNTIME_MODE=openshell` skips Kubernetes initialization and legacy
   membership migration. Kubernetes-only namespace bypasses and directory
   lookups do not apply in this mode.
