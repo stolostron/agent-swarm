@@ -11,6 +11,7 @@ or revoke selected rules for a session.
   `_policy_chunks.html`
 - Router: `swarmer/routers/sessions.py` policy handlers
 - Runtime: `swarmer/openshell_client.py`
+- Launch policy projection: `swarmer/openshell_policy.py`
 - Model fields: `Session.custom_policies`, `Session.policy_chunks`
 
 ## Methods and tooling
@@ -54,6 +55,12 @@ Vertex AI, and OpenAI inference endpoints. Draft-chunk auto-approval
 5. Persist the rule even if live application fails.
 6. If active, approve available chunk IDs in OpenShell and report whether live
    application succeeded.
+
+At sandbox launch, `build_session_network_policies()` projects each persisted
+custom rule into the OpenShell `NetworkPolicyRule` shape (`name`, `endpoints`,
+and `binaries`). Swarmer provenance such as `source`, `added_at`, and `chunk_id`
+remains in `Session.custom_policies` for UI and revoke behavior; it must not be
+passed to OpenShell's protobuf parser.
 
 ## Versioned REST contract
 
@@ -120,6 +127,8 @@ also allow cross-session URL/policy pattern analysis without parsing templates.
 - Cross-session policy access is rejected.
 - Empty/invalid endpoint hosts are not sent to OpenShell.
 - Same rule name with different binaries merges rather than drops data.
+- Launching a persisted custom rule with Swarmer provenance builds a valid
+  OpenShell protobuf and leaves the stored metadata unchanged.
 - Live failures are visible but do not roll back a valid persisted decision.
 - Agent Swarm launches have both a non-secret `swarm_mcp` network rule and a
   session-scoped provider; either missing policy is treated as a launch defect.
