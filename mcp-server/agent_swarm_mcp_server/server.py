@@ -570,6 +570,33 @@ class AgentSwarmMCPServer:
         """Return complete stored content without local truncation."""
         return await self.client.get_session_run(workspace_id, session_id, run_id)
 
+    async def _list_session_policy_chunks(
+        self, workspace_id: int, session_id: int
+    ) -> dict:
+        """Return detected chunks with stable IDs and pending/promoted status."""
+        return await self.client.list_session_policy_chunks(workspace_id, session_id)
+
+    async def _list_session_policy_rules(
+        self, workspace_id: int, session_id: int
+    ) -> dict:
+        """Return normalized declarative rules suitable for backup/export."""
+        return await self.client.list_session_policy_rules(workspace_id, session_id)
+
+    async def _approve_session_policy_chunks(
+        self,
+        workspace_id: int,
+        session_id: int,
+        chunk_ids: list[str] | None = None,
+        approve_all: bool = False,
+    ) -> dict:
+        """Approve detected chunks only, preserving API result/audit details."""
+        return await self.client.approve_session_policy_chunks(
+            workspace_id,
+            session_id,
+            chunk_ids=chunk_ids,
+            approve_all=approve_all,
+        )
+
     async def _wait_for_session(
         self,
         workspace_id: int,
@@ -1329,6 +1356,66 @@ class AgentSwarmMCPServer:
                 limit: Maximum summaries to return (1-100, default 20).
             """
             return await self._list_session_runs(workspace_id, session_id, limit)
+
+        @mcp.tool()
+        async def list_session_policy_chunks(
+            workspace_id: int,
+            session_id: int,
+        ) -> dict:
+            """List detected policy chunks and their pending/promoted status.
+
+            Active sessions read OpenShell live; inactive sessions use the last
+            saved snapshot. Each chunk retains its stable ID, endpoints,
+            destinations, binaries, native OpenShell status, and promotion flag.
+
+            Args:
+                workspace_id: Authorized workspace containing the session.
+                session_id: Session whose detected network requirements to inspect.
+            """
+            return await self._list_session_policy_chunks(workspace_id, session_id)
+
+        @mcp.tool()
+        async def list_session_policy_rules(
+            workspace_id: int,
+            session_id: int,
+        ) -> dict:
+            """List normalized, declarative promoted rules for export/auditing.
+
+            Rules include endpoints (hosts/IPs, ports, protocols, enforcement,
+            and L7 access), binaries, and persisted source metadata.
+
+            Args:
+                workspace_id: Authorized workspace containing the session.
+                session_id: Session whose promoted rules to export or inspect.
+            """
+            return await self._list_session_policy_rules(workspace_id, session_id)
+
+        @mcp.tool()
+        async def approve_session_policy_chunks(
+            workspace_id: int,
+            session_id: int,
+            chunk_ids: list[str] | None = None,
+            approve_all: bool = False,
+        ) -> dict:
+            """Promote selected pending OpenShell chunks by stable ID.
+
+            This tool cannot create hand-authored rules. The result contains a
+            machine-readable result_code (APPROVED_LIVE,
+            APPROVED_PERSISTED_ONLY, or REJECTED), persisted count, live-apply
+            outcome, approved IDs, rejected IDs/reasons, and audit timestamp.
+
+            Args:
+                workspace_id: Authorized workspace containing the session.
+                session_id: Session whose detected chunks to approve.
+                chunk_ids: Stable IDs from list_session_policy_chunks.
+                approve_all: Approve every currently pending chunk when true.
+            """
+            return await self._approve_session_policy_chunks(
+                workspace_id,
+                session_id,
+                chunk_ids=chunk_ids,
+                approve_all=approve_all,
+            )
 
         @mcp.tool()
         async def get_session_run(

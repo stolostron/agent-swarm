@@ -20,6 +20,11 @@ or revoke selected rules for a session.
 - HTMX `/policy-rules-partial` refresh on `policyChanged`.
 - OpenShell draft-chunk approval and undo APIs for live apply/revoke.
 - JSON persistence for normalized custom rules.
+- Authenticated versioned REST operations under
+  `/api/v1/workspaces/{ws_id}/sessions/{sid}/policy-chunks`, `policy-rules`,
+  and `policy-chunks/approve` for automation and declarative export.
+- FastMCP tools `list_session_policy_chunks`, `list_session_policy_rules`, and
+  `approve_session_policy_chunks` delegate to those REST operations.
 
 The built-in Agent Swarm rule is generated at launch as `swarm_mcp` and allows
 the MCP binary to reach the internal Swarmer REST service. Its endpoint is
@@ -37,13 +42,70 @@ Vertex AI, and OpenAI inference endpoints. Draft-chunk auto-approval
 ## Promotion algorithm
 
 1. Load draft chunks live from OpenShell when active, otherwise use snapshot.
-2. Determine already promoted binaries by rule name.
-3. Parse selected chunk JSON and normalize endpoints, enforcement, and L7
-   access fields.
-4. Merge binaries into existing same-name rules or append a new rule.
+2. Determine already promoted chunks by rule name, binary-path coverage, and
+   endpoint coverage. Every chunk binary path and endpoint must be covered by
+   the same-name persisted rule; extra persisted coverage is allowed.
+   Endpoints are normalized before matching, then compared as canonical JSON
+   objects (key order is ignored).
+3. Resolve selected chunks by stable ID; normalize endpoints, enforcement, and
+   L7 access fields. Empty endpoints are rejected and never persisted.
+4. Merge endpoint and binary coverage into existing same-name rules without
+   discarding existing rule metadata, or append a new rule.
 5. Persist the rule even if live application fails.
 6. If active, approve available chunk IDs in OpenShell and report whether live
    application succeeded.
+
+## Versioned REST contract
+
+Every operation requires the standard bearer authentication and workspace ACL.
+The session must belong to the workspace in the path; inaccessible workspace or
+session IDs return 404.
+
+### `GET /api/v1/workspaces/{ws_id}/sessions/{sid}/policy-chunks`
+
+Returns `workspace_id`, `session_id`, `source` (`live` or `snapshot`), `active`,
+and `chunks`. An active sandbox is queried through OpenShell; otherwise the
+stored `Session.policy_chunks` snapshot is returned. Each chunk keeps its stable
+`id`, native status, rule name, structured endpoints/destinations and binaries,
+and adds `is_promoted`, `promotion_status` (`promoted`/`pending`), and `pending`.
+Promotion status requires a same-name persisted rule to cover every chunk binary
+path and every normalized endpoint; additional persisted coverage is allowed.
+
+### `GET /api/v1/workspaces/{ws_id}/sessions/{sid}/policy-rules`
+
+Returns `rules` from `Session.custom_policies` in complete declarative form.
+Endpoints retain host or allowed IP destinations, port/port range, protocol,
+enforcement, and L7 access/permissions. Empty invalid endpoints are excluded;
+L7 endpoints include `access: full` and `enforcement: enforce`. Binary paths
+and rule metadata are preserved for backup, migration, query, and golden-rule
+discovery workflows.
+
+### `POST /api/v1/workspaces/{ws_id}/sessions/{sid}/policy-chunks/approve`
+
+JSON body accepts either `{"chunk_ids": ["stable-id"]}` or
+`{"approve_all": true}`. `chunk_ids` are stable OpenShell IDs from the listing;
+the two selection modes are mutually exclusive. `approve_all` evaluates all
+currently pending chunks at request time. Unknown or already-promoted selected
+IDs reject the batch. Invalid chunks (including chunks whose endpoints
+normalize to empty) are returned in `rejected_chunks` and not persisted.
+
+The response contains `result_code` (`APPROVED_LIVE`,
+`APPROVED_PERSISTED_ONLY`, or `REJECTED`), `persisted_count`,
+`persisted_chunk_ids`, `rejected_chunks` with reasons, live-attempt/application
+booleans and counts, `detail`, and a `processed_at` timestamp. Rules are
+committed before live approval, so gateway failure still leaves them effective
+for the next launch. A partial or failed live approval returns
+`APPROVED_PERSISTED_ONLY`, never a false success signal for live application.
+This API approves only OpenShell-detected chunks; it does not accept
+hand-authored network rules.
+
+The MCP client mirrors the REST payloads without flattening IDs or statuses and
+preserves API errors. Monitoring agents can compare draft endpoints against
+session logs before approving explicit IDs and store the response as audit
+context. Backup/migration agents can serialize the normalized rule list into a
+manifest, retain pending chunk IDs separately, and re-evaluate detected drafts
+after session restoration. Structured destinations and normalized endpoints
+also allow cross-session URL/policy pattern analysis without parsing templates.
 
 ## Revoke algorithm
 

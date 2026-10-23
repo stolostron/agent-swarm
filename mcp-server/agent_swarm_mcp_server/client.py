@@ -222,6 +222,32 @@ class AgentSwarmClient:
         """Get details and status of a session."""
         return await self._get(f"/api/v1/workspaces/{ws_id}/sessions/{sid}")
 
+    async def list_session_policy_chunks(self, ws_id: int, sid: int) -> dict:
+        """List live/snapshotted detected policy chunks and promotion status."""
+        return await self._get(
+            f"/api/v1/workspaces/{ws_id}/sessions/{sid}/policy-chunks"
+        )
+
+    async def list_session_policy_rules(self, ws_id: int, sid: int) -> dict:
+        """List normalized persisted session rules for export and inspection."""
+        return await self._get(
+            f"/api/v1/workspaces/{ws_id}/sessions/{sid}/policy-rules"
+        )
+
+    async def approve_session_policy_chunks(
+        self,
+        ws_id: int,
+        sid: int,
+        *,
+        chunk_ids: list[str] | None = None,
+        approve_all: bool = False,
+    ) -> dict:
+        """Promote pending detected chunks by stable ID; never create rules."""
+        return await self._post(
+            f"/api/v1/workspaces/{ws_id}/sessions/{sid}/policy-chunks/approve",
+            json={"chunk_ids": chunk_ids or [], "approve_all": approve_all},
+        )
+
     async def create_session(
         self,
         ws_id: int,

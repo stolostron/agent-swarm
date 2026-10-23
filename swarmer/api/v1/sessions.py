@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import re
-from datetime import datetime, timezone
+from datetime import UTC, datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import or_, select
@@ -24,10 +25,14 @@ from swarmer.api.schemas import (
     ScheduleEntryOut,
     ScheduleEntryUpdate,
     ScheduleRequest,
+    SessionPolicyChunksApproveIn,
+    SessionPolicyChunksApproveOut,
+    SessionPolicyChunksOut,
     SessionCreate,
     SessionLaunchRequest,
     SessionOut,
     SessionOutput,
+    SessionPolicyRulesOut,
     SessionRunOut,
     SessionRunSummaryOut,
     SessionRunDetailOut,
@@ -41,6 +46,13 @@ from swarmer.models.mcp_server import McpServer
 from swarmer.models.session_run import SessionRun
 from swarmer.models.workspace import Workspace
 from swarmer.models.workspace_prompt import WorkspacePrompt, WorkspacePromptSource
+from swarmer.session_policy import (
+    is_chunk_promoted,
+    load_policy_list,
+    merge_policy_chunks,
+    normalize_policy_endpoints,
+    normalize_policy_rule,
+)
 
 
 class PatchResult(BaseModel):
@@ -519,6 +531,203 @@ async def list_session_runs(
         .limit(100)
     )
     return list(result.scalars().all())
+
+
+async def _session_policy_chunks(
+    ws_id: int, session: Session, db: AsyncSession,
+) -> tuple[str, list[dict]]:
+    """Read live OpenShell chunks when available, otherwise the saved snapshot."""
+    chunks: list[dict] = []
+    source = "snapshot"
+    if session.sandbox_name and session.is_active:
+        from swarmer import openshell_client
+
+        client = await openshell_client.get_client_for_workspace(ws_id, db)
+        chunks = await openshell_client.get_draft_chunks(session.sandbox_name, client=client)
+        source = "live"
+    elif session.policy_chunks:
+        try:
+            value = json.loads(session.policy_chunks)
+            if isinstance(value, list):
+                chunks = [chunk for chunk in value if isinstance(chunk, dict)]
+        except (TypeError, ValueError):
+            chunks = []
+
+    policies = load_policy_list(session.custom_policies)
+    for chunk in chunks:
+        chunk["id"] = str(chunk.get("id") or "")
+        chunk["status"] = str(chunk.get("status") or "pending")
+        chunk["endpoints"] = normalize_policy_endpoints(chunk.get("endpoints"))
+        promoted = is_chunk_promoted(chunk, policies)
+        chunk["is_promoted"] = promoted
+        chunk["promotion_status"] = "promoted" if promoted else "pending"
+        chunk["pending"] = chunk["status"] == "pending" and not promoted
+    return source, chunks
+
+
+@router.get("/{sid}/policy-chunks", response_model=SessionPolicyChunksOut)
+async def list_session_policy_chunks(
+    ws_id: int,
+    sid: int,
+    ws: Workspace = Depends(get_workspace_or_404),  # noqa: B008 - FastAPI dependency injection
+    db: AsyncSession = Depends(get_db),  # noqa: B008 - FastAPI dependency injection
+) -> SessionPolicyChunksOut:
+    """List detected live or snapshotted chunks with persisted promotion state."""
+    session = await _get_session_or_404(ws_id, sid, db)
+    try:
+        source, chunks = await _session_policy_chunks(ws_id, session, db)
+    except Exception as exc:
+        log.warning("session %d: failed to read OpenShell policy chunks: %s", sid, exc)
+        raise HTTPException(status_code=502, detail="Unable to read live OpenShell policy chunks") from exc
+    return SessionPolicyChunksOut(
+        workspace_id=ws_id,
+        session_id=sid,
+        source=source,
+        active=bool(session.sandbox_name and session.is_active),
+        chunks=chunks,
+    )
+
+
+@router.get("/{sid}/policy-rules", response_model=SessionPolicyRulesOut)
+async def list_session_policy_rules(
+    ws_id: int,
+    sid: int,
+    ws: Workspace = Depends(get_workspace_or_404),  # noqa: B008 - FastAPI dependency injection
+    db: AsyncSession = Depends(get_db),  # noqa: B008 - FastAPI dependency injection
+) -> SessionPolicyRulesOut:
+    """List promoted rules as normalized, declarative policy documents."""
+    session = await _get_session_or_404(ws_id, sid, db)
+    return SessionPolicyRulesOut(
+        workspace_id=ws_id,
+        session_id=sid,
+        rules=[normalize_policy_rule(rule) for rule in load_policy_list(session.custom_policies)],
+    )
+
+
+@router.post(
+    "/{sid}/policy-chunks/approve",
+    response_model=SessionPolicyChunksApproveOut,
+)
+async def approve_session_policy_chunks(
+    ws_id: int,
+    sid: int,
+    body: SessionPolicyChunksApproveIn,
+    ws: Workspace = Depends(get_workspace_or_404),  # noqa: B008 - FastAPI dependency injection
+    db: AsyncSession = Depends(get_db),  # noqa: B008 - FastAPI dependency injection
+) -> SessionPolicyChunksApproveOut:
+    """Persist selected detected chunks and attempt live approval if active."""
+    session = await _get_session_or_404(ws_id, sid, db)
+    now = datetime.now(UTC)
+
+    def rejected_result(reason: str) -> SessionPolicyChunksApproveOut:
+        return SessionPolicyChunksApproveOut(
+            workspace_id=ws_id,
+            session_id=sid,
+            result_code="REJECTED",
+            persisted_count=0,
+            rejected_chunks=[{"chunk_id": "", "reason": reason}],
+            detail=reason,
+            processed_at=now,
+        )
+
+    if body.approve_all and body.chunk_ids:
+        return rejected_result("CHUNK_IDS_AND_APPROVE_ALL_ARE_MUTUALLY_EXCLUSIVE")
+    if not body.approve_all and not body.chunk_ids:
+        return rejected_result("NO_CHUNKS_SELECTED")
+
+    try:
+        _, chunks = await _session_policy_chunks(ws_id, session, db)
+    except Exception as exc:
+        log.warning("session %d: failed to read chunks before approval: %s", sid, exc)
+        raise HTTPException(status_code=502, detail="Unable to read current OpenShell policy chunks") from exc
+
+    chunk_by_id = {chunk["id"]: chunk for chunk in chunks if chunk.get("id")}
+    pending_chunks = [chunk for chunk in chunks if chunk.get("pending")]
+    if body.approve_all:
+        selected = pending_chunks
+    else:
+        selected = []
+        errors: list[dict[str, str]] = []
+        for chunk_id in dict.fromkeys(body.chunk_ids):
+            chunk = chunk_by_id.get(chunk_id)
+            if chunk is None:
+                errors.append({"chunk_id": chunk_id, "reason": "UNKNOWN_CHUNK_ID"})
+            elif not chunk.get("pending"):
+                errors.append({
+                    "chunk_id": chunk_id,
+                    "reason": "ALREADY_PROMOTED" if chunk.get("is_promoted") else "NOT_PENDING",
+                })
+            else:
+                selected.append(chunk)
+        if errors:
+            return SessionPolicyChunksApproveOut(
+                workspace_id=ws_id,
+                session_id=sid,
+                result_code="REJECTED",
+                persisted_count=0,
+                rejected_chunks=errors,
+                detail="One or more chunk IDs are unknown or not pending; nothing was persisted",
+                processed_at=now,
+            )
+
+    if not selected:
+        return SessionPolicyChunksApproveOut(
+            workspace_id=ws_id,
+            session_id=sid,
+            result_code="APPROVED_PERSISTED_ONLY",
+            persisted_count=0,
+            detail="No pending chunks were available",
+            processed_at=now,
+        )
+
+    existing = load_policy_list(session.custom_policies)
+    updated, persisted_count, persisted_ids, rejected = merge_policy_chunks(existing, selected)
+    if persisted_count:
+        session.custom_policies = json.dumps(updated)
+        await db.commit()
+
+    live_attempted = bool(session.sandbox_name and session.is_active and persisted_ids)
+    live_approved_count = 0
+    if live_attempted:
+        try:
+            from swarmer import openshell_client
+
+            client = await openshell_client.get_client_for_workspace(ws_id, db)
+            live_approved_count = await openshell_client.approve_chunks_by_id(
+                session.sandbox_name, persisted_ids, client=client,
+            )
+        except Exception as exc:  # noqa: BLE001 - persistence must survive any live gateway failure
+            log.warning(
+                "session %d: live policy approval failed; persisted rules will apply on next launch: %s",
+                sid,
+                exc,
+            )
+
+    live_applied = live_attempted and live_approved_count == len(persisted_ids)
+    result_code = "APPROVED_LIVE" if live_applied else "APPROVED_PERSISTED_ONLY"
+    if not persisted_count and rejected:
+        result_code = "REJECTED"
+    detail = (
+        "Rules persisted and applied to the active sandbox"
+        if live_applied
+        else "Rules persisted for the next launch; live application was unavailable or incomplete"
+        if persisted_count
+        else "No policy changes were persisted"
+    )
+    return SessionPolicyChunksApproveOut(
+        workspace_id=ws_id,
+        session_id=sid,
+        result_code=result_code,
+        persisted_count=persisted_count,
+        persisted_chunk_ids=persisted_ids,
+        rejected_chunks=rejected,
+        live_attempted=live_attempted,
+        live_applied=live_applied,
+        live_approved_count=live_approved_count,
+        live_requested_count=len(persisted_ids),
+        detail=detail,
+        processed_at=now,
+    )
 
 
 @router.get("/{sid}/runs/summaries", response_model=list[SessionRunSummaryOut])

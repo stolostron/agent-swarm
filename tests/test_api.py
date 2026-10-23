@@ -3313,3 +3313,346 @@ class TestSessionMcpSelection:
         assert own_item["server_url"] == "https://example.com/mcp"
         assert not {"user_id", "jira_email", "jira_access_token", "jira_access_token_enc"}.intersection(own_item)
         assert "YOUR_" not in json.dumps(inventory)
+
+
+class TestSessionPolicyAPI:
+    @pytest.mark.asyncio
+    async def test_policy_chunk_snapshot_and_normalized_rules(self, client):
+        ws = await _create_workspace(client)
+        session = await _create_session(client, ws["id"])
+        snapshot = [{
+            "id": "snapshot-1",
+            "status": "pending",
+            "rule_name": "package-registry",
+            "endpoints": [{"host": "registry.example.com", "port": 443, "protocol": "https"}],
+            "binaries": [{"path": "/usr/bin/npm"}],
+        }]
+        async with _TestSession() as db:
+            from swarmer.models.session import Session
+
+            stored = await db.get(Session, session["id"])
+            stored.policy_chunks = json.dumps(snapshot)
+            stored.custom_policies = json.dumps([{
+                "name": "already-promoted",
+                "endpoints": [{"host": "api.example.com", "port": 443, "protocol": "https", "path": "/restricted"}],
+                "binaries": [{"path": "/usr/bin/curl"}],
+            }])
+            await db.commit()
+
+        chunks_response = await client.get(
+            f"/api/v1/workspaces/{ws['id']}/sessions/{session['id']}/policy-chunks"
+        )
+        assert chunks_response.status_code == 200, chunks_response.text
+        data = chunks_response.json()
+        assert data["source"] == "snapshot"
+        assert data["active"] is False
+        assert data["chunks"][0]["id"] == "snapshot-1"
+        assert data["chunks"][0]["pending"] is True
+
+        rules_response = await client.get(
+            f"/api/v1/workspaces/{ws['id']}/sessions/{session['id']}/policy-rules"
+        )
+        assert rules_response.status_code == 200, rules_response.text
+        endpoint = rules_response.json()["rules"][0]["endpoints"][0]
+        assert endpoint["host"] == "api.example.com"
+        assert endpoint["port"] == 443
+        assert endpoint["protocol"] == "https"
+        assert endpoint["access"] == "full"
+        assert endpoint["enforcement"] == "enforce"
+        assert "path" not in endpoint
+
+    @pytest.mark.asyncio
+    async def test_policy_chunks_reads_live_and_marks_promoted(self, client, monkeypatch):
+        ws = await _create_workspace(client)
+        session = await _create_session(client, ws["id"])
+        async with _TestSession() as db:
+            from swarmer.models.session import Session
+
+            stored = await db.get(Session, session["id"])
+            stored.sandbox_name = "live-sandbox"
+            stored.phase = "running"
+            stored.custom_policies = json.dumps([{
+                "name": "shared-rule",
+                "endpoints": [{
+                    "host": "dest.example.com", "port": 443, "protocol": "https",
+                }],
+                "binaries": [{"path": "/usr/bin/tool"}],
+            }])
+            await db.commit()
+
+        chunks = [{
+            "id": "live-1",
+            "status": "pending",
+            "rule_name": "shared-rule",
+            "endpoints": [{"host": "dest.example.com", "port": 443, "protocol": "https"}],
+            "binaries": [{"path": "/usr/bin/tool"}],
+        }]
+        monkeypatch.setattr("swarmer.openshell_client.get_client_for_workspace", AsyncMock(return_value=object()))
+        fetch = AsyncMock(return_value=chunks)
+        monkeypatch.setattr("swarmer.openshell_client.get_draft_chunks", fetch)
+
+        response = await client.get(
+            f"/api/v1/workspaces/{ws['id']}/sessions/{session['id']}/policy-chunks"
+        )
+        assert response.status_code == 200, response.text
+        data = response.json()
+        assert data["source"] == "live"
+        assert data["active"] is True
+        assert data["chunks"][0]["is_promoted"] is True
+        assert data["chunks"][0]["pending"] is False
+        fetch.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_policy_chunk_without_valid_endpoints_is_not_promoted(self, client):
+        ws = await _create_workspace(client)
+        session = await _create_session(client, ws["id"])
+        chunk = {
+            "id": "invalid-endpoints",
+            "status": "pending",
+            "rule_name": "shared-rule",
+            "endpoints": [{"host": "  ", "port": 443, "protocol": "https"}],
+            "binaries": [{"path": "/usr/bin/tool"}],
+        }
+        async with _TestSession() as db:
+            from swarmer.models.session import Session
+
+            stored = await db.get(Session, session["id"])
+            stored.policy_chunks = json.dumps([chunk])
+            stored.custom_policies = json.dumps([{
+                "name": "shared-rule",
+                "endpoints": [{"host": "dest.example.com", "port": 443, "protocol": "https"}],
+                "binaries": [{"path": "/usr/bin/tool"}],
+            }])
+            await db.commit()
+
+        chunks_response = await client.get(
+            f"/api/v1/workspaces/{ws['id']}/sessions/{session['id']}/policy-chunks"
+        )
+        assert chunks_response.status_code == 200, chunks_response.text
+        listed_chunk = chunks_response.json()["chunks"][0]
+        assert listed_chunk["is_promoted"] is False
+        assert listed_chunk["promotion_status"] == "pending"
+        assert listed_chunk["pending"] is True
+
+        approval = await client.post(
+            f"/api/v1/workspaces/{ws['id']}/sessions/{session['id']}/policy-chunks/approve",
+            json={"chunk_ids": ["invalid-endpoints"]},
+        )
+        assert approval.status_code == 200, approval.text
+        assert approval.json()["persisted_chunk_ids"] == []
+        assert approval.json()["rejected_chunks"] == [{
+            "chunk_id": "invalid-endpoints",
+            "reason": "INVALID_ENDPOINTS",
+        }]
+
+    @pytest.mark.asyncio
+    async def test_same_name_binary_chunks_with_different_endpoints_remain_pending(self, client):
+        ws = await _create_workspace(client)
+        session = await _create_session(client, ws["id"])
+        chunks = [
+            {
+                "id": "first-destination",
+                "status": "pending",
+                "rule_name": "shared-rule",
+                "endpoints": [{"host": "first.example.com", "port": 443, "protocol": "https"}],
+                "binaries": [{"path": "/usr/bin/tool"}],
+            },
+            {
+                "id": "second-destination",
+                "status": "pending",
+                "rule_name": "shared-rule",
+                "endpoints": [{"host": "second.example.com", "port": 443, "protocol": "https"}],
+                "binaries": [{"path": "/usr/bin/tool"}],
+            },
+        ]
+        async with _TestSession() as db:
+            from swarmer.models.session import Session
+
+            stored = await db.get(Session, session["id"])
+            stored.policy_chunks = json.dumps(chunks)
+            await db.commit()
+
+        first_approval = await client.post(
+            f"/api/v1/workspaces/{ws['id']}/sessions/{session['id']}/policy-chunks/approve",
+            json={"chunk_ids": ["first-destination"]},
+        )
+        assert first_approval.status_code == 200, first_approval.text
+        assert first_approval.json()["persisted_chunk_ids"] == ["first-destination"]
+
+        chunk_response = await client.get(
+            f"/api/v1/workspaces/{ws['id']}/sessions/{session['id']}/policy-chunks"
+        )
+        assert chunk_response.status_code == 200, chunk_response.text
+        chunk_states = {chunk["id"]: chunk for chunk in chunk_response.json()["chunks"]}
+        assert chunk_states["first-destination"]["pending"] is False
+        assert chunk_states["second-destination"]["pending"] is True
+        assert chunk_states["second-destination"]["promotion_status"] == "pending"
+
+        second_approval = await client.post(
+            f"/api/v1/workspaces/{ws['id']}/sessions/{session['id']}/policy-chunks/approve",
+            json={"chunk_ids": ["second-destination"]},
+        )
+        assert second_approval.status_code == 200, second_approval.text
+        assert second_approval.json()["persisted_chunk_ids"] == ["second-destination"]
+
+        rules_response = await client.get(
+            f"/api/v1/workspaces/{ws['id']}/sessions/{session['id']}/policy-rules"
+        )
+        assert rules_response.status_code == 200, rules_response.text
+        rules = rules_response.json()["rules"]
+        assert len(rules) == 1
+        assert {endpoint["host"] for endpoint in rules[0]["endpoints"]} == {
+            "first.example.com", "second.example.com",
+        }
+        assert {binary["path"] for binary in rules[0]["binaries"]} == {"/usr/bin/tool"}
+
+    @pytest.mark.asyncio
+    async def test_approve_all_merges_same_name_and_persists_live_failure(self, client, monkeypatch):
+        ws = await _create_workspace(client)
+        session = await _create_session(client, ws["id"])
+        chunks = [
+            {
+                "id": "chunk-a",
+                "status": "pending",
+                "rule_name": "shared-rule",
+                "endpoints": [{"host": "new-a.example.com", "port": 443, "protocol": "https", "path": "/ignored"}],
+                "binaries": [{"path": "/usr/bin/new-a"}],
+            },
+            {
+                "id": "chunk-b",
+                "status": "pending",
+                "rule_name": "shared-rule",
+                "endpoints": [{"host": "new-b.example.com", "port": 8443, "protocol": "grpc"}],
+                "binaries": [{"path": "/usr/bin/new-b"}],
+            },
+            {
+                "id": "chunk-invalid",
+                "status": "pending",
+                "rule_name": "invalid-rule",
+                "endpoints": [{"host": "  ", "port": 443, "protocol": "https"}],
+                "binaries": [{"path": "/usr/bin/invalid"}],
+            },
+        ]
+        async with _TestSession() as db:
+            from swarmer.models.session import Session
+
+            stored = await db.get(Session, session["id"])
+            stored.sandbox_name = "live-sandbox"
+            stored.phase = "running"
+            stored.custom_policies = json.dumps([{
+                "name": "shared-rule",
+                "description": "keep existing metadata",
+                "endpoints": [{"host": "old.example.com", "port": 443, "protocol": "https"}],
+                "binaries": [{"path": "/usr/bin/existing"}],
+            }])
+            await db.commit()
+
+        monkeypatch.setattr("swarmer.openshell_client.get_client_for_workspace", AsyncMock(return_value=object()))
+        monkeypatch.setattr("swarmer.openshell_client.get_draft_chunks", AsyncMock(return_value=chunks))
+        live_approve = AsyncMock(return_value=0)
+        monkeypatch.setattr("swarmer.openshell_client.approve_chunks_by_id", live_approve)
+
+        response = await client.post(
+            f"/api/v1/workspaces/{ws['id']}/sessions/{session['id']}/policy-chunks/approve",
+            json={"approve_all": True},
+        )
+        assert response.status_code == 200, response.text
+        result = response.json()
+        assert result["result_code"] == "APPROVED_PERSISTED_ONLY"
+        assert result["persisted_count"] == 2
+        assert result["live_attempted"] is True
+        assert result["live_applied"] is False
+        assert result["live_requested_count"] == 2
+        assert result["rejected_chunks"] == [{
+            "chunk_id": "chunk-invalid", "reason": "INVALID_ENDPOINTS"
+        }]
+        live_approve.assert_awaited_once()
+        assert set(live_approve.await_args.args[1]) == {"chunk-a", "chunk-b"}
+
+        async with _TestSession() as db:
+            from swarmer.models.session import Session
+
+            stored = await db.get(Session, session["id"])
+            rules = json.loads(stored.custom_policies)
+        assert len(rules) == 1
+        rule = rules[0]
+        assert rule["description"] == "keep existing metadata"
+        assert {binary["path"] for binary in rule["binaries"]} == {
+            "/usr/bin/existing", "/usr/bin/new-a", "/usr/bin/new-b"
+        }
+        endpoints = {endpoint["host"]: endpoint for endpoint in rule["endpoints"]}
+        assert set(endpoints) == {"old.example.com", "new-a.example.com", "new-b.example.com"}
+        assert endpoints["new-a.example.com"]["access"] == "full"
+        assert endpoints["new-a.example.com"]["enforcement"] == "enforce"
+        assert "path" not in endpoints["new-a.example.com"]
+        assert endpoints["new-b.example.com"]["access"] == "full"
+
+    @pytest.mark.asyncio
+    async def test_approve_selected_stable_id_only(self, client):
+        ws = await _create_workspace(client)
+        session = await _create_session(client, ws["id"])
+        chunks = [
+            {
+                "id": "selected-id",
+                "status": "pending",
+                "rule_name": "selected-rule",
+                "endpoints": [{"host": "selected.example.com", "port": 443, "protocol": "https"}],
+                "binaries": [{"path": "/usr/bin/selected"}],
+            },
+            {
+                "id": "not-selected-id",
+                "status": "pending",
+                "rule_name": "other-rule",
+                "endpoints": [{"host": "other.example.com", "port": 443, "protocol": "https"}],
+                "binaries": [{"path": "/usr/bin/other"}],
+            },
+        ]
+        async with _TestSession() as db:
+            from swarmer.models.session import Session
+
+            stored = await db.get(Session, session["id"])
+            stored.policy_chunks = json.dumps(chunks)
+            await db.commit()
+
+        response = await client.post(
+            f"/api/v1/workspaces/{ws['id']}/sessions/{session['id']}/policy-chunks/approve",
+            json={"chunk_ids": ["selected-id"]},
+        )
+        assert response.status_code == 200, response.text
+        result = response.json()
+        assert result["result_code"] == "APPROVED_PERSISTED_ONLY"
+        assert result["persisted_count"] == 1
+        assert result["persisted_chunk_ids"] == ["selected-id"]
+        assert result["live_attempted"] is False
+
+        rules = await client.get(
+            f"/api/v1/workspaces/{ws['id']}/sessions/{session['id']}/policy-rules"
+        )
+        assert [rule["name"] for rule in rules.json()["rules"]] == ["selected-rule"]
+
+        rejected = await client.post(
+            f"/api/v1/workspaces/{ws['id']}/sessions/{session['id']}/policy-chunks/approve",
+            json={"chunk_ids": ["stale-id"]},
+        )
+        assert rejected.status_code == 200
+        assert rejected.json()["result_code"] == "REJECTED"
+        assert rejected.json()["rejected_chunks"] == [{
+            "chunk_id": "stale-id", "reason": "UNKNOWN_CHUNK_ID"
+        }]
+
+    @pytest.mark.asyncio
+    async def test_policy_routes_enforce_workspace_access(self, client):
+        from swarmer.api.deps import require_api_auth
+        from swarmer.k8s_auth import TokenIdentity
+        from swarmer.main import app
+
+        ws = await _create_workspace(client)
+        session = await _create_session(client, ws["id"])
+        app.dependency_overrides[require_api_auth] = lambda: TokenIdentity(
+            username="different-user", uid="other-uid"
+        )
+
+        response = await client.get(
+            f"/api/v1/workspaces/{ws['id']}/sessions/{session['id']}/policy-chunks"
+        )
+        assert response.status_code == 404
