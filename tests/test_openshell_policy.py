@@ -11,16 +11,17 @@ Validates that build_session_policy() returns a SandboxPolicy proto with:
   - Agent API block adapted to agent tool and model provider
   - No excess blocks for minimal sessions (single repo, no MCP)
 """
-import sys
+import copy
 import os
+import sys
 
 import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from swarmer.openshell_policy import (
-    build_session_policy,
     build_session_network_policies,
+    build_session_policy,
     slack_webhook_enabled,
 )
 
@@ -183,6 +184,48 @@ def test_build_session_policy_network_policies_match_build_session_network_polic
     assert proto_keys == expected_keys, (
         f"Proto network_policies keys {proto_keys} != computed keys {expected_keys}"
     )
+
+
+@_requires_sdk
+def test_build_session_policy_projects_saved_custom_rule_metadata():
+    """Saved Swarmer provenance must not leak into OpenShell protobuf rules."""
+    custom = [
+        {
+            "name": "allow_pypi_org_443",
+            "endpoints": [
+                {
+                    "host": "pypi.org",
+                    "port": 443,
+                    "protocol": "rest",
+                    "access": "full",
+                }
+            ],
+            "binaries": [{"path": "/usr/local/bin/python", "harness": False}],
+            "source": "chunk",
+            "added_at": "2026-10-23T00:00:00Z",
+            "chunk_id": "chunk-123",
+        }
+    ]
+    saved_custom = copy.deepcopy(custom)
+
+    policy = build_session_policy(
+        _make_session(language="python"),
+        repos=[],
+        mcp_servers=[],
+        agent_tool="opencode",
+        model=_MODEL,
+        custom_policies=custom,
+    )
+
+    rule = policy.network_policies["custom_allow_pypi_org_443"]
+    assert rule.name == "allow_pypi_org_443"
+    assert len(rule.endpoints) == 1
+    assert rule.endpoints[0].host == "pypi.org"
+    assert rule.endpoints[0].port == 443
+    assert rule.endpoints[0].enforcement == 1  # NETWORK_ENFORCEMENT_MODE_ENFORCE
+    assert rule.endpoints[0].access == 3  # NETWORK_ACCESS_PRESET_FULL
+    assert [binary.path for binary in rule.binaries] == ["/usr/local/bin/python"]
+    assert custom == saved_custom, "building a protobuf must not mutate persisted rule metadata"
 
 
 @_requires_sdk

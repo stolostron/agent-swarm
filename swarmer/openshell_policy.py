@@ -631,6 +631,15 @@ def build_session_network_policies(
             endpoints.append(ep)
         if not endpoints:
             continue
-        network_policies_dict[key] = {**rule, "endpoints": endpoints}
+        # Session custom-policy entries also carry Swarmer-owned provenance
+        # (`source`, `added_at`, and `chunk_id`) for display and revocation.
+        # They are not fields on OpenShell's NetworkPolicyRule protobuf. Build
+        # the API object explicitly instead of forwarding the stored dict, so
+        # persistence metadata cannot make sandbox launch fail protobuf parsing.
+        network_policies_dict[key] = {
+            "name": rule_name,
+            "endpoints": endpoints,
+            "binaries": rule.get("binaries", []),
+        }
 
     return network_policies_dict
