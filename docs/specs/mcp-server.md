@@ -217,9 +217,13 @@ workspace/session ownership are enforced by the REST API. API errors (including
 saved `Session.policy_chunks` snapshot otherwise. It returns the source, active
 state, and each chunk's stable `id`, OpenShell `status`, rule name, structured
 endpoints/destinations, binaries, `is_promoted`, `promotion_status`, and
-`pending` flag. A chunk is promoted only when its rule name exists in
-`Session.custom_policies` and that rule covers all of the chunk's binary paths.
-Use IDs from this result for approvals; do not reconstruct them from rule names.
+`pending` flag. A chunk is promoted only when a same-name rule exists in
+`Session.custom_policies` and covers all of the chunk's binary paths and
+endpoints; additional persisted binary or endpoint coverage is allowed.
+Endpoint coverage is matched after endpoint normalization (including trimming
+host whitespace and excluding invalid empty-host endpoints), using canonical
+JSON objects so object-key order does not affect the match. Use IDs from this
+result for approvals; do not reconstruct them from rule names.
 
 `list_session_policy_rules` returns the complete normalized `rules` array from
 `Session.custom_policies`. Each declarative rule retains its metadata and

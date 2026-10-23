@@ -42,7 +42,11 @@ Vertex AI, and OpenAI inference endpoints. Draft-chunk auto-approval
 ## Promotion algorithm
 
 1. Load draft chunks live from OpenShell when active, otherwise use snapshot.
-2. Determine already promoted binaries by rule name.
+2. Determine already promoted chunks by rule name, binary-path coverage, and
+   endpoint coverage. Every chunk binary path and endpoint must be covered by
+   the same-name persisted rule; extra persisted coverage is allowed.
+   Endpoints are normalized before matching, then compared as canonical JSON
+   objects (key order is ignored).
 3. Resolve selected chunks by stable ID; normalize endpoints, enforcement, and
    L7 access fields. Empty endpoints are rejected and never persisted.
 4. Merge endpoint and binary coverage into existing same-name rules without
