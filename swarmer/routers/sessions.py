@@ -3527,91 +3527,18 @@ async def session_policy_rules_add(
     # (multiple values possible when multiple checkboxes are ticked).
     selected_raw = form.getlist("chunk")
 
-    existing: list[dict] = []
-    if session.custom_policies:
-        try:
-            existing = _j.loads(session.custom_policies)
-        except Exception:
-            pass
+    from swarmer.session_policy import load_policy_list, merge_policy_chunks
 
-    # Index existing rules by name for O(1) lookup and in-place merge.
-    existing_by_name: dict[str, dict] = {
-        str(r["name"]): r for r in existing if r.get("name")
-    }
-    added = 0
-    from datetime import timezone
-    now_iso = datetime.now(timezone.utc).isoformat()
-
-    def _normalize_endpoints(raw_eps: list) -> list:
-        """Ensure every L7-protocol endpoint has access and enforcement set.
-
-        Draft chunks from OPA include host/port/protocol but omit these fields,
-        which causes gateway validation to fail with 'protocol requires rules or
-        access to define allowed traffic'. When promoting/adding rules, default
-        to access=full and strip restrictive path/rules so subsequent dependencies
-        or requests on the approved host do not silently fail at L7.
-        """
-        result = []
-        for ep in raw_eps:
-            host = (ep.get("host") or "").strip()
-            if not host and not ep.get("allowed_ips"):
-                # OpenShell rejects empty endpoint hosts with INVALID_ARGUMENT
-                continue
-            ep = dict(ep)
-            ep["host"] = host
-            if not ep.get("enforcement"):
-                ep["enforcement"] = "enforce"
-            if ep.get("protocol"):
-                ep["access"] = "full"
-                ep.pop("path", None)
-                ep.pop("rules", None)
-            if ep.get("host") == "registry.npmjs.org":
-                ep["allow_encoded_slash"] = True
-            result.append(ep)
-        return result
-
+    selected_chunks = []
     for raw in selected_raw:
         try:
-            chunk = _j.loads(raw)
-        except Exception:
+            chunk = _j.loads(raw) if isinstance(raw, str) else raw
+        except (TypeError, ValueError):
             continue
-        rule_name = chunk.get("rule_name") or chunk.get("name") or ""
-        if not rule_name:
-            continue
-
-        new_eps = _normalize_endpoints(chunk.get("endpoints", []))
-        new_bins = chunk.get("binaries", [])
-
-        if rule_name in existing_by_name:
-            # Same rule name already exists — merge binaries rather than
-            # dropping the chunk. OPA emits one chunk per (rule_name, binary)
-            # pair so two chunks can share a name but differ only in binary.
-            rule = existing_by_name[rule_name]
-            existing_bin_paths = {b.get("path") for b in rule.get("binaries", [])}
-            merged = False
-            for b in new_bins:
-                if b.get("path") not in existing_bin_paths:
-                    rule.setdefault("binaries", []).append(b)
-                    existing_bin_paths.add(b.get("path"))
-                    merged = True
-            if merged:
-                added += 1
-        else:
-            chunk_id = chunk.get("id") or ""
-            existing.append({
-                "name": rule_name,
-                "endpoints": new_eps,
-                "binaries": new_bins,
-                "source": "chunk",
-                "added_at": now_iso,
-                # Store the chunk ID so live-revoke (delete path) can call
-                # UndoDraftChunk directly without a GetDraftHistory lookup.
-                # Empty string means the rule was merged into an existing entry
-                # or the ID was unavailable; revoke falls back to history lookup.
-                "chunk_id": chunk_id,
-            })
-            existing_by_name[rule_name] = existing[-1]
-            added += 1
+        if isinstance(chunk, dict):
+            selected_chunks.append(chunk)
+    existing = load_policy_list(session.custom_policies)
+    existing, added, chunk_ids, _rejected = merge_policy_chunks(existing, selected_chunks)
 
     if added:
         session.custom_policies = _j.dumps(existing)
@@ -3622,14 +3549,6 @@ async def session_policy_rules_add(
         live_applied = False
         if session.sandbox_name and session.is_active:
             import swarmer.openshell_client as _oc
-            # Collect chunk IDs for newly-promoted rules (may be empty strings
-            # for binary-merge updates — those were already approved earlier).
-            chunk_ids = [
-                chunk.get("id", "")
-                for raw in selected_raw
-                for chunk in [(_j.loads(raw) if isinstance(raw, str) else raw)]
-                if chunk.get("id")
-            ]
             if chunk_ids:
                 try:
                     oc_client = await _oc.get_client_for_workspace(ws_id, db)

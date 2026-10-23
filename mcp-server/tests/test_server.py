@@ -43,6 +43,9 @@ EXPECTED_TOOLS = {
     "get_session_output",
     "list_session_runs",
     "get_session_run",
+    "list_session_policy_chunks",
+    "list_session_policy_rules",
+    "approve_session_policy_chunks",
     "wait_for_session",
     "list_github_pats",
     # ACM-35377: schedule management tools
@@ -626,6 +629,32 @@ async def test_find_sessions_by_repo_empty_workspace():
     server.client.list_sessions = AsyncMock(return_value=[])
     result = await server._find_sessions_by_repo(1, "https://github.com/org/repo")
     assert result == []
+
+
+@pytest.mark.asyncio
+async def test_session_policy_tools_preserve_results_and_errors():
+    server = make_server()
+    chunks = {
+        "source": "snapshot",
+        "chunks": [{"id": "chunk-7", "pending": True, "is_promoted": False}],
+    }
+    rules = {"rules": [{"name": "tooling", "endpoints": [{"host": "example.com", "port": 443}]}]}
+    approval = {"result_code": "APPROVED_PERSISTED_ONLY", "persisted_count": 1}
+    server.client.list_session_policy_chunks = AsyncMock(return_value=chunks)
+    server.client.list_session_policy_rules = AsyncMock(return_value=rules)
+    server.client.approve_session_policy_chunks = AsyncMock(return_value=approval)
+
+    assert await server._list_session_policy_chunks(3, 9) == chunks
+    assert await server._list_session_policy_rules(3, 9) == rules
+    assert await server._approve_session_policy_chunks(3, 9, ["chunk-7"], False) == approval
+    server.client.approve_session_policy_chunks.assert_awaited_once_with(
+        3, 9, chunk_ids=["chunk-7"], approve_all=False
+    )
+
+    from agent_swarm_mcp_server.client import AgentSwarmAPIError
+    server.client.list_session_policy_chunks.side_effect = AgentSwarmAPIError(403, "forbidden")
+    with pytest.raises(AgentSwarmAPIError, match="403"):
+        await server._list_session_policy_chunks(3, 9)
 
 
 # ------------------------------------------------------------------

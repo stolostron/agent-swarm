@@ -112,6 +112,9 @@ optional values may clear existing saved configuration.
 | `get_session_status` | Read compact lifecycle status |
 | `get_session_output` | Read processed and raw output |
 | `wait_for_session` | Poll until terminal phase or timeout |
+| `list_session_policy_chunks` | Inspect detected live/snapshot network-policy chunks |
+| `list_session_policy_rules` | Export normalized, persisted session network rules |
+| `approve_session_policy_chunks` | Promote pending detected chunks by stable ID |
 
 Supported phases are:
 
@@ -203,6 +206,53 @@ the phase is `succeeded`, `failed`, or `stopped`. On timeout it returns:
 ```
 
 Timeout is a client observation, not a persisted session phase.
+
+#### Session network-rule tools
+
+All three tools take `workspace_id` and `session_id`; authorization and
+workspace/session ownership are enforced by the REST API. API errors (including
+401/403/404) remain MCP errors and are never converted into empty results.
+
+`list_session_policy_chunks` reads OpenShell when a sandbox is active and the
+saved `Session.policy_chunks` snapshot otherwise. It returns the source, active
+state, and each chunk's stable `id`, OpenShell `status`, rule name, structured
+endpoints/destinations, binaries, `is_promoted`, `promotion_status`, and
+`pending` flag. A chunk is promoted only when its rule name exists in
+`Session.custom_policies` and that rule covers all of the chunk's binary paths.
+Use IDs from this result for approvals; do not reconstruct them from rule names.
+
+`list_session_policy_rules` returns the complete normalized `rules` array from
+`Session.custom_policies`. Each declarative rule retains its metadata and
+includes binary paths and endpoints with host/allowed IPs, port or port range,
+protocol, enforcement, and L7 access/permissions. L7 protocols default to
+`access: full` and `enforcement: enforce`; invalid empty-host endpoints are
+excluded. The structured output supports backup manifests, cross-instance
+session migration, endpoint/destination searches, and recurring "golden rule"
+discovery.
+
+`approve_session_policy_chunks` takes either `chunk_ids: string[]` or
+`approve_all: true` (not both). IDs must identify currently pending chunks; an
+unknown, already promoted, or non-pending selected ID rejects the batch without
+persisting it. Invalid endpoint chunks are reported in `rejected_chunks` and
+are not persisted. The result includes `result_code`, `persisted_count`,
+`persisted_chunk_ids`, `rejected_chunks`, `live_attempted`, `live_applied`,
+approved/requested live counts, and a `processed_at` audit timestamp.
+
+| `result_code` | Meaning |
+|---|---|
+| `APPROVED_LIVE` | Persisted policy changes were applied to the active sandbox |
+| `APPROVED_PERSISTED_ONLY` | Changes were persisted for the next launch; no live apply was available or it was incomplete |
+| `REJECTED` | The selection was invalid or no valid policy changes could be persisted |
+
+Persistence happens before live OpenShell approval and is not rolled back if
+live application fails. Same-name policies merge endpoint and binary coverage
+while retaining existing rule metadata and data. This approval workflow only
+promotes OpenShell-detected chunks; it does not create arbitrary rules.
+Monitoring agents should inspect a chunk, correlate it with session output or
+network activity, then approve explicit IDs and retain the structured result as
+an audit record. Migration agents can serialize `list_session_policy_rules`
+alongside session configuration and separately record pending chunks for
+review at the destination.
 
 ### 6.4 Repository tools
 

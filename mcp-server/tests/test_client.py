@@ -209,6 +209,42 @@ async def test_session_run_history_client_methods(client):
 
 
 @pytest.mark.asyncio
+async def test_session_policy_methods_and_error_preservation(client):
+    chunks = {"source": "live", "chunks": [{"id": "chunk-2", "pending": True}]}
+    rules = {"rules": [{"name": "registry", "endpoints": [{"host": "example.com"}]}]}
+    approval = {"result_code": "APPROVED_LIVE", "persisted_count": 1}
+    with respx.mock(base_url=BASE_URL) as mock:
+        mock.get("/api/v1/workspaces/2/sessions/8/policy-chunks").mock(
+            return_value=httpx.Response(200, json=chunks)
+        )
+        mock.get("/api/v1/workspaces/2/sessions/8/policy-rules").mock(
+            return_value=httpx.Response(200, json=rules)
+        )
+        approve_route = mock.post(
+            "/api/v1/workspaces/2/sessions/8/policy-chunks/approve"
+        ).mock(return_value=httpx.Response(200, json=approval))
+
+        assert await client.list_session_policy_chunks(2, 8) == chunks
+        assert await client.list_session_policy_rules(2, 8) == rules
+        assert await client.approve_session_policy_chunks(
+            2, 8, chunk_ids=["chunk-2"]
+        ) == approval
+        assert json.loads(approve_route.calls[0].request.content) == {
+            "chunk_ids": ["chunk-2"],
+            "approve_all": False,
+        }
+
+    with respx.mock(base_url=BASE_URL) as mock:
+        mock.get("/api/v1/workspaces/2/sessions/8/policy-rules").mock(
+            return_value=httpx.Response(403, json={"detail": "workspace denied"})
+        )
+        with pytest.raises(AgentSwarmAPIError) as error:
+            await client.list_session_policy_rules(2, 8)
+    assert error.value.status_code == 403
+    assert error.value.detail == "workspace denied"
+
+
+@pytest.mark.asyncio
 async def test_add_repo(client):
     with respx.mock(base_url=BASE_URL) as mock:
         route = mock.post("/api/v1/workspaces/1/sessions/5/repos").mock(
