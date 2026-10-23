@@ -31,9 +31,9 @@ their existence. Access is granted when any of the following applies:
 - The caller has a matching `WorkspaceMember` row.
 - The workspace is unclaimed (`owner_id == ""`).
 
-Management operations additionally require the owner or global administrator,
-except that an unclaimed workspace may be claimed by the first management
-caller.
+Management operations additionally require the owner, a member with the
+workspace `admin` role, or a global administrator, except that an unclaimed
+workspace may be claimed by the first management caller.
 
 Credential records have an additional owner/shared visibility layer. Shared
 credential mutation should be treated as manager-only even where current

@@ -291,6 +291,40 @@ class SessionUpdate(BaseModel):
     mcp_selection: Literal["inherit", "disabled"] | None = None
 
 
+class SessionPolicyChunksOut(BaseModel):
+    workspace_id: int
+    session_id: int
+    source: Literal["live", "snapshot"]
+    active: bool
+    chunks: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class SessionPolicyRulesOut(BaseModel):
+    workspace_id: int
+    session_id: int
+    rules: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class SessionPolicyChunksApproveIn(BaseModel):
+    chunk_ids: list[str] = Field(default_factory=list, max_length=500)
+    approve_all: bool = False
+
+
+class SessionPolicyChunksApproveOut(BaseModel):
+    workspace_id: int
+    session_id: int
+    result_code: Literal["APPROVED_LIVE", "APPROVED_PERSISTED_ONLY", "REJECTED"]
+    persisted_count: int
+    persisted_chunk_ids: list[str] = Field(default_factory=list)
+    rejected_chunks: list[dict[str, str]] = Field(default_factory=list)
+    live_attempted: bool = False
+    live_applied: bool = False
+    live_approved_count: int = 0
+    live_requested_count: int = 0
+    detail: str = ""
+    processed_at: datetime
+
+
 class SessionOut(BaseModel):
     id: int
     workspace_id: int

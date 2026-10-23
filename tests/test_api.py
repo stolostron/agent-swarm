@@ -7,6 +7,7 @@ Overrides the auth dependency and uses an in-memory SQLite database.
 import json
 import logging
 import os
+import secrets
 import sys
 from unittest.mock import AsyncMock
 
@@ -1220,6 +1221,240 @@ class TestSessions:
             f"/api/v1/workspaces/{ws['id']}/mcp-servers/{server_id}"
         )
         assert owner_delete_response.status_code == 200
+
+    @pytest.mark.asyncio
+    async def test_workspace_admin_role_can_mutate_shared_mcp_servers(self, client):
+        """ACM-48496: a member granted the admin role is a workspace manager
+        and may add/configure/toggle/delete shared MCP servers there."""
+        from unittest.mock import AsyncMock as _AsyncMock
+        from unittest.mock import patch as _patch
+
+        from sqlalchemy import select
+
+        from swarmer.api.deps import get_current_user, require_api_auth
+        from swarmer.k8s_auth import TokenIdentity
+        from swarmer.main import app
+        from swarmer.models.mcp_server import McpServer
+        from swarmer.models.workspace_member import WorkspaceMember
+
+        jira_token = secrets.token_urlsafe(32)
+        ws = await _create_workspace(client)
+        added = await client.post(
+            f"/api/v1/workspaces/{ws['id']}/members",
+            json={"user_id": "helper", "role": "admin"},
+        )
+        assert added.status_code == 201, added.text
+        async with _TestSession() as db:
+            membership = await db.scalar(
+                select(WorkspaceMember).where(
+                    WorkspaceMember.workspace_id == ws["id"],
+                    WorkspaceMember.user_id == "helper",
+                )
+            )
+            membership.role = " Admin "
+            await db.commit()
+            assert membership.role == " Admin "
+
+        app.dependency_overrides[require_api_auth] = lambda: TokenIdentity(
+            username="helper", uid="uid-helper"
+        )
+        app.dependency_overrides[get_current_user] = lambda: "helper"
+        try:
+            # Add from catalog as the workspace admin
+            jira = await client.post(
+                f"/api/v1/workspaces/{ws['id']}/mcp-servers",
+                json={"catalog_slug": "atlassian-jira"},
+            )
+            assert jira.status_code == 201, jira.text
+            server_id = jira.json()["id"]
+            async with _TestSession() as db:
+                server = await db.get(McpServer, server_id)
+                assert server.user_id == "helper"
+
+            # Save credentials (mock the Jira probe so it reports valid)
+            with _patch(
+                "swarmer.routers.mcp_servers._probe_jira_token",
+                new=_AsyncMock(return_value=True),
+            ):
+                save = await client.post(
+                    f"/api/v1/workspaces/{ws['id']}/mcp-servers/{server_id}/save",
+                    json={
+                        "jira_server_url": "https://example.atlassian.net",
+                        "jira_email": "helper@example.com",
+                        "jira_access_token": jira_token,
+                    },
+                )
+            assert save.status_code == 200, save.text
+            assert save.json()["auth_status"] == "active"
+
+            toggle = await client.post(
+                f"/api/v1/workspaces/{ws['id']}/mcp-servers/{server_id}/toggle"
+            )
+            assert toggle.status_code == 200, toggle.text
+            assert toggle.json()["enabled"] is False
+
+            delete = await client.delete(
+                f"/api/v1/workspaces/{ws['id']}/mcp-servers/{server_id}"
+            )
+            assert delete.status_code == 200, delete.text
+        finally:
+            app.dependency_overrides[require_api_auth] = _override_require_api_auth
+            app.dependency_overrides[get_current_user] = _override_get_current_user
+
+    @pytest.mark.asyncio
+    async def test_workspace_admin_role_is_scoped_per_workspace(self, client):
+        """ACM-48496: the admin role only grants manager rights inside the
+        workspace where it was granted — an admin of one workspace stays an
+        ordinary member everywhere else."""
+        from swarmer.api.deps import get_current_user, require_api_auth
+        from swarmer.k8s_auth import TokenIdentity
+        from swarmer.main import app
+
+        jira_token = secrets.token_urlsafe(32)
+        home_ws = await _create_workspace(client, "Home WS")
+        other_ws = await _create_workspace(client, "Other WS")
+        await client.post(
+            f"/api/v1/workspaces/{home_ws['id']}/members",
+            json={"user_id": "helper", "role": "admin"},
+        )
+        # Ordinary member of the other workspace — can see it, not manage it.
+        await client.post(
+            f"/api/v1/workspaces/{other_ws['id']}/members",
+            json={"user_id": "helper", "role": "member"},
+        )
+        other_jira = await client.post(
+            f"/api/v1/workspaces/{other_ws['id']}/mcp-servers",
+            json={"catalog_slug": "atlassian-jira"},
+        )
+        assert other_jira.status_code == 201, other_jira.text
+        other_server_id = other_jira.json()["id"]
+
+        app.dependency_overrides[require_api_auth] = lambda: TokenIdentity(
+            username="helper", uid="uid-helper"
+        )
+        app.dependency_overrides[get_current_user] = lambda: "helper"
+        try:
+            inventory = await client.get(
+                f"/api/v1/workspaces/{other_ws['id']}/mcp-servers"
+            )
+            assert inventory.status_code == 200
+            assert other_server_id in {item["id"] for item in inventory.json()}
+
+            add = await client.post(
+                f"/api/v1/workspaces/{other_ws['id']}/mcp-servers",
+                json={"catalog_slug": "agent-swarm"},
+            )
+            save = await client.post(
+                f"/api/v1/workspaces/{other_ws['id']}/mcp-servers/{other_server_id}/save",
+                json={
+                    "jira_server_url": "https://example.atlassian.net",
+                    "jira_email": "helper@example.com",
+                    "jira_access_token": jira_token,
+                },
+            )
+            toggle = await client.post(
+                f"/api/v1/workspaces/{other_ws['id']}/mcp-servers/{other_server_id}/toggle"
+            )
+            delete = await client.delete(
+                f"/api/v1/workspaces/{other_ws['id']}/mcp-servers/{other_server_id}"
+            )
+        finally:
+            app.dependency_overrides[require_api_auth] = _override_require_api_auth
+            app.dependency_overrides[get_current_user] = _override_get_current_user
+
+        assert add.status_code == 403, add.text
+        assert save.status_code == 403, save.text
+        assert toggle.status_code == 403, toggle.text
+        assert delete.status_code == 403, delete.text
+
+    @pytest.mark.asyncio
+    async def test_members_cannot_add_shared_mcp_servers(self, client):
+        """ACM-48496: adding a shared MCP server is a manager action too —
+        members must not create rows they then cannot configure."""
+        from swarmer.api.deps import get_current_user, require_api_auth
+        from swarmer.k8s_auth import TokenIdentity
+        from swarmer.main import app
+
+        ws = await _create_workspace(client)
+        await client.post(
+            f"/api/v1/workspaces/{ws['id']}/members", json={"user_id": "stranger"}
+        )
+
+        app.dependency_overrides[require_api_auth] = lambda: TokenIdentity(
+            username="stranger", uid="uid-stranger"
+        )
+        app.dependency_overrides[get_current_user] = lambda: "stranger"
+        try:
+            response = await client.post(
+                f"/api/v1/workspaces/{ws['id']}/mcp-servers",
+                json={"catalog_slug": "atlassian-jira"},
+            )
+        finally:
+            app.dependency_overrides[require_api_auth] = _override_require_api_auth
+            app.dependency_overrides[get_current_user] = _override_get_current_user
+
+        assert response.status_code == 403, response.text
+        assert response.json()["detail"] == "Only workspace managers can update shared MCP servers."
+        inventory = await client.get(f"/api/v1/workspaces/{ws['id']}/mcp-servers")
+        # Only the auto-provisioned agent-swarm row may exist — the member's
+        # catalog add must not have created anything.
+        assert "atlassian-jira" not in {item["slug"] for item in inventory.json()}
+
+    @pytest.mark.asyncio
+    async def test_session_credentials_cannot_add_shared_mcp_servers(self, client):
+        """ACM-48496: session-bound credentials cannot add shared MCP servers."""
+        from swarmer.api.deps import require_api_auth
+        from swarmer.k8s_auth import TokenIdentity
+        from swarmer.main import app
+
+        ws = await _create_workspace(client)
+        app.dependency_overrides[require_api_auth] = lambda: TokenIdentity(
+            username="session:123", session_id=123, workspace_id=ws["id"]
+        )
+        try:
+            response = await client.post(
+                f"/api/v1/workspaces/{ws['id']}/mcp-servers",
+                json={"catalog_slug": "atlassian-jira"},
+            )
+        finally:
+            app.dependency_overrides[require_api_auth] = _override_require_api_auth
+
+        assert response.status_code == 403, response.text
+        assert response.json()["detail"] == "Session credentials cannot use this endpoint"
+        inventory = await client.get(f"/api/v1/workspaces/{ws['id']}/mcp-servers")
+        assert "atlassian-jira" not in {item["slug"] for item in inventory.json()}
+
+    @pytest.mark.asyncio
+    async def test_workspace_admin_role_case_insensitive_and_member_management(self, client):
+        """ACM-48496: the admin role is recognized regardless of case, and a
+        workspace admin can also manage members (the ACL manager check)."""
+        from swarmer.api.deps import require_api_auth
+        from swarmer.k8s_auth import TokenIdentity
+        from swarmer.main import app
+
+        ws = await _create_workspace(client)
+        await client.post(
+            f"/api/v1/workspaces/{ws['id']}/members",
+            json={"user_id": "helper", "role": "Admin"},
+        )
+
+        app.dependency_overrides[require_api_auth] = lambda: TokenIdentity(
+            username="helper", uid="uid-helper"
+        )
+        try:
+            # Workspace admins manage members like owners do.
+            resp = await client.post(
+                f"/api/v1/workspaces/{ws['id']}/members",
+                json={"user_id": "teammate", "role": "member"},
+            )
+            assert resp.status_code == 201, resp.text
+
+            remove = await client.delete(
+                f"/api/v1/workspaces/{ws['id']}/members/teammate"
+            )
+            assert remove.status_code == 200, remove.text
+        finally:
+            app.dependency_overrides[require_api_auth] = _override_require_api_auth
 
     @pytest.mark.asyncio
     async def test_background_mcp_eligibility_includes_workspace_mcp_by_default(self, client):
@@ -3078,3 +3313,346 @@ class TestSessionMcpSelection:
         assert own_item["server_url"] == "https://example.com/mcp"
         assert not {"user_id", "jira_email", "jira_access_token", "jira_access_token_enc"}.intersection(own_item)
         assert "YOUR_" not in json.dumps(inventory)
+
+
+class TestSessionPolicyAPI:
+    @pytest.mark.asyncio
+    async def test_policy_chunk_snapshot_and_normalized_rules(self, client):
+        ws = await _create_workspace(client)
+        session = await _create_session(client, ws["id"])
+        snapshot = [{
+            "id": "snapshot-1",
+            "status": "pending",
+            "rule_name": "package-registry",
+            "endpoints": [{"host": "registry.example.com", "port": 443, "protocol": "https"}],
+            "binaries": [{"path": "/usr/bin/npm"}],
+        }]
+        async with _TestSession() as db:
+            from swarmer.models.session import Session
+
+            stored = await db.get(Session, session["id"])
+            stored.policy_chunks = json.dumps(snapshot)
+            stored.custom_policies = json.dumps([{
+                "name": "already-promoted",
+                "endpoints": [{"host": "api.example.com", "port": 443, "protocol": "https", "path": "/restricted"}],
+                "binaries": [{"path": "/usr/bin/curl"}],
+            }])
+            await db.commit()
+
+        chunks_response = await client.get(
+            f"/api/v1/workspaces/{ws['id']}/sessions/{session['id']}/policy-chunks"
+        )
+        assert chunks_response.status_code == 200, chunks_response.text
+        data = chunks_response.json()
+        assert data["source"] == "snapshot"
+        assert data["active"] is False
+        assert data["chunks"][0]["id"] == "snapshot-1"
+        assert data["chunks"][0]["pending"] is True
+
+        rules_response = await client.get(
+            f"/api/v1/workspaces/{ws['id']}/sessions/{session['id']}/policy-rules"
+        )
+        assert rules_response.status_code == 200, rules_response.text
+        endpoint = rules_response.json()["rules"][0]["endpoints"][0]
+        assert endpoint["host"] == "api.example.com"
+        assert endpoint["port"] == 443
+        assert endpoint["protocol"] == "https"
+        assert endpoint["access"] == "full"
+        assert endpoint["enforcement"] == "enforce"
+        assert "path" not in endpoint
+
+    @pytest.mark.asyncio
+    async def test_policy_chunks_reads_live_and_marks_promoted(self, client, monkeypatch):
+        ws = await _create_workspace(client)
+        session = await _create_session(client, ws["id"])
+        async with _TestSession() as db:
+            from swarmer.models.session import Session
+
+            stored = await db.get(Session, session["id"])
+            stored.sandbox_name = "live-sandbox"
+            stored.phase = "running"
+            stored.custom_policies = json.dumps([{
+                "name": "shared-rule",
+                "endpoints": [{
+                    "host": "dest.example.com", "port": 443, "protocol": "https",
+                }],
+                "binaries": [{"path": "/usr/bin/tool"}],
+            }])
+            await db.commit()
+
+        chunks = [{
+            "id": "live-1",
+            "status": "pending",
+            "rule_name": "shared-rule",
+            "endpoints": [{"host": "dest.example.com", "port": 443, "protocol": "https"}],
+            "binaries": [{"path": "/usr/bin/tool"}],
+        }]
+        monkeypatch.setattr("swarmer.openshell_client.get_client_for_workspace", AsyncMock(return_value=object()))
+        fetch = AsyncMock(return_value=chunks)
+        monkeypatch.setattr("swarmer.openshell_client.get_draft_chunks", fetch)
+
+        response = await client.get(
+            f"/api/v1/workspaces/{ws['id']}/sessions/{session['id']}/policy-chunks"
+        )
+        assert response.status_code == 200, response.text
+        data = response.json()
+        assert data["source"] == "live"
+        assert data["active"] is True
+        assert data["chunks"][0]["is_promoted"] is True
+        assert data["chunks"][0]["pending"] is False
+        fetch.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_policy_chunk_without_valid_endpoints_is_not_promoted(self, client):
+        ws = await _create_workspace(client)
+        session = await _create_session(client, ws["id"])
+        chunk = {
+            "id": "invalid-endpoints",
+            "status": "pending",
+            "rule_name": "shared-rule",
+            "endpoints": [{"host": "  ", "port": 443, "protocol": "https"}],
+            "binaries": [{"path": "/usr/bin/tool"}],
+        }
+        async with _TestSession() as db:
+            from swarmer.models.session import Session
+
+            stored = await db.get(Session, session["id"])
+            stored.policy_chunks = json.dumps([chunk])
+            stored.custom_policies = json.dumps([{
+                "name": "shared-rule",
+                "endpoints": [{"host": "dest.example.com", "port": 443, "protocol": "https"}],
+                "binaries": [{"path": "/usr/bin/tool"}],
+            }])
+            await db.commit()
+
+        chunks_response = await client.get(
+            f"/api/v1/workspaces/{ws['id']}/sessions/{session['id']}/policy-chunks"
+        )
+        assert chunks_response.status_code == 200, chunks_response.text
+        listed_chunk = chunks_response.json()["chunks"][0]
+        assert listed_chunk["is_promoted"] is False
+        assert listed_chunk["promotion_status"] == "pending"
+        assert listed_chunk["pending"] is True
+
+        approval = await client.post(
+            f"/api/v1/workspaces/{ws['id']}/sessions/{session['id']}/policy-chunks/approve",
+            json={"chunk_ids": ["invalid-endpoints"]},
+        )
+        assert approval.status_code == 200, approval.text
+        assert approval.json()["persisted_chunk_ids"] == []
+        assert approval.json()["rejected_chunks"] == [{
+            "chunk_id": "invalid-endpoints",
+            "reason": "INVALID_ENDPOINTS",
+        }]
+
+    @pytest.mark.asyncio
+    async def test_same_name_binary_chunks_with_different_endpoints_remain_pending(self, client):
+        ws = await _create_workspace(client)
+        session = await _create_session(client, ws["id"])
+        chunks = [
+            {
+                "id": "first-destination",
+                "status": "pending",
+                "rule_name": "shared-rule",
+                "endpoints": [{"host": "first.example.com", "port": 443, "protocol": "https"}],
+                "binaries": [{"path": "/usr/bin/tool"}],
+            },
+            {
+                "id": "second-destination",
+                "status": "pending",
+                "rule_name": "shared-rule",
+                "endpoints": [{"host": "second.example.com", "port": 443, "protocol": "https"}],
+                "binaries": [{"path": "/usr/bin/tool"}],
+            },
+        ]
+        async with _TestSession() as db:
+            from swarmer.models.session import Session
+
+            stored = await db.get(Session, session["id"])
+            stored.policy_chunks = json.dumps(chunks)
+            await db.commit()
+
+        first_approval = await client.post(
+            f"/api/v1/workspaces/{ws['id']}/sessions/{session['id']}/policy-chunks/approve",
+            json={"chunk_ids": ["first-destination"]},
+        )
+        assert first_approval.status_code == 200, first_approval.text
+        assert first_approval.json()["persisted_chunk_ids"] == ["first-destination"]
+
+        chunk_response = await client.get(
+            f"/api/v1/workspaces/{ws['id']}/sessions/{session['id']}/policy-chunks"
+        )
+        assert chunk_response.status_code == 200, chunk_response.text
+        chunk_states = {chunk["id"]: chunk for chunk in chunk_response.json()["chunks"]}
+        assert chunk_states["first-destination"]["pending"] is False
+        assert chunk_states["second-destination"]["pending"] is True
+        assert chunk_states["second-destination"]["promotion_status"] == "pending"
+
+        second_approval = await client.post(
+            f"/api/v1/workspaces/{ws['id']}/sessions/{session['id']}/policy-chunks/approve",
+            json={"chunk_ids": ["second-destination"]},
+        )
+        assert second_approval.status_code == 200, second_approval.text
+        assert second_approval.json()["persisted_chunk_ids"] == ["second-destination"]
+
+        rules_response = await client.get(
+            f"/api/v1/workspaces/{ws['id']}/sessions/{session['id']}/policy-rules"
+        )
+        assert rules_response.status_code == 200, rules_response.text
+        rules = rules_response.json()["rules"]
+        assert len(rules) == 1
+        assert {endpoint["host"] for endpoint in rules[0]["endpoints"]} == {
+            "first.example.com", "second.example.com",
+        }
+        assert {binary["path"] for binary in rules[0]["binaries"]} == {"/usr/bin/tool"}
+
+    @pytest.mark.asyncio
+    async def test_approve_all_merges_same_name_and_persists_live_failure(self, client, monkeypatch):
+        ws = await _create_workspace(client)
+        session = await _create_session(client, ws["id"])
+        chunks = [
+            {
+                "id": "chunk-a",
+                "status": "pending",
+                "rule_name": "shared-rule",
+                "endpoints": [{"host": "new-a.example.com", "port": 443, "protocol": "https", "path": "/ignored"}],
+                "binaries": [{"path": "/usr/bin/new-a"}],
+            },
+            {
+                "id": "chunk-b",
+                "status": "pending",
+                "rule_name": "shared-rule",
+                "endpoints": [{"host": "new-b.example.com", "port": 8443, "protocol": "grpc"}],
+                "binaries": [{"path": "/usr/bin/new-b"}],
+            },
+            {
+                "id": "chunk-invalid",
+                "status": "pending",
+                "rule_name": "invalid-rule",
+                "endpoints": [{"host": "  ", "port": 443, "protocol": "https"}],
+                "binaries": [{"path": "/usr/bin/invalid"}],
+            },
+        ]
+        async with _TestSession() as db:
+            from swarmer.models.session import Session
+
+            stored = await db.get(Session, session["id"])
+            stored.sandbox_name = "live-sandbox"
+            stored.phase = "running"
+            stored.custom_policies = json.dumps([{
+                "name": "shared-rule",
+                "description": "keep existing metadata",
+                "endpoints": [{"host": "old.example.com", "port": 443, "protocol": "https"}],
+                "binaries": [{"path": "/usr/bin/existing"}],
+            }])
+            await db.commit()
+
+        monkeypatch.setattr("swarmer.openshell_client.get_client_for_workspace", AsyncMock(return_value=object()))
+        monkeypatch.setattr("swarmer.openshell_client.get_draft_chunks", AsyncMock(return_value=chunks))
+        live_approve = AsyncMock(return_value=0)
+        monkeypatch.setattr("swarmer.openshell_client.approve_chunks_by_id", live_approve)
+
+        response = await client.post(
+            f"/api/v1/workspaces/{ws['id']}/sessions/{session['id']}/policy-chunks/approve",
+            json={"approve_all": True},
+        )
+        assert response.status_code == 200, response.text
+        result = response.json()
+        assert result["result_code"] == "APPROVED_PERSISTED_ONLY"
+        assert result["persisted_count"] == 2
+        assert result["live_attempted"] is True
+        assert result["live_applied"] is False
+        assert result["live_requested_count"] == 2
+        assert result["rejected_chunks"] == [{
+            "chunk_id": "chunk-invalid", "reason": "INVALID_ENDPOINTS"
+        }]
+        live_approve.assert_awaited_once()
+        assert set(live_approve.await_args.args[1]) == {"chunk-a", "chunk-b"}
+
+        async with _TestSession() as db:
+            from swarmer.models.session import Session
+
+            stored = await db.get(Session, session["id"])
+            rules = json.loads(stored.custom_policies)
+        assert len(rules) == 1
+        rule = rules[0]
+        assert rule["description"] == "keep existing metadata"
+        assert {binary["path"] for binary in rule["binaries"]} == {
+            "/usr/bin/existing", "/usr/bin/new-a", "/usr/bin/new-b"
+        }
+        endpoints = {endpoint["host"]: endpoint for endpoint in rule["endpoints"]}
+        assert set(endpoints) == {"old.example.com", "new-a.example.com", "new-b.example.com"}
+        assert endpoints["new-a.example.com"]["access"] == "full"
+        assert endpoints["new-a.example.com"]["enforcement"] == "enforce"
+        assert "path" not in endpoints["new-a.example.com"]
+        assert endpoints["new-b.example.com"]["access"] == "full"
+
+    @pytest.mark.asyncio
+    async def test_approve_selected_stable_id_only(self, client):
+        ws = await _create_workspace(client)
+        session = await _create_session(client, ws["id"])
+        chunks = [
+            {
+                "id": "selected-id",
+                "status": "pending",
+                "rule_name": "selected-rule",
+                "endpoints": [{"host": "selected.example.com", "port": 443, "protocol": "https"}],
+                "binaries": [{"path": "/usr/bin/selected"}],
+            },
+            {
+                "id": "not-selected-id",
+                "status": "pending",
+                "rule_name": "other-rule",
+                "endpoints": [{"host": "other.example.com", "port": 443, "protocol": "https"}],
+                "binaries": [{"path": "/usr/bin/other"}],
+            },
+        ]
+        async with _TestSession() as db:
+            from swarmer.models.session import Session
+
+            stored = await db.get(Session, session["id"])
+            stored.policy_chunks = json.dumps(chunks)
+            await db.commit()
+
+        response = await client.post(
+            f"/api/v1/workspaces/{ws['id']}/sessions/{session['id']}/policy-chunks/approve",
+            json={"chunk_ids": ["selected-id"]},
+        )
+        assert response.status_code == 200, response.text
+        result = response.json()
+        assert result["result_code"] == "APPROVED_PERSISTED_ONLY"
+        assert result["persisted_count"] == 1
+        assert result["persisted_chunk_ids"] == ["selected-id"]
+        assert result["live_attempted"] is False
+
+        rules = await client.get(
+            f"/api/v1/workspaces/{ws['id']}/sessions/{session['id']}/policy-rules"
+        )
+        assert [rule["name"] for rule in rules.json()["rules"]] == ["selected-rule"]
+
+        rejected = await client.post(
+            f"/api/v1/workspaces/{ws['id']}/sessions/{session['id']}/policy-chunks/approve",
+            json={"chunk_ids": ["stale-id"]},
+        )
+        assert rejected.status_code == 200
+        assert rejected.json()["result_code"] == "REJECTED"
+        assert rejected.json()["rejected_chunks"] == [{
+            "chunk_id": "stale-id", "reason": "UNKNOWN_CHUNK_ID"
+        }]
+
+    @pytest.mark.asyncio
+    async def test_policy_routes_enforce_workspace_access(self, client):
+        from swarmer.api.deps import require_api_auth
+        from swarmer.k8s_auth import TokenIdentity
+        from swarmer.main import app
+
+        ws = await _create_workspace(client)
+        session = await _create_session(client, ws["id"])
+        app.dependency_overrides[require_api_auth] = lambda: TokenIdentity(
+            username="different-user", uid="other-uid"
+        )
+
+        response = await client.get(
+            f"/api/v1/workspaces/{ws['id']}/sessions/{session['id']}/policy-chunks"
+        )
+        assert response.status_code == 404

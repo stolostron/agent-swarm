@@ -190,6 +190,34 @@ async def filter_accessible_workspaces(
     return [ws for ws in workspaces if ws.id in accessible_ids]
 
 
+WORKSPACE_ADMIN_ROLE = "admin"
+"""WorkspaceMember.role value that grants workspace-scoped manager rights
+(distinct from the global admin allow-list — see `is_admin`)."""
+
+
+async def is_workspace_admin(
+    db: AsyncSession, ws_id: int, username: str
+) -> bool:
+    """Return True when *username* holds a WorkspaceMember row with the
+    admin role in workspace *ws_id*.
+
+    This is the workspace-scoped manager grant from the owner/member/admin
+    ACL model (ACM-41659). The role comparison ignores surrounding whitespace
+    and is case-insensitive so hand-entered values like `` Admin `` behave
+    the same as ``admin``.
+    """
+    if not username:
+        return False
+    result = await db.execute(
+        select(WorkspaceMember.role).where(
+            WorkspaceMember.workspace_id == ws_id,
+            WorkspaceMember.user_id == username,
+        )
+    )
+    role = result.scalar_one_or_none()
+    return (role or "").strip().lower() == WORKSPACE_ADMIN_ROLE
+
+
 async def can_manage_members(
     db: AsyncSession,
     ws: Workspace,
@@ -197,15 +225,18 @@ async def can_manage_members(
     groups: list[str] | None = None,
     session_identity: bool = False,
 ) -> bool:
-    """Owner, a global admin, or anyone (while the workspace is unclaimed)
-    can rename/delete a workspace or manage its members."""
+    """Owner, a global admin, a member with the workspace admin role, or
+    anyone (while the workspace is unclaimed) can rename/delete a workspace
+    or manage its members."""
     if not username or session_identity:
         return False
     if await is_admin(db, username, groups):
         return True
     if not ws.owner_id:
         return True
-    return ws.owner_id == username
+    if ws.owner_id == username:
+        return True
+    return await is_workspace_admin(db, ws.id, username)
 
 
 async def _db_known_users(
