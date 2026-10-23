@@ -90,7 +90,11 @@ def is_chunk_promoted(chunk: dict[str, Any], policies: list[dict[str, Any]]) -> 
         json.dumps(endpoint, sort_keys=True, separators=(",", ":"))
         for endpoint in normalize_policy_endpoints(rule.get("endpoints"))
     }
-    return chunk_paths.issubset(rule_paths) and chunk_endpoints.issubset(rule_endpoints)
+    return (
+        bool(chunk_endpoints)
+        and chunk_paths.issubset(rule_paths)
+        and chunk_endpoints.issubset(rule_endpoints)
+    )
 
 
 def merge_policy_chunks(

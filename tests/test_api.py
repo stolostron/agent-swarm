@@ -3403,6 +3403,49 @@ class TestSessionPolicyAPI:
         fetch.assert_awaited_once()
 
     @pytest.mark.asyncio
+    async def test_policy_chunk_without_valid_endpoints_is_not_promoted(self, client):
+        ws = await _create_workspace(client)
+        session = await _create_session(client, ws["id"])
+        chunk = {
+            "id": "invalid-endpoints",
+            "status": "pending",
+            "rule_name": "shared-rule",
+            "endpoints": [{"host": "  ", "port": 443, "protocol": "https"}],
+            "binaries": [{"path": "/usr/bin/tool"}],
+        }
+        async with _TestSession() as db:
+            from swarmer.models.session import Session
+
+            stored = await db.get(Session, session["id"])
+            stored.policy_chunks = json.dumps([chunk])
+            stored.custom_policies = json.dumps([{
+                "name": "shared-rule",
+                "endpoints": [{"host": "dest.example.com", "port": 443, "protocol": "https"}],
+                "binaries": [{"path": "/usr/bin/tool"}],
+            }])
+            await db.commit()
+
+        chunks_response = await client.get(
+            f"/api/v1/workspaces/{ws['id']}/sessions/{session['id']}/policy-chunks"
+        )
+        assert chunks_response.status_code == 200, chunks_response.text
+        listed_chunk = chunks_response.json()["chunks"][0]
+        assert listed_chunk["is_promoted"] is False
+        assert listed_chunk["promotion_status"] == "pending"
+        assert listed_chunk["pending"] is True
+
+        approval = await client.post(
+            f"/api/v1/workspaces/{ws['id']}/sessions/{session['id']}/policy-chunks/approve",
+            json={"chunk_ids": ["invalid-endpoints"]},
+        )
+        assert approval.status_code == 200, approval.text
+        assert approval.json()["persisted_chunk_ids"] == []
+        assert approval.json()["rejected_chunks"] == [{
+            "chunk_id": "invalid-endpoints",
+            "reason": "INVALID_ENDPOINTS",
+        }]
+
+    @pytest.mark.asyncio
     async def test_same_name_binary_chunks_with_different_endpoints_remain_pending(self, client):
         ws = await _create_workspace(client)
         session = await _create_session(client, ws["id"])

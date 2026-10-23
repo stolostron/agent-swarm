@@ -68,7 +68,8 @@ and `chunks`. An active sandbox is queried through OpenShell; otherwise the
 stored `Session.policy_chunks` snapshot is returned. Each chunk keeps its stable
 `id`, native status, rule name, structured endpoints/destinations and binaries,
 and adds `is_promoted`, `promotion_status` (`promoted`/`pending`), and `pending`.
-Promotion status uses the same rule-name and binary-coverage test as the UI.
+Promotion status requires a same-name persisted rule to cover every chunk binary
+path and every normalized endpoint; additional persisted coverage is allowed.
 
 ### `GET /api/v1/workspaces/{ws_id}/sessions/{sid}/policy-rules`
 
