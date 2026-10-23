@@ -3373,7 +3373,9 @@ class TestSessionPolicyAPI:
             stored.phase = "running"
             stored.custom_policies = json.dumps([{
                 "name": "shared-rule",
-                "endpoints": [],
+                "endpoints": [{
+                    "host": "dest.example.com", "port": 443, "protocol": "https",
+                }],
                 "binaries": [{"path": "/usr/bin/tool"}],
             }])
             await db.commit()
@@ -3399,6 +3401,67 @@ class TestSessionPolicyAPI:
         assert data["chunks"][0]["is_promoted"] is True
         assert data["chunks"][0]["pending"] is False
         fetch.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_same_name_binary_chunks_with_different_endpoints_remain_pending(self, client):
+        ws = await _create_workspace(client)
+        session = await _create_session(client, ws["id"])
+        chunks = [
+            {
+                "id": "first-destination",
+                "status": "pending",
+                "rule_name": "shared-rule",
+                "endpoints": [{"host": "first.example.com", "port": 443, "protocol": "https"}],
+                "binaries": [{"path": "/usr/bin/tool"}],
+            },
+            {
+                "id": "second-destination",
+                "status": "pending",
+                "rule_name": "shared-rule",
+                "endpoints": [{"host": "second.example.com", "port": 443, "protocol": "https"}],
+                "binaries": [{"path": "/usr/bin/tool"}],
+            },
+        ]
+        async with _TestSession() as db:
+            from swarmer.models.session import Session
+
+            stored = await db.get(Session, session["id"])
+            stored.policy_chunks = json.dumps(chunks)
+            await db.commit()
+
+        first_approval = await client.post(
+            f"/api/v1/workspaces/{ws['id']}/sessions/{session['id']}/policy-chunks/approve",
+            json={"chunk_ids": ["first-destination"]},
+        )
+        assert first_approval.status_code == 200, first_approval.text
+        assert first_approval.json()["persisted_chunk_ids"] == ["first-destination"]
+
+        chunk_response = await client.get(
+            f"/api/v1/workspaces/{ws['id']}/sessions/{session['id']}/policy-chunks"
+        )
+        assert chunk_response.status_code == 200, chunk_response.text
+        chunk_states = {chunk["id"]: chunk for chunk in chunk_response.json()["chunks"]}
+        assert chunk_states["first-destination"]["pending"] is False
+        assert chunk_states["second-destination"]["pending"] is True
+        assert chunk_states["second-destination"]["promotion_status"] == "pending"
+
+        second_approval = await client.post(
+            f"/api/v1/workspaces/{ws['id']}/sessions/{session['id']}/policy-chunks/approve",
+            json={"chunk_ids": ["second-destination"]},
+        )
+        assert second_approval.status_code == 200, second_approval.text
+        assert second_approval.json()["persisted_chunk_ids"] == ["second-destination"]
+
+        rules_response = await client.get(
+            f"/api/v1/workspaces/{ws['id']}/sessions/{session['id']}/policy-rules"
+        )
+        assert rules_response.status_code == 200, rules_response.text
+        rules = rules_response.json()["rules"]
+        assert len(rules) == 1
+        assert {endpoint["host"] for endpoint in rules[0]["endpoints"]} == {
+            "first.example.com", "second.example.com",
+        }
+        assert {binary["path"] for binary in rules[0]["binaries"]} == {"/usr/bin/tool"}
 
     @pytest.mark.asyncio
     async def test_approve_all_merges_same_name_and_persists_live_failure(self, client, monkeypatch):

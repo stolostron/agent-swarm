@@ -62,7 +62,7 @@ def normalize_policy_rule(rule: dict[str, Any]) -> dict[str, Any]:
 
 
 def is_chunk_promoted(chunk: dict[str, Any], policies: list[dict[str, Any]]) -> bool:
-    """Match a detected chunk to persisted rules by name and binary coverage."""
+    """Match a detected chunk to persisted rules by name and coverage."""
     name = str(chunk.get("rule_name") or chunk.get("name") or "")
     if not name:
         return False
@@ -82,7 +82,15 @@ def is_chunk_promoted(chunk: dict[str, Any], policies: list[dict[str, Any]]) -> 
         for binary in rule_binaries
         if isinstance(binary, dict)
     }
-    return chunk_paths.issubset(rule_paths)
+    chunk_endpoints = {
+        json.dumps(endpoint, sort_keys=True, separators=(",", ":"))
+        for endpoint in normalize_policy_endpoints(chunk.get("endpoints"))
+    }
+    rule_endpoints = {
+        json.dumps(endpoint, sort_keys=True, separators=(",", ":"))
+        for endpoint in normalize_policy_endpoints(rule.get("endpoints"))
+    }
+    return chunk_paths.issubset(rule_paths) and chunk_endpoints.issubset(rule_endpoints)
 
 
 def merge_policy_chunks(
