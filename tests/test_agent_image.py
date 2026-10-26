@@ -190,10 +190,29 @@ def test_kind_deploy_passes_one_offline_resolution_to_build_and_deploy(tmp_path)
     scripts.mkdir()
     for name in ("image_release.py", "resolve_agent_image.py"):
         shutil.copy2(REPO_ROOT / "scripts" / name, scripts / name)
+    # GNU Make executes recipe lines containing $(MAKE) even under -n. Stub
+    # only the KinD context-export commands reached through that recursion so
+    # this dry-run stays hermetic and does not depend on a local cluster.
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    fake_kind = bin_dir / "kind"
+    fake_kind.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    fake_kind.chmod(0o755)
+    fake_kubectl = bin_dir / "kubectl"
+    fake_kubectl.write_text(
+        "#!/bin/sh\n"
+        'case "$*" in\n'
+        '  *"config current-context"*) echo "kind-swarmer" ;;\n'
+        '  *) exit 0 ;;\n'
+        "esac\n",
+        encoding="utf-8",
+    )
+    fake_kubectl.chmod(0o755)
     image_ref = "registry.example.com/team/opencode:1.2.3"
     result = subprocess.run(
         ["make", "--no-print-directory", "-n", "kind-deploy", f"AGENT_IMAGE_OPENCODE={image_ref}"],
         cwd=tmp_path,
+        env={**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}"},
         capture_output=True,
         text=True,
         check=False,

@@ -102,7 +102,9 @@ def test_workflow_tag_override_and_kind_tag():
     assert '"swarmer:1.4.10"' in build
     assert '"swarmer:1.4.10" "quay.io/example/swarmer:1.4.10"' in push
     makefile = (ROOT / "Makefile").read_text()
-    assert '$(MAKE) deploy SILENT=1 IMAGE_REF="$(if $(KIND_IMAGE_REF),$(KIND_IMAGE_REF),$(LOCAL_IMAGE_REF))"' in makefile
+    assert 'KUBECONFIG="$$KUBECONFIG_FILE" $(MAKE) --no-print-directory _kind-deploy-cluster-resolved' in makefile
+    assert 'IMAGE_REF="$(if $(KIND_IMAGE_REF),$(KIND_IMAGE_REF),$(LOCAL_IMAGE_REF))"' in makefile
+    assert '$(MAKE) deploy SILENT=1 IMAGE_REF="$(IMAGE_REF)"' in makefile
 
 
 def test_push_records_digest_only_after_success(tmp_path):
