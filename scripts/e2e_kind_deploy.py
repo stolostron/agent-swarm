@@ -23,11 +23,11 @@ import shutil
 import socket
 import subprocess
 import sys
+import tempfile
 import time
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode, urljoin
 from urllib.request import HTTPRedirectHandler, Request, build_opener
-
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DEFAULT_URL = "http://127.0.0.1:8080"
@@ -48,11 +48,16 @@ def log_step(name: str, passed: bool, detail: str = "") -> None:
     print(f"[{marker}] {name}{suffix}")
 
 
-def run(command: list[str], timeout: int) -> subprocess.CompletedProcess[str]:
+def run(
+    command: list[str],
+    timeout: int,
+    env: dict[str, str] | None = None,
+) -> subprocess.CompletedProcess[str]:
     print(f"$ {' '.join(command)}")
     return subprocess.run(
         command,
         cwd=REPO_ROOT,
+        env=env,
         text=True,
         capture_output=True,
         timeout=timeout,
@@ -90,13 +95,14 @@ def cluster_exists(cluster: str) -> bool:
     return cluster in result.stdout.splitlines()
 
 
-def collect_diagnostics(namespace: str) -> None:
+def collect_diagnostics(namespace: str, cluster: str) -> None:
     """Print KinD state before cleanup removes the failed deployment."""
+    context = f"kind-{cluster}"
     commands = [
-        ["kubectl", "get", "pods", "-A", "-o", "wide"],
-        ["kubectl", "get", "events", "-A", "--sort-by=.lastTimestamp"],
-        ["kubectl", "logs", "-n", namespace, "deployment/swarmer", "--all-containers", "--tail=200"],
-        ["kubectl", "logs", "-n", "openshell", "deployment/openshell", "--all-containers", "--tail=200"],
+        ["kubectl", "get", "pods", "-A", "-o", "wide", "--context", context],
+        ["kubectl", "get", "events", "-A", "--sort-by=.lastTimestamp", "--context", context],
+        ["kubectl", "logs", "-n", namespace, "deployment/swarmer", "--all-containers", "--tail=200", "--context", context],
+        ["kubectl", "logs", "-n", "openshell", "deployment/openshell", "--all-containers", "--tail=200", "--context", context],
     ]
     print("Collecting KinD diagnostics before cluster cleanup...")
     for command in commands:
@@ -192,6 +198,7 @@ def main() -> int:
         make.append(f"KIND_IMAGE_REF={args.image_ref}")
     cleanup_needed = False
     failed = False
+    kubeconfig_path = None
 
     try:
         require_commands(
@@ -210,6 +217,27 @@ def main() -> int:
             raise RuntimeError(deploy.stdout + deploy.stderr)
         log_step("make kind-deploy", True)
 
+        # Keep every follow-up Kubernetes command scoped to the test cluster
+        # without changing the user's active kubeconfig context.
+        fd, kubeconfig_path = tempfile.mkstemp(prefix="swarmer-kind-kubeconfig-")
+        os.close(fd)
+        export_kubeconfig = run(
+            [
+                "kind",
+                "export",
+                "kubeconfig",
+                "--name",
+                args.cluster_name,
+                "--kubeconfig",
+                kubeconfig_path,
+            ],
+            timeout=30,
+        )
+        if export_kubeconfig.returncode != 0:
+            raise RuntimeError(export_kubeconfig.stderr or "could not export KinD kubeconfig")
+        kind_env = os.environ.copy()
+        kind_env["KUBECONFIG"] = kubeconfig_path
+
         rollout = run(
             [
                 "kubectl",
@@ -219,14 +247,21 @@ def main() -> int:
                 "-n",
                 args.namespace,
                 f"--timeout={args.timeout}s",
+                "--context",
+                f"kind-{args.cluster_name}",
             ],
             timeout=args.timeout + 30,
+            env=kind_env,
         )
         if rollout.returncode != 0:
             raise RuntimeError(rollout.stdout + rollout.stderr)
         log_step("Swarmer rollout", True)
 
-        token_result = run(make + ["user-token", f"SA_USER={args.user}"], timeout=60)
+        token_result = run(
+            make + ["user-token", f"SA_USER={args.user}"],
+            timeout=60,
+            env=kind_env,
+        )
         if token_result.returncode != 0:
             raise RuntimeError(token_result.stdout + token_result.stderr)
         token = extract_token(token_result.stdout)
@@ -273,7 +308,7 @@ def main() -> int:
         log_step("lifecycle verification", False, str(exc).strip())
     finally:
         if failed and cleanup_needed:
-            collect_diagnostics(args.namespace)
+            collect_diagnostics(args.namespace, args.cluster_name)
         if cleanup_needed and not args.keep_cluster:
             destroy = run(make + ["kind-destroy"], timeout=120)
             if destroy.returncode == 0 and not cluster_exists(args.cluster_name):
@@ -283,6 +318,11 @@ def main() -> int:
                 log_step("make kind-destroy", False, destroy.stdout + destroy.stderr)
         elif cleanup_needed:
             print(f"Cluster '{args.cluster_name}' retained for debugging.")
+        if kubeconfig_path:
+            try:
+                os.unlink(kubeconfig_path)
+            except FileNotFoundError:
+                pass
 
     return 1 if failed else 0
 

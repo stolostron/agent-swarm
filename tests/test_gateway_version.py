@@ -44,11 +44,13 @@ async def test_gateway_version_change_resets_ai_provider_flags():
 
         await observe_gateway_version(config, client, db)
         secret = (await db.execute(select(OpencodeSecret))).scalar_one()
+        await db.refresh(secret)
         assert secret.gemini_configured is True
 
         info.gateway_version = "0.1.5"
         await observe_gateway_version(config, client, db)
         secret = (await db.execute(select(OpencodeSecret))).scalar_one()
+        await db.refresh(secret)
         assert secret.gemini_configured is False
         assert secret.openai_configured is False
         assert secret.vertex_configured is False
@@ -87,6 +89,8 @@ async def test_dedicated_gateway_version_change_resets_all_matching_workspaces()
         client = SimpleNamespace(_stub=SimpleNamespace(GetGatewayInfo=lambda *args, **kwargs: info))
 
         await observe_gateway_version(config, client, db)
+        await db.refresh(gw1)
+        await db.refresh(gw2)
         assert gw1.gateway_version == "0.1.4"
         assert gw2.gateway_version == "0.1.4"
 
@@ -94,9 +98,72 @@ async def test_dedicated_gateway_version_change_resets_all_matching_workspaces()
         await observe_gateway_version(config, client, db)
         await db.refresh(sec1)
         await db.refresh(sec2)
+        await db.refresh(gw1)
+        await db.refresh(gw2)
         assert sec1.gemini_configured is False
         assert sec2.gemini_configured is False
         assert gw1.gateway_version == "0.1.5"
         assert gw2.gateway_version == "0.1.5"
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_observe_gateway_version_does_not_expire_caller_session_instances():
+    """The gateway-version UPDATE must not expire attributes on the caller's ORM instances.
+
+    The workspace_gateways UPDATE fires the updated_at column's onupdate.
+    With ORM synchronize_session, the server-generated value expires that
+    attribute on identity-mapped instances, and the caller's next attribute
+    access raises MissingGreenlet in async context — this 500'd
+    GET /api/v1/workspaces on remote-gateway workspaces whose gateway
+    reports a version (the 60s observation cache made it intermittent).
+    """
+    from sqlalchemy import inspect as sa_inspect
+    from sqlalchemy import select
+    from sqlalchemy.orm import selectinload
+
+    from swarmer.models.workspace_gateway import WorkspaceGateway
+
+    engine = create_async_engine("sqlite+aiosqlite://")
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+
+    async with session_factory() as db:
+        ws = Workspace(display_name="WS", namespace="ws", owner_id="user")
+        db.add(ws)
+        await db.flush()
+        gw = WorkspaceGateway(
+            workspace_id=ws.id, gateway_url="https://gw.example", auth_mode="none"
+        )
+        db.add(gw)
+        await db.commit()
+
+        # Load through the relationship exactly like the workspaces list
+        # endpoint does (selectinload), so the instance is identity-mapped.
+        result = await db.execute(
+            select(Workspace)
+            .options(selectinload(Workspace.gateway))
+            .where(Workspace.id == ws.id)
+        )
+        loaded = result.scalar_one()
+        gw_loaded = loaded.__dict__["gateway"]
+        assert "updated_at" not in sa_inspect(gw_loaded).unloaded
+
+        config = SimpleNamespace(gateway_url="https://gw.example", workspace_id=ws.id)
+        info = SimpleNamespace(gateway_version="0.1.3-rhaiv.3")
+        client = SimpleNamespace(
+            _stub=SimpleNamespace(GetGatewayInfo=lambda *args, **kwargs: info)
+        )
+
+        version = await observe_gateway_version(config, client, db)
+        assert version == "0.1.3-rhaiv.3"
+
+        # No lazy refresh may be required after the observation — this access
+        # raises MissingGreenlet if the UPDATE expired the attribute.
+        assert "updated_at" not in sa_inspect(gw_loaded).unloaded
+        assert gw_loaded.updated_at is not None
+        await db.rollback()
 
     await engine.dispose()

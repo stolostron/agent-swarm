@@ -386,6 +386,8 @@ async def _get_provider_options(
     has_vertex = False
     has_gemini = False
     has_enmaas = False
+    # Check gateway for OpenAI provider — key is stored on OpenShell, not Swarmer DB.
+    has_openai = False
     try:
         from swarmer import openshell_client
         oc_client = await openshell_client.get_client_for_workspace(ws_id, db)
@@ -399,13 +401,13 @@ async def _get_provider_options(
         has_enmaas = await openshell_client.provider_exists(
             f"swarmer-ws-{ws_id}-enmaas", client=oc_client
         )
-    except Exception:
-        pass
-    # Check gateway for OpenAI provider — key is stored on OpenShell, not Swarmer DB.
-    has_openai = False
-    try:
-        from swarmer import openshell_client
-        has_openai = await openshell_client.provider_exists(f"swarmer-ws-{ws_id}-openai")
+        # OpenAI must be probed on the same workspace-selected gateway — the
+        # key is pushed there at save time. Probing the cluster-shared default
+        # gateway instead made the option permanently unavailable on
+        # remote-gateway workspaces even though the key was configured.
+        has_openai = await openshell_client.provider_exists(
+            f"swarmer-ws-{ws_id}-openai", client=oc_client
+        )
     except Exception:
         pass
     return tool.get_model_options(
@@ -1415,7 +1417,12 @@ async def _do_launch(
     has_adc = False
     try:
         from swarmer import openshell_client as _oc_client
-        has_adc = await _oc_client.provider_exists(f"swarmer-ws-{session.workspace_id}-google-cloud")
+        # Probe the workspace's selected gateway, not the cluster-shared
+        # default — remote-gateway workspaces keep their ADC provider there.
+        _gw_client = await _oc_client.get_client_for_workspace(ws, db)
+        has_adc = await _oc_client.provider_exists(
+            f"swarmer-ws-{session.workspace_id}-google-cloud", client=_gw_client
+        )
     except Exception:
         pass
     # Fetch enabled & authenticated MCP servers for this workspace

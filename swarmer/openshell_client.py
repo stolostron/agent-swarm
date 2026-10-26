@@ -2157,7 +2157,23 @@ async def get_sandbox_provider_environment(sandbox_id: str, client=None) -> dict
     try:
         return await asyncio.to_thread(_do_get)
     except GatewayError as exc:
-        if _gateway_rpc_code(exc) == grpc.StatusCode.NOT_FOUND:
+        code = _gateway_rpc_code(exc)
+        if code == grpc.StatusCode.NOT_FOUND:
+            return {}
+        if code == grpc.StatusCode.PERMISSION_DENIED:
+            # Some gateways (e.g. OpenShell 0.1.3) restrict
+            # GetSandboxProviderEnvironment to sandbox principals: only the
+            # supervisor running inside the sandbox may call it, and it
+            # injects the provider reference tokens into every exec request
+            # on its own. The controller cannot fetch the environment there
+            # — and does not need to — so return {} and let the supervisor
+            # supply the credentials.
+            log.info(
+                "GetSandboxProviderEnvironment requires a sandbox principal on "
+                "this gateway; relying on supervisor-injected provider "
+                "environment for sandbox %s",
+                sandbox_id,
+            )
             return {}
         raise
 

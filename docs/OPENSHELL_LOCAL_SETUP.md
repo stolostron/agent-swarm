@@ -329,7 +329,7 @@ kubectl -n openshell get secret openshell-client-tls \
 Then re-run `make openshell-register` to copy the updated certs to the gateway config dir.
 
 **`kubectl` context wrong (deploying to production instead of kind)**
-→ Run `kind export kubeconfig --name swarmer` before any `make` targets to point kubectl at the kind cluster.
+→ `make kind-deploy` uses a temporary kubeconfig scoped to `kind-$(KIND_CLUSTER)` and does not change the active context. For manual commands, pass `--context kind-swarmer` (or the configured cluster name). `make deploy` intentionally continues to use the current context.
 
 **Session stays in `pending` / never reaches `running`**
 → Check Swarmer logs for errors from `_run_openshell_agent`. The sandbox image must be pullable from within the cluster node — for kind, load it with `kind load docker-image <image> --name swarmer`.

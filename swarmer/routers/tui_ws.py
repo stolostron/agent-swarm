@@ -17,22 +17,29 @@ log = logging.getLogger(__name__)
 def _build_tui_shell(binary: str, opencode_session_id: str | None = None) -> str:
     """Build a TUI reconnect command without selecting an unrelated latest chat."""
     cmd_parts = [binary]
+    env_setup = 'export HOME=/sandbox PATH="/sandbox/.local/bin:$PATH"'
+    if binary == "opencode":
+        # The service registration advertises the wildcard bind address
+        # (0.0.0.0), which is not connectable from TUI exec on some OpenShell
+        # gateways. Connect to loopback explicitly and read the per-session
+        # password from the registration; --server does not discover it.
+        password_reader = (
+            "import json, pathlib, sys; "
+            'password = json.loads((pathlib.Path.home() / '
+            '".local/state/opencode/service.json").read_text()).get("password"); '
+            'print(password) if password else sys.exit('
+            '"OpenCode service password is missing")'
+        )
+        env_setup += (
+            ' && export NO_PROXY="${NO_PROXY:+$NO_PROXY,}127.0.0.1,localhost,0.0.0.0"'
+            ' no_proxy="${no_proxy:+$no_proxy,}127.0.0.1,localhost,0.0.0.0"'
+            f' && export OPENCODE_PASSWORD="$(python3 -c {shlex.quote(password_reader)})"'
+            ' && test -n "$OPENCODE_PASSWORD"'
+        )
+        cmd_parts.extend(("--server", "http://127.0.0.1:4096"))
     if opencode_session_id:
         cmd_parts.extend(("--session", opencode_session_id))
     cmd = " ".join(shlex.quote(part) for part in cmd_parts)
-    env_setup = 'export HOME=/sandbox PATH="/sandbox/.local/bin:$PATH"'
-    if binary == "opencode":
-        # OpenCode V2 discovers its shared service through
-        # ~/.local/state/opencode/service.json, whose URL is http://0.0.0.0:4096.
-        # OpenShell injects HTTP proxy settings into the sandbox; without this
-        # loopback exemption the CLI sends its health probe through that proxy,
-        # fails to discover the already-running server, and tries to start a
-        # second one on port 4096. Preserve existing exclusions and add the
-        # service's advertised wildcard-bind address for both env conventions.
-        env_setup += (
-            ' && export NO_PROXY="${NO_PROXY:+$NO_PROXY,}0.0.0.0"'
-            ' no_proxy="${no_proxy:+$no_proxy,}0.0.0.0"'
-        )
     return f"{env_setup} && exec {cmd}"
 
 
