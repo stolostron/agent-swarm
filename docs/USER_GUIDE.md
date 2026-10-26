@@ -503,6 +503,8 @@ The GitHub Actions workflow is active at `.github/workflows/publish-image.yml` a
 
 After a squash-merged pull request lands on `main`, GitHub Actions builds its dashboard image with Podman, increments the last component of `VERSION` (for example, `1.4.9` to `1.4.10`), and publishes to Quay. Configure these repository-level Actions values:
 
+Use **Squash and merge** for changes intended to trigger publishing; the publisher tracks these PRs by their merge commit on `main`.
+
 - Variable `QUAY_REPOSITORY_PATH`: the registry and repository namespace only, such as `quay.io/<namespace>`; do not include `/swarmer` or a tag.
 - Variable `QUAY_ROBOT_USERNAME`: the Quay robot account login name.
 - Secret `QUAY_PUSH_TOKEN`: the robot account token. Grant the robot push permission only for the target image repository.
