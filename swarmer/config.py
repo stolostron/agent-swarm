@@ -70,7 +70,7 @@ class Settings(BaseSettings):
     gemini_preset_plan_model: str = "google/gemini-4-argon"
     gemini_preset_build_model: str = "google/gemini-3.8-flash"
     gemini_preset_small_model: str = "google/gemini-3.5-flash-lite"
-    openai_preset_plan_model: str = "openai/gpt-6.1-sol"
+    openai_preset_plan_model: str = "openai/gpt-6.1-terra"
     openai_preset_build_model: str = "openai/gpt-6-luna"
     openai_preset_small_model: str = "openai/gpt-6-luna"
     # EnMaaS preset role models — every default role stays within EnMaaS so an

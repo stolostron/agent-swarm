@@ -34,7 +34,7 @@ kubernetes==37.0.1
 MarkupSafe==3.0.4
 multidict==7.1.0
 oauthlib==4.0.0
-openshell==0.1.4     # OpenShell sandbox SDK; keep aligned with the gateway version
+openshell==0.1.5     # OpenShell sandbox SDK; update with make update-deps
 opentelemetry-api==1.45.1
 propcache==0.5.4
 protobuf==7.36.2
