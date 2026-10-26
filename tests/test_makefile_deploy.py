@@ -28,21 +28,21 @@ def test_makefile_agent_sandbox_version_default():
 
     as_match = re.search(r"^AGENT_SANDBOX_VERSION\s*\?=\s*(v[0-9]+\.[0-9]+\.[0-9]+)", content, re.MULTILINE)
     assert as_match, "AGENT_SANDBOX_VERSION not found in Makefile"
-    assert as_match.group(1) == "v1.0.4"
+    assert as_match.group(1) == "v1.0.8"
 
     os_match = re.search(r"^OPENSHELL_VERSION\s*\?=\s*([0-9]+\.[0-9]+\.[0-9]+)", content, re.MULTILINE)
     assert os_match, "OPENSHELL_VERSION not found in Makefile"
-    assert os_match.group(1) == "0.1.4"
+    assert os_match.group(1) == "0.1.5"
 
 
 def test_makefile_installs_only_pinned_agent_sandbox_manifest():
-    """The clean cutover uses the pinned v1.0.4 sandbox manifest only."""
+    """The clean cutover uses the pinned v1.0.8 sandbox manifest only."""
     with open(MAKEFILE_PATH, "r", encoding="utf-8") as f:
         content = f.read()
 
     assert "sandbox.yaml" in content
     assert "manifest.yaml" not in content
-    assert "AGENT_SANDBOX_VERSION    ?= v1.0.4" in content
+    assert "AGENT_SANDBOX_VERSION    ?= v1.0.8" in content
 
 
 def test_makefile_kind_destroy_alias_and_e2e_target():

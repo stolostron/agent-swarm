@@ -150,7 +150,7 @@ model configuration, command construction, and server/TUI binaries are provided 
 add tool-specific behavior to `agent_tools/`.
 
 Provider presets map `plan`, `build`, and `small` roles through `swarmer/config.py` and
-`k8s/swarmer/configmap.yaml`. The OpenAI preset defaults are `openai/gpt-6.1-sol` for plan
+`k8s/swarmer/configmap.yaml`. The OpenAI preset defaults are `openai/gpt-6.1-terra` for plan
 and `openai/gpt-6-luna` for both build and small; the ConfigMap values override the Python
 defaults in deployed environments. The EnMaaS preset (ACM-48198) defaults every role to
 `enmaas/rits/zai-org/glm-5-3` on the business-provided zero-cost gateway; because `enmaas`
@@ -235,7 +235,7 @@ stolostron/agent-containers main/VERSION
   its metadata commits.
 - `swarmer/config.py` reads `AGENT_IMAGE_OPENCODE`; `opencode.py:get_image()` supplies it
   to sandbox creation. The image is not selected from the model or hardcoded in Python.
-- OpenShell SDK and chart versions are pinned to 0.1.4, and Agent Sandbox CRDs to v1.0.4,
+- OpenShell SDK and chart versions are pinned to 0.1.5, and Agent Sandbox CRDs to v1.0.8,
   in `requirements.txt` and this repository's `Makefile`. This is a clean API/runtime cutover;
   old gateway clients and sandbox instances are not supported. See
   [OpenShell setup and migration](OPENSHELL_LOCAL_SETUP.md).

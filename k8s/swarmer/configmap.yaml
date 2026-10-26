@@ -18,7 +18,7 @@ data:
   GEMINI_PRESET_PLAN_MODEL: "google/gemini-4-argon"
   GEMINI_PRESET_BUILD_MODEL: "google/gemini-3.8-flash"
   GEMINI_PRESET_SMALL_MODEL: "google/gemini-3.5-flash-lite"
-  OPENAI_PRESET_PLAN_MODEL: "openai/gpt-6.1-sol"
+  OPENAI_PRESET_PLAN_MODEL: "openai/gpt-6.1-terra"
   OPENAI_PRESET_BUILD_MODEL: "openai/gpt-6-luna"
   OPENAI_PRESET_SMALL_MODEL: "openai/gpt-6-luna"
   # EnMaaS preset role models — zero-cost GLM-5.3. The gateway URL is
