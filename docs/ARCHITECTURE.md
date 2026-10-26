@@ -235,7 +235,7 @@ stolostron/agent-containers main/VERSION
   its metadata commits.
 - `swarmer/config.py` reads `AGENT_IMAGE_OPENCODE`; `opencode.py:get_image()` supplies it
   to sandbox creation. The image is not selected from the model or hardcoded in Python.
-- OpenShell SDK and chart versions are pinned to 0.1.4, and Agent Sandbox CRDs to v1.0.4,
+- OpenShell SDK and chart versions are pinned to 0.1.5, and Agent Sandbox CRDs to v1.0.8,
   in `requirements.txt` and this repository's `Makefile`. This is a clean API/runtime cutover;
   old gateway clients and sandbox instances are not supported. See
   [OpenShell setup and migration](OPENSHELL_LOCAL_SETUP.md).

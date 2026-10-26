@@ -1,6 +1,6 @@
 # OpenShell Local Development Setup
 
-Step-by-step guide to running Swarmer with OpenShell 0.1.4 and Agent Sandbox v1.0.4, using either a locally hosted or remote/hosted gateway.
+Step-by-step guide to running Swarmer with OpenShell 0.1.5 and Agent Sandbox v1.0.8, using either a locally hosted or remote/hosted gateway.
 
 ## Prerequisites
 
@@ -11,13 +11,13 @@ Step-by-step guide to running Swarmer with OpenShell 0.1.4 and Agent Sandbox v1.
 | `helm` | 3.8+ | Required for OCI chart support |
 | `oc` | any | OpenShift only — grants SCC policies |
 | Python | 3.12 | `python3 --version` |
-| `openshell` CLI | 0.1.4 | `openshell --version` — use the exact pinned gateway release |
+| `openshell` CLI | 0.1.5 | `openshell --version` — use the exact pinned gateway release |
 
-> **Version matters.** The Python SDK, CLI, and gateway use the OpenShell 0.1.4 API. Keep the `openshell` CLI at the same release as `OPENSHELL_VERSION` in the Makefile.
+> **Version matters.** The Python SDK, CLI, and gateway use the OpenShell 0.1.5 API. Keep the `openshell` CLI at the same release as `OPENSHELL_VERSION` in the Makefile.
 
 ## Clean gateway/session migration
 
-Swarmer is pinned to OpenShell 0.1.4 and Agent Sandbox v1.0.4. The gateway API,
+Swarmer is pinned to OpenShell 0.1.5 and Agent Sandbox v1.0.8. The gateway API,
 protobufs, and sandbox runtime are a clean cutover; old gateway clients and
 sandbox instances are not supported. Before upgrading an existing deployment,
 stop active sessions while the old gateway is still available and save any
@@ -105,7 +105,7 @@ or mTLS gateway. Never commit tokens, private keys, or certificate contents.
 Remote gateways must be able to pull the configured agent image. Swarmer imports
 the pinned provider profiles on each gateway before creating providers, and
 continues to store provider credentials on the gateway. The session lifecycle,
-pagination, cleanup, and service exposure use the same OpenShell 0.1.4 API for
+pagination, cleanup, and service exposure use the same OpenShell 0.1.5 API for
 local and remote gateways.
 
 ---
