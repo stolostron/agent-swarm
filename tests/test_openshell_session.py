@@ -498,6 +498,52 @@ class TestDoLaunchOpenshell:
         assert "image" in call_kwargs
 
     @pytest.mark.asyncio
+    async def test_launch_provider_probes_use_workspace_gateway(self, client):
+        """All provider availability probes during launch target the workspace gateway.
+
+        The has_adc (google-cloud) probe in _do_launch historically called
+        provider_exists without the workspace client, probing the
+        cluster-shared default gateway instead — on remote-gateway workspaces
+        Vertex ADC was reported missing. Every probe (has_adc plus the
+        per-family availability loop and attach checks) must carry the
+        workspace-resolved client.
+        """
+        ws = await _create_workspace(client)
+        s = await _create_session(client, ws["id"])
+
+        sentinel_client = object()
+        patches = self._patch_openshell()
+        with patches["create_provider"], patches["ensure_provider"], patches["profile_endpoint_matches"], \
+             patches["configure_provider_credential"], patches["attach_sandbox_provider"], \
+             patches["create_sandbox"], \
+             patches["write_agent_config"], \
+             patches["write_agents_md"], patches["exec_command"], \
+             patches["start_agent"], patches["delete_sandbox"], \
+             patches["build_policy"], patches["run_agent"], \
+             patches["setup_sandbox"], \
+             patches["provider_exists"] as mock_exists, patches["get_image"], \
+             patch(
+                 "swarmer.openshell_client.get_client_for_workspace",
+                 new=AsyncMock(return_value=sentinel_client),
+             ):
+            resp = await client.post(
+                f"/api/v1/workspaces/{ws['id']}/sessions/{s['id']}/launch"
+            )
+            await asyncio.sleep(0)
+
+        assert resp.status_code == 200
+        assert mock_exists.call_args_list, "expected provider availability probes during launch"
+        # The has_adc probe in _do_launch is the first provider_exists call;
+        # it must carry the workspace client (previously it had none).
+        probed = [c.args[0] if c.args else c.kwargs.get("name") for c in mock_exists.call_args_list]
+        assert probed[0] == f"swarmer-ws-{ws['id']}-google-cloud"
+        for c in mock_exists.call_args_list:
+            assert c.kwargs.get("client") is sentinel_client, (
+                f"provider_exists probe {c.args[0] if c.args else c.kwargs} did not "
+                "use the workspace gateway client"
+            )
+
+    @pytest.mark.asyncio
     async def test_sets_sandbox_name_on_session(self, client):
         ws = await _create_workspace(client)
         s = await _create_session(client, ws["id"])

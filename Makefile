@@ -61,7 +61,7 @@ OPENSHELL_WORKSPACE_STORAGE ?= 10Gi
         dev lint helm-lint test smoke-test-jira \
         sync-images image-build image-push \
         deploy _deploy-resolved delete connect mcp-setup mcp-api mcp-url api-url openshell-register connect-openshell status \
-        kind-deploy _kind-deploy-resolved kind-delete kind-destroy test-e2e-kind \
+        kind-deploy _kind-deploy-resolved _kind-deploy-cluster-resolved kind-delete kind-destroy test-e2e-kind \
         help
 
 # ──────────────────────────────────────────────────────────────
@@ -376,10 +376,19 @@ _deploy-resolved:
 	  echo "Error: Helm 3.8+ required for OCI chart support (found: $$(helm version --short 2>/dev/null || echo 'not installed'))"; \
 	  exit 1; \
 	fi; \
+	if kubectl get crd sandboxes.agents.x-k8s.io > /dev/null 2>&1; then \
+	  STORED_VERSIONS=$$(kubectl get crd sandboxes.agents.x-k8s.io -o jsonpath='{.status.storedVersions}'); \
+	  if echo "$$STORED_VERSIONS" | grep -q 'v1alpha1'; then \
+	    echo "Error: Agent Sandbox v1alpha1 storage must be migrated before upgrading to $(AGENT_SANDBOX_VERSION)." >&2; \
+	    echo "       Follow the upstream v1alpha1 → v1beta1 migration guide; direct upgrades from v0.4.x are unsupported." >&2; \
+	    exit 1; \
+	  fi; \
+	fi; \
+	MANIFEST_URL="https://github.com/kubernetes-sigs/agent-sandbox/releases/download/$(AGENT_SANDBOX_VERSION)/sandbox.yaml"; \
+	kubectl apply -f "$$MANIFEST_URL"; \
+	kubectl -n agent-sandbox-system rollout status deployment/agent-sandbox-controller --timeout=5m; \
 	if ! helm status openshell -n $(OPENSHELL_NAMESPACE) > /dev/null 2>&1; then \
 	  echo "OpenShell not found — installing $(OPENSHELL_VERSION)..."; \
-	  MANIFEST_URL="https://github.com/kubernetes-sigs/agent-sandbox/releases/download/$(AGENT_SANDBOX_VERSION)/sandbox.yaml"; \
-	  kubectl apply -f "$$MANIFEST_URL"; \
 	  kubectl create namespace $(OPENSHELL_NAMESPACE) --dry-run=client -o yaml | kubectl apply -f -; \
 	  if command -v oc > /dev/null 2>&1; then \
 	    oc adm policy add-scc-to-user anyuid    -z agent-sandbox-controller -n agent-sandbox-system 2>/dev/null || true; \
@@ -404,6 +413,37 @@ _deploy-resolved:
 	else \
 	  echo "OpenShell already installed — applying workspaceDefaultStorageSize=$(OPENSHELL_WORKSPACE_STORAGE) \
 and pinned version $(OPENSHELL_VERSION) with chart defaults..."; \
+	  CHART_MANIFEST=$$(mktemp); \
+	  trap 'rm -f "$$CHART_MANIFEST"' EXIT; \
+	  DOCKER_CONFIG=$$(mktemp -d) helm template openshell \
+	    oci://ghcr.io/nvidia/openshell/helm-chart \
+	    --version $(OPENSHELL_VERSION) \
+	    --namespace $(OPENSHELL_NAMESPACE) \
+	    --set agentSandbox.preflight.enabled=false \
+	    --set server.auth.allowUnauthenticatedUsers=true \
+	    --set server.drivers.kubernetes.workspaceMode=shared \
+	    --set server.credentialDrivers.kubernetesSecrets.enabled=false \
+	    --set server.credentialDrivers.vault.enabled=false \
+	    --set-string certManager.serverIssuerRef.name= \
+	    --set server.policyValidationFailureMode=fail_closed \
+	    --set server.workspaceDefaultStorageSize=$(OPENSHELL_WORKSPACE_STORAGE) > "$$CHART_MANIFEST"; \
+	  DESIRED_SERVICE_NAME=$$(python3 -c 'import sys, yaml; docs=yaml.safe_load_all(open(sys.argv[1])); print(next(x["spec"]["serviceName"] for x in docs if x and x.get("kind") == "StatefulSet" and x["metadata"].get("name") == "openshell"))' "$$CHART_MANIFEST"); \
+	  CURRENT_SERVICE_NAME=$$(kubectl -n $(OPENSHELL_NAMESPACE) get statefulset openshell -o jsonpath='{.spec.serviceName}'); \
+	  if [ "$$CURRENT_SERVICE_NAME" != "$$DESIRED_SERVICE_NAME" ]; then \
+	    echo "OpenShell StatefulSet serviceName changes from $$CURRENT_SERVICE_NAME to $$DESIRED_SERVICE_NAME; recreating it while retaining its PVCs..."; \
+	    RETENTION=$$(kubectl -n $(OPENSHELL_NAMESPACE) get statefulset openshell -o jsonpath='{.spec.persistentVolumeClaimRetentionPolicy.whenDeleted}'); \
+	    if [ "$$RETENTION" = "Delete" ]; then \
+	      echo "Error: refusing StatefulSet replacement because its PVC retention policy is Delete" >&2; exit 1; \
+	    fi; \
+	    PVC_NAMES=$$(kubectl -n $(OPENSHELL_NAMESPACE) get statefulset openshell -o json | python3 -c 'import json,sys; s=json.load(sys.stdin); print(" ".join(v["metadata"]["name"] + "-openshell-" + str(i) for v in s["spec"].get("volumeClaimTemplates", []) for i in range(s["spec"].get("replicas", 1))))'); \
+	    for PVC in $$PVC_NAMES; do \
+	      PVC_PHASE=$$(kubectl -n $(OPENSHELL_NAMESPACE) get pvc "$$PVC" -o jsonpath='{.status.phase}'); \
+	      if [ "$$PVC_PHASE" != "Bound" ]; then \
+	        echo "Error: refusing StatefulSet replacement because PVC $$PVC is not Bound (phase=$$PVC_PHASE)" >&2; exit 1; \
+	      fi; \
+	    done; \
+	    kubectl -n $(OPENSHELL_NAMESPACE) delete statefulset openshell --cascade=foreground --wait=true; \
+	  fi; \
 	  DOCKER_CONFIG=$$(mktemp -d) helm upgrade openshell \
 	    oci://ghcr.io/nvidia/openshell/helm-chart \
 	    --version $(OPENSHELL_VERSION) \
@@ -809,7 +849,21 @@ _kind-deploy-resolved:
 	  fi; \
 	  echo "✓ Image loaded."; \
 	fi
-	$(MAKE) deploy SILENT=1 IMAGE_REF="$(if $(KIND_IMAGE_REF),$(KIND_IMAGE_REF),$(LOCAL_IMAGE_REF))"
+	@set -e; \
+	  KUBECONFIG_FILE=$$(mktemp); \
+	  trap 'rm -f "$$KUBECONFIG_FILE"' EXIT; \
+	  kind export kubeconfig --name "$(KIND_CLUSTER)" --kubeconfig "$$KUBECONFIG_FILE"; \
+	  CONTEXT=$$(kubectl --kubeconfig "$$KUBECONFIG_FILE" config current-context); \
+	  test "$$CONTEXT" = "kind-$(KIND_CLUSTER)" || { \
+	    echo "Error: expected kind context kind-$(KIND_CLUSTER), got '$$CONTEXT'" >&2; exit 1; \
+	  }; \
+	  KUBECONFIG="$$KUBECONFIG_FILE" $(MAKE) --no-print-directory _kind-deploy-cluster-resolved \
+	    KIND_CLUSTER="$(KIND_CLUSTER)" NAMESPACE="$(NAMESPACE)" \
+	    IMAGE_REF="$(if $(KIND_IMAGE_REF),$(KIND_IMAGE_REF),$(LOCAL_IMAGE_REF))" \
+	    AGENT_IMAGE_OPENCODE="$(AGENT_IMAGE_OPENCODE)"
+
+_kind-deploy-cluster-resolved:
+	$(MAKE) deploy SILENT=1 IMAGE_REF="$(IMAGE_REF)" AGENT_IMAGE_OPENCODE="$(AGENT_IMAGE_OPENCODE)"
 	@echo "Restarting swarmer deployment to ensure latest loaded image is running..."
 	kubectl rollout restart deployment/swarmer -n $(NAMESPACE)
 	kubectl rollout status deployment/swarmer -n $(NAMESPACE) --timeout=120s

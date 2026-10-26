@@ -1,9 +1,9 @@
 """Tests for Makefile OpenShell and Agent Sandbox deployment logic."""
 
+import importlib.util
 import os
 import re
 import subprocess
-import importlib.util
 
 import pytest
 
@@ -36,13 +36,29 @@ def test_makefile_agent_sandbox_version_default():
 
 
 def test_makefile_installs_only_pinned_agent_sandbox_manifest():
-    """The clean cutover uses the pinned v1.0.4 sandbox manifest only."""
+    """Every deploy reconciles Agent Sandbox to the pinned release first."""
     with open(MAKEFILE_PATH, "r", encoding="utf-8") as f:
         content = f.read()
 
     assert "sandbox.yaml" in content
     assert "manifest.yaml" not in content
     assert "AGENT_SANDBOX_VERSION    ?= v1.0.4" in content
+    assert "Agent Sandbox v1alpha1 storage must be migrated" in content
+    assert "Follow the upstream v1alpha1 → v1beta1 migration guide" in content
+    assert content.index('kubectl apply -f "$$MANIFEST_URL"') < content.index('if ! helm status openshell')
+    assert "rollout status deployment/agent-sandbox-controller --timeout=5m" in content
+
+
+def test_openshell_upgrade_recreates_statefulset_for_immutable_service_name():
+    """Recreate the gateway StatefulSet only when chart serviceName changes."""
+    with open(MAKEFILE_PATH, "r", encoding="utf-8") as f:
+        content = f.read()
+
+    assert "helm template openshell" in content
+    assert "CURRENT_SERVICE_NAME" in content
+    assert "DESIRED_SERVICE_NAME" in content
+    assert "PVC retention policy is Delete" in content
+    assert "--cascade=foreground --wait=true" in content
 
 
 def test_makefile_kind_destroy_alias_and_e2e_target():
@@ -55,6 +71,17 @@ def test_makefile_kind_destroy_alias_and_e2e_target():
     assert "scripts/e2e_kind_deploy.py" in content
     assert "--cluster-name $(KIND_CLUSTER)" in content
     assert "--namespace $(NAMESPACE)" in content
+
+
+def test_kind_deploy_uses_isolated_cluster_kubeconfig():
+    """KinD deployment must not inherit a different active kubectl context."""
+    with open(MAKEFILE_PATH, "r", encoding="utf-8") as f:
+        content = f.read()
+
+    assert 'kind export kubeconfig --name "$(KIND_CLUSTER)" --kubeconfig' in content
+    assert 'test "$$CONTEXT" = "kind-$(KIND_CLUSTER)"' in content
+    assert 'KUBECONFIG="$$KUBECONFIG_FILE" $(MAKE)' in content
+    assert "_kind-deploy-cluster-resolved" in content
 
 
 def test_kind_e2e_workflow_sets_namespace():
@@ -90,7 +117,7 @@ def test_e2e_uses_namespace_for_deploy_and_rollout(monkeypatch):
     commands = []
     cluster_checks = iter([False, False])
 
-    def fake_run(command, timeout):
+    def fake_run(command, timeout, env=None):
         commands.append(command)
         if "kind-deploy" in command:
             return subprocess.CompletedProcess(command, 0, "", "")
@@ -108,6 +135,8 @@ def test_e2e_uses_namespace_for_deploy_and_rollout(monkeypatch):
     assert ["KIND_CLUSTER=swarmer", "NAMESPACE=custom-ns"] == commands[0][1:3]
     rollout = next(command for command in commands if command[:2] == ["kubectl", "rollout"])
     assert rollout[rollout.index("-n") + 1] == "custom-ns"
+    assert rollout[rollout.index("--context") + 1] == "kind-swarmer"
+    assert any(command[:3] == ["kind", "export", "kubeconfig"] for command in commands)
     assert any("kind-destroy" in command for command in commands)
 
 
@@ -122,7 +151,7 @@ def test_e2e_uses_validated_published_image_digest(monkeypatch):
     commands = []
     cluster_checks = iter([False, False])
 
-    def fake_run(command, timeout):
+    def fake_run(command, timeout, env=None):
         commands.append(command)
         if "kind-deploy" in command:
             return subprocess.CompletedProcess(command, 0, "", "")

@@ -167,7 +167,7 @@ endpoint-scoped egress rule. There is no deployment-level URL setting or default
 |---|---|---|
 | Headless prompt | Starts agent and monitors output; reads processed response from `.opencode/opencode.db` | Creates isolated sandbox, injects providers, deletes sandbox on success |
 | Persistent server | Stores exposed service URL and proxies HTTP/SSE/WebSocket | Runs OpenCode server; `expose_service()` returns Gateway virtual host |
-| Interactive TUI | One-time UUID auth then WebSocket PTY bridge | `exec_interactive()` runs the selected TUI binary |
+| Interactive TUI | One-time UUID auth then WebSocket PTY bridge; OpenCode attaches to its shared service over authenticated loopback | `exec_interactive()` runs the selected TUI binary |
 | GitHub App auth | `github_auth.py` mints IAT; refresh loop restarts after app restart | Gateway provider receives refreshed token; raw private key never enters sandbox |
 | MCP access | `mcp_catalog.py`, `McpServer`, `create_provider()` | Gateway env injection plus policy allowlist |
 
@@ -246,10 +246,25 @@ stolostron/agent-containers main/VERSION
 root `Makefile`; deployment manifests contain placeholders intentionally replaced at deploy
 time. Do not replace those placeholders with environment-specific values in git.
 
+`make deploy` intentionally targets the active Kubernetes context. `make kind-deploy`
+instead exports the named KinD cluster's kubeconfig to a temporary file, verifies the
+`kind-$(KIND_CLUSTER)` context, and passes that isolated kubeconfig to deployment and rollout
+commands. It does not change the user's active context or risk applying the KinD deployment
+to another current cluster.
+
 1. Apply Swarmer namespace, RBAC, PVC, and model ConfigMap.
-2. Install Agent Sandbox CRDs from the pinned `AGENT_SANDBOX_VERSION` if needed.
+2. Reconcile Agent Sandbox CRDs and controller to the pinned `AGENT_SANDBOX_VERSION` and
+   wait for the controller rollout before upgrading OpenShell. Before this step, deployment
+   refuses a cluster whose Sandbox CRD still lists `v1alpha1` in `status.storedVersions`:
+   Agent Sandbox v1.0.x removed that API, and existing v0.4.x installations require the
+   upstream v0.5.x conversion-webhook and storage-migration procedure before upgrading.
 3. Install or upgrade the OCI chart
    `oci://ghcr.io/nvidia/openshell/helm-chart` at `OPENSHELL_VERSION`.
+   Before an existing-release upgrade, the deploy renders the target chart and compares the
+   gateway StatefulSet's immutable `spec.serviceName`. If it changed, deployment verifies the
+   current PVC retention policy and that its claims are Bound, then deletes and recreates only
+   the StatefulSet. The PVCs are retained and reused; the gateway pod restarts during this
+   migration.
 4. Import the pinned GitHub, Google, and Swarmer provider profiles on fresh gateways before
    provider creation; `swarmer/main.py` performs this initialization.
 5. Use these required chart settings:

@@ -74,6 +74,7 @@ async def observe_gateway_version(config, client, db: AsyncSession) -> str:
                     vertex_configured=False,
                     enmaas_configured=False,
                 )
+                .execution_options(synchronize_session=False)
             )
         log.warning(
             "OpenShell gateway %s changed version from %s to %s; AI provider "
@@ -84,10 +85,18 @@ async def observe_gateway_version(config, client, db: AsyncSession) -> str:
         )
 
     if config.workspace_id is not None:
+        # synchronize_session=False: expiring ORM attributes here would
+        # corrupt the CALLER's session. The UPDATE sets updated_at via the
+        # column's onupdate, and synchronize_session expires server-generated
+        # attributes on identity-mapped instances — a later lazy load of
+        # updated_at then raises MissingGreenlet in async context and 500s
+        # the request (observed on remote-gateway workspaces whose gateway
+        # reports a version, e.g. GET /api/v1/workspaces).
         await db.execute(
             update(WorkspaceGateway)
             .where(WorkspaceGateway.gateway_url == gateway_url)
             .values(gateway_version=version)
+            .execution_options(synchronize_session=False)
         )
 
     await db.flush()

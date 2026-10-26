@@ -2097,11 +2097,14 @@ class TestTuiWsOpenshell:
         selected = _build_tui_shell("opencode", "ses_selected_chat")
         fallback = _build_tui_shell("opencode")
 
-        assert "opencode --session ses_selected_chat" in selected
+        assert "opencode --server http://127.0.0.1:4096 --session ses_selected_chat" in selected
         assert "--continue" not in selected
-        assert fallback.endswith("exec opencode")
-        assert 'NO_PROXY="${NO_PROXY:+$NO_PROXY,}0.0.0.0"' in fallback
-        assert 'no_proxy="${no_proxy:+$no_proxy,}0.0.0.0"' in fallback
+        assert fallback.endswith("exec opencode --server http://127.0.0.1:4096")
+        assert 'NO_PROXY="${NO_PROXY:+$NO_PROXY,}127.0.0.1,localhost,0.0.0.0"' in fallback
+        assert 'no_proxy="${no_proxy:+$no_proxy,}127.0.0.1,localhost,0.0.0.0"' in fallback
+        assert "OPENCODE_PASSWORD" in fallback
+        assert ".local/state/opencode/service.json" in fallback
+        assert "test -n \"$OPENCODE_PASSWORD\"" in fallback
         assert "--continue" not in fallback
 
     def test_non_opencode_tui_does_not_change_proxy_exclusions(self):
