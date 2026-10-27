@@ -34,6 +34,18 @@ This rule is distinct from the OpenShell provider profile: the provider
 profile supplies endpoint enforcement, binary attribution, and the bearer
 credential binding required for `AGENT_SWARM_API_TOKEN` injection.
 
+Jira and Agent Swarm network blocks are generated only when their MCP is selected
+for the session. Their provider profiles and network blocks include the MCP
+executable and the agent image's current Python interpreter (`/usr/local/bin/python3.15`),
+because both MCP servers are Python packages and OpenShell attributes their
+connections to that interpreter. This is particularly relevant to Jira: the
+Jira MCP server validates its credentials during startup by calling Jira's
+`myself()` endpoint, before the agent invokes a Jira tool. Do not make either
+MCP's host access unconditional for sessions where that MCP is not selected.
+When the agent image's Python version changes, update both the conditional
+network blocks and the corresponding provider profile binary lists, with
+selected/unselected policy tests.
+
 For `enmaas` sessions, the `agent_api` policy block grants HTTPS egress only to
 the workspace's validated EnMaaS gateway `(host, port)` and OpenCode metadata
 endpoints (`opencode.ai`, `models.opencode.ai`, `models.dev`), omitting Google,

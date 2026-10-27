@@ -49,6 +49,9 @@ def test_agent_swarm_policy_is_conditional(monkeypatch):
     assert "swarm_mcp" not in without
     assert with_mcp["swarm_mcp"]["endpoints"][0]["host"] == "swarmer.test"
     assert with_mcp["swarm_mcp"]["endpoints"][0]["port"] == 8080
+    swarm_bins = {binary["path"] for binary in with_mcp["swarm_mcp"]["binaries"]}
+    assert "/usr/local/bin/python3.15" in swarm_bins
+    assert "/usr/local/bin/python3.14" not in swarm_bins
 
 
 def test_agent_swarm_provider_binds_token_to_internal_endpoint(monkeypatch):
@@ -67,7 +70,7 @@ def test_agent_swarm_provider_binds_token_to_internal_endpoint(monkeypatch):
     }]
     assert {binary["path"] for binary in profile["binaries"]} >= {
         "/usr/local/bin/agent-swarm-mcp-server",
-        "/usr/local/bin/python3.14",
+        "/usr/local/bin/python3.15",
         "/usr/local/bin/python3",
         "/usr/bin/python3",
         "/sandbox/.venv/bin/python*",
