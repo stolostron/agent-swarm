@@ -87,7 +87,7 @@ def _agent_swarm_profile() -> dict:
         }],
         "binaries": [
             {"path": "/usr/local/bin/agent-swarm-mcp-server"},
-            {"path": "/usr/local/bin/python3.14"},
+            {"path": "/usr/local/bin/python3.15"},
             {"path": "/usr/local/bin/python3"},
             {"path": "/usr/bin/python3"},
             {"path": "/sandbox/.venv/bin/python*"},
@@ -200,7 +200,7 @@ CUSTOM_PROVIDER_PROFILES: list[dict] = [
         ],
         "binaries": [
             {"path": "/usr/local/bin/jira-mcp-server"},
-            {"path": "/usr/local/bin/python3.14"},
+            {"path": "/usr/local/bin/python3.15"},
             {"path": "/usr/local/bin/python3"},
             {"path": "/usr/bin/python3"},
             {"path": "/sandbox/.venv/bin/python*"},

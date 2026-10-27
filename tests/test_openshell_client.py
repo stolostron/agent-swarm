@@ -1325,6 +1325,9 @@ def test_jira_provider_profile_binds_atlassian_endpoints():
         ("*.atlassian.net", 443),
         ("redhat.atlassian.net", 443),
     }
+    binary_paths = {binary["path"] for binary in jira["binaries"]}
+    assert "/usr/local/bin/python3.15" in binary_paths
+    assert "/usr/local/bin/python3.14" not in binary_paths
 
 
 @pytest.mark.asyncio

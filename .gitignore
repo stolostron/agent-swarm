@@ -19,3 +19,4 @@ swarmer.db
 
 workspace_backups/
 /.worktrees/
+.worktree/

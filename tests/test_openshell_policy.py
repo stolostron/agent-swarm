@@ -322,6 +322,9 @@ def test_jira_block_present_when_jira_mcp_enabled():
     # Use the real catalog slug ("atlassian-jira") to confirm the loose match works.
     net = _bnet(mcp_servers=[_make_mcp(slug="atlassian-jira")])
     assert any("jira" in k.lower() for k in net), "Expected a jira MCP network block"
+    jira_bins = {b["path"] for b in net["jira_mcp"]["binaries"]}
+    assert "/usr/local/bin/python3.15" in jira_bins
+    assert "/usr/local/bin/python3.14" not in jira_bins
 
 
 def test_jira_block_absent_when_no_jira_mcp():
@@ -350,7 +353,8 @@ def test_slack_webhook_block_present_when_enabled():
     )
     bins = [b["path"] for b in net["slack_webhook"]["binaries"]]
     assert "/usr/bin/curl" in bins
-    assert "/usr/local/bin/python3.14" in bins
+    assert "/usr/local/bin/python3.15" in bins
+    assert "/usr/local/bin/python3.14" not in bins
 
 
 def test_slack_webhook_block_absent_by_default():
@@ -602,7 +606,8 @@ def test_raw_github_block_python_binaries_present():
         b.get("path", "") if isinstance(b, dict) else getattr(b, "path", "")
         for b in block.get("binaries", [])
     ]
-    assert "/usr/local/bin/python3.14" in binaries
+    assert "/usr/local/bin/python3.15" in binaries
+    assert "/usr/local/bin/python3.14" not in binaries
     assert "/usr/bin/python3" in binaries
 
 

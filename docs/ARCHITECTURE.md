@@ -294,6 +294,10 @@ the Swarmer dashboard, not the agent sandbox.
 - OpenShell sandbox network access has two enforcement layers: OPA/Landlock process rules
   and the egress proxy. Add both canonical binaries and literal production hosts when
   adding an MCP integration; see `openshell_policy.py` and its tests.
+- Jira and Agent Swarm egress is conditional on session MCP selection. Their Python MCP
+  processes connect using the agent image's current interpreter path; update both generated
+  network blocks and provider profiles when that runtime version changes. Jira's MCP
+  startup performs a Jira connectivity check, so Jira egress may occur before a tool call.
 - OpenShift sandbox capabilities require `NET_ADMIN`, `SYS_ADMIN`, `SYS_PTRACE`, and
   `SYSLOG`; the deployment grants the required SCCs automatically when `oc` is available.
 - Swarmer runs as non-root UID 1001. `/data` and `/auth` must be writable through the

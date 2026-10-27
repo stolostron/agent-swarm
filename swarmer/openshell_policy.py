@@ -129,12 +129,10 @@ _JIRA_MCP_BLOCK = {
     ],
     "binaries": [
         _bin("/usr/local/bin/jira-mcp-server"),
-        # jira-mcp-server is a Python package. OPA resolves the canonical binary
-        # path via /proc/{pid}/root. The agent container image uses python3.14
-        # installed at /usr/local/bin/python3.14 (confirmed via OPA draft chunks);
-        # /usr/bin/python3 and /usr/local/bin/python3 are symlinks to it.
-        # All three paths are listed so the rule survives image updates.
-        _bin("/usr/local/bin/python3.14"),
+        # Jira MCP is a Python package. OPA resolves the canonical interpreter
+        # path via /proc/{pid}/root. Current agent images use Python 3.15;
+        # python3 aliases are retained for image/runtime compatibility.
+        _bin("/usr/local/bin/python3.15"),
         _bin("/usr/local/bin/python3"),
         _bin("/usr/bin/python3"),
         _bin("/sandbox/.venv/bin/python*"),
@@ -164,7 +162,7 @@ def _build_agent_swarm_mcp_block() -> dict:
         }],
         "binaries": [
             _bin("/usr/local/bin/agent-swarm-mcp-server"),
-            _bin("/usr/local/bin/python3.14"),
+            _bin("/usr/local/bin/python3.15"),
             _bin("/usr/local/bin/python3"),
             _bin("/usr/bin/python3"),
             _bin("/sandbox/.venv/bin/python*"),
@@ -189,7 +187,7 @@ _SLACK_WEBHOOK_BLOCK = {
     ],
     "binaries": [
         _bin("/usr/bin/curl"),
-        _bin("/usr/local/bin/python3.14"),
+        _bin("/usr/local/bin/python3.15"),
         _bin("/usr/local/bin/python3"),
         _bin("/usr/bin/python3"),
         _bin("/sandbox/.venv/bin/python*"),
@@ -306,7 +304,7 @@ def _build_raw_github_block(
         ],
         "binaries": [
             _bin("/usr/bin/curl"),
-            _bin("/usr/local/bin/python3.14"),
+            _bin("/usr/local/bin/python3.15"),
             _bin("/usr/local/bin/python3"),
             _bin("/usr/bin/python3"),
             _bin("/sandbox/.venv/bin/python*"),
