@@ -1511,3 +1511,80 @@ async def test_ensure_provider_imports_platform_profile_on_fresh_gateway(sdk_cli
     ids = [item.profile.id for item in request.profiles]
     assert ids == ["github"]
     assert not request.HasField("workspace_scope")
+
+
+# ---------------------------------------------------------------------------
+# get_sandbox_provider_environment (GetSandboxProviderEnvironment)
+# ---------------------------------------------------------------------------
+
+def _client_with_provider_env_error(code, details="boom"):
+    """Build a fake client whose GetSandboxProviderEnvironment raises code."""
+    import grpc
+    from openshell.errors import GatewayError
+
+    class _Err(grpc.RpcError, grpc.Call):
+        def code(self):
+            return code
+
+        def details(self):
+            return details
+
+        def trailing_metadata(self):
+            return ()
+
+    client = MagicMock()
+    client._stub.GetSandboxProviderEnvironment.side_effect = GatewayError(_Err())
+    return client
+
+
+@pytest.mark.asyncio
+async def test_get_sandbox_provider_environment_returns_env():
+    client = MagicMock()
+    resp = MagicMock()
+    resp.environment = {"OPENAI_API_KEY": "openshell://provider/ref"}
+    client._stub.GetSandboxProviderEnvironment.return_value = resp
+    env = await oc.get_sandbox_provider_environment("sbx-1", client=client)
+    assert env == {"OPENAI_API_KEY": "openshell://provider/ref"}
+
+
+@pytest.mark.asyncio
+async def test_get_sandbox_provider_environment_not_found_returns_empty():
+    import grpc
+
+    env = await oc.get_sandbox_provider_environment(
+        "sbx-1",
+        client=_client_with_provider_env_error(grpc.StatusCode.NOT_FOUND),
+    )
+    assert env == {}
+
+
+@pytest.mark.asyncio
+async def test_get_sandbox_provider_environment_permission_denied_returns_empty():
+    """PERMISSION_DENIED means the RPC is restricted to sandbox principals.
+
+    Gateways that restrict GetSandboxProviderEnvironment (e.g. OpenShell
+    0.1.3-rhaiv.3) inject the provider environment into exec requests via the
+    sandbox supervisor themselves, so the controller must treat the rejection
+    as "nothing to fetch" instead of failing the launch.
+    """
+    import grpc
+
+    env = await oc.get_sandbox_provider_environment(
+        "sbx-1",
+        client=_client_with_provider_env_error(
+            grpc.StatusCode.PERMISSION_DENIED,
+            "this method requires a sandbox principal",
+        ),
+    )
+    assert env == {}
+
+
+@pytest.mark.asyncio
+async def test_get_sandbox_provider_environment_transport_error_raises():
+    import grpc
+
+    with pytest.raises(Exception):
+        await oc.get_sandbox_provider_environment(
+            "sbx-1",
+            client=_client_with_provider_env_error(grpc.StatusCode.UNAVAILABLE),
+        )

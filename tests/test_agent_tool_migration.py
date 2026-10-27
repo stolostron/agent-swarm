@@ -132,3 +132,57 @@ async def test_get_provider_options_still_works_for_valid_tool(monkeypatch, capl
             options = await _get_provider_options(ws.id, db, "opencode")
         assert isinstance(options, list)
         assert not any("unknown agent_tool" in rec.message for rec in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_get_provider_options_probes_workspace_gateway_for_all_providers(monkeypatch):
+    """Every AI-provider availability probe must target the workspace's gateway.
+
+    The OpenAI check historically omitted the workspace client and probed the
+    cluster-shared default gateway instead — on remote-gateway workspaces the
+    OpenAI option was permanently unavailable (disabled radio) even though the
+    key was configured on the workspace gateway. All four probes (Vertex AI,
+    Gemini, OpenAI, EnMaaS) must carry the workspace-resolved client.
+    """
+    from unittest.mock import AsyncMock
+
+    from swarmer.routers.sessions import _get_provider_options
+
+    sentinel_client = object()
+
+    async def _record(name, client=None):
+        return True
+
+    provider_exists_mock = AsyncMock(side_effect=_record)
+    get_client_mock = AsyncMock(return_value=sentinel_client)
+
+    monkeypatch.setattr(
+        "swarmer.openshell_client.provider_exists", provider_exists_mock
+    )
+    monkeypatch.setattr(
+        "swarmer.openshell_client.get_client_for_workspace", get_client_mock
+    )
+
+    async with _TestSession() as db:
+        ws, _session = await _make_session_with_tool(db, "opencode")
+
+        options = await _get_provider_options(ws.id, db, "opencode")
+
+    probed_names = [c.args[0] if c.args else c.kwargs.get("name") for c in provider_exists_mock.call_args_list]
+    assert probed_names == [
+        f"swarmer-ws-{ws.id}-google-cloud",
+        f"swarmer-ws-{ws.id}-google-ai-studio",
+        f"swarmer-ws-{ws.id}-enmaas",
+        f"swarmer-ws-{ws.id}-openai",
+    ]
+    for c in provider_exists_mock.call_args_list:
+        assert c.kwargs.get("client") is sentinel_client, (
+            f"provider_exists probe {c.args[0] if c.args else c.kwargs} did not "
+            "use the workspace gateway client"
+        )
+    # With every provider reported present, the OpenAI preset must be offered.
+    openai_opts = [
+        o for o in options
+        if o.get("value") == "openai" and o.get("type") == "preset"
+    ]
+    assert openai_opts and openai_opts[0]["available"] is True
