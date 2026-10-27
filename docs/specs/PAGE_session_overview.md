@@ -34,6 +34,11 @@ mode-specific output and configuration components.
 ## Lifecycle actions
 
 - Launch `tui`, `server`, or `prompt` through the shared `_do_launch()` path.
+- Sandbox setup fetches provider environment references from the OpenShell
+  Gateway when available. If `GetSandboxProviderEnvironment` returns
+  `PERMISSION_DENIED` because the gateway requires a sandbox principal, Swarmer
+  relies on the supervisor to inject provider variables into exec requests;
+  other setup errors fail the launch.
 - Manual launches from each mode use the same accessible confirmation dialog.
   Prompt, provider, and mode selections are stored on the session and reused by
   all modes. Additional Instructions are run-only; they never update session or
