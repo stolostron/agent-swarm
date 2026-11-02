@@ -38,7 +38,7 @@ openshell==0.1.5     # OpenShell sandbox SDK; update with make update-deps
 opentelemetry-api==1.45.1
 propcache==0.5.4
 protobuf==7.36.2
-pyasn1==0.6.4
+pyasn1==0.6.5
 pyasn1_modules==0.4.2
 pycparser==3.11
 pydantic==2.14.1
