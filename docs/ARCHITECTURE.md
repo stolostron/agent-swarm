@@ -8,9 +8,12 @@ repository root; symbols are the preferred code entry points.
 
 - **OpenShell owns agent runtimes.** Swarmer does not create session pods, PVCs, Services,
   Routes, or session credential Secrets. It calls the OpenShell Gateway and Supervisor.
-- **The Gateway owns credential injection.** AI credentials, GitHub credentials, and MCP
-  credentials are registered with Gateway providers and injected into sandboxes at launch.
-  Workspace environment variables are passed directly to the agent process through
+- **Gateway providers own long-lived external credential injection.** AI credentials,
+  GitHub credentials, and Jira MCP credentials are registered with Gateway providers.
+  For OpenCode prompt runs, the short-lived, session-scoped Agent Swarm token is passed
+  directly to the agent command through `ExecSandboxRequest.environment`; interactive
+  sessions use a Gateway provider because their MCP process persists across exec
+  requests. Workspace environment variables are also passed through
   `ExecSandboxRequest.environment`.
 - **Kubernetes authenticates identity, not workspace authorization.** `k8s_auth.py` uses
   TokenReview or its fallback identity probe. Workspace access is enforced by the database
@@ -100,11 +103,11 @@ refresh loops -> start `scheduler.py` and `pr_watcher.py` background tasks.
 2. If `MAX_CONCURRENT_AGENTS` is full, persist `phase="queued"`; do not create a sandbox.
 3. Resolve the workspace Gateway with `resolve_gateway_config()`.
 4. Resolve providers and credentials; mint a GitHub App IAT when needed. When the Agent
-   Swarm MCP is enabled, `session_auth.py:mint_session_token()` also mints the
-   short-lived per-session API token (`AGENT_SWARM_API_TOKEN`, HMAC-signed, 1-hour TTL
-   with a background refresh loop) that authorizes the sandbox's MCP client back into
-   Swarmer's REST API — it is scope- and session-bound, unrelated to AI provider
-   credentials, and rotated independently of them.
+   Swarm MCP is enabled, `session_auth.py:mint_session_token()` mints the HMAC-signed,
+   one-hour session token (`AGENT_SWARM_API_TOKEN`) for the sandbox MCP client. Prompt
+   runs pass it only to the one-shot agent command, avoiding Gateway provider updates
+   during recurring launches; TUI/server sessions attach it through a Gateway provider
+   and refresh it in the background.
 5. `openshell_client.create_sandbox()` creates the sandbox and applies policy/providers.
 6. Clone `SessionRepo` entries and write tool config plus `/sandbox/AGENTS.md`.
 7. Run the selected mode:

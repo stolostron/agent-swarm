@@ -31,8 +31,11 @@ The built-in Agent Swarm rule is generated at launch as `swarm_mcp` and allows
 the MCP binary to reach the internal Swarmer REST service. Its endpoint is
 derived from `POD_NAMESPACE`/`K8S_NAMESPACE` or the explicit internal URL.
 This rule is distinct from the OpenShell provider profile: the provider
-profile supplies endpoint enforcement, binary attribution, and the bearer
-credential binding required for `AGENT_SWARM_API_TOKEN` injection.
+profile supplies endpoint enforcement and binary attribution. For TUI/server
+sessions it also binds the provider-injected `AGENT_SWARM_API_TOKEN`; OpenCode
+prompt sessions instead pass their short-lived token only on the agent command's
+`ExecSandboxRequest.environment`, without attaching a token provider. The
+network rule remains the same in both modes.
 
 Jira and Agent Swarm network blocks are generated only when their MCP is selected
 for the session. Their provider profiles and network blocks include the MCP

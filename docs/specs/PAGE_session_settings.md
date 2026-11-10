@@ -38,18 +38,21 @@ working branch, prompt, GitHub credential, and enabled MCP servers.
 
 ### Agent Swarm MCP provider
 
-When the persisted MCP selection includes `agent-swarm`, launch derives the
-provider name `swarmer-ws-{workspace_id}-agent-swarm-s{session_id}`. The
-provider is created or updated with a one-hour, workspace-bound session token
-and attached to the new sandbox. The provider profile must also contain the
-internal Swarmer REST endpoint, bearer credential mapping, and MCP binary
-attribution; the sandbox `swarm_mcp` network rule is separate and only permits
-network access.
+When the persisted MCP selection includes `agent-swarm`, launch mints a
+one-hour, workspace- and session-bound token for the internal Swarmer REST API.
+OpenCode prompt runs pass it only in the one-shot agent command's
+`ExecSandboxRequest.environment`; it is not written to `SandboxSpec` or a Gateway
+provider. TUI/server sessions use the provider
+`swarmer-ws-{workspace_id}-agent-swarm-s{session_id}`, attached to the sandbox,
+because their MCP process persists across later exec requests. That provider
+supplies the bearer credential mapping; the sandbox `swarm_mcp` network rule is
+separate and only permits network access.
 
 For `tui` and `server` sessions, the token is re-minted every 50 minutes and
 the existing provider is updated in place. Prompt sessions do not need a
-refresh loop because they are one-shot. Provider cleanup occurs after sandbox
-deletion on stop, delete, and successful prompt completion.
+refresh loop because they are one-shot; they do not create an Agent Swarm token
+provider. Interactive-provider cleanup occurs after sandbox deletion on stop
+or delete.
 
 ### EnMaaS provider (`enmaas`)
 
