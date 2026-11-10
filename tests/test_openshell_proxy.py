@@ -1966,6 +1966,57 @@ class TestRestartPromptPollersArgs:
         assert call_args[5] == "opencode"
 
     @pytest.mark.asyncio
+    async def test_prompt_resume_remints_agent_swarm_token(self, client):
+        from swarmer.models.session import Session as _Session
+
+        ws = await _create_workspace(client)
+        mcp_list = await client.get(f"/api/v1/workspaces/{ws['id']}/mcp-servers")
+        assert mcp_list.status_code == 200, mcp_list.text
+        mcp = next((row for row in mcp_list.json() if row["slug"] == "agent-swarm"), None)
+        if mcp is None:
+            mcp_resp = await client.post(
+                f"/api/v1/workspaces/{ws['id']}/mcp-servers",
+                json={"catalog_slug": "agent-swarm"},
+            )
+            assert mcp_resp.status_code == 201, mcp_resp.text
+            mcp = mcp_resp.json()
+        session_resp = await client.post(
+            f"/api/v1/workspaces/{ws['id']}/sessions",
+            json={
+                "name": "prompt-agent-swarm-restart",
+                "mode": "prompt",
+                "agent_tool": "opencode",
+                "mcp_server_ids": [mcp["id"]],
+            },
+        )
+        assert session_resp.status_code == 201, session_resp.text
+        s = session_resp.json()
+
+        async with _TestSession() as db:
+            session_obj = await db.get(_Session, s["id"])
+            session_obj.phase = "running"
+            session_obj.sandbox_name = "sandbox-agent-swarm-restart"
+            await db.commit()
+
+        mock_run = AsyncMock()
+        sentinel_token = "unit-test-session-token"
+        with (
+            patch("swarmer.routers.sessions._run_openshell_agent", new=mock_run),
+            patch("swarmer.database.get_db", new=_override_get_db),
+            patch(
+                "swarmer.session_auth.mint_session_token",
+                return_value=sentinel_token,
+            ),
+        ):
+            from swarmer.main import _restart_prompt_pollers
+
+            await _restart_prompt_pollers()
+            await asyncio.sleep(0)
+
+        mock_run.assert_called_once()
+        assert mock_run.call_args.kwargs["env_vars"]["AGENT_SWARM_API_TOKEN"] == sentinel_token
+
+    @pytest.mark.asyncio
     @pytest.mark.parametrize(
         ("endpoint", "provider_available", "profile_matches", "should_resume"),
         [

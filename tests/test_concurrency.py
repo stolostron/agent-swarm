@@ -1115,10 +1115,13 @@ class TestListPageLaunchModeCoercion:
             )
 
         assert resp.status_code == 200
-        assert "Session launch failed" in caplog.text
-        assert str(s["id"]) not in caplog.text
-        assert sentinel not in caplog.text
-        assert "Traceback" not in caplog.text
+        # Inspect message bodies, not formatted records: the source line number
+        # in caplog.text can coincidentally contain a one-digit session ID.
+        messages = "\n".join(record.getMessage() for record in caplog.records)
+        assert "Session launch failed" in messages
+        assert str(s["id"]) not in messages
+        assert sentinel not in messages
+        assert "Traceback" not in messages
         assert sentinel not in resp.text
 
     @pytest.mark.asyncio

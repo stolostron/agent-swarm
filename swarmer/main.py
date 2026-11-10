@@ -215,6 +215,7 @@ async def _restart_prompt_pollers() -> None:
                 _resolve_schedule_provider,
                 _resolve_session_prompt,
                 _run_openshell_agent,
+                _select_session_mcp_servers,
             )
 
             # Reconstruct workspace extra env vars (arbitrary key-value pairs stored
@@ -228,6 +229,21 @@ async def _restart_prompt_pollers() -> None:
                 select(SandboxEnvVar).where(SandboxEnvVar.workspace_id == s.workspace_id)
             )
             _env_vars: dict[str, str] = {row.key: row.value for row in _ev_result.scalars().all()}
+
+            # Prompt-mode Agent Swarm credentials are passed only to the agent
+            # command, not stored on the sandbox's gateway provider environment.
+            # Re-mint one when resuming a run after a Swarmer restart.
+            if s.agent_tool == "opencode" and s.mcp_selection != "disabled":
+                from swarmer.routers.mcp_servers import get_enabled_mcp_servers
+
+                _eligible_mcps = await get_enabled_mcp_servers(s.workspace_id, db)
+                _selected_mcps = _select_session_mcp_servers(s, _eligible_mcps)
+                if any(getattr(mcp, "slug", "") == "agent-swarm" for mcp in (_selected_mcps or [])):
+                    from swarmer.session_auth import mint_session_token
+
+                    _env_vars["AGENT_SWARM_API_TOKEN"] = mint_session_token(
+                        s.id, s.workspace_id
+                    )
 
             _tool = _get_tool(s.agent_tool)
             if s.agent_tool == "shell":

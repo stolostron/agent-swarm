@@ -1893,6 +1893,66 @@ class TestDoLaunchOpenshell:
         )
 
     @pytest.mark.asyncio
+    async def test_prompt_agent_swarm_token_does_not_mutate_gateway_provider(self, client):
+        """Prompt runs pass their scoped token only to the agent exec request."""
+        ws = await _create_workspace(client)
+        mcp_list = await client.get(f"/api/v1/workspaces/{ws['id']}/mcp-servers")
+        assert mcp_list.status_code == 200, mcp_list.text
+        mcp = next((row for row in mcp_list.json() if row["slug"] == "agent-swarm"), None)
+        if mcp is None:
+            mcp_resp = await client.post(
+                f"/api/v1/workspaces/{ws['id']}/mcp-servers",
+                json={"catalog_slug": "agent-swarm"},
+            )
+            assert mcp_resp.status_code == 201, mcp_resp.text
+            mcp = mcp_resp.json()
+        session_resp = await client.post(
+            f"/api/v1/workspaces/{ws['id']}/sessions",
+            json={
+                "name": "prompt-with-agent-swarm",
+                "mode": "prompt",
+                "agent_tool": "opencode",
+                "mcp_server_ids": [mcp["id"]],
+            },
+        )
+        assert session_resp.status_code == 201, session_resp.text
+        session = session_resp.json()
+
+        patches = self._patch_openshell()
+        sentinel_token = "unit-test-session-token"
+        with (
+            patches["create_provider"],
+            patches["ensure_provider"] as mock_ensure,
+            patches["configure_provider_credential"],
+            patches["attach_sandbox_provider"],
+            patches["create_sandbox"],
+            patches["write_agent_config"],
+            patches["write_agents_md"],
+            patches["exec_command"],
+            patches["start_agent"],
+            patches["delete_sandbox"],
+            patches["build_policy"],
+            patches["run_agent"],
+            patches["setup_sandbox"] as mock_setup,
+            patches["provider_exists"],
+            patches["get_image"],
+            patch("swarmer.session_auth.mint_session_token", return_value=sentinel_token),
+        ):
+            await client.post(
+                f"/api/v1/workspaces/{ws['id']}/sessions/{session['id']}/launch"
+            )
+            await asyncio.sleep(0)
+
+        assert not any(
+            len(provider_call.args) >= 2 and provider_call.args[1] == "agent-swarm"
+            for provider_call in mock_ensure.call_args_list
+        )
+        setup_kwargs = mock_setup.call_args.kwargs
+        assert setup_kwargs["agent_swarm_token"] == sentinel_token
+        assert not any("agent-swarm" in name for name in setup_kwargs["provider_names"])
+        assert "AGENT_SWARM_API_TOKEN" not in setup_kwargs["env_vars"]
+
+    @pytest.mark.asyncio
     async def test_passes_policy_yaml_from_builder(self, client):
         ws = await _create_workspace(client)
         s = await _create_session(client, ws["id"])
@@ -2596,6 +2656,7 @@ class TestRunOpenshellAgent:
 
         assert sess.phase == "failed"
         assert sess.run_completed_at is not None
+        assert "gateway down" in sess.status_detail
 
 
 # ===========================================================================
@@ -2623,6 +2684,7 @@ class TestExecCommandTimeout:
             stdin=None, timeout_seconds=120, env={},
         )
         assert result.stdout == "ok"
+
 
     @pytest.mark.asyncio
     async def test_exec_command_default_timeout_is_none(self):
@@ -2660,6 +2722,23 @@ class TestExecCommandTimeout:
             "sb-name", ["echo", "test"], workspace="default",
             stdin=None, timeout_seconds=None, env={},
         )
+
+
+class TestExecCommandStreamingErrors:
+    @pytest.mark.asyncio
+    async def test_stream_failure_without_exit_status_is_propagated(self):
+        from swarmer.openshell_client import exec_command_streaming
+
+        class _FailingClient:
+            def exec_stream(self, *_args, **_kwargs):
+                raise RuntimeError("exec relay closed before exit status")
+
+        with pytest.raises(RuntimeError, match="exec relay closed before exit status"):
+            await exec_command_streaming(
+                "sandbox-test",
+                ["sh", "-c", "true"],
+                client=_FailingClient(),
+            )
 
 
 

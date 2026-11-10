@@ -2066,6 +2066,7 @@ async def exec_command_streaming(
     _buf: list[str] = []          # accumulated output chunks
     _done_event = asyncio.Event() # set by reader thread when exec_stream exhausted
     _result_holder: list[Any] = []
+    _error_holder: list[Exception] = []
 
     loop = asyncio.get_event_loop()
 
@@ -2094,6 +2095,7 @@ async def exec_command_streaming(
                     # ExecResult — final item; capture it
                     _result_holder.append(item)
         except Exception as exc:
+            _error_holder.append(exc)
             log.warning("exec_command_streaming: stream error for %s: %s", sandbox_name, exc)
         finally:
             loop.call_soon_threadsafe(_done_event.set)
@@ -2131,7 +2133,16 @@ async def exec_command_streaming(
 
     reader_thread.join(timeout=5)
 
-    return _result_holder[0] if _result_holder else None
+    if _result_holder:
+        return _result_holder[0]
+    if _error_holder:
+        raise RuntimeError(
+            f"OpenShell exec stream failed before reporting an exit status for {sandbox_name}: "
+            f"{_error_holder[0]}"
+        ) from _error_holder[0]
+    raise RuntimeError(
+        f"OpenShell exec stream ended without reporting an exit status for {sandbox_name}"
+    )
 
 
 async def get_sandbox_provider_environment(sandbox_id: str, client=None) -> dict[str, str]:

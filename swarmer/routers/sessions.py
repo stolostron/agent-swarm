@@ -1801,21 +1801,28 @@ async def _do_launch_openshell(
         }, client=oc_client)
         provider_names.append(pname)
     agent_swarm_provider_name = ""
+    agent_swarm_token = ""
     jira_provider_created = False
     for mcp in (mcp_servers or []):
-        if getattr(mcp, "slug", "") == "agent-swarm" and not agent_swarm_provider_name:
+        if getattr(mcp, "slug", "") == "agent-swarm" and not agent_swarm_token:
             from swarmer.session_auth import mint_session_token
 
             agent_swarm_token = mint_session_token(session.id, ws_id)
-            agent_swarm_provider_name = _agent_swarm_provider_name(ws_id, session.id)
-            await openshell_client.ensure_provider(
-                agent_swarm_provider_name,
-                "agent-swarm",
-                {},
-                credentials={"AGENT_SWARM_API_TOKEN": agent_swarm_token},
-                client=oc_client,
-            )
-            provider_names.append(agent_swarm_provider_name)
+            if session.mode != "prompt" or tool.name != "opencode":
+                # Interactive sessions need gateway-injected credentials for
+                # later exec requests. Prompt runs only need the token for the
+                # single agent command; passing it there avoids mutating the
+                # gateway provider environment on every scheduled launch,
+                # which invalidates active sandbox network tunnels.
+                agent_swarm_provider_name = _agent_swarm_provider_name(ws_id, session.id)
+                await openshell_client.ensure_provider(
+                    agent_swarm_provider_name,
+                    "agent-swarm",
+                    {},
+                    credentials={"AGENT_SWARM_API_TOKEN": agent_swarm_token},
+                    client=oc_client,
+                )
+                provider_names.append(agent_swarm_provider_name)
             from swarmer.config import get_agent_swarm_internal_url
 
             internal_url = get_agent_swarm_internal_url()
@@ -1970,6 +1977,11 @@ async def _do_launch_openshell(
             share_cmd=share_cmd,
             mcp_patch=mcp_patch,
             agent_swarm_provider_name=agent_swarm_provider_name,
+            agent_swarm_token=(
+                agent_swarm_token
+                if session.mode == "prompt" and tool.name == "opencode"
+                else ""
+            ),
             repos_data=repos_data,
             git_username=git_username,
             pat_token=pat_token,
@@ -2042,6 +2054,7 @@ async def _setup_openshell_sandbox(
     pat_id: int | None = None,  # PAT DB ID for provider cleanup on completion
     client=_CLIENT_UNSET,
     agent_swarm_provider_name: str = "",
+    agent_swarm_token: str = "",
 ) -> None:
     """Background task: create sandbox and run all setup steps, then launch agent."""
     from swarmer import openshell_client
@@ -2376,6 +2389,12 @@ async def _setup_openshell_sandbox(
         # credentials) are forwarded into the agent process via ExecSandboxRequest.
         # spec.environment is stored on the sandbox but is NOT forwarded to exec
         # calls by the OpenShell gateway; env_vars in ExecSandboxRequest IS.
+        agent_env_vars = dict(env_vars or {})
+        if agent_swarm_token:
+            # Keep this short-lived, session-scoped token out of SandboxSpec
+            # and setup commands; only the agent process needs it.
+            agent_env_vars["AGENT_SWARM_API_TOKEN"] = agent_swarm_token
+
         asyncio.create_task(
             _run_openshell_agent(
                 session_id=session_id,
@@ -2385,7 +2404,7 @@ async def _setup_openshell_sandbox(
                 cmd=["sh", "-c", agent_cmd],
                 mode=mode,
                 agent_tool=tool_name,
-                env_vars=env_vars,
+                env_vars=agent_env_vars,
                 pat_id=pat_id,
             ),
             name=f"openshell-agent-{session_id}",
@@ -2466,6 +2485,9 @@ async def _run_openshell_agent(
 
     # Collect non-empty injected credential values so bare secret strings in shell output are redacted
     injected_secrets: set[str] = set()
+    session_mcp_token = (env_vars or {}).get("AGENT_SWARM_API_TOKEN", "")
+    if session_mcp_token:
+        injected_secrets.add(session_mcp_token)
     if env_vars:
         for _v in env_vars.values():
             if _v and isinstance(_v, str) and _v.strip():
@@ -2733,11 +2755,15 @@ async def _run_openshell_agent(
 
     except asyncio.CancelledError:
         raise
-    except Exception:
+    except Exception as exc:
         log.exception("_run_openshell_agent failed for session %d", session_id)
+        _detail = _redact_secrets(
+            f"OpenShell agent execution failed: {exc}",
+            secret_values=injected_secrets,
+        )[:255]
         await _update_db(
             phase="failed",
-            status_detail="OpenShell agent startup failed",
+            status_detail=_detail,
             run_completed_at=datetime.now(timezone.utc),
         )
 
