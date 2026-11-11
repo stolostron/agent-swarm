@@ -196,6 +196,30 @@ def _redact_secrets(
     )
 
 
+def _prompt_failure_detail(
+    exit_code: int | None,
+    stderr: str,
+    secret_values: Iterable[str] | None = None,
+    response_persisted: bool = False,
+) -> str:
+    """Build a bounded, redacted diagnostic for a nonzero prompt process exit."""
+    if exit_code is None:
+        detail = "Prompt process exited without an exit code"
+    else:
+        detail = f"Prompt process exited with code {exit_code}"
+
+    if response_persisted:
+        detail += "; OpenCode response was persisted"
+
+    safe_stderr = " ".join(_redact_secrets(stderr, secret_values).split())
+    if safe_stderr:
+        # Keep the actionable tail while fitting the 255-character status field.
+        if len(safe_stderr) > 170:
+            safe_stderr = "…" + safe_stderr[-169:]
+        detail += f"; stderr: {safe_stderr}"
+    return detail[:255]
+
+
 def _is_valid_ref_name(name: str) -> bool:
     """Check whether *name* is a legal git ref component."""
     if not name or name.startswith("/") or name.endswith("/") or name.endswith("."):
@@ -2620,6 +2644,7 @@ async def _run_openshell_agent(
             exit_code = getattr(result, "exit_code", None)
             stderr = getattr(result, "stderr", "") or ""
             phase = "succeeded" if exit_code == 0 else "failed"
+            response_persisted = False
 
             # OpenCode stores the response in its SQLite DB, not stdout, so we
             # do a final read_opencode_response call after the exec completes.
@@ -2640,12 +2665,23 @@ async def _run_openshell_agent(
                     res_opencode = await openshell_client.read_opencode_response(sandbox_name, client=oc_client)
                 else:
                     res_opencode = await openshell_client.read_opencode_response(sandbox_name)
+                response_persisted = bool(res_opencode and res_opencode.strip())
                 _raw_output = (
                     res_opencode
                     or _streamed_text
                     or stderr
                 )
             output = _redact_secrets(_raw_output, secret_values=injected_secrets)
+            status_detail = (
+                _prompt_failure_detail(
+                    exit_code,
+                    stderr,
+                    secret_values=injected_secrets,
+                    response_persisted=response_persisted,
+                )
+                if phase == "failed"
+                else ""
+            )
 
             # Snapshot draft policy chunks before any sandbox deletion so the
             # Policy tab can show what was denied/proposed during this run.
@@ -2698,7 +2734,7 @@ async def _run_openshell_agent(
                 phase=phase,
                 last_output=output,
                 raw_output=_final_raw,  # preserve raw console log regardless of agent tool
-                status_detail="",  # clear any stale status from previous runs
+                status_detail=status_detail,
                 policy_chunks=chunks_json,
                 run_completed_at=datetime.now(timezone.utc),
                 sandbox_name=new_sandbox_name,

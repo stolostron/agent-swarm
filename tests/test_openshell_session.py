@@ -12,7 +12,7 @@ Covers:
 import asyncio
 import os
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch, call
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -2345,6 +2345,7 @@ class TestRunOpenshellAgent:
 
         async with _TestSession() as db:
             from sqlalchemy import select
+
             from swarmer.models.session import Session
             sess = (await db.execute(select(Session).where(Session.id == s["id"]))).scalar_one()
 
@@ -2358,25 +2359,45 @@ class TestRunOpenshellAgent:
 
         async with _TestSession() as db:
             await db.execute(
-                text("UPDATE sessions SET sandbox_name='sandbox-fail', phase='pending' WHERE id=:id"),
-                {"id": s["id"]},
+                text("UPDATE sessions SET sandbox_name='sandbox-fail', phase='pending', run_started_at=:started WHERE id=:id"),
+                {"id": s["id"], "started": datetime.now(timezone.utc)},
             )
             await db.commit()
 
-        exec_result = MagicMock(exit_code=1, stdout="", stderr="error: tool crashed")
+        secret = "prompt-run-diagnostic-secret"
+        exec_result = MagicMock(
+            exit_code=1,
+            stdout="",
+            stderr=f"error: tool crashed GITHUB_TOKEN={secret}",
+        )
         with patch("swarmer.database.get_db", new=_make_test_db_provider()), \
              patch("swarmer.openshell_client.exec_command_streaming", new=AsyncMock(return_value=exec_result)), \
+             patch("swarmer.openshell_client.read_opencode_response", new=AsyncMock(return_value="agent response persisted")), \
              patch("swarmer.openshell_client.get_draft_chunks", new=AsyncMock(return_value=[])), \
              patch("swarmer.openshell_client.delete_sandbox", new=AsyncMock()):
             from swarmer.routers.sessions import _run_openshell_agent
-            await _run_openshell_agent(s["id"], ws["id"], "sandbox-fail", ["sh", "-c", "opencode run"], "prompt", "opencode")
+            await _run_openshell_agent(
+                s["id"], ws["id"], "sandbox-fail", ["sh", "-c", "opencode run"],
+                "prompt", "opencode", env_vars={"GITHUB_TOKEN": secret},
+            )
 
         async with _TestSession() as db:
             from sqlalchemy import select
+
             from swarmer.models.session import Session
+            from swarmer.models.session_run import SessionRun
             sess = (await db.execute(select(Session).where(Session.id == s["id"]))).scalar_one()
+            run = (await db.execute(
+                select(SessionRun).where(SessionRun.session_id == s["id"])
+            )).scalar_one()
 
         assert sess.phase == "failed"
+        assert "exited with code 1" in sess.status_detail
+        assert "response was persisted" in sess.status_detail
+        assert "GITHUB_TOKEN=[REDACTED]" in sess.status_detail
+        assert secret not in sess.status_detail
+        assert run.phase == "failed"
+        assert run.status_detail == sess.status_detail
 
     @pytest.mark.asyncio
     async def test_prompt_mode_redacts_openai_key_in_opencode_output(self, client):

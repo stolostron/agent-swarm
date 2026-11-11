@@ -27,6 +27,11 @@ records the result without maintaining an interactive terminal or chat service.
    `AGENTS.md` according to launch rules.
 3. Apply tool/provider, repository, branch, MCP, environment, and policy setup.
 4. Execute once, stream output, and persist processed/raw values and run state.
+   A nonzero process exit remains `failed`, even if OpenCode has persisted a
+   response; `status_detail` records the exit code, whether a response was
+   persisted, and a bounded stderr excerpt with known secrets redacted. The
+   same detail is saved in run history. A persisted response is not proof of
+   successful process completion.
 5. On completion, expose output/history; on success, clean up the sandbox.
 6. On process restart, resume monitoring for surviving prompt executions. For
    EnMaaS prompt runs, verify that the workspace gateway URL and OpenShell
@@ -43,4 +48,7 @@ records the result without maintaining an interactive terminal or chat service.
 
 - Missing or cross-workspace prompts fail before launch.
 - Prompt runs cannot become an orphaned active session after completion.
+- Nonzero prompt exits retain their failure phase and expose the exit code plus
+  bounded, redacted stderr in both current session state and run history; a
+  persisted OpenCode response does not mask the process failure.
 - Output and history distinguish manual prompt runs from scheduled runs.
