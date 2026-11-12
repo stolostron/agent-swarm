@@ -1874,27 +1874,33 @@ async def _do_launch_openshell(
             async with openshell_client.provider_reconciliation_lock(
                 pname, oc_client
             ):
-                try:
-                    await db.refresh(mcp)
-                except Exception:
-                    # A row deleted mid-launch must not fail the launch; the
-                    # values loaded at start remain the best available.
-                    log.warning(
-                        "_do_launch_openshell: could not refresh Jira MCP "
-                        "configuration for session %d",
-                        session.id,
-                        exc_info=True,
+                from swarmer.models.mcp_server import McpServer
+
+                # populate_existing refreshes the identity-mapped row in
+                # place when it still exists. A row deleted mid-launch
+                # returns None and leaves the launch-start values intact —
+                # unlike db.refresh, which expires attributes first and
+                # would leave the object unusable in async code.
+                fresh_mcp = (
+                    await db.execute(
+                        select(McpServer)
+                        .where(McpServer.id == mcp.id)
+                        .execution_options(populate_existing=True)
                     )
+                ).scalar_one_or_none()
+                jira_source = fresh_mcp if fresh_mcp is not None else mcp
                 if not await openshell_client.provider_exists(
                     pname, client=oc_client, force_refresh=True, lock_held=True
                 ):
                     await openshell_client.ensure_provider(
                         pname, "jira",
                         config={
-                            "JIRA_SERVER_URL": mcp.jira_server_url or "",
-                            "JIRA_EMAIL": mcp.jira_email or "",
+                            "JIRA_SERVER_URL": jira_source.jira_server_url or "",
+                            "JIRA_EMAIL": jira_source.jira_email or "",
                         },
-                        credentials={"JIRA_ACCESS_TOKEN": mcp.jira_access_token},
+                        credentials={
+                            "JIRA_ACCESS_TOKEN": jira_source.jira_access_token
+                        },
                         client=oc_client,
                         force_reconcile=True,
                         lock_held=True,
@@ -1902,8 +1908,8 @@ async def _do_launch_openshell(
             provider_names.append(pname)
             # URL and email are non-secret; pass them as plain env vars so the
             # sandbox process sees them directly on every exec call.
-            env_vars["JIRA_SERVER_URL"] = mcp.jira_server_url or ""
-            env_vars["JIRA_EMAIL"] = mcp.jira_email or ""
+            env_vars["JIRA_SERVER_URL"] = jira_source.jira_server_url or ""
+            env_vars["JIRA_EMAIL"] = jira_source.jira_email or ""
             jira_provider_created = True  # only one Jira provider per workspace
 
     # 2. Build policy YAML (pure computation, no I/O)

@@ -2008,6 +2008,97 @@ class TestDoLaunchOpenshell:
         assert jira_calls[0].kwargs.get("lock_held") is True
 
     @pytest.mark.asyncio
+    async def test_jira_launch_tolerates_mcp_row_deleted_during_launch(self, client):
+        """A Jira row deleted mid-launch must not break the launch.
+
+        The re-read uses populate_existing instead of db.refresh, so a
+        missing row leaves the identity-mapped object's launch-start values
+        readable instead of expiring them (async attribute loads raise).
+        """
+        import secrets
+
+        from unittest.mock import AsyncMock as _AsyncMock
+        from unittest.mock import patch as _patch
+
+        from swarmer.models.mcp_server import McpServer
+
+        ws = await _create_workspace(client)
+        mcp_resp = await client.post(
+            f"/api/v1/workspaces/{ws['id']}/mcp-servers",
+            json={"catalog_slug": "atlassian-jira"},
+        )
+        assert mcp_resp.status_code == 201, mcp_resp.text
+        mcp = mcp_resp.json()
+        saved_token = secrets.token_urlsafe(32)
+        gateway_client = type("GatewayClient", (), {"_endpoint": "test-gateway"})()
+        with _patch("swarmer.routers.mcp_servers._probe_jira_token", new=_AsyncMock(return_value=True)), \
+             _patch("swarmer.openshell_client.get_client_for_workspace", new=_AsyncMock(return_value=gateway_client)), \
+             _patch("swarmer.openshell_client.ensure_provider", new=_AsyncMock()):
+            save_resp = await client.post(
+                f"/api/v1/workspaces/{ws['id']}/mcp-servers/{mcp['id']}/save",
+                json={
+                    "jira_server_url": "https://redhat.atlassian.net",
+                    "jira_email": "test@redhat.com",
+                    "jira_access_token": saved_token,
+                },
+            )
+        assert save_resp.status_code == 200, save_resp.text
+
+        s_resp = await client.post(
+            f"/api/v1/workspaces/{ws['id']}/sessions",
+            json={"name": "s-jira-row-deleted", "mode": "prompt", "agent_tool": "opencode",
+                  "mcp_server_ids": [mcp["id"]]},
+        )
+        assert s_resp.status_code == 201, s_resp.text
+        s = s_resp.json()
+
+        patches = self._patch_openshell()
+        jira_provider_name = f"swarmer-ws-{ws['id']}-jira"
+
+        async def _delete_mcp_row_during_launch(**_kwargs):
+            # create_provider() runs after the launch committed its
+            # pre-provider state and loaded the Jira row, but before it
+            # takes the provider lock.
+            async with _TestSession() as db2:
+                row = await db2.get(McpServer, mcp["id"])
+                await db2.delete(row)
+                await db2.commit()
+            return {}
+
+        with patches["create_provider"] as mock_create, \
+             patches["ensure_provider"] as mock_ensure, \
+             patches["configure_provider_credential"], patches["attach_sandbox_provider"], \
+             patches["create_sandbox"], patches["write_agent_config"], \
+             patches["write_agents_md"], patches["exec_command"], \
+             patches["start_agent"], patches["delete_sandbox"], \
+             patches["build_policy"], patches["run_agent"], \
+             patches["setup_sandbox"] as mock_setup, \
+             patches["provider_exists"] as mock_provider_exists, patches["get_image"], \
+             _patch("swarmer.openshell_client.get_client_for_workspace", new=_AsyncMock(return_value=gateway_client)):
+            mock_create.side_effect = _delete_mcp_row_during_launch
+            mock_provider_exists.side_effect = lambda name, **_kwargs: (
+                name != jira_provider_name
+            )
+            launch_response = await client.post(
+                f"/api/v1/workspaces/{ws['id']}/sessions/{s['id']}/launch"
+            )
+            await asyncio.sleep(0)
+
+        assert launch_response.status_code == 200, launch_response.text
+        mock_setup.assert_awaited_once()
+        assert jira_provider_name in mock_setup.await_args.kwargs["provider_names"]
+        jira_calls = [
+            c for c in mock_ensure.call_args_list
+            if len(c.args) >= 2 and c.args[1] == "jira"
+        ]
+        assert len(jira_calls) == 1
+        # The launch-start values remain usable after the row disappeared.
+        assert jira_calls[0].kwargs["credentials"]["JIRA_ACCESS_TOKEN"] == saved_token
+        setup_kwargs = mock_setup.call_args.kwargs if mock_setup.call_args else {}
+        sandbox_env = setup_kwargs.get("env_vars", {})
+        assert sandbox_env.get("JIRA_SERVER_URL") == "https://redhat.atlassian.net"
+
+    @pytest.mark.asyncio
     async def test_prompt_agent_swarm_token_does_not_mutate_gateway_provider(self, client):
         """Prompt runs pass their scoped token only to the agent exec request."""
         ws = await _create_workspace(client)

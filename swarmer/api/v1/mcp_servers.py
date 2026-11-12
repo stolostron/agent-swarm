@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -250,6 +251,7 @@ async def save_config(
                 )
 
         provider_synced = False
+        commit_succeeded = False
         try:
             await openshell_client.ensure_provider(
                 provider_name,
@@ -263,12 +265,36 @@ async def save_config(
                 lock_held=True,
             )
             provider_synced = True
-            await db.commit()
+            # A cancelled wait does not mean a failed commit: aiosqlite runs
+            # queued commits in its worker even after the awaiting future is
+            # cancelled. Keep the commit task alive and decide restoration
+            # from its real outcome while still holding the provider lock.
+            commit_task = asyncio.create_task(db.commit())
+            try:
+                await asyncio.shield(commit_task)
+                commit_succeeded = True
+            except asyncio.CancelledError:
+                while not commit_task.done():
+                    try:
+                        await asyncio.shield(commit_task)
+                    except asyncio.CancelledError:
+                        continue
+                    except BaseException:  # noqa: BLE001 - outcome probe only
+                        break
+                try:
+                    commit_task.result()
+                    commit_succeeded = True
+                except BaseException:  # noqa: BLE001 - the commit failed
+                    pass
+                raise
         except BaseException as exc:  # noqa: BLE001 - compensation must include cancellation
             # Keep the provider write, DB commit, and compensation in one
             # critical section. Cancellation is included because a worker
             # thread may finish its RPC after the request task is cancelled.
-            await restore_previous_state()
+            # A commit that actually landed must not be rolled back on the
+            # gateway — only restore when persistence really failed.
+            if not commit_succeeded:
+                await restore_previous_state()
             if not provider_synced and isinstance(exc, Exception):
                 log.warning(
                     "save_config: failed to configure Jira provider for workspace %d "

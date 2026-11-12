@@ -733,6 +733,57 @@ async def test_cancelled_ensure_waits_for_gateway_thread_before_releasing_lock(s
 
 
 @pytest.mark.asyncio
+async def test_cancelled_import_waits_for_gateway_thread_before_releasing_lock(
+    sdk_client,
+):
+    """Cancellation during a profile import cannot let a later ensure overtake it."""
+    import asyncio
+    import secrets
+    import threading
+
+    name = "swarmer-ws-4-jira"
+    import_started = threading.Event()
+    finish_import = threading.Event()
+    order = []
+    token = secrets.token_urlsafe(32)
+
+    def _import(_request, timeout):
+        import_started.set()
+        assert finish_import.wait(timeout=3)
+        order.append("import")
+
+    sdk_client._stub.ImportProviderProfiles.side_effect = _import
+    profile = next(
+        p for p in oc.CUSTOM_PROVIDER_PROFILES if p["id"] == "jira"
+    )
+    # The reconcile loop must see a matching stored profile so the second
+    # ensure can complete without further stub setup.
+    sdk_client._stub.GetProviderProfile.return_value = type(
+        "ProviderProfileResponse", (), {"profile": oc._build_provider_profile(profile)}
+    )()
+
+    first = asyncio.create_task(
+        oc.ensure_provider(name, "jira", {}, {"TOKEN": token}, client=sdk_client)
+    )
+    assert await asyncio.to_thread(import_started.wait, 1)
+    first.cancel()
+    second = asyncio.create_task(
+        oc.ensure_provider(name, "jira", {}, {"TOKEN": token}, client=sdk_client)
+    )
+    await asyncio.sleep(0.05)
+    assert not first.done()
+    assert not second.done()
+    assert order == []
+
+    finish_import.set()
+    with pytest.raises(asyncio.CancelledError):
+        await first
+    await second
+
+    assert order == ["import", "import"]
+
+
+@pytest.mark.asyncio
 async def test_ensure_provider_refreshes_stale_cached_false(sdk_client):
     """ensure_provider() must refresh a stale cached "False" to "True" on success.
 

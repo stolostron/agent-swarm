@@ -1577,6 +1577,87 @@ class TestSessions:
         assert ensure_provider.await_args.kwargs["client"] is default_client
 
     @pytest.mark.asyncio
+    async def test_jira_save_cancelled_after_commit_does_not_restore(
+        self, client, monkeypatch
+    ):
+        """A commit that landed must not be restored when the wait is cancelled.
+
+        aiosqlite executes queued commits in its worker even after the
+        awaiting future is cancelled, so the save must resolve the commit
+        task's real outcome before restoring the previous provider.
+        """
+        from unittest.mock import AsyncMock, patch
+
+        from sqlalchemy.ext.asyncio import AsyncSession
+
+        from swarmer.models.mcp_server import McpServer
+
+        old_token = secrets.token_urlsafe(32)
+        new_token = secrets.token_urlsafe(32)
+        ws = await _create_workspace(client)
+        jira = await client.post(
+            f"/api/v1/workspaces/{ws['id']}/mcp-servers",
+            json={"catalog_slug": "atlassian-jira"},
+        )
+        assert jira.status_code == 201, jira.text
+        server_id = jira.json()["id"]
+        async with _TestSession() as db:
+            server = await db.get(McpServer, server_id)
+            server.jira_server_url = "https://old.example.invalid"
+            server.jira_email = "old-contact"
+            server.jira_access_token = old_token
+            await db.commit()
+
+        gateway_client = type("GatewayClient", (), {"_endpoint": "test-gateway"})()
+        ensure_provider = AsyncMock()
+        original_commit = AsyncSession.commit
+        committed = asyncio.Event()
+        release_commit = asyncio.Event()
+
+        async def resolve_gateway(_ws_id, _db):
+            return gateway_client
+
+        async def commit_and_hold(db):
+            await original_commit(db)
+            committed.set()
+            await release_commit.wait()
+
+        monkeypatch.setattr(AsyncSession, "commit", commit_and_hold)
+        with patch(
+            "swarmer.routers.mcp_servers._probe_jira_token",
+            new=AsyncMock(return_value=True),
+        ), patch(
+            "swarmer.openshell_client.get_client_for_workspace",
+            new=AsyncMock(side_effect=resolve_gateway),
+        ), patch(
+            "swarmer.openshell_client.ensure_provider", new=ensure_provider
+        ):
+            save_task = asyncio.create_task(client.post(
+                f"/api/v1/workspaces/{ws['id']}/mcp-servers/{server_id}/save",
+                json={
+                    "jira_server_url": "https://new.example.invalid",
+                    "jira_email": "new-contact",
+                    "jira_access_token": new_token,
+                },
+            ))
+            await committed.wait()
+            save_task.cancel()
+            # Let the save task receive the cancellation and enter its
+            # commit-outcome wait before releasing the commit worker.
+            await asyncio.sleep(0)
+            release_commit.set()
+            with pytest.raises(asyncio.CancelledError):
+                await save_task
+
+        # The commit landed: the gateway provider must not be restored.
+        assert ensure_provider.await_count == 1
+        async with _TestSession() as db:
+            server = await db.get(McpServer, server_id)
+            assert server.jira_server_url == "https://new.example.invalid"
+            assert server.jira_email == "new-contact"
+            assert server.jira_access_token == new_token
+
+    @pytest.mark.asyncio
     async def test_workspace_admin_role_is_scoped_per_workspace(self, client):
         """ACM-48496: the admin role only grants manager rights inside the
         workspace where it was granted — an admin of one workspace stays an

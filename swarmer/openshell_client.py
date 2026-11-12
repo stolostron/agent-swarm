@@ -1771,7 +1771,7 @@ async def import_provider_profiles(
                     raise
                 log.warning("import_provider_profiles: failed to update profile %s: %s", pid, exc)
 
-    await asyncio.to_thread(_do_import)
+    await _run_blocking_and_wait_on_cancel(_do_import)
 
 
 async def create_provider_from_env(
