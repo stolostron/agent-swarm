@@ -1880,11 +1880,18 @@ async def _do_launch_openshell(
                 # place when it still exists. A row deleted mid-launch
                 # returns None and leaves the launch-start values intact —
                 # unlike db.refresh, which expires attributes first and
-                # would leave the object unusable in async code.
+                # would leave the object unusable in async code. The
+                # workspace predicate is required: without AUTOINCREMENT,
+                # SQLite can reuse a deleted row's ID for another
+                # workspace's new server, which must not leak into this
+                # launch's provider.
                 fresh_mcp = (
                     await db.execute(
                         select(McpServer)
-                        .where(McpServer.id == mcp.id)
+                        .where(
+                            McpServer.id == mcp.id,
+                            McpServer.workspace_id == ws_id,
+                        )
                         .execution_options(populate_existing=True)
                     )
                 ).scalar_one_or_none()

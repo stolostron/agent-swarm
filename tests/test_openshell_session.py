@@ -2014,6 +2014,9 @@ class TestDoLaunchOpenshell:
         The re-read uses populate_existing instead of db.refresh, so a
         missing row leaves the identity-mapped object's launch-start values
         readable instead of expiring them (async attribute loads raise).
+        The re-read is also workspace-scoped: without AUTOINCREMENT, SQLite
+        can reuse a deleted row's ID for another workspace's server, which
+        must not leak into this launch's provider.
         """
         import secrets
 
@@ -2023,6 +2026,7 @@ class TestDoLaunchOpenshell:
         from swarmer.models.mcp_server import McpServer
 
         ws = await _create_workspace(client)
+        other_ws = await _create_workspace(client, "ID reuse workspace")
         mcp_resp = await client.post(
             f"/api/v1/workspaces/{ws['id']}/mcp-servers",
             json={"catalog_slug": "atlassian-jira"},
@@ -2054,14 +2058,29 @@ class TestDoLaunchOpenshell:
 
         patches = self._patch_openshell()
         jira_provider_name = f"swarmer-ws-{ws['id']}-jira"
+        other_token = secrets.token_urlsafe(32)
 
-        async def _delete_mcp_row_during_launch(**_kwargs):
+        async def _delete_and_reuse_mcp_row_during_launch(**_kwargs):
             # create_provider() runs after the launch committed its
             # pre-provider state and loaded the Jira row, but before it
-            # takes the provider lock.
+            # takes the provider lock. Delete the row and simulate SQLite
+            # rowid reuse: another workspace's server takes the same ID.
             async with _TestSession() as db2:
                 row = await db2.get(McpServer, mcp["id"])
                 await db2.delete(row)
+                db2.add(
+                    McpServer(
+                        id=mcp["id"],
+                        workspace_id=other_ws["id"],
+                        slug="atlassian-jira",
+                        display_name="Jira",
+                        server_url="",
+                        jira_server_url="https://other.example.invalid",
+                        jira_email="other-contact",
+                        jira_access_token=other_token,
+                        shared=True,
+                    )
+                )
                 await db2.commit()
             return {}
 
@@ -2075,7 +2094,7 @@ class TestDoLaunchOpenshell:
              patches["setup_sandbox"] as mock_setup, \
              patches["provider_exists"] as mock_provider_exists, patches["get_image"], \
              _patch("swarmer.openshell_client.get_client_for_workspace", new=_AsyncMock(return_value=gateway_client)):
-            mock_create.side_effect = _delete_mcp_row_during_launch
+            mock_create.side_effect = _delete_and_reuse_mcp_row_during_launch
             mock_provider_exists.side_effect = lambda name, **_kwargs: (
                 name != jira_provider_name
             )
@@ -2092,8 +2111,12 @@ class TestDoLaunchOpenshell:
             if len(c.args) >= 2 and c.args[1] == "jira"
         ]
         assert len(jira_calls) == 1
-        # The launch-start values remain usable after the row disappeared.
+        # The launch-start values remain usable after the row disappeared,
+        # and the reused ID from another workspace must not leak in.
         assert jira_calls[0].kwargs["credentials"]["JIRA_ACCESS_TOKEN"] == saved_token
+        assert (
+            jira_calls[0].kwargs["credentials"]["JIRA_ACCESS_TOKEN"] != other_token
+        )
         setup_kwargs = mock_setup.call_args.kwargs if mock_setup.call_args else {}
         sandbox_env = setup_kwargs.get("env_vars", {})
         assert sandbox_env.get("JIRA_SERVER_URL") == "https://redhat.atlassian.net"
