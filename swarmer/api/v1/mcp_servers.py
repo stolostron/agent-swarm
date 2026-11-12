@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -152,25 +153,161 @@ async def save_config(
 
     if not jira_server_url or not jira_email:
         raise HTTPException(status_code=422, detail="Server URL and email are required")
-    if not jira_access_token and not server.jira_access_token_enc:
-        raise HTTPException(status_code=422, detail="API token is required")
 
-    server.jira_server_url = jira_server_url
-    server.shared = True
-    if jira_access_token:
-        server.jira_access_token = jira_access_token
-    server.jira_email = jira_email
+    # Resolve the workspace gateway before changing ORM fields: the lookup
+    # queries WorkspaceGateway on this session and would otherwise autoflush
+    # these changes before the provider RPC completes. Workspaces on the
+    # default gateway get None here; resolve the shared default client so the
+    # reconciliation lock and provider calls key on a real endpoint.
+    try:
+        from swarmer import openshell_client
 
-    from swarmer.routers.mcp_servers import _probe_jira_token
-    probe_token = jira_access_token or server.jira_access_token
-    valid = await _probe_jira_token(jira_server_url, jira_email, probe_token)
-    if valid:
-        server.token_expires_at = None
-    else:
-        from datetime import datetime, timezone
-        server.token_expires_at = datetime.now(timezone.utc)
+        gateway_client = await openshell_client.get_client_for_workspace(ws_id, db)
+        if gateway_client is None:
+            gateway_client = openshell_client._get_client()
+    except Exception as exc:
+        log.warning(
+            "save_config: failed to configure Jira provider for workspace %d (error_type=%s)",
+            ws_id,
+            type(exc).__name__,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="failed to configure Jira provider on OpenShell",
+        ) from exc
 
-    await db.commit()
+    provider_name = f"swarmer-ws-{ws_id}-jira"
+    # End the read transaction used for authorization/gateway lookup before
+    # waiting on another save, then read the authoritative saved state under
+    # the same lock used by provider reconciliation and deletion.
+    await db.rollback()
+    async with openshell_client.provider_reconciliation_lock(
+        provider_name, gateway_client
+    ):
+        ws = await get_workspace_or_404(ws_id, db, identity)
+        await _require_workspace_manager(db, ws, identity)
+        server = await _get_visible_server_or_404(
+            ws_id, server_id, identity.username, db
+        )
+        if not jira_access_token and not server.jira_access_token_enc:
+            raise HTTPException(status_code=422, detail="API token is required")
+
+        previous_jira_server_url = server.jira_server_url
+        previous_jira_email = server.jira_email
+        previous_jira_access_token = server.jira_access_token
+        saved_token = jira_access_token or previous_jira_access_token
+
+        from swarmer.routers.mcp_servers import _probe_jira_token
+
+        valid = await _probe_jira_token(jira_server_url, jira_email, saved_token)
+        server.jira_server_url = jira_server_url
+        server.shared = True
+        if jira_access_token:
+            server.jira_access_token = jira_access_token
+        server.jira_email = jira_email
+        if valid:
+            server.token_expires_at = None
+        else:
+            from datetime import datetime, timezone
+
+            server.token_expires_at = datetime.now(timezone.utc)
+
+        async def restore_previous_state() -> None:
+            try:
+                await db.rollback()
+            except BaseException as exc:  # noqa: BLE001 - rollback must include cancellation
+                log.warning(
+                    "save_config: database rollback failed for workspace %d "
+                    "(error_type=%s)",
+                    ws_id,
+                    type(exc).__name__,
+                )
+            try:
+                if previous_jira_access_token:
+                    await openshell_client.ensure_provider(
+                        provider_name,
+                        "jira",
+                        config={
+                            "JIRA_SERVER_URL": previous_jira_server_url,
+                            "JIRA_EMAIL": previous_jira_email,
+                        },
+                        credentials={
+                            "JIRA_ACCESS_TOKEN": previous_jira_access_token
+                        },
+                        client=gateway_client,
+                        force_reconcile=True,
+                        lock_held=True,
+                    )
+                else:
+                    await openshell_client.delete_provider(
+                        provider_name, client=gateway_client, lock_held=True
+                    )
+            except BaseException as exc:  # noqa: BLE001 - log compensation failures without masking original error
+                log.error(
+                    "save_config: failed to restore Jira provider after save failure "
+                    "for workspace %d (error_type=%s)",
+                    ws_id,
+                    type(exc).__name__,
+                )
+
+        provider_synced = False
+        commit_succeeded = False
+        try:
+            await openshell_client.ensure_provider(
+                provider_name,
+                "jira",
+                config={
+                    "JIRA_SERVER_URL": jira_server_url,
+                    "JIRA_EMAIL": jira_email,
+                },
+                credentials={"JIRA_ACCESS_TOKEN": saved_token},
+                client=gateway_client,
+                lock_held=True,
+            )
+            provider_synced = True
+            # A cancelled wait does not mean a failed commit: aiosqlite runs
+            # queued commits in its worker even after the awaiting future is
+            # cancelled. Keep the commit task alive and decide restoration
+            # from its real outcome while still holding the provider lock.
+            commit_task = asyncio.create_task(db.commit())
+            try:
+                await asyncio.shield(commit_task)
+                commit_succeeded = True
+            except asyncio.CancelledError:
+                while not commit_task.done():
+                    try:
+                        await asyncio.shield(commit_task)
+                    except asyncio.CancelledError:
+                        continue
+                    except BaseException:  # noqa: BLE001 - outcome probe only
+                        break
+                try:
+                    commit_task.result()
+                    commit_succeeded = True
+                except BaseException:  # noqa: BLE001 - the commit failed
+                    pass
+                raise
+        except BaseException as exc:  # noqa: BLE001 - compensation must include cancellation
+            # Keep the provider write, DB commit, and compensation in one
+            # critical section. Cancellation is included because a worker
+            # thread may finish its RPC after the request task is cancelled.
+            # A commit that actually landed must not be rolled back on the
+            # gateway — only restore when persistence really failed.
+            if not commit_succeeded:
+                await restore_previous_state()
+            if not provider_synced and isinstance(exc, Exception):
+                log.warning(
+                    "save_config: failed to configure Jira provider for workspace %d "
+                    "(error_type=%s)",
+                    ws_id,
+                    type(exc).__name__,
+                )
+                raise HTTPException(
+                    status_code=status.HTTP_502_BAD_GATEWAY,
+                    detail="failed to configure Jira provider on OpenShell",
+                ) from exc
+            raise
+
     await db.refresh(server)
     return server
 

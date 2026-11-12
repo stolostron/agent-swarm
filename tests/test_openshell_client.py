@@ -503,6 +503,22 @@ async def test_provider_exists_cache_miss_calls_grpc(sdk_client):
 
 
 @pytest.mark.asyncio
+async def test_provider_exists_force_refresh_ignores_cached_true(sdk_client):
+    """Launch-time checks bypass a stale positive existence result."""
+    import time
+
+    name = "swarmer-ws-3-jira"
+    key = oc._provider_cache_key(sdk_client, name)
+    oc._provider_cache[key] = (True, time.monotonic() + 30)
+    sdk_client._stub.GetProvider.return_value = MagicMock()
+
+    result = await oc.provider_exists(name, client=sdk_client, force_refresh=True)
+
+    assert result is True
+    sdk_client._stub.GetProvider.assert_called_once()
+
+
+@pytest.mark.asyncio
 async def test_provider_exists_cache_is_scoped_to_gateway():
     """A local provider result must not leak into a remote gateway cache entry."""
     import grpc
@@ -539,14 +555,232 @@ async def test_provider_exists_cache_is_scoped_to_gateway():
 
 @pytest.mark.asyncio
 async def test_delete_provider_invalidates_cache(sdk_client):
-    """delete_provider() removes the name from _provider_cache."""
+    """delete_provider() clears existence and configuration caches."""
     import time
     name = "swarmer-ws-4-google-cloud"
     key = oc._provider_cache_key(sdk_client, name)
     oc._provider_cache[key] = (True, time.monotonic() + 30)
+    oc._provider_config_cache[key] = b"test-fingerprint"
     with patch.object(oc, "_get_client", return_value=sdk_client):
         await oc.delete_provider(name)
     assert key not in oc._provider_cache
+    assert key not in oc._provider_config_cache
+
+
+@pytest.mark.asyncio
+async def test_delete_provider_serializes_with_ensure(sdk_client):
+    """An ensure waiting behind deletion recreates rather than being deleted."""
+    import asyncio
+    import secrets
+    import threading
+
+    name = "swarmer-ws-4-jira"
+    delete_started = threading.Event()
+    finish_delete = threading.Event()
+    token = secrets.token_urlsafe(32)
+    order = []
+
+    def _delete(_request, timeout):
+        delete_started.set()
+        assert finish_delete.wait(timeout=3)
+        order.append("delete")
+        raise RuntimeError("simulated gateway deletion failure")
+
+    def _create(_request, timeout):
+        order.append("create")
+
+    sdk_client._stub.DeleteProvider.side_effect = _delete
+    sdk_client._stub.CreateProvider.side_effect = _create
+    with patch.object(oc, "_get_client", return_value=sdk_client), \
+         patch.object(oc, "import_provider_profiles", new=AsyncMock()):
+        deleting = asyncio.create_task(oc.delete_provider(name))
+        assert await asyncio.to_thread(delete_started.wait, 1)
+        ensuring = asyncio.create_task(
+            oc.ensure_provider(name, "jira", {}, {"TOKEN": token}, client=sdk_client)
+        )
+        await asyncio.sleep(0.05)
+        assert not ensuring.done()
+        sdk_client._stub.CreateProvider.assert_not_called()
+
+        finish_delete.set()
+        with pytest.raises(RuntimeError, match="simulated gateway deletion failure"):
+            await deleting
+        await ensuring
+
+    assert order == ["delete", "create"]
+
+
+@pytest.mark.asyncio
+async def test_delete_provider_clears_caches_after_failure(sdk_client):
+    """A failed deletion must not leave stale existence or config fingerprints."""
+    import time
+
+    name = "swarmer-ws-4-jira"
+    key = oc._provider_cache_key(sdk_client, name)
+    oc._provider_cache[key] = (True, time.monotonic() + 30)
+    oc._provider_config_cache[key] = b"test-fingerprint"
+    sdk_client._stub.DeleteProvider.side_effect = RuntimeError("gateway unavailable")
+
+    with patch.object(oc, "_get_client", return_value=sdk_client), \
+         pytest.raises(RuntimeError, match="gateway unavailable"):
+        await oc.delete_provider(name)
+
+    assert key not in oc._provider_cache
+    assert key not in oc._provider_config_cache
+
+
+@pytest.mark.asyncio
+async def test_cancelled_delete_waits_for_gateway_thread_before_releasing_lock(sdk_client):
+    """A cancelled delete keeps reconciliation blocked until its RPC finishes."""
+    import asyncio
+    import secrets
+    import threading
+
+    name = "swarmer-ws-4-jira"
+    delete_started = threading.Event()
+    finish_delete = threading.Event()
+    order = []
+    token = secrets.token_urlsafe(32)
+
+    def _delete(_request, timeout):
+        delete_started.set()
+        assert finish_delete.wait(timeout=3)
+        order.append("delete")
+        return sdk_client._stub.DeleteProvider.return_value
+
+    def _create(_request, timeout):
+        order.append("create")
+
+    sdk_client._stub.DeleteProvider.side_effect = _delete
+    sdk_client._stub.CreateProvider.side_effect = _create
+    with patch.object(oc, "import_provider_profiles", new=AsyncMock()):
+        deleting = asyncio.create_task(oc.delete_provider(name, client=sdk_client))
+        assert await asyncio.to_thread(delete_started.wait, 1)
+        deleting.cancel()
+
+        ensure_started = asyncio.Event()
+
+        async def _ensure():
+            ensure_started.set()
+            await oc.ensure_provider(
+                name, "jira", {}, {"TOKEN": token}, client=sdk_client
+            )
+
+        ensuring = asyncio.create_task(_ensure())
+        await ensure_started.wait()
+        # Give the waiting task time to reach the provider lock before
+        # asserting it is blocked (a single event-loop yield is not enough).
+        await asyncio.sleep(0.05)
+        assert not ensuring.done()
+        sdk_client._stub.CreateProvider.assert_not_called()
+
+        finish_delete.set()
+        with pytest.raises(asyncio.CancelledError):
+            await deleting
+        await ensuring
+
+    assert order == ["delete", "create"]
+
+
+@pytest.mark.asyncio
+async def test_cancelled_ensure_waits_for_gateway_thread_before_releasing_lock(sdk_client):
+    """Cancellation cannot let another ensure overtake an in-flight create RPC."""
+    import asyncio
+    import secrets
+    import threading
+
+    name = "swarmer-ws-4-jira"
+    create_started = threading.Event()
+    finish_create = threading.Event()
+    order = []
+    first_token = secrets.token_urlsafe(32)
+    second_token = secrets.token_urlsafe(32)
+
+    def _create(_request, timeout):
+        if not create_started.is_set():
+            create_started.set()
+            assert finish_create.wait(timeout=3)
+            order.append("first-create")
+        else:
+            order.append("second-create")
+
+    sdk_client._stub.CreateProvider.side_effect = _create
+    with patch.object(oc, "import_provider_profiles", new=AsyncMock()):
+        first = asyncio.create_task(
+            oc.ensure_provider(
+                name, "jira", {}, {"TOKEN": first_token}, client=sdk_client
+            )
+        )
+        assert await asyncio.to_thread(create_started.wait, 1)
+        first.cancel()
+        second = asyncio.create_task(
+            oc.ensure_provider(
+                name, "jira", {}, {"TOKEN": second_token}, client=sdk_client
+            )
+        )
+        await asyncio.sleep(0.05)
+        assert not first.done()
+        assert not second.done()
+        # Neither RPC may complete while the first ensure holds the lock.
+        assert order == []
+
+        finish_create.set()
+        with pytest.raises(asyncio.CancelledError):
+            await first
+        await second
+
+    assert order == ["first-create", "second-create"]
+
+
+@pytest.mark.asyncio
+async def test_cancelled_import_waits_for_gateway_thread_before_releasing_lock(
+    sdk_client,
+):
+    """Cancellation during a profile import cannot let a later ensure overtake it."""
+    import asyncio
+    import secrets
+    import threading
+
+    name = "swarmer-ws-4-jira"
+    import_started = threading.Event()
+    finish_import = threading.Event()
+    order = []
+    token = secrets.token_urlsafe(32)
+
+    def _import(_request, timeout):
+        import_started.set()
+        assert finish_import.wait(timeout=3)
+        order.append("import")
+
+    sdk_client._stub.ImportProviderProfiles.side_effect = _import
+    profile = next(
+        p for p in oc.CUSTOM_PROVIDER_PROFILES if p["id"] == "jira"
+    )
+    # The reconcile loop must see a matching stored profile so the second
+    # ensure can complete without further stub setup.
+    sdk_client._stub.GetProviderProfile.return_value = type(
+        "ProviderProfileResponse", (), {"profile": oc._build_provider_profile(profile)}
+    )()
+
+    first = asyncio.create_task(
+        oc.ensure_provider(name, "jira", {}, {"TOKEN": token}, client=sdk_client)
+    )
+    assert await asyncio.to_thread(import_started.wait, 1)
+    first.cancel()
+    second = asyncio.create_task(
+        oc.ensure_provider(name, "jira", {}, {"TOKEN": token}, client=sdk_client)
+    )
+    await asyncio.sleep(0.05)
+    assert not first.done()
+    assert not second.done()
+    assert order == []
+
+    finish_import.set()
+    with pytest.raises(asyncio.CancelledError):
+        await first
+    await second
+
+    assert order == ["import", "import"]
 
 
 @pytest.mark.asyncio
@@ -573,6 +807,173 @@ async def test_ensure_provider_refreshes_stale_cached_false(sdk_client):
         result = await oc.provider_exists(pname)
     assert result is True
     sdk_client._stub.GetProvider.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_ensure_provider_skips_unchanged_and_updates_changed_config(sdk_client):
+    """Unchanged credentials are not rewritten; changed credentials still propagate."""
+    import grpc
+
+    class AlreadyExists(grpc.RpcError, grpc.Call):
+        def code(self):
+            return grpc.StatusCode.ALREADY_EXISTS
+
+    pname = "swarmer-ws-9-agent-swarm-s77"
+    cache_key = oc._provider_cache_key(sdk_client, pname)
+    oc._provider_config_cache.pop(cache_key, None)
+    sdk_client._stub.CreateProvider.side_effect = [None, AlreadyExists(), AlreadyExists()]
+
+    with patch.object(oc, "_get_client", return_value=sdk_client):
+        await oc.ensure_provider(
+            pname, "agent-swarm", {"ENDPOINT": "https://example.invalid/v1"},
+            {"TOKEN": "credential-v1"},
+        )
+        await oc.ensure_provider(
+            pname, "agent-swarm", {"ENDPOINT": "https://example.invalid/v1"},
+            {"TOKEN": "credential-v1"},
+        )
+        await oc.ensure_provider(
+            pname, "agent-swarm", {"ENDPOINT": "https://example.invalid/v1"},
+            {"TOKEN": "credential-v2"},
+        )
+        await oc.ensure_provider(
+            pname, "agent-swarm", {"ENDPOINT": "https://example.invalid/v2"},
+            {"TOKEN": "credential-v2"},
+        )
+
+    assert sdk_client._stub.CreateProvider.call_count == 3
+    assert sdk_client._stub.UpdateProvider.call_count == 2
+    credential_update, config_update = [
+        call.args[0] for call in sdk_client._stub.UpdateProvider.call_args_list
+    ]
+    assert credential_update.provider.metadata.name == pname
+    assert credential_update.provider.credentials["TOKEN"] == "credential-v2"
+    assert config_update.provider.config["ENDPOINT"] == "https://example.invalid/v2"
+    assert b"credential-v1" not in oc._provider_config_cache[cache_key]
+    assert b"credential-v2" not in oc._provider_config_cache[cache_key]
+
+
+@pytest.mark.asyncio
+async def test_ensure_provider_force_reconciles_cached_configuration(sdk_client):
+    """An observed-missing provider is recreated even with a matching fingerprint."""
+    import grpc
+    import secrets
+
+    class AlreadyExists(grpc.RpcError, grpc.Call):
+        def code(self):
+            return grpc.StatusCode.ALREADY_EXISTS
+
+    name = "swarmer-ws-9-jira"
+    token = secrets.token_urlsafe(32)
+    sdk_client._stub.CreateProvider.side_effect = [None, AlreadyExists()]
+    with patch.object(oc, "import_provider_profiles", new=AsyncMock()):
+        await oc.ensure_provider(
+            name, "jira", {"JIRA_SERVER_URL": "https://example.invalid"},
+            {"TOKEN": token}, client=sdk_client,
+        )
+        await oc.ensure_provider(
+            name, "jira", {"JIRA_SERVER_URL": "https://example.invalid"},
+            {"TOKEN": token}, client=sdk_client, force_reconcile=True,
+        )
+
+    assert sdk_client._stub.CreateProvider.call_count == 2
+    sdk_client._stub.UpdateProvider.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_ensure_provider_recreates_when_fingerprint_matches_but_provider_missing(
+    sdk_client,
+):
+    """A matching fingerprint must not skip recreation when the gateway lost the provider."""
+    import grpc
+    import secrets
+
+    class _NotFound(grpc.RpcError, grpc.Call):
+        def code(self):
+            return grpc.StatusCode.NOT_FOUND
+
+        def details(self):
+            return "provider not found"
+
+        def trailing_metadata(self):
+            return ()
+
+    name = "swarmer-ws-9-jira"
+    token = secrets.token_urlsafe(32)
+    sdk_client._stub.CreateProvider.side_effect = [None, None]
+    sdk_client._stub.GetProvider.return_value = MagicMock()
+    with patch.object(oc, "import_provider_profiles", new=AsyncMock()):
+        await oc.ensure_provider(
+            name, "jira", {}, {"TOKEN": token}, client=sdk_client
+        )
+        # The gateway loses the provider after Swarmer cached its fingerprint.
+        sdk_client._stub.GetProvider.side_effect = _NotFound()
+        await oc.ensure_provider(
+            name, "jira", {}, {"TOKEN": token}, client=sdk_client
+        )
+
+    assert sdk_client._stub.CreateProvider.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_failed_provider_write_does_not_leave_stale_fingerprint(sdk_client):
+    """A failed update must not leave a fingerprint that masks the next reconciliation."""
+    import grpc
+    import secrets
+
+    class AlreadyExists(grpc.RpcError, grpc.Call):
+        def code(self):
+            return grpc.StatusCode.ALREADY_EXISTS
+
+    name = "swarmer-ws-9-agent-swarm-s99"
+    token_a = secrets.token_urlsafe(32)
+    token_b = secrets.token_urlsafe(32)
+    key = oc._provider_cache_key(sdk_client, name)
+    oc._provider_config_cache.pop(key, None)
+    sdk_client._stub.CreateProvider.side_effect = [None, AlreadyExists(), AlreadyExists()]
+    sdk_client._stub.UpdateProvider.side_effect = [
+        RuntimeError("simulated gateway timeout"),
+        None,
+    ]
+    with patch.object(oc, "_get_client", return_value=sdk_client):
+        await oc.ensure_provider(name, "agent-swarm", {}, {"TOKEN": token_a})
+        with pytest.raises(RuntimeError, match="simulated gateway timeout"):
+            await oc.ensure_provider(name, "agent-swarm", {}, {"TOKEN": token_b})
+        # The failed write must clear the cached fingerprint so the retry
+        # reconciles instead of trusting a stale entry.
+        assert key not in oc._provider_config_cache
+        await oc.ensure_provider(name, "agent-swarm", {}, {"TOKEN": token_b})
+
+    assert sdk_client._stub.UpdateProvider.call_count == 2
+    assert oc._provider_config_cache[key] == oc._provider_config_fingerprint(
+        "agent-swarm", {}, {"TOKEN": token_b}
+    )
+
+
+@pytest.mark.asyncio
+async def test_provider_reconciliation_is_isolated_from_another_active_session(sdk_client):
+    """Changing one session's provider never rewrites another session's provider."""
+    import grpc
+
+    class AlreadyExists(grpc.RpcError, grpc.Call):
+        def code(self):
+            return grpc.StatusCode.ALREADY_EXISTS
+
+    target = "swarmer-ws-9-agent-swarm-s77"
+    active = "swarmer-ws-9-agent-swarm-s88"
+    for name in (target, active):
+        oc._provider_config_cache.pop(oc._provider_cache_key(sdk_client, name), None)
+    sdk_client._stub.CreateProvider.side_effect = [None, None, AlreadyExists()]
+
+    with patch.object(oc, "_get_client", return_value=sdk_client):
+        await oc.ensure_provider(target, "agent-swarm", {}, {"TOKEN": "target-config-v1"})
+        await oc.ensure_provider(active, "agent-swarm", {}, {"TOKEN": "active-config-v1"})
+        await oc.ensure_provider(target, "agent-swarm", {}, {"TOKEN": "target-config-v1"})
+        await oc.ensure_provider(target, "agent-swarm", {}, {"TOKEN": "target-config-v2"})
+
+    sdk_client._stub.UpdateProvider.assert_called_once()
+    request = sdk_client._stub.UpdateProvider.call_args.args[0]
+    assert request.provider.metadata.name == target
 
 
 # ---------------------------------------------------------------------------
@@ -1284,9 +1685,6 @@ async def test_import_provider_profiles_reconciles_after_successful_import():
     """A successful bulk import still updates an existing stale profile."""
     mock_client = MagicMock()
     mock_client._timeout = 10
-    existing_resp = MagicMock()
-    existing_resp.profile.resource_version = 7
-    mock_client._stub.GetProviderProfile.return_value = existing_resp
 
     profile = {
         "id": "agent-swarm",
@@ -1305,6 +1703,13 @@ async def test_import_provider_profiles_reconciles_after_successful_import():
             "enforcement": "enforce",
         }],
     }
+    stale_profile = oc._build_provider_profile(profile, resource_version=7)
+    stale_profile.endpoints[0].host = "old.example.invalid"
+    stale_profile.source = "user"
+    stale_profile.scope = "platform"
+    mock_client._stub.GetProviderProfile.return_value = type(
+        "ProviderProfileResponse", (), {"profile": stale_profile}
+    )()
 
     await oc.import_provider_profiles([profile], client=mock_client)
 
@@ -1312,6 +1717,40 @@ async def test_import_provider_profiles_reconciles_after_successful_import():
     request = mock_client._stub.UpdateProviderProfiles.call_args.args[0]
     assert request.expected_resource_version == 7
     assert request.profile.profile.endpoints[0].host == "swarmer.swarmer.svc.cluster.local"
+
+
+@pytest.mark.asyncio
+async def test_import_provider_profiles_skips_unchanged_profile():
+    """An identical profile does not advance the gateway profile revision."""
+    mock_client = MagicMock()
+    mock_client._timeout = 10
+    profile = {
+        "id": "agent-swarm",
+        "display_name": "Agent Swarm",
+        "credentials": [{
+            "name": "AGENT_SWARM_API_TOKEN",
+            "env_vars": ["AGENT_SWARM_API_TOKEN"],
+            "auth_style": "bearer",
+            "header_name": "authorization",
+        }],
+        "endpoints": [{
+            "host": "swarmer.swarmer.svc.cluster.local",
+            "port": 8080,
+            "protocol": "rest",
+            "access": "read-write",
+            "enforcement": "enforce",
+        }],
+    }
+    existing = oc._build_provider_profile(profile, resource_version=7)
+    existing.source = "user"
+    existing.scope = "platform"
+    mock_client._stub.GetProviderProfile.return_value = type(
+        "ProviderProfileResponse", (), {"profile": existing}
+    )()
+
+    await oc.import_provider_profiles([profile], client=mock_client)
+
+    mock_client._stub.UpdateProviderProfiles.assert_not_called()
 
 
 def test_jira_provider_profile_binds_atlassian_endpoints():
