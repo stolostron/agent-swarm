@@ -370,6 +370,10 @@ def _provider_cache_key(client, name: str) -> tuple[str, str]:
 @asynccontextmanager
 async def provider_reconciliation_lock(name: str, client):
     """Serialize a provider mutation with other reconciliations/deletions."""
+    if client is None:
+        # Workspaces on the default gateway pass None; resolve it the same way
+        # ensure_provider/delete_provider do so the lock key matches theirs.
+        client = _get_client()
     lock = _provider_config_locks.setdefault(_provider_cache_key(client, name), asyncio.Lock())
     async with lock:
         yield
@@ -415,6 +419,23 @@ def _provider_config_fingerprint(
         separators=(",", ":"),
     ).encode()
     return hmac.new(_PROVIDER_FINGERPRINT_KEY, payload, hashlib.sha256).digest()
+
+
+def _provider_exists_rpc(name: str, client) -> bool:
+    """Blocking GetProvider existence check (NOT_FOUND → False, others raise)."""
+    import grpc
+    from openshell._proto import openshell_pb2
+
+    req = openshell_pb2.GetProviderRequest()
+    req.name = name
+    _set_workspace(req)
+    try:
+        client._stub.GetProvider(req, timeout=client._timeout)
+        return True
+    except grpc.RpcError as exc:
+        if _gateway_rpc_code(exc) == grpc.StatusCode.NOT_FOUND:
+            return False
+        raise
 
 
 def _gateway_rpc_code(error):
@@ -828,6 +849,11 @@ async def ensure_provider(
     caller has independently observed that the provider is absent.
     ``lock_held`` is for callers that already hold
     ``provider_reconciliation_lock`` across a larger transaction.
+
+    A matching fingerprint only skips the write after confirming the provider
+    still exists on the gateway; the fingerprint is re-recorded only after a
+    confirmed successful write, so failed or cancelled writes reconcile on the
+    next call.
     """
     import grpc
     from openshell._proto import openshell_pb2
@@ -865,7 +891,18 @@ async def ensure_provider(
             not force_reconcile
             and hmac.compare_digest(_provider_config_cache.get(cache_key, b""), fingerprint)
         ):
-            return
+            # The fingerprint only proves this process wrote this exact
+            # configuration before. The gateway can still have lost the
+            # provider through another route, and only a deletion in this
+            # process would have cleared the entry — confirm the provider
+            # still exists before skipping. Reads do not advance provider
+            # revisions, so the redundant-write avoidance is preserved.
+            def _confirm_exists() -> bool:
+                return _provider_exists_rpc(name, client)
+
+            if await _run_blocking_and_wait_on_cancel(_confirm_exists):
+                return
+            _provider_config_cache.pop(cache_key, None)
 
         def _build_provider(req_provider):
             req_provider.metadata.name = name
@@ -890,6 +927,11 @@ async def ensure_provider(
                 else:
                     raise
 
+        # Gateway state is unknown once a mutation starts; only a confirmed
+        # success may re-establish the fingerprint. Clearing the entry first
+        # means a failed or cancelled write cannot leave an older fingerprint
+        # that masks divergence on the next call.
+        _provider_config_cache.pop(cache_key, None)
         await _run_blocking_and_wait_on_cancel(_do_ensure)
         _provider_config_cache[cache_key] = fingerprint
         # A successful create/update means the provider now definitely exists —
@@ -952,12 +994,16 @@ async def delete_provider(name: str, client=None, lock_held: bool = False) -> No
             _provider_cache.pop(cache_key, None)
 
 
-async def provider_exists(name: str, client=None, force_refresh: bool = False) -> bool:
+async def provider_exists(
+    name: str, client=None, force_refresh: bool = False, lock_held: bool = False
+) -> bool:
     """Return True if a named provider exists on the gateway.
 
     Results are cached for _PROVIDER_CACHE_TTL seconds to avoid a gRPC round-trip
     on every page render. Callers that need a current launch-time result can set
-    ``force_refresh`` to bypass the cache and serialize the check with mutations.
+    ``force_refresh`` to bypass the cache and serialize the check with mutations;
+    callers already holding ``provider_reconciliation_lock`` must also set
+    ``lock_held`` because asyncio locks are not reentrant.
     """
     if client is None:
         client = _get_client()
@@ -970,26 +1016,11 @@ async def provider_exists(name: str, client=None, force_refresh: bool = False) -
         if now < expires_at:
             return result
 
-    import grpc
-    from openshell._proto import openshell_pb2
-
-    def _do_check() -> bool:
-        req = openshell_pb2.GetProviderRequest()
-        req.name = name
-        _set_workspace(req)
-        try:
-            client._stub.GetProvider(req, timeout=client._timeout)
-            return True
-        except grpc.RpcError as exc:
-            if _gateway_rpc_code(exc) == grpc.StatusCode.NOT_FOUND:
-                return False
-            raise
-
-    if force_refresh:
+    if force_refresh and not lock_held:
         async with _provider_config_locks.setdefault(cache_key, asyncio.Lock()):
-            result = await asyncio.to_thread(_do_check)
+            result = await asyncio.to_thread(_provider_exists_rpc, name, client)
     else:
-        result = await asyncio.to_thread(_do_check)
+        result = await asyncio.to_thread(_provider_exists_rpc, name, client)
     _provider_cache[cache_key] = (result, now + _PROVIDER_CACHE_TTL)
     return result
 

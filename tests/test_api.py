@@ -1538,6 +1538,45 @@ class TestSessions:
             await engine.dispose()
 
     @pytest.mark.asyncio
+    async def test_jira_save_with_default_gateway_client(self, client):
+        from unittest.mock import AsyncMock, patch
+
+        default_client = type("GatewayClient", (), {"_endpoint": "default-gateway"})()
+        ensure_provider = AsyncMock()
+
+        ws = await _create_workspace(client)
+        jira = await client.post(
+            f"/api/v1/workspaces/{ws['id']}/mcp-servers",
+            json={"catalog_slug": "atlassian-jira"},
+        )
+        assert jira.status_code == 201, jira.text
+        server_id = jira.json()["id"]
+
+        with patch(
+            "swarmer.routers.mcp_servers._probe_jira_token",
+            new=AsyncMock(return_value=True),
+        ), patch(
+            "swarmer.openshell_client.get_client_for_workspace",
+            new=AsyncMock(return_value=None),
+        ), patch(
+            "swarmer.openshell_client._get_client", return_value=default_client
+        ), patch(
+            "swarmer.openshell_client.ensure_provider", new=ensure_provider
+        ):
+            save = await client.post(
+                f"/api/v1/workspaces/{ws['id']}/mcp-servers/{server_id}/save",
+                json={
+                    "jira_server_url": "https://example.atlassian.net",
+                    "jira_email": "helper@example.com",
+                    "jira_access_token": secrets.token_urlsafe(32),
+                },
+            )
+
+        assert save.status_code == 200, save.text
+        ensure_provider.assert_awaited_once()
+        assert ensure_provider.await_args.kwargs["client"] is default_client
+
+    @pytest.mark.asyncio
     async def test_workspace_admin_role_is_scoped_per_workspace(self, client):
         """ACM-48496: the admin role only grants manager rights inside the
         workspace where it was granted — an admin of one workspace stays an

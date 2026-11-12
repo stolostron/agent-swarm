@@ -1867,19 +1867,38 @@ async def _do_launch_openshell(
             # Jira credentials/configuration are synchronized when saved. A
             # workspace provider can be attached to other live sandboxes, so
             # don't rewrite it during every launch; only recreate it if absent.
-            if not await openshell_client.provider_exists(
-                pname, client=oc_client, force_refresh=True
+            # Hold the provider's reconciliation lock across the existence
+            # check and the write, and re-read the saved row under it, so a
+            # Jira save that commits while this launch is running cannot be
+            # overwritten with the credentials loaded at launch start.
+            async with openshell_client.provider_reconciliation_lock(
+                pname, oc_client
             ):
-                await openshell_client.ensure_provider(
-                    pname, "jira",
-                    config={
-                        "JIRA_SERVER_URL": mcp.jira_server_url or "",
-                        "JIRA_EMAIL": mcp.jira_email or "",
-                    },
-                    credentials={"JIRA_ACCESS_TOKEN": mcp.jira_access_token},
-                    client=oc_client,
-                    force_reconcile=True,
-                )
+                try:
+                    await db.refresh(mcp)
+                except Exception:
+                    # A row deleted mid-launch must not fail the launch; the
+                    # values loaded at start remain the best available.
+                    log.warning(
+                        "_do_launch_openshell: could not refresh Jira MCP "
+                        "configuration for session %d",
+                        session.id,
+                        exc_info=True,
+                    )
+                if not await openshell_client.provider_exists(
+                    pname, client=oc_client, force_refresh=True, lock_held=True
+                ):
+                    await openshell_client.ensure_provider(
+                        pname, "jira",
+                        config={
+                            "JIRA_SERVER_URL": mcp.jira_server_url or "",
+                            "JIRA_EMAIL": mcp.jira_email or "",
+                        },
+                        credentials={"JIRA_ACCESS_TOKEN": mcp.jira_access_token},
+                        client=oc_client,
+                        force_reconcile=True,
+                        lock_held=True,
+                    )
             provider_names.append(pname)
             # URL and email are non-secret; pass them as plain env vars so the
             # sandbox process sees them directly on every exec call.

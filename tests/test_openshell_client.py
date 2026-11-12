@@ -668,6 +668,9 @@ async def test_cancelled_delete_waits_for_gateway_thread_before_releasing_lock(s
 
         ensuring = asyncio.create_task(_ensure())
         await ensure_started.wait()
+        # Give the waiting task time to reach the provider lock before
+        # asserting it is blocked (a single event-loop yield is not enough).
+        await asyncio.sleep(0.05)
         assert not ensuring.done()
         sdk_client._stub.CreateProvider.assert_not_called()
 
@@ -715,9 +718,11 @@ async def test_cancelled_ensure_waits_for_gateway_thread_before_releasing_lock(s
                 name, "jira", {}, {"TOKEN": second_token}, client=sdk_client
             )
         )
-        await asyncio.sleep(0)
+        await asyncio.sleep(0.05)
         assert not first.done()
         assert not second.done()
+        # Neither RPC may complete while the first ensure holds the lock.
+        assert order == []
 
         finish_create.set()
         with pytest.raises(asyncio.CancelledError):
@@ -822,6 +827,76 @@ async def test_ensure_provider_force_reconciles_cached_configuration(sdk_client)
 
     assert sdk_client._stub.CreateProvider.call_count == 2
     sdk_client._stub.UpdateProvider.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_ensure_provider_recreates_when_fingerprint_matches_but_provider_missing(
+    sdk_client,
+):
+    """A matching fingerprint must not skip recreation when the gateway lost the provider."""
+    import grpc
+    import secrets
+
+    class _NotFound(grpc.RpcError, grpc.Call):
+        def code(self):
+            return grpc.StatusCode.NOT_FOUND
+
+        def details(self):
+            return "provider not found"
+
+        def trailing_metadata(self):
+            return ()
+
+    name = "swarmer-ws-9-jira"
+    token = secrets.token_urlsafe(32)
+    sdk_client._stub.CreateProvider.side_effect = [None, None]
+    sdk_client._stub.GetProvider.return_value = MagicMock()
+    with patch.object(oc, "import_provider_profiles", new=AsyncMock()):
+        await oc.ensure_provider(
+            name, "jira", {}, {"TOKEN": token}, client=sdk_client
+        )
+        # The gateway loses the provider after Swarmer cached its fingerprint.
+        sdk_client._stub.GetProvider.side_effect = _NotFound()
+        await oc.ensure_provider(
+            name, "jira", {}, {"TOKEN": token}, client=sdk_client
+        )
+
+    assert sdk_client._stub.CreateProvider.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_failed_provider_write_does_not_leave_stale_fingerprint(sdk_client):
+    """A failed update must not leave a fingerprint that masks the next reconciliation."""
+    import grpc
+    import secrets
+
+    class AlreadyExists(grpc.RpcError, grpc.Call):
+        def code(self):
+            return grpc.StatusCode.ALREADY_EXISTS
+
+    name = "swarmer-ws-9-agent-swarm-s99"
+    token_a = secrets.token_urlsafe(32)
+    token_b = secrets.token_urlsafe(32)
+    key = oc._provider_cache_key(sdk_client, name)
+    oc._provider_config_cache.pop(key, None)
+    sdk_client._stub.CreateProvider.side_effect = [None, AlreadyExists(), AlreadyExists()]
+    sdk_client._stub.UpdateProvider.side_effect = [
+        RuntimeError("simulated gateway timeout"),
+        None,
+    ]
+    with patch.object(oc, "_get_client", return_value=sdk_client):
+        await oc.ensure_provider(name, "agent-swarm", {}, {"TOKEN": token_a})
+        with pytest.raises(RuntimeError, match="simulated gateway timeout"):
+            await oc.ensure_provider(name, "agent-swarm", {}, {"TOKEN": token_b})
+        # The failed write must clear the cached fingerprint so the retry
+        # reconciles instead of trusting a stale entry.
+        assert key not in oc._provider_config_cache
+        await oc.ensure_provider(name, "agent-swarm", {}, {"TOKEN": token_b})
+
+    assert sdk_client._stub.UpdateProvider.call_count == 2
+    assert oc._provider_config_cache[key] == oc._provider_config_fingerprint(
+        "agent-swarm", {}, {"TOKEN": token_b}
+    )
 
 
 @pytest.mark.asyncio

@@ -104,11 +104,13 @@ refresh loops -> start `scheduler.py` and `pr_watcher.py` background tasks.
 3. Resolve the workspace Gateway with `resolve_gateway_config()`.
 4. Reconcile provider profiles and resolve providers/credentials; unchanged profiles are
    not rewritten, and unchanged provider configurations are skipped using keyed in-memory
-   fingerprints because Gateway reads redact credentials. Credential/configuration saves
-   still reconcile changed values. Workspace-scoped Jira providers are synchronized at
-   save time and force-reconciled during launch if a fresh existence check finds them
-   missing, even when a process-local fingerprint matches. Jira saves hold the provider's
-   reconciliation lock through provider write, database commit, and best-effort rollback
+   fingerprints because Gateway reads redact credentials (a skip still confirms the
+   provider exists on the gateway, and fingerprints are re-recorded only after confirmed
+   successful writes). Credential/configuration saves still reconcile changed values.
+   Workspace-scoped Jira providers are synchronized at save time; launch holds the
+   provider's reconciliation lock, re-reads the saved configuration under it, and
+   force-reconciles the provider if a fresh existence check finds it missing. Jira saves
+   hold that same lock through provider write, database commit, and best-effort rollback
    compensation, preventing overlapping saves from committing out of order. Cancellation
    waits for in-flight Gateway worker threads before compensation or lock release. Provider
    deletion shares the per-provider lock and invalidates both caches after completion. This

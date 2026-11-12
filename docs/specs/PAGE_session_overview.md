@@ -60,14 +60,18 @@ mode-specific output and configuration components.
 - Provider profiles are updated only when their effective definition changes.
   Provider reconciliation uses keyed, process-local fingerprints (never
   plaintext secret comparisons) to skip unchanged writes while still applying
-  changed credentials/configuration. Workspace-scoped Jira provider changes are
-  synchronized when saved; launch force-reconciles the provider if an existence
-  fresh existence check finds it absent, even if its prior fingerprint matches.
-  Provider deletion is serialized with reconciliation and invalidates the existence
-  and configuration caches after completion. Jira saves hold that same provider lock
-  through the database commit and best-effort restoration on failure, preventing
-  overlapping saves from committing out of order. Cancellation waits for an in-flight
-  Gateway worker before restoration and lock release. This is process-local coordination
+  changed credentials/configuration; a skipped write still confirms the
+  provider exists on the gateway, and a fingerprint is re-recorded only after
+  a confirmed successful write. Workspace-scoped Jira provider changes are
+  synchronized when saved; launch holds the provider reconciliation lock,
+  re-reads the saved Jira configuration under it, and force-reconciles the
+  provider if a fresh existence check finds it absent, even if its prior
+  fingerprint matches. Provider deletion is serialized with reconciliation
+  and invalidates the existence and configuration caches after completion.
+  Jira saves hold that same provider lock through the database commit and
+  best-effort restoration on failure, preventing overlapping saves from
+  committing out of order. Cancellation waits for an in-flight Gateway worker
+  before restoration and lock release. This is process-local coordination
   for the supported single-worker Swarmer deployment.
 - Rename and configuration changes are blocked while active.
 

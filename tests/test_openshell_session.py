@@ -1849,7 +1849,8 @@ class TestDoLaunchOpenshell:
              patches["start_agent"], patches["delete_sandbox"], \
              patches["build_policy"], patches["run_agent"], \
              patches["setup_sandbox"] as mock_setup, \
-             patches["provider_exists"] as mock_provider_exists, patches["get_image"]:
+             patches["provider_exists"] as mock_provider_exists, patches["get_image"], \
+             _patch("swarmer.openshell_client.get_client_for_workspace", new=_AsyncMock(return_value=gateway_client)):
             jira_provider_name = f"swarmer-ws-{ws['id']}-jira"
             mock_provider_exists.side_effect = lambda name, **_kwargs: (
                 name != jira_provider_name or jira_provider_exists
@@ -1879,6 +1880,7 @@ class TestDoLaunchOpenshell:
             return
         assert len(jira_calls) == 1
         assert jira_calls[0].kwargs.get("force_reconcile") is True
+        assert jira_calls[0].kwargs.get("lock_held") is True
         # Token must go through provider credentials — gateway stores it securely and
         # injects as an opaque reference token (openshell:resolve:...), never plaintext.
         creds = jira_calls[0].kwargs.get("credentials", {})
@@ -1913,6 +1915,97 @@ class TestDoLaunchOpenshell:
         assert "JIRA_ACCESS_TOKEN" not in sandbox_env, (
             f"JIRA_ACCESS_TOKEN must not appear in plaintext sandbox env_vars: {sandbox_env}"
         )
+
+    @pytest.mark.asyncio
+    async def test_jira_launch_uses_credentials_saved_during_launch(self, client):
+        """A Jira save committed after launch loaded its config is not overwritten.
+
+        The launch must hold the provider reconciliation lock across its
+        existence check and write, re-reading the saved row under the lock, so
+        a save that commits mid-launch cannot be overwritten with stale
+        credentials (and the launch must not deadlock on the lock it holds).
+        """
+        import secrets
+
+        from unittest.mock import AsyncMock as _AsyncMock
+        from unittest.mock import patch as _patch
+
+        from swarmer.models.mcp_server import McpServer
+
+        ws = await _create_workspace(client)
+        mcp_resp = await client.post(
+            f"/api/v1/workspaces/{ws['id']}/mcp-servers",
+            json={"catalog_slug": "atlassian-jira"},
+        )
+        assert mcp_resp.status_code == 201, mcp_resp.text
+        mcp = mcp_resp.json()
+        first_token = secrets.token_urlsafe(32)
+        second_token = secrets.token_urlsafe(32)
+        gateway_client = type("GatewayClient", (), {"_endpoint": "test-gateway"})()
+        # Save initial credentials (mock the Jira probe so it reports valid).
+        with _patch("swarmer.routers.mcp_servers._probe_jira_token", new=_AsyncMock(return_value=True)), \
+             _patch("swarmer.openshell_client.get_client_for_workspace", new=_AsyncMock(return_value=gateway_client)), \
+             _patch("swarmer.openshell_client.ensure_provider", new=_AsyncMock()):
+            save_resp = await client.post(
+                f"/api/v1/workspaces/{ws['id']}/mcp-servers/{mcp['id']}/save",
+                json={
+                    "jira_server_url": "https://redhat.atlassian.net",
+                    "jira_email": "test@redhat.com",
+                    "jira_access_token": first_token,
+                },
+            )
+        assert save_resp.status_code == 200, save_resp.text
+
+        s_resp = await client.post(
+            f"/api/v1/workspaces/{ws['id']}/sessions",
+            json={"name": "s-jira-save-race", "mode": "prompt", "agent_tool": "opencode",
+                  "mcp_server_ids": [mcp["id"]]},
+        )
+        assert s_resp.status_code == 201, s_resp.text
+        s = s_resp.json()
+
+        patches = self._patch_openshell()
+        jira_provider_name = f"swarmer-ws-{ws['id']}-jira"
+
+        async def _save_new_token_during_launch(**_kwargs):
+            # create_provider() runs after the launch committed its
+            # pre-provider state and loaded the Jira row, but before it takes
+            # the provider lock — the window a concurrent Jira save commits in.
+            async with _TestSession() as db2:
+                row = await db2.get(McpServer, mcp["id"])
+                row.jira_access_token = second_token
+                await db2.commit()
+            return {}
+
+        with patches["create_provider"] as mock_create, \
+             patches["ensure_provider"] as mock_ensure, \
+             patches["configure_provider_credential"], patches["attach_sandbox_provider"], \
+             patches["create_sandbox"], patches["write_agent_config"], \
+             patches["write_agents_md"], patches["exec_command"], \
+             patches["start_agent"], patches["delete_sandbox"], \
+             patches["build_policy"], patches["run_agent"], \
+             patches["setup_sandbox"], \
+             patches["provider_exists"] as mock_provider_exists, patches["get_image"], \
+             _patch("swarmer.openshell_client.get_client_for_workspace", new=_AsyncMock(return_value=gateway_client)):
+            mock_create.side_effect = _save_new_token_during_launch
+            mock_provider_exists.side_effect = lambda name, **_kwargs: (
+                name != jira_provider_name
+            )
+            launch_response = await client.post(
+                f"/api/v1/workspaces/{ws['id']}/sessions/{s['id']}/launch"
+            )
+            await asyncio.sleep(0)
+
+        assert launch_response.status_code == 200, launch_response.text
+        jira_calls = [
+            c for c in mock_ensure.call_args_list
+            if len(c.args) >= 2 and c.args[1] == "jira"
+        ]
+        assert len(jira_calls) == 1
+        # The provider write must use the credentials committed during the
+        # launch, not the values loaded before the save.
+        assert jira_calls[0].kwargs["credentials"]["JIRA_ACCESS_TOKEN"] == second_token
+        assert jira_calls[0].kwargs.get("lock_held") is True
 
     @pytest.mark.asyncio
     async def test_prompt_agent_swarm_token_does_not_mutate_gateway_provider(self, client):

@@ -155,11 +155,15 @@ async def save_config(
 
     # Resolve the workspace gateway before changing ORM fields: the lookup
     # queries WorkspaceGateway on this session and would otherwise autoflush
-    # these changes before the provider RPC completes.
+    # these changes before the provider RPC completes. Workspaces on the
+    # default gateway get None here; resolve the shared default client so the
+    # reconciliation lock and provider calls key on a real endpoint.
     try:
         from swarmer import openshell_client
 
         gateway_client = await openshell_client.get_client_for_workspace(ws_id, db)
+        if gateway_client is None:
+            gateway_client = openshell_client._get_client()
     except Exception as exc:
         log.warning(
             "save_config: failed to configure Jira provider for workspace %d (error_type=%s)",
