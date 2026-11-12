@@ -1876,6 +1876,7 @@ async def _do_launch_openshell(
                     },
                     credentials={"JIRA_ACCESS_TOKEN": mcp.jira_access_token},
                     client=oc_client,
+                    force_reconcile=True,
                 )
             provider_names.append(pname)
             # URL and email are non-secret; pass them as plain env vars so the

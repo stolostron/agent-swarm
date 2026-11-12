@@ -61,8 +61,11 @@ mode-specific output and configuration components.
   Provider reconciliation uses keyed, process-local fingerprints (never
   plaintext secret comparisons) to skip unchanged writes while still applying
   changed credentials/configuration. Workspace-scoped Jira provider changes are
-  synchronized when saved; launch only recreates that provider if it is absent,
-  so another live sandbox using it is not disrupted by an unrelated launch.
+  synchronized when saved; launch force-reconciles the provider if an existence
+  check finds it absent, even if its prior fingerprint matches. Provider deletion
+  is serialized with reconciliation and invalidates the existence and configuration
+  caches after completion. If the database commit fails after a Jira provider update,
+  save attempts to restore the previously committed provider configuration.
 - Rename and configuration changes are blocked while active.
 
 ## API references

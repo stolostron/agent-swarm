@@ -106,8 +106,11 @@ refresh loops -> start `scheduler.py` and `pr_watcher.py` background tasks.
    not rewritten, and unchanged provider configurations are skipped using keyed in-memory
    fingerprints because Gateway reads redact credentials. Credential/configuration saves
    still reconcile changed values. Workspace-scoped Jira providers are synchronized at
-   save time and only recreated during launch when missing. Mint a GitHub App IAT when
-   needed. When the Agent
+   save time and force-reconciled during launch if an existence check finds them missing,
+   even when a process-local fingerprint matches. A failed Jira database commit triggers
+   best-effort restoration of the previously committed provider configuration. Provider
+   deletion shares the per-provider reconciliation lock and invalidates both caches after
+   completion. Mint a GitHub App IAT when needed. When the Agent
    Swarm MCP is enabled, `session_auth.py:mint_session_token()` mints the HMAC-signed,
    one-hour session token (`AGENT_SWARM_API_TOKEN`) for the sandbox MCP client. Prompt
    runs pass it only to the one-shot agent command, avoiding Gateway provider updates

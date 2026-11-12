@@ -774,6 +774,7 @@ async def ensure_provider(
     client=None,
     enmaas_base_url: str = "",
     strict_profile_reconciliation: bool = True,
+    force_reconcile: bool = False,
 ) -> None:
     """Create or update a named provider on the gateway with its credentials.
 
@@ -785,6 +786,8 @@ async def ensure_provider(
     *enmaas_base_url* supplies the validated workspace URL for ``enmaas-ws-*``
     profile types. ``strict_profile_reconciliation`` propagates profile import
     failures for URL changes that must not be reported as successful otherwise.
+    ``force_reconcile`` bypasses a matching process-local fingerprint when a
+    caller has independently observed that the provider is absent.
     """
     import grpc
     from openshell._proto import openshell_pb2
@@ -817,7 +820,10 @@ async def ensure_provider(
         # keyed digest held in memory can safely establish that this process
         # already reconciled the exact same effective provider configuration.
         # A changed key/config gets a different digest and is still propagated.
-        if hmac.compare_digest(_provider_config_cache.get(cache_key, b""), fingerprint):
+        if (
+            not force_reconcile
+            and hmac.compare_digest(_provider_config_cache.get(cache_key, b""), fingerprint)
+        ):
             return
 
         def _build_provider(req_provider):
@@ -858,7 +864,7 @@ async def delete_provider(name: str, client=None) -> None:
     if client is None:
         client = _get_client()
     cache_key = _provider_cache_key(client, name)
-    _provider_config_cache.pop(cache_key, None)
+    lock = _provider_config_locks.setdefault(cache_key, asyncio.Lock())
 
     def _do_delete():
         req = openshell_pb2.DeleteProviderRequest()
@@ -893,8 +899,15 @@ async def delete_provider(name: str, client=None) -> None:
                 return
             raise
 
-    await asyncio.to_thread(_do_delete)
-    _provider_cache.pop(cache_key, None)  # invalidate cached existence check
+    async with lock:
+        try:
+            await asyncio.to_thread(_do_delete)
+        finally:
+            # Invalidate both caches only after deletion has completed, even
+            # when the gateway reports an error. This shares ensure_provider's
+            # lock so a concurrent reconciliation cannot be deleted afterward.
+            _provider_config_cache.pop(cache_key, None)
+            _provider_cache.pop(cache_key, None)
 
 
 async def provider_exists(name: str, client=None) -> bool:

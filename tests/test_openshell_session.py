@@ -1867,6 +1867,7 @@ class TestDoLaunchOpenshell:
             assert jira_calls == []
             return
         assert len(jira_calls) == 1
+        assert jira_calls[0].kwargs.get("force_reconcile") is True
         # Token must go through provider credentials — gateway stores it securely and
         # injects as an opaque reference token (openshell:resolve:...), never plaintext.
         creds = jira_calls[0].kwargs.get("credentials", {})

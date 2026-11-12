@@ -539,14 +539,78 @@ async def test_provider_exists_cache_is_scoped_to_gateway():
 
 @pytest.mark.asyncio
 async def test_delete_provider_invalidates_cache(sdk_client):
-    """delete_provider() removes the name from _provider_cache."""
+    """delete_provider() clears existence and configuration caches."""
     import time
     name = "swarmer-ws-4-google-cloud"
     key = oc._provider_cache_key(sdk_client, name)
     oc._provider_cache[key] = (True, time.monotonic() + 30)
+    oc._provider_config_cache[key] = b"test-fingerprint"
     with patch.object(oc, "_get_client", return_value=sdk_client):
         await oc.delete_provider(name)
     assert key not in oc._provider_cache
+    assert key not in oc._provider_config_cache
+
+
+@pytest.mark.asyncio
+async def test_delete_provider_serializes_with_ensure(sdk_client):
+    """An ensure waiting behind deletion recreates rather than being deleted."""
+    import asyncio
+    import secrets
+    import threading
+
+    name = "swarmer-ws-4-jira"
+    delete_started = threading.Event()
+    finish_delete = threading.Event()
+    token = secrets.token_urlsafe(32)
+    order = []
+
+    def _delete(_request, timeout):
+        delete_started.set()
+        assert finish_delete.wait(timeout=3)
+        order.append("delete")
+        raise RuntimeError("simulated gateway deletion failure")
+
+    def _create(_request, timeout):
+        order.append("create")
+
+    sdk_client._stub.DeleteProvider.side_effect = _delete
+    sdk_client._stub.CreateProvider.side_effect = _create
+    with patch.object(oc, "_get_client", return_value=sdk_client), \
+         patch.object(oc, "import_provider_profiles", new=AsyncMock()):
+        deleting = asyncio.create_task(oc.delete_provider(name))
+        assert await asyncio.to_thread(delete_started.wait, 1)
+        ensuring = asyncio.create_task(
+            oc.ensure_provider(name, "jira", {}, {"TOKEN": token}, client=sdk_client)
+        )
+        await asyncio.sleep(0.05)
+        assert not ensuring.done()
+        sdk_client._stub.CreateProvider.assert_not_called()
+
+        finish_delete.set()
+        with pytest.raises(RuntimeError, match="simulated gateway deletion failure"):
+            await deleting
+        await ensuring
+
+    assert order == ["delete", "create"]
+
+
+@pytest.mark.asyncio
+async def test_delete_provider_clears_caches_after_failure(sdk_client):
+    """A failed deletion must not leave stale existence or config fingerprints."""
+    import time
+
+    name = "swarmer-ws-4-jira"
+    key = oc._provider_cache_key(sdk_client, name)
+    oc._provider_cache[key] = (True, time.monotonic() + 30)
+    oc._provider_config_cache[key] = b"test-fingerprint"
+    sdk_client._stub.DeleteProvider.side_effect = RuntimeError("gateway unavailable")
+
+    with patch.object(oc, "_get_client", return_value=sdk_client), \
+         pytest.raises(RuntimeError, match="gateway unavailable"):
+        await oc.delete_provider(name)
+
+    assert key not in oc._provider_cache
+    assert key not in oc._provider_config_cache
 
 
 @pytest.mark.asyncio
@@ -617,6 +681,33 @@ async def test_ensure_provider_skips_unchanged_and_updates_changed_config(sdk_cl
     assert config_update.provider.config["ENDPOINT"] == "https://example.invalid/v2"
     assert b"credential-v1" not in oc._provider_config_cache[cache_key]
     assert b"credential-v2" not in oc._provider_config_cache[cache_key]
+
+
+@pytest.mark.asyncio
+async def test_ensure_provider_force_reconciles_cached_configuration(sdk_client):
+    """An observed-missing provider is recreated even with a matching fingerprint."""
+    import grpc
+    import secrets
+
+    class AlreadyExists(grpc.RpcError, grpc.Call):
+        def code(self):
+            return grpc.StatusCode.ALREADY_EXISTS
+
+    name = "swarmer-ws-9-jira"
+    token = secrets.token_urlsafe(32)
+    sdk_client._stub.CreateProvider.side_effect = [None, AlreadyExists()]
+    with patch.object(oc, "import_provider_profiles", new=AsyncMock()):
+        await oc.ensure_provider(
+            name, "jira", {"JIRA_SERVER_URL": "https://example.invalid"},
+            {"TOKEN": token}, client=sdk_client,
+        )
+        await oc.ensure_provider(
+            name, "jira", {"JIRA_SERVER_URL": "https://example.invalid"},
+            {"TOKEN": token}, client=sdk_client, force_reconcile=True,
+        )
+
+    assert sdk_client._stub.CreateProvider.call_count == 2
+    sdk_client._stub.UpdateProvider.assert_called_once()
 
 
 @pytest.mark.asyncio

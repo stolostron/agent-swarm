@@ -155,6 +155,28 @@ async def save_config(
     if not jira_access_token and not server.jira_access_token_enc:
         raise HTTPException(status_code=422, detail="API token is required")
 
+    # Resolve the workspace gateway before changing ORM fields: the lookup
+    # queries WorkspaceGateway on this session and would otherwise autoflush
+    # these changes before the provider RPC completes.
+    try:
+        from swarmer import openshell_client
+
+        gateway_client = await openshell_client.get_client_for_workspace(ws_id, db)
+    except Exception as exc:
+        log.warning(
+            "save_config: failed to configure Jira provider for workspace %d (error_type=%s)",
+            ws_id,
+            type(exc).__name__,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="failed to configure Jira provider on OpenShell",
+        ) from exc
+
+    previous_jira_server_url = server.jira_server_url
+    previous_jira_email = server.jira_email
+    previous_jira_access_token = server.jira_access_token
+
     server.jira_server_url = jira_server_url
     server.shared = True
     if jira_access_token:
@@ -175,9 +197,6 @@ async def save_config(
     # recreate it if missing), avoiding updates that would affect other live
     # sandboxes in the workspace.
     try:
-        from swarmer import openshell_client
-
-        gateway_client = await openshell_client.get_client_for_workspace(ws_id, db)
         await openshell_client.ensure_provider(
             f"swarmer-ws-{ws_id}-jira",
             "jira",
@@ -199,7 +218,46 @@ async def save_config(
             detail="failed to configure Jira provider on OpenShell",
         ) from exc
 
-    await db.commit()
+    try:
+        await db.commit()
+    except Exception:
+        # The provider is shared with live sandboxes. If persistence fails,
+        # restore its last committed state so an unsuccessful save cannot
+        # silently change credentials used by those sandboxes.
+        try:
+            await db.rollback()
+        except Exception:
+            log.warning(
+                "save_config: database rollback failed for workspace %d",
+                ws_id,
+                exc_info=True,
+            )
+        try:
+            provider_name = f"swarmer-ws-{ws_id}-jira"
+            if previous_jira_access_token:
+                await openshell_client.ensure_provider(
+                    provider_name,
+                    "jira",
+                    config={
+                        "JIRA_SERVER_URL": previous_jira_server_url,
+                        "JIRA_EMAIL": previous_jira_email,
+                    },
+                    credentials={"JIRA_ACCESS_TOKEN": previous_jira_access_token},
+                    client=gateway_client,
+                )
+            else:
+                await openshell_client.delete_provider(
+                    provider_name, client=gateway_client
+                )
+        except Exception as exc:
+            log.error(
+                "save_config: failed to restore Jira provider after database commit failure "
+                "for workspace %d (error_type=%s)",
+                ws_id,
+                type(exc).__name__,
+            )
+        raise
+
     await db.refresh(server)
     return server
 

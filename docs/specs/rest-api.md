@@ -545,11 +545,16 @@ Creation accepts a catalog slug. Current catalog support is Jira-oriented.
 Saving validates server URL, email, and token, then probes Jira and records
 health status. Before committing the saved configuration, it synchronizes the
 workspace-scoped Jira provider on OpenShell; a Gateway failure returns `502`
-and does not report the save as successful. Session launch attaches the
-existing provider without rewriting it, creating it only if it is absent, so
-other live sandboxes using that shared provider are unaffected by an unrelated
-launch. Inventory visibility follows MCP ownership and sharing rules;
-credential values and ownership identifiers are not returned.
+and does not report the save as successful. The gateway client is resolved
+before changing ORM fields so the lookup cannot flush the pending Jira update.
+If the database commit fails after the Gateway update, Swarmer rolls back and
+best-effort restores the previously committed provider (or deletes it if no
+previous token was configured); a restoration failure is logged. Session launch
+attaches an existing provider without rewriting it, force-reconciling it if an
+existence check finds it absent even when a cached fingerprint matches. Provider
+deletion is serialized against reconciliation and invalidates both provider caches
+after the deletion attempt. Inventory visibility follows MCP ownership and sharing
+rules; credential values and ownership identifiers are not returned.
 
 ### 6.11 Prompt sources
 
