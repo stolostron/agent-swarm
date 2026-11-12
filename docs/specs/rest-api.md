@@ -549,12 +549,16 @@ and does not report the save as successful. The gateway client is resolved
 before changing ORM fields so the lookup cannot flush the pending Jira update.
 If the database commit fails after the Gateway update, Swarmer rolls back and
 best-effort restores the previously committed provider (or deletes it if no
-previous token was configured); a restoration failure is logged. Session launch
-attaches an existing provider without rewriting it, force-reconciling it if an
-existence check finds it absent even when a cached fingerprint matches. Provider
+previous token was configured); a restoration failure is logged. Saves serialize
+provider update, database commit, and compensation under the same per-provider
+lock, and reload the prior saved configuration after acquiring the lock. Cancellation
+waits for any in-flight Gateway worker before attempting restoration. Session launch
+uses a fresh existence check, then attaches an existing provider without rewriting
+it or force-reconciles it if absent even when a cached fingerprint matches. Provider
 deletion is serialized against reconciliation and invalidates both provider caches
-after the deletion attempt. Inventory visibility follows MCP ownership and sharing
-rules; credential values and ownership identifiers are not returned.
+after the deletion attempt. This process-local coordination relies on the supported
+single-replica/single-worker deployment. Inventory visibility follows MCP ownership
+and sharing rules; credential values and ownership identifiers are not returned.
 
 ### 6.11 Prompt sources
 

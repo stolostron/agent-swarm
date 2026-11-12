@@ -1807,7 +1807,8 @@ class TestDoLaunchOpenshell:
         self, client, jira_provider_exists
     ):
         """Create Jira provider if missing; do not rewrite it during launch if present."""
-        from unittest.mock import patch as _patch, AsyncMock as _AsyncMock
+        from unittest.mock import AsyncMock as _AsyncMock
+        from unittest.mock import patch as _patch
         ws = await _create_workspace(client)
         # Add Jira MCP server from catalog
         mcp_resp = await client.post(
@@ -1816,9 +1817,10 @@ class TestDoLaunchOpenshell:
         )
         assert mcp_resp.status_code == 201, mcp_resp.text
         mcp = mcp_resp.json()
+        gateway_client = type("GatewayClient", (), {"_endpoint": "test-gateway"})()
         # Save credentials (mock the Jira probe so it reports valid)
         with _patch("swarmer.routers.mcp_servers._probe_jira_token", new=_AsyncMock(return_value=True)), \
-             _patch("swarmer.openshell_client.get_client_for_workspace", new=_AsyncMock(return_value=object())), \
+             _patch("swarmer.openshell_client.get_client_for_workspace", new=_AsyncMock(return_value=gateway_client)), \
              _patch("swarmer.openshell_client.ensure_provider", new=_AsyncMock()):
             save_resp = await client.post(
                 f"/api/v1/workspaces/{ws['id']}/mcp-servers/{mcp['id']}/save",
@@ -1852,17 +1854,26 @@ class TestDoLaunchOpenshell:
             mock_provider_exists.side_effect = lambda name, **_kwargs: (
                 name != jira_provider_name or jira_provider_exists
             )
-            await client.post(
+            launch_response = await client.post(
                 f"/api/v1/workspaces/{ws['id']}/sessions/{s['id']}/launch"
             )
             # Yield to the event loop so the asyncio.create_task() background
             # task (_setup_openshell_sandbox) runs while patches are still active.
             await asyncio.sleep(0)
+            assert launch_response.status_code == 200, launch_response.text
+            mock_setup.assert_awaited_once()
+            assert jira_provider_name in mock_setup.await_args.kwargs["provider_names"]
 
         jira_calls = [
             c for c in mock_ensure.call_args_list
             if len(c.args) >= 2 and c.args[1] == "jira"
         ]
+        jira_existence_calls = [
+            c for c in mock_provider_exists.call_args_list
+            if c.args and c.args[0] == jira_provider_name
+        ]
+        assert len(jira_existence_calls) == 1
+        assert jira_existence_calls[0].kwargs["force_refresh"] is True
         if jira_provider_exists:
             assert jira_calls == []
             return

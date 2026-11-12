@@ -4,6 +4,7 @@ Uses httpx AsyncClient with the FastAPI test client — no running server needed
 Overrides the auth dependency and uses an in-memory SQLite database.
 """
 
+import asyncio
 import json
 import logging
 import os
@@ -1277,7 +1278,7 @@ class TestSessions:
                 assert server.jira_email == ""
                 assert not server.jira_access_token_enc
                 assert not db.is_modified(server)
-                return object()
+                return type("GatewayClient", (), {"_endpoint": "test-gateway"})()
 
             # Save credentials (mock the Jira probe so it reports valid)
             with _patch(
@@ -1328,8 +1329,9 @@ class TestSessions:
             app.dependency_overrides[get_current_user] = _override_get_current_user
 
     @pytest.mark.asyncio
-    async def test_jira_save_restores_provider_when_database_commit_fails(
-        self, client, monkeypatch
+    @pytest.mark.parametrize("failure_kind", ["commit", "cancellation"])
+    async def test_jira_save_restores_provider_when_commit_fails_or_is_cancelled(
+        self, client, monkeypatch, failure_kind
     ):
         from unittest.mock import AsyncMock, patch
 
@@ -1354,12 +1356,14 @@ class TestSessions:
             await db.commit()
 
         ensure_provider = AsyncMock()
-        gateway_client = object()
+        gateway_client = type("GatewayClient", (), {"_endpoint": "test-gateway"})()
 
         async def resolve_gateway(_ws_id, _db):
             return gateway_client
 
         async def fail_commit(_session):
+            if failure_kind == "cancellation":
+                raise asyncio.CancelledError()
             raise RuntimeError("simulated database commit failure")
 
         with patch(
@@ -1374,7 +1378,12 @@ class TestSessions:
             "swarmer.openshell_client.delete_provider", new=AsyncMock()
         ) as delete_provider, monkeypatch.context() as patch_commit:
             patch_commit.setattr(AsyncSession, "commit", fail_commit)
-            with pytest.raises(RuntimeError, match="simulated database commit failure"):
+            expected_failure = (
+                asyncio.CancelledError
+                if failure_kind == "cancellation"
+                else RuntimeError
+            )
+            with pytest.raises(expected_failure):
                 await client.post(
                     f"/api/v1/workspaces/{ws['id']}/mcp-servers/{server_id}/save",
                     json={
@@ -1395,6 +1404,8 @@ class TestSessions:
             "JIRA_ACCESS_TOKEN": old_token,
         }
         assert restore_call.kwargs["client"] is gateway_client
+        assert restore_call.kwargs["force_reconcile"] is True
+        assert restore_call.kwargs["lock_held"] is True
         delete_provider.assert_not_awaited()
 
         async with _TestSession() as db:
@@ -1402,6 +1413,129 @@ class TestSessions:
             assert server.jira_server_url == "https://old.example.invalid"
             assert server.jira_email == "old-contact"
             assert server.jira_access_token == old_token
+
+    @pytest.mark.asyncio
+    async def test_concurrent_jira_saves_serialize_provider_write_and_commit(
+        self, client, monkeypatch, tmp_path
+    ):
+        from unittest.mock import AsyncMock, patch
+
+        from sqlalchemy.ext.asyncio import (
+            AsyncSession,
+            async_sessionmaker,
+            create_async_engine,
+        )
+
+        from swarmer.database import get_db
+        from swarmer.main import app
+        from swarmer.models.mcp_server import McpServer
+
+        engine = create_async_engine(
+            f"sqlite+aiosqlite:///{tmp_path / 'concurrent-saves.sqlite'}"
+        )
+        session_factory = async_sessionmaker(engine, expire_on_commit=False)
+
+        async def override_get_db():
+            async with session_factory() as session:
+                yield session
+
+        app.dependency_overrides[get_db] = override_get_db
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+
+        ws = await _create_workspace(client)
+        jira = await client.post(
+            f"/api/v1/workspaces/{ws['id']}/mcp-servers",
+            json={"catalog_slug": "atlassian-jira"},
+        )
+        assert jira.status_code == 201, jira.text
+        server_id = jira.json()["id"]
+        first_url = "https://first.example.invalid"
+        second_url = "https://second.example.invalid"
+        first_token = secrets.token_urlsafe(32)
+        second_token = secrets.token_urlsafe(32)
+        gateway_client = type("GatewayClient", (), {"_endpoint": "test-gateway"})()
+        first_commit_started = asyncio.Event()
+        release_first_commit = asyncio.Event()
+        second_gateway_resolved = asyncio.Event()
+        gateway_resolutions = 0
+
+        async def resolve_gateway(_ws_id, _db):
+            nonlocal gateway_resolutions
+            gateway_resolutions += 1
+            if gateway_resolutions == 2:
+                second_gateway_resolved.set()
+            return gateway_client
+
+        async def probe_jira(*_args):
+            return True
+
+        ensure_provider = AsyncMock()
+        original_commit = AsyncSession.commit
+
+        async def pause_first_commit(db):
+            if any(
+                isinstance(item, McpServer) and item.jira_server_url == first_url
+                for item in db.identity_map.values()
+            ):
+                first_commit_started.set()
+                await release_first_commit.wait()
+            await original_commit(db)
+
+        monkeypatch.setattr(AsyncSession, "commit", pause_first_commit)
+        with patch(
+            "swarmer.routers.mcp_servers._probe_jira_token",
+            new=AsyncMock(side_effect=probe_jira),
+        ), patch(
+            "swarmer.openshell_client.get_client_for_workspace",
+            new=AsyncMock(side_effect=resolve_gateway),
+        ), patch(
+            "swarmer.openshell_client.ensure_provider", new=ensure_provider
+        ):
+            first_save = asyncio.create_task(client.post(
+                f"/api/v1/workspaces/{ws['id']}/mcp-servers/{server_id}/save",
+                json={
+                    "jira_server_url": first_url,
+                    "jira_email": "first-contact",
+                    "jira_access_token": first_token,
+                },
+            ))
+            await first_commit_started.wait()
+
+            second_save = asyncio.create_task(client.post(
+                f"/api/v1/workspaces/{ws['id']}/mcp-servers/{server_id}/save",
+                json={
+                    "jira_server_url": second_url,
+                    "jira_email": "second-contact",
+                    "jira_access_token": second_token,
+                },
+            ))
+            await second_gateway_resolved.wait()
+            assert ensure_provider.await_count == 1
+            assert not second_save.done()
+
+            release_first_commit.set()
+            first_response, second_response = await asyncio.gather(
+                first_save, second_save
+            )
+
+        assert first_response.status_code == 200, first_response.text
+        assert second_response.status_code == 200, second_response.text
+        assert ensure_provider.await_count == 2
+        assert [
+            call.kwargs["config"]["JIRA_SERVER_URL"]
+            for call in ensure_provider.await_args_list
+        ] == [first_url, second_url]
+
+        try:
+            async with session_factory() as db:
+                server = await db.get(McpServer, server_id)
+                assert server.jira_server_url == second_url
+                assert server.jira_email == "second-contact"
+                assert server.jira_access_token == second_token
+        finally:
+            app.dependency_overrides[get_db] = _override_get_db
+            await engine.dispose()
 
     @pytest.mark.asyncio
     async def test_workspace_admin_role_is_scoped_per_workspace(self, client):

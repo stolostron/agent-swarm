@@ -1867,7 +1867,9 @@ async def _do_launch_openshell(
             # Jira credentials/configuration are synchronized when saved. A
             # workspace provider can be attached to other live sandboxes, so
             # don't rewrite it during every launch; only recreate it if absent.
-            if not await openshell_client.provider_exists(pname, client=oc_client):
+            if not await openshell_client.provider_exists(
+                pname, client=oc_client, force_refresh=True
+            ):
                 await openshell_client.ensure_provider(
                     pname, "jira",
                     config={

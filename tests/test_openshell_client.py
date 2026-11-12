@@ -503,6 +503,22 @@ async def test_provider_exists_cache_miss_calls_grpc(sdk_client):
 
 
 @pytest.mark.asyncio
+async def test_provider_exists_force_refresh_ignores_cached_true(sdk_client):
+    """Launch-time checks bypass a stale positive existence result."""
+    import time
+
+    name = "swarmer-ws-3-jira"
+    key = oc._provider_cache_key(sdk_client, name)
+    oc._provider_cache[key] = (True, time.monotonic() + 30)
+    sdk_client._stub.GetProvider.return_value = MagicMock()
+
+    result = await oc.provider_exists(name, client=sdk_client, force_refresh=True)
+
+    assert result is True
+    sdk_client._stub.GetProvider.assert_called_once()
+
+
+@pytest.mark.asyncio
 async def test_provider_exists_cache_is_scoped_to_gateway():
     """A local provider result must not leak into a remote gateway cache entry."""
     import grpc
@@ -611,6 +627,104 @@ async def test_delete_provider_clears_caches_after_failure(sdk_client):
 
     assert key not in oc._provider_cache
     assert key not in oc._provider_config_cache
+
+
+@pytest.mark.asyncio
+async def test_cancelled_delete_waits_for_gateway_thread_before_releasing_lock(sdk_client):
+    """A cancelled delete keeps reconciliation blocked until its RPC finishes."""
+    import asyncio
+    import secrets
+    import threading
+
+    name = "swarmer-ws-4-jira"
+    delete_started = threading.Event()
+    finish_delete = threading.Event()
+    order = []
+    token = secrets.token_urlsafe(32)
+
+    def _delete(_request, timeout):
+        delete_started.set()
+        assert finish_delete.wait(timeout=3)
+        order.append("delete")
+        return sdk_client._stub.DeleteProvider.return_value
+
+    def _create(_request, timeout):
+        order.append("create")
+
+    sdk_client._stub.DeleteProvider.side_effect = _delete
+    sdk_client._stub.CreateProvider.side_effect = _create
+    with patch.object(oc, "import_provider_profiles", new=AsyncMock()):
+        deleting = asyncio.create_task(oc.delete_provider(name, client=sdk_client))
+        assert await asyncio.to_thread(delete_started.wait, 1)
+        deleting.cancel()
+
+        ensure_started = asyncio.Event()
+
+        async def _ensure():
+            ensure_started.set()
+            await oc.ensure_provider(
+                name, "jira", {}, {"TOKEN": token}, client=sdk_client
+            )
+
+        ensuring = asyncio.create_task(_ensure())
+        await ensure_started.wait()
+        assert not ensuring.done()
+        sdk_client._stub.CreateProvider.assert_not_called()
+
+        finish_delete.set()
+        with pytest.raises(asyncio.CancelledError):
+            await deleting
+        await ensuring
+
+    assert order == ["delete", "create"]
+
+
+@pytest.mark.asyncio
+async def test_cancelled_ensure_waits_for_gateway_thread_before_releasing_lock(sdk_client):
+    """Cancellation cannot let another ensure overtake an in-flight create RPC."""
+    import asyncio
+    import secrets
+    import threading
+
+    name = "swarmer-ws-4-jira"
+    create_started = threading.Event()
+    finish_create = threading.Event()
+    order = []
+    first_token = secrets.token_urlsafe(32)
+    second_token = secrets.token_urlsafe(32)
+
+    def _create(_request, timeout):
+        if not create_started.is_set():
+            create_started.set()
+            assert finish_create.wait(timeout=3)
+            order.append("first-create")
+        else:
+            order.append("second-create")
+
+    sdk_client._stub.CreateProvider.side_effect = _create
+    with patch.object(oc, "import_provider_profiles", new=AsyncMock()):
+        first = asyncio.create_task(
+            oc.ensure_provider(
+                name, "jira", {}, {"TOKEN": first_token}, client=sdk_client
+            )
+        )
+        assert await asyncio.to_thread(create_started.wait, 1)
+        first.cancel()
+        second = asyncio.create_task(
+            oc.ensure_provider(
+                name, "jira", {}, {"TOKEN": second_token}, client=sdk_client
+            )
+        )
+        await asyncio.sleep(0)
+        assert not first.done()
+        assert not second.done()
+
+        finish_create.set()
+        with pytest.raises(asyncio.CancelledError):
+            await first
+        await second
+
+    assert order == ["first-create", "second-create"]
 
 
 @pytest.mark.asyncio
@@ -1445,9 +1559,6 @@ async def test_import_provider_profiles_reconciles_after_successful_import():
     """A successful bulk import still updates an existing stale profile."""
     mock_client = MagicMock()
     mock_client._timeout = 10
-    existing_resp = MagicMock()
-    existing_resp.profile.resource_version = 7
-    mock_client._stub.GetProviderProfile.return_value = existing_resp
 
     profile = {
         "id": "agent-swarm",
@@ -1466,6 +1577,13 @@ async def test_import_provider_profiles_reconciles_after_successful_import():
             "enforcement": "enforce",
         }],
     }
+    stale_profile = oc._build_provider_profile(profile, resource_version=7)
+    stale_profile.endpoints[0].host = "old.example.invalid"
+    stale_profile.source = "user"
+    stale_profile.scope = "platform"
+    mock_client._stub.GetProviderProfile.return_value = type(
+        "ProviderProfileResponse", (), {"profile": stale_profile}
+    )()
 
     await oc.import_provider_profiles([profile], client=mock_client)
 
@@ -1498,6 +1616,8 @@ async def test_import_provider_profiles_skips_unchanged_profile():
         }],
     }
     existing = oc._build_provider_profile(profile, resource_version=7)
+    existing.source = "user"
+    existing.scope = "platform"
     mock_client._stub.GetProviderProfile.return_value = type(
         "ProviderProfileResponse", (), {"profile": existing}
     )()
