@@ -2014,9 +2014,10 @@ class TestDoLaunchOpenshell:
         The re-read uses populate_existing instead of db.refresh, so a
         missing row leaves the identity-mapped object's launch-start values
         readable instead of expiring them (async attribute loads raise).
-        The re-read is also workspace-scoped: without AUTOINCREMENT, SQLite
-        can reuse a deleted row's ID for another workspace's server, which
-        must not leak into this launch's provider.
+        The re-read is also workspace- and slug-scoped: without
+        AUTOINCREMENT, SQLite can reuse a deleted row's ID for a new server
+        in another workspace or with a different slug, which must not leak
+        into this launch's provider.
         """
         import secrets
 
@@ -2026,7 +2027,6 @@ class TestDoLaunchOpenshell:
         from swarmer.models.mcp_server import McpServer
 
         ws = await _create_workspace(client)
-        other_ws = await _create_workspace(client, "ID reuse workspace")
         mcp_resp = await client.post(
             f"/api/v1/workspaces/{ws['id']}/mcp-servers",
             json={"catalog_slug": "atlassian-jira"},
@@ -2064,16 +2064,17 @@ class TestDoLaunchOpenshell:
             # create_provider() runs after the launch committed its
             # pre-provider state and loaded the Jira row, but before it
             # takes the provider lock. Delete the row and simulate SQLite
-            # rowid reuse: another workspace's server takes the same ID.
+            # rowid reuse: a same-workspace server with a different slug
+            # takes the same ID.
             async with _TestSession() as db2:
                 row = await db2.get(McpServer, mcp["id"])
                 await db2.delete(row)
                 db2.add(
                     McpServer(
                         id=mcp["id"],
-                        workspace_id=other_ws["id"],
-                        slug="atlassian-jira",
-                        display_name="Jira",
+                        workspace_id=ws["id"],
+                        slug="other-integration",
+                        display_name="Other Integration",
                         server_url="",
                         jira_server_url="https://other.example.invalid",
                         jira_email="other-contact",
@@ -2112,7 +2113,8 @@ class TestDoLaunchOpenshell:
         ]
         assert len(jira_calls) == 1
         # The launch-start values remain usable after the row disappeared,
-        # and the reused ID from another workspace must not leak in.
+        # and the reused ID (same workspace, different slug) must not leak
+        # the replacement row's values into the provider write.
         assert jira_calls[0].kwargs["credentials"]["JIRA_ACCESS_TOKEN"] == saved_token
         assert (
             jira_calls[0].kwargs["credentials"]["JIRA_ACCESS_TOKEN"] != other_token

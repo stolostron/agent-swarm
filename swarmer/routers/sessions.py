@@ -1881,16 +1881,17 @@ async def _do_launch_openshell(
                 # returns None and leaves the launch-start values intact —
                 # unlike db.refresh, which expires attributes first and
                 # would leave the object unusable in async code. The
-                # workspace predicate is required: without AUTOINCREMENT,
-                # SQLite can reuse a deleted row's ID for another
-                # workspace's new server, which must not leak into this
-                # launch's provider.
+                # workspace and slug predicates are required: without
+                # AUTOINCREMENT, SQLite can reuse a deleted row's ID for a
+                # new server — in another workspace or with a different
+                # slug — which must not leak into this launch's provider.
                 fresh_mcp = (
                     await db.execute(
                         select(McpServer)
                         .where(
                             McpServer.id == mcp.id,
                             McpServer.workspace_id == ws_id,
+                            McpServer.slug == mcp.slug,
                         )
                         .execution_options(populate_existing=True)
                     )
