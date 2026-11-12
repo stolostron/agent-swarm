@@ -57,6 +57,12 @@ mode-specific output and configuration components.
 - Agent Swarm provider credentials are refreshed for long-running TUI/server
   sessions and deleted after the sandbox is deleted; prompt-mode tokens are
   request-scoped and use no Agent Swarm Gateway provider.
+- Provider profiles are updated only when their effective definition changes.
+  Provider reconciliation uses keyed, process-local fingerprints (never
+  plaintext secret comparisons) to skip unchanged writes while still applying
+  changed credentials/configuration. Workspace-scoped Jira provider changes are
+  synchronized when saved; launch only recreates that provider if it is absent,
+  so another live sandbox using it is not disrupted by an unrelated launch.
 - Rename and configuration changes are blocked while active.
 
 ## API references

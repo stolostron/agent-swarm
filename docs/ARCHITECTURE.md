@@ -102,7 +102,12 @@ refresh loops -> start `scheduler.py` and `pr_watcher.py` background tasks.
 1. HTTP route, cron scheduler, or PR watcher calls `routers/sessions.py:_do_launch()`.
 2. If `MAX_CONCURRENT_AGENTS` is full, persist `phase="queued"`; do not create a sandbox.
 3. Resolve the workspace Gateway with `resolve_gateway_config()`.
-4. Resolve providers and credentials; mint a GitHub App IAT when needed. When the Agent
+4. Reconcile provider profiles and resolve providers/credentials; unchanged profiles are
+   not rewritten, and unchanged provider configurations are skipped using keyed in-memory
+   fingerprints because Gateway reads redact credentials. Credential/configuration saves
+   still reconcile changed values. Workspace-scoped Jira providers are synchronized at
+   save time and only recreated during launch when missing. Mint a GitHub App IAT when
+   needed. When the Agent
    Swarm MCP is enabled, `session_auth.py:mint_session_token()` mints the HMAC-signed,
    one-hour session token (`AGENT_SWARM_API_TOKEN`) for the sandbox MCP client. Prompt
    runs pass it only to the one-shot agent command, avoiding Gateway provider updates

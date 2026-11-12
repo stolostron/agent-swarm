@@ -23,7 +23,10 @@ Credential injection:
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import hmac
 import ipaddress
+import json
 import logging
 import os
 import pathlib
@@ -51,6 +54,13 @@ log = logging.getLogger(__name__)
 
 _PROVIDER_CACHE_TTL: float = 30.0
 _provider_cache: dict[tuple[str, str], tuple[bool, float]] = {}  # (gateway endpoint, name) → result
+# Gateway reads redact credentials, so remote state cannot safely be compared
+# with the caller's secrets. Keep only keyed fingerprints in process memory to
+# suppress repeated writes while still detecting effective config/credential
+# changes. The random key intentionally makes these fingerprints non-persistent.
+_PROVIDER_FINGERPRINT_KEY = os.urandom(32)
+_provider_config_cache: dict[tuple[str, str], bytes] = {}
+_provider_config_locks: dict[tuple[str, str], asyncio.Lock] = {}
 _OPENSHELL_WORKSPACE = "default"
 _OPENCODE_PROVIDER_BINARIES = [
     {"path": "/usr/local/share/npm-global/lib/node_modules/@opencode/cli-linux-x64/bin/opencode"},
@@ -354,6 +364,20 @@ def _require_deletion_complete(outcome: int, resource_type: str, resource_name: 
 def _provider_cache_key(client, name: str) -> tuple[str, str]:
     """Isolate provider existence state between local and remote gateways."""
     return (client._endpoint, name)
+
+
+def _provider_config_fingerprint(
+    profile_type: str,
+    config: dict[str, str] | None,
+    credentials: dict[str, str] | None,
+) -> bytes:
+    """Return a keyed, non-reversible fingerprint without retaining secrets."""
+    payload = json.dumps(
+        [profile_type, config or {}, credentials or {}],
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode()
+    return hmac.new(_PROVIDER_FINGERPRINT_KEY, payload, hashlib.sha256).digest()
 
 
 def _gateway_rpc_code(error):
@@ -762,61 +786,68 @@ async def ensure_provider(
     profile types. ``strict_profile_reconciliation`` propagates profile import
     failures for URL changes that must not be reported as successful otherwise.
     """
-    from openshell._proto import openshell_pb2
     import grpc
+    from openshell._proto import openshell_pb2
 
     if client is None:
         client = _get_client()
 
-    # Custom Swarmer-owned profiles are imported on the resolved client so
-    # dedicated remote gateways and fresh setups behave consistently. EnMaaS
-    # profiles use only the explicitly resolved workspace URL.
-    custom_profile = _custom_profile_for(profile_type, config, enmaas_base_url)
-    if custom_profile is None and profile_type.startswith("enmaas-ws-"):
-        # Never register an endpoint-less EnMaaS profile — the workspace must
-        # have a gateway URL before EnMaaS credentials can be configured
-        # (ACM-48198).
-        raise ValueError(
-            "EnMaaS gateway URL is missing or invalid — set it in Settings > Tokens."
-        )
-    if custom_profile is not None:
-        await import_provider_profiles(
-            [custom_profile], client=client, strict=strict_profile_reconciliation
-        )
+    cache_key = _provider_cache_key(client, name)
+    fingerprint = _provider_config_fingerprint(profile_type, config, credentials)
+    lock = _provider_config_locks.setdefault(cache_key, asyncio.Lock())
 
-    def _build_provider(req_provider):
-        req_provider.metadata.name = name
-        req_provider.type = profile_type
-        for k, v in (config or {}).items():
-            req_provider.config[k] = v
-        for k, v in (credentials or {}).items():
-            req_provider.credentials[k] = v
+    async with lock:
+        # Custom Swarmer-owned profiles are imported on the resolved client so
+        # dedicated remote gateways and fresh setups behave consistently. EnMaaS
+        # profiles use only the explicitly resolved workspace URL.
+        custom_profile = _custom_profile_for(profile_type, config, enmaas_base_url)
+        if custom_profile is None and profile_type.startswith("enmaas-ws-"):
+            # Never register an endpoint-less EnMaaS profile — the workspace must
+            # have a gateway URL before EnMaaS credentials can be configured
+            # (ACM-48198).
+            raise ValueError(
+                "EnMaaS gateway URL is missing or invalid — set it in Settings > Tokens."
+            )
+        if custom_profile is not None:
+            await import_provider_profiles(
+                [custom_profile], client=client, strict=strict_profile_reconciliation
+            )
 
-    def _do_ensure():
-        create_req = openshell_pb2.CreateProviderRequest()
-        _set_workspace(create_req)
-        _build_provider(create_req.provider)
-        try:
-            client._stub.CreateProvider(create_req, timeout=client._timeout)
-        except grpc.RpcError as exc:
-            if _gateway_rpc_code(exc) == grpc.StatusCode.ALREADY_EXISTS:
-                update_req = openshell_pb2.UpdateProviderRequest()
-                _set_workspace(update_req)
-                _build_provider(update_req.provider)
-                client._stub.UpdateProvider(update_req, timeout=client._timeout)
-            else:
-                raise
+        # Credential values are returned as REDACTED by OpenShell, so only a
+        # keyed digest held in memory can safely establish that this process
+        # already reconciled the exact same effective provider configuration.
+        # A changed key/config gets a different digest and is still propagated.
+        if hmac.compare_digest(_provider_config_cache.get(cache_key, b""), fingerprint):
+            return
 
-    await asyncio.to_thread(_do_ensure)
-    # A successful create/update means the provider now definitely exists —
-    # refresh the provider_exists() cache immediately instead of waiting out
-    # _PROVIDER_CACHE_TTL. Without this, a page load or session launch that
-    # happens right after a credential save (e.g. Gemini/Google AI Studio via
-    # the secrets UI) could see a stale cached "False" and skip attaching the
-    # provider that was just configured.
-    _provider_cache[_provider_cache_key(client, name)] = (
-        True, time.monotonic() + _PROVIDER_CACHE_TTL
-    )
+        def _build_provider(req_provider):
+            req_provider.metadata.name = name
+            req_provider.type = profile_type
+            for k, v in (config or {}).items():
+                req_provider.config[k] = v
+            for k, v in (credentials or {}).items():
+                req_provider.credentials[k] = v
+
+        def _do_ensure():
+            create_req = openshell_pb2.CreateProviderRequest()
+            _set_workspace(create_req)
+            _build_provider(create_req.provider)
+            try:
+                client._stub.CreateProvider(create_req, timeout=client._timeout)
+            except grpc.RpcError as exc:
+                if _gateway_rpc_code(exc) == grpc.StatusCode.ALREADY_EXISTS:
+                    update_req = openshell_pb2.UpdateProviderRequest()
+                    _set_workspace(update_req)
+                    _build_provider(update_req.provider)
+                    client._stub.UpdateProvider(update_req, timeout=client._timeout)
+                else:
+                    raise
+
+        await asyncio.to_thread(_do_ensure)
+        _provider_config_cache[cache_key] = fingerprint
+        # A successful create/update means the provider now definitely exists —
+        # refresh provider_exists() immediately instead of waiting out its TTL.
+        _provider_cache[cache_key] = (True, time.monotonic() + _PROVIDER_CACHE_TTL)
 
 
 async def delete_provider(name: str, client=None) -> None:
@@ -827,6 +858,7 @@ async def delete_provider(name: str, client=None) -> None:
     if client is None:
         client = _get_client()
     cache_key = _provider_cache_key(client, name)
+    _provider_config_cache.pop(cache_key, None)
 
     def _do_delete():
         req = openshell_pb2.DeleteProviderRequest()
@@ -1620,6 +1652,17 @@ async def import_provider_profiles(
             try:
                 rv = existing.profile.resource_version
                 updated_profile = _build_provider_profile(p, resource_version=rv)
+                current_profile = type(existing.profile)()
+                current_profile.CopyFrom(existing.profile)
+                # Resource version is gateway bookkeeping, not effective
+                # profile configuration. Do not advance it for an identical
+                # profile; that can invalidate policy generations in sandboxes
+                # attached to the platform profile.
+                current_profile.resource_version = 0
+                updated_profile.resource_version = 0
+                if current_profile == updated_profile:
+                    continue
+                updated_profile.resource_version = rv
                 item = openshell_pb2.ProviderProfileImportItem(profile=updated_profile, source="swarmer")
                 up_req = openshell_pb2.UpdateProviderProfilesRequest(
                     id=pid,

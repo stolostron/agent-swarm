@@ -170,6 +170,35 @@ async def save_config(
         from datetime import datetime, timezone
         server.token_expires_at = datetime.now(timezone.utc)
 
+    # Synchronize workspace-scoped Jira credentials/configuration at the
+    # explicit save boundary. Session launches only attach this provider (or
+    # recreate it if missing), avoiding updates that would affect other live
+    # sandboxes in the workspace.
+    try:
+        from swarmer import openshell_client
+
+        gateway_client = await openshell_client.get_client_for_workspace(ws_id, db)
+        await openshell_client.ensure_provider(
+            f"swarmer-ws-{ws_id}-jira",
+            "jira",
+            config={
+                "JIRA_SERVER_URL": jira_server_url,
+                "JIRA_EMAIL": jira_email,
+            },
+            credentials={"JIRA_ACCESS_TOKEN": server.jira_access_token},
+            client=gateway_client,
+        )
+    except Exception as exc:
+        log.warning(
+            "save_config: failed to configure Jira provider for workspace %d (error_type=%s)",
+            ws_id,
+            type(exc).__name__,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="failed to configure Jira provider on OpenShell",
+        ) from exc
+
     await db.commit()
     await db.refresh(server)
     return server

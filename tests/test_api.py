@@ -1275,7 +1275,13 @@ class TestSessions:
             with _patch(
                 "swarmer.routers.mcp_servers._probe_jira_token",
                 new=_AsyncMock(return_value=True),
-            ):
+            ), _patch(
+                "swarmer.openshell_client.get_client_for_workspace",
+                new=_AsyncMock(return_value=object()),
+            ), _patch(
+                "swarmer.openshell_client.ensure_provider",
+                new=_AsyncMock(),
+            ) as ensure_provider:
                 save = await client.post(
                     f"/api/v1/workspaces/{ws['id']}/mcp-servers/{server_id}/save",
                     json={
@@ -1286,6 +1292,18 @@ class TestSessions:
                 )
             assert save.status_code == 200, save.text
             assert save.json()["auth_status"] == "active"
+            ensure_provider.assert_awaited_once()
+            assert ensure_provider.await_args.args[:2] == (
+                f"swarmer-ws-{ws['id']}-jira",
+                "jira",
+            )
+            assert ensure_provider.await_args.kwargs["config"] == {
+                "JIRA_SERVER_URL": "https://example.atlassian.net",
+                "JIRA_EMAIL": "helper@example.com",
+            }
+            assert ensure_provider.await_args.kwargs["credentials"] == {
+                "JIRA_ACCESS_TOKEN": jira_token,
+            }
 
             toggle = await client.post(
                 f"/api/v1/workspaces/{ws['id']}/mcp-servers/{server_id}/toggle"

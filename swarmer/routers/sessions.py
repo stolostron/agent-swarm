@@ -1864,15 +1864,19 @@ async def _do_launch_openshell(
             # JIRA_SERVER_URL and JIRA_EMAIL are non-secret config — the gateway injects
             # them as plain env vars into the sandbox (and into every exec call) alongside
             # the credential reference tokens, so no separate env_vars entry is needed.
-            await openshell_client.ensure_provider(
-                pname, "jira",
-                config={
-                    "JIRA_SERVER_URL": mcp.jira_server_url or "",
-                    "JIRA_EMAIL": mcp.jira_email or "",
-                },
-                credentials={"JIRA_ACCESS_TOKEN": mcp.jira_access_token},
-                client=oc_client,
-            )
+            # Jira credentials/configuration are synchronized when saved. A
+            # workspace provider can be attached to other live sandboxes, so
+            # don't rewrite it during every launch; only recreate it if absent.
+            if not await openshell_client.provider_exists(pname, client=oc_client):
+                await openshell_client.ensure_provider(
+                    pname, "jira",
+                    config={
+                        "JIRA_SERVER_URL": mcp.jira_server_url or "",
+                        "JIRA_EMAIL": mcp.jira_email or "",
+                    },
+                    credentials={"JIRA_ACCESS_TOKEN": mcp.jira_access_token},
+                    client=oc_client,
+                )
             provider_names.append(pname)
             # URL and email are non-secret; pass them as plain env vars so the
             # sandbox process sees them directly on every exec call.

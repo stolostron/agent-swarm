@@ -575,6 +575,76 @@ async def test_ensure_provider_refreshes_stale_cached_false(sdk_client):
     sdk_client._stub.GetProvider.assert_not_called()
 
 
+@pytest.mark.asyncio
+async def test_ensure_provider_skips_unchanged_and_updates_changed_config(sdk_client):
+    """Unchanged credentials are not rewritten; changed credentials still propagate."""
+    import grpc
+
+    class AlreadyExists(grpc.RpcError, grpc.Call):
+        def code(self):
+            return grpc.StatusCode.ALREADY_EXISTS
+
+    pname = "swarmer-ws-9-agent-swarm-s77"
+    cache_key = oc._provider_cache_key(sdk_client, pname)
+    oc._provider_config_cache.pop(cache_key, None)
+    sdk_client._stub.CreateProvider.side_effect = [None, AlreadyExists(), AlreadyExists()]
+
+    with patch.object(oc, "_get_client", return_value=sdk_client):
+        await oc.ensure_provider(
+            pname, "agent-swarm", {"ENDPOINT": "https://example.invalid/v1"},
+            {"TOKEN": "credential-v1"},
+        )
+        await oc.ensure_provider(
+            pname, "agent-swarm", {"ENDPOINT": "https://example.invalid/v1"},
+            {"TOKEN": "credential-v1"},
+        )
+        await oc.ensure_provider(
+            pname, "agent-swarm", {"ENDPOINT": "https://example.invalid/v1"},
+            {"TOKEN": "credential-v2"},
+        )
+        await oc.ensure_provider(
+            pname, "agent-swarm", {"ENDPOINT": "https://example.invalid/v2"},
+            {"TOKEN": "credential-v2"},
+        )
+
+    assert sdk_client._stub.CreateProvider.call_count == 3
+    assert sdk_client._stub.UpdateProvider.call_count == 2
+    credential_update, config_update = [
+        call.args[0] for call in sdk_client._stub.UpdateProvider.call_args_list
+    ]
+    assert credential_update.provider.metadata.name == pname
+    assert credential_update.provider.credentials["TOKEN"] == "credential-v2"
+    assert config_update.provider.config["ENDPOINT"] == "https://example.invalid/v2"
+    assert b"credential-v1" not in oc._provider_config_cache[cache_key]
+    assert b"credential-v2" not in oc._provider_config_cache[cache_key]
+
+
+@pytest.mark.asyncio
+async def test_provider_reconciliation_is_isolated_from_another_active_session(sdk_client):
+    """Changing one session's provider never rewrites another session's provider."""
+    import grpc
+
+    class AlreadyExists(grpc.RpcError, grpc.Call):
+        def code(self):
+            return grpc.StatusCode.ALREADY_EXISTS
+
+    target = "swarmer-ws-9-agent-swarm-s77"
+    active = "swarmer-ws-9-agent-swarm-s88"
+    for name in (target, active):
+        oc._provider_config_cache.pop(oc._provider_cache_key(sdk_client, name), None)
+    sdk_client._stub.CreateProvider.side_effect = [None, None, AlreadyExists()]
+
+    with patch.object(oc, "_get_client", return_value=sdk_client):
+        await oc.ensure_provider(target, "agent-swarm", {}, {"TOKEN": "target-config-v1"})
+        await oc.ensure_provider(active, "agent-swarm", {}, {"TOKEN": "active-config-v1"})
+        await oc.ensure_provider(target, "agent-swarm", {}, {"TOKEN": "target-config-v1"})
+        await oc.ensure_provider(target, "agent-swarm", {}, {"TOKEN": "target-config-v2"})
+
+    sdk_client._stub.UpdateProvider.assert_called_once()
+    request = sdk_client._stub.UpdateProvider.call_args.args[0]
+    assert request.provider.metadata.name == target
+
+
 # ---------------------------------------------------------------------------
 # 6. create_google_cloud_provider + configure_google_cloud_provider
 # ---------------------------------------------------------------------------
@@ -1312,6 +1382,38 @@ async def test_import_provider_profiles_reconciles_after_successful_import():
     request = mock_client._stub.UpdateProviderProfiles.call_args.args[0]
     assert request.expected_resource_version == 7
     assert request.profile.profile.endpoints[0].host == "swarmer.swarmer.svc.cluster.local"
+
+
+@pytest.mark.asyncio
+async def test_import_provider_profiles_skips_unchanged_profile():
+    """An identical profile does not advance the gateway profile revision."""
+    mock_client = MagicMock()
+    mock_client._timeout = 10
+    profile = {
+        "id": "agent-swarm",
+        "display_name": "Agent Swarm",
+        "credentials": [{
+            "name": "AGENT_SWARM_API_TOKEN",
+            "env_vars": ["AGENT_SWARM_API_TOKEN"],
+            "auth_style": "bearer",
+            "header_name": "authorization",
+        }],
+        "endpoints": [{
+            "host": "swarmer.swarmer.svc.cluster.local",
+            "port": 8080,
+            "protocol": "rest",
+            "access": "read-write",
+            "enforcement": "enforce",
+        }],
+    }
+    existing = oc._build_provider_profile(profile, resource_version=7)
+    mock_client._stub.GetProviderProfile.return_value = type(
+        "ProviderProfileResponse", (), {"profile": existing}
+    )()
+
+    await oc.import_provider_profiles([profile], client=mock_client)
+
+    mock_client._stub.UpdateProviderProfiles.assert_not_called()
 
 
 def test_jira_provider_profile_binds_atlassian_endpoints():

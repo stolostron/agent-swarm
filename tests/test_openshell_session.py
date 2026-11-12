@@ -1802,8 +1802,11 @@ class TestDoLaunchOpenshell:
                 )
 
     @pytest.mark.asyncio
-    async def test_jira_provider_registered_when_mcp_configured(self, client):
-        """When a Jira MCP server is configured and valid, ensure_provider is called with all three credentials."""
+    @pytest.mark.parametrize("jira_provider_exists", [False, True])
+    async def test_jira_provider_reconciliation_when_mcp_configured(
+        self, client, jira_provider_exists
+    ):
+        """Create Jira provider if missing; do not rewrite it during launch if present."""
         from unittest.mock import patch as _patch, AsyncMock as _AsyncMock
         ws = await _create_workspace(client)
         # Add Jira MCP server from catalog
@@ -1814,7 +1817,9 @@ class TestDoLaunchOpenshell:
         assert mcp_resp.status_code == 201, mcp_resp.text
         mcp = mcp_resp.json()
         # Save credentials (mock the Jira probe so it reports valid)
-        with _patch("swarmer.routers.mcp_servers._probe_jira_token", new=_AsyncMock(return_value=True)):
+        with _patch("swarmer.routers.mcp_servers._probe_jira_token", new=_AsyncMock(return_value=True)), \
+             _patch("swarmer.openshell_client.get_client_for_workspace", new=_AsyncMock(return_value=object())), \
+             _patch("swarmer.openshell_client.ensure_provider", new=_AsyncMock()):
             save_resp = await client.post(
                 f"/api/v1/workspaces/{ws['id']}/mcp-servers/{mcp['id']}/save",
                 json={
@@ -1842,7 +1847,11 @@ class TestDoLaunchOpenshell:
              patches["start_agent"], patches["delete_sandbox"], \
              patches["build_policy"], patches["run_agent"], \
              patches["setup_sandbox"] as mock_setup, \
-             patches["provider_exists"], patches["get_image"]:
+             patches["provider_exists"] as mock_provider_exists, patches["get_image"]:
+            jira_provider_name = f"swarmer-ws-{ws['id']}-jira"
+            mock_provider_exists.side_effect = lambda name, **_kwargs: (
+                name != jira_provider_name or jira_provider_exists
+            )
             await client.post(
                 f"/api/v1/workspaces/{ws['id']}/sessions/{s['id']}/launch"
             )
@@ -1854,9 +1863,10 @@ class TestDoLaunchOpenshell:
             c for c in mock_ensure.call_args_list
             if len(c.args) >= 2 and c.args[1] == "jira"
         ]
-        assert len(jira_calls) == 1, (
-            f"Expected 1 jira provider call when MCP is configured, got {len(jira_calls)}"
-        )
+        if jira_provider_exists:
+            assert jira_calls == []
+            return
+        assert len(jira_calls) == 1
         # Token must go through provider credentials — gateway stores it securely and
         # injects as an opaque reference token (openshell:resolve:...), never plaintext.
         creds = jira_calls[0].kwargs.get("credentials", {})
