@@ -2565,6 +2565,100 @@ class TestRestartServerSessions:
             assert row.phase == "stopped"
 
     @pytest.mark.asyncio
+    async def test_stop_during_credential_setup_cleans_up_provider_and_refresh_task(
+        self, client
+    ):
+        ws = await _create_workspace(client)
+        created = await _create_session(
+            client, ws["id"], mode="server", agent_tool="opencode"
+        )
+        async with _TestSession() as db:
+            from swarmer.models.session import Session as SessionRow
+
+            row = await db.get(SessionRow, created["id"])
+            row.phase = "running"
+            row.sandbox_name = "sandbox-credential-race"
+            row.run_started_at = datetime.now(timezone.utc).replace(tzinfo=None)
+            await db.commit()
+
+        setup_entered = asyncio.Event()
+        finish_setup = asyncio.Event()
+        provider_present = False
+        provider_deletes = []
+
+        async def paused_provider_setup(session, _db):
+            nonlocal provider_present
+            setup_entered.set()
+            await finish_setup.wait()
+            provider_present = True
+
+            async def refresh_loop():
+                await asyncio.Event().wait()
+
+            asyncio.create_task(refresh_loop(), name=f"iat-refresh-{session.id}")
+
+        async def delete_provider(name, **_kwargs):
+            nonlocal provider_present
+            provider_deletes.append(name)
+            if "github-app" in name:
+                provider_present = False
+
+        async def no_refresh(*_args, **_kwargs):
+            return None
+
+        async def list_sandboxes(*_args, **_kwargs):
+            return ["sandbox-credential-race"]
+
+        with (
+            patch("swarmer.openshell_client.list_sandboxes", new=list_sandboxes),
+            patch(
+                "swarmer.openshell_client.get_client_for_workspace",
+                new=AsyncMock(return_value=None),
+            ),
+            patch("swarmer.openshell_client.delete_sandbox", new=AsyncMock()),
+            patch("swarmer.openshell_client.delete_provider", new=delete_provider),
+            patch("swarmer.database.get_db", new=_override_get_db),
+            patch(
+                "swarmer.main._restart_github_app_iat_refresh",
+                new=paused_provider_setup,
+            ),
+            patch(
+                "swarmer.main._restart_agent_swarm_token_refresh", new=no_refresh
+            ),
+        ):
+            from swarmer.main import _restart_server_sessions
+
+            reconcile_task = asyncio.create_task(_restart_server_sessions())
+            await asyncio.wait_for(setup_entered.wait(), timeout=2)
+            stop_task = asyncio.create_task(
+                client.post(
+                    f"/workspaces/{ws['id']}/sessions/{created['id']}/stop",
+                    follow_redirects=False,
+                )
+            )
+            try:
+                # Stop must wait for provider setup's transition lock rather
+                # than deleting the provider and allowing setup to recreate it.
+                await asyncio.sleep(0.05)
+                assert not stop_task.done()
+            finally:
+                finish_setup.set()
+
+            await asyncio.gather(reconcile_task, stop_task)
+
+        async with _TestSession() as db:
+            from swarmer.models.session import Session as SessionRow
+
+            row = await db.get(SessionRow, created["id"])
+            assert row.phase == "stopped"
+        assert not provider_present
+        assert any("github-app" in name for name in provider_deletes)
+        assert not any(
+            task.get_name() == f"iat-refresh-{created['id']}"
+            for task in asyncio.all_tasks()
+        )
+
+    @pytest.mark.asyncio
     async def test_legacy_service_cleanup_failure_preserves_live_session(self, client):
         """A failed legacy-route cleanup must not stop the live session."""
         ws = await _create_workspace(client)

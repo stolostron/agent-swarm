@@ -616,8 +616,27 @@ async def _restart_server_sessions() -> None:
             if reconciled.rowcount != 1:
                 continue
 
-            await _restart_github_app_iat_refresh(s, db)
-            await _restart_agent_swarm_token_refresh(s, db, client=oc_client)
+            # Provider installation and refresh-task creation are side effects
+            # of this observed run. Serialize them with stop, and re-check the
+            # run identity after acquiring the lock: stop may have won after
+            # the reconciliation commit but before this setup began.
+            async with chat_proxy_router.session_run_transition(s.id):
+                current_run = await db.execute(
+                    select(Session.id).where(
+                        Session.id == s.id,
+                        Session.run_started_at == observed_run_started_at,
+                        Session.sandbox_name == sandbox_name,
+                        Session.phase.in_(("pending", "running")),
+                    )
+                )
+                run_is_current = current_run.scalar_one_or_none() is not None
+                await db.commit()
+                if not run_is_current:
+                    continue
+
+                await _restart_github_app_iat_refresh(s, db)
+                await _restart_agent_swarm_token_refresh(s, db, client=oc_client)
+                await db.commit()
         break
 
 
