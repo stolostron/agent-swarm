@@ -1183,9 +1183,19 @@ class TestChatTunnelBridge:
 
     @pytest.mark.asyncio
     async def test_first_bridge_survives_rejected_duplicate_connection(self, monkeypatch):
+        import queue as _queue
+
         from swarmer.routers import chat_proxy as cp
 
-        seen = self._install_fake_forward_tcp(monkeypatch)
+        seen = {}
+
+        def fake_forward_tcp(sandbox_name, host, port, client=None):
+            input_q = _queue.Queue(maxsize=16)
+            stream = _FakeForwardStream(input_q, transform=lambda data: data.upper())
+            seen.update(sandbox=sandbox_name, host=host, port=port, client=client, stream=stream)
+            return stream, input_q
+
+        monkeypatch.setattr("swarmer.openshell_client.forward_tcp", fake_forward_tcp)
         async with cp._open_sandbox_tunnel(
             "sandbox-bridge", 4096, "client", session_id=779
         ) as local_url:
@@ -2477,6 +2487,13 @@ class TestRestartGitHubAppIATRefresh:
     loop restarted after a Swarmer restart — otherwise the App IAT (valid ~1h)
     silently expires and git push starts failing inside an otherwise-healthy
     sandbox."""
+
+    @pytest.fixture(autouse=True)
+    def _ready_probe_succeeds_by_default(self, monkeypatch):
+        monkeypatch.setattr(
+            "swarmer.routers.sessions._wait_for_opencode_ready",
+            AsyncMock(),
+        )
 
     @pytest.fixture(autouse=True)
     def _configured_default_gateway(self, monkeypatch):
