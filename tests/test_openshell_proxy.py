@@ -2499,7 +2499,7 @@ class TestRestartServerSessions:
             failed_row.phase = "running"
             failed_row.sandbox_name = "sandbox-resolution-error"
             healthy_row = await db.get(SessionRow, healthy["id"])
-            healthy_row.phase = "running"
+            healthy_row.phase = "pending"
             healthy_row.sandbox_name = "sandbox-healthy"
             await db.commit()
 
