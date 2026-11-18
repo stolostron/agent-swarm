@@ -31,8 +31,10 @@ publicly exposed sandbox service.
 - Upstream WebSocket connections use a preconnected socket so the upstream
   cannot redirect the session or credential to another destination; proxied
   WebSocket handshake logging redacts credentials.
-- Admission control (global tunnel cap plus per-user quota) runs before any
-  gateway work and rejects overload with an explicit 503 / WebSocket 1013.
+- Admission control atomically reserves a global and per-user tunnel slot
+  before gateway work. The reservation is transferred to the relay for the
+  tunnel lifetime and released on setup failure or disconnect (HTTP 503 /
+  WebSocket 1013 when capacity is exhausted).
 - Stopping or deleting a session aborts its live Chat tunnels; access
   revocation applies when a connection ends, bounded by the tunnel maximum
   lifetime.
@@ -79,7 +81,9 @@ One Chat request travels this path:
 
 1. The browser sends an authenticated HTTPS/WSS request to the Swarmer Chat
    route; workspace ACL and same-origin checks run first.
-2. Admission control reserves a tunnel slot before any gateway work.
+2. Atomically reserve admission (global tunnel cap plus per-user quota) before
+   gateway work; transfer the reservation to the relay or release it if setup
+   fails.
 3. `resolve_gateway_config()` loads the workspace's `WorkspaceGateway` row —
    gateway URL, auth mode, encrypted OIDC/bearer/mTLS material — and
    `_require_secure_gateway()` rejects anything except certificate-verified
@@ -105,8 +109,12 @@ One Chat request travels this path:
 
 Failure modes in the remote scenario, all fail-closed:
 
-- Missing or unverifiable gateway TLS, or no configured authentication →
-  HTTP 503 / WebSocket close 1011 before any tunnel is opened.
+- Missing TLS settings or missing gateway authentication is rejected before a
+  tunnel is opened (HTTP 503; an authorized WebSocket is accepted then closed
+  with 1011). A configured gateway certificate that fails verification is
+  discovered later when `ForwardTcp` uses the channel: HTTP fails with 503, and
+  an already-accepted WebSocket closes on the failed upstream connection; it
+  does not receive the setup-time 1011 close.
 - Slow or failed OIDC refresh → bounded by the stream-open timeout; Chat
   fails closed rather than stalling other requests.
 - Gateway overload (global or per-user tunnel quota) → explicit 503 /

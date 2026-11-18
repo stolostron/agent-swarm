@@ -38,7 +38,7 @@ import queue
 import shlex
 import tempfile
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterator
 from dataclasses import dataclass
 from datetime import timezone
 from typing import Any
@@ -644,7 +644,8 @@ async def resolve_gateway_config(
 
     bearer_callable = None
     if gw.auth_mode == "oidc" and gw.oidc_issuer and gw.oidc_client_id:
-        auth = oidc_manager.get_or_create(
+        auth = await asyncio.to_thread(
+            oidc_manager.get_or_create,
             workspace_id=gw.workspace_id,
             issuer=gw.oidc_issuer,
             client_id=gw.oidc_client_id,
@@ -661,6 +662,9 @@ async def resolve_gateway_config(
             tls_ca=gw.tls_ca,
             tls_verify=gw.tls_verify,
         )
+        # The manager's synchronous lock/seed path runs off-loop, while token
+        # persistence from its worker must still target this DB event loop.
+        auth.set_event_loop(asyncio.get_running_loop())
         bearer_callable = auth.current_access_token
 
     return GatewayConfig(
@@ -2382,8 +2386,8 @@ def forward_tcp(
     sandbox_name: str,
     host: str,
     port: int,
-    client=None,
-):
+    client: Any | None = None,
+) -> tuple[Iterator[Any], queue.Queue[bytes | None]]:
     """Open an OpenShell TCP relay stream to a fixed sandbox destination.
 
     Returns (response_iterator, input_queue). The caller must send byte strings

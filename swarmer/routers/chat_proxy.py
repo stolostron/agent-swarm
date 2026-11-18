@@ -9,16 +9,17 @@ import asyncio
 import base64
 import contextlib
 import hashlib
+import hmac
 import json
 import logging
 import queue
 import re
 import socket
 import threading
-import time
+from collections.abc import AsyncIterator, Iterator
 from contextlib import AsyncExitStack, asynccontextmanager
 from ipaddress import ip_address
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from urllib.parse import parse_qsl, urlencode, urlparse
 
 import httpx
@@ -29,9 +30,12 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from swarmer.database import get_db
-from swarmer.deps import require_auth
+from swarmer.deps import require_auth, require_websocket_auth
 from swarmer.models.session import Session
 from swarmer.models.workspace import Workspace
+
+if TYPE_CHECKING:
+    from swarmer.openshell_client import GatewayConfig
 
 router = APIRouter()
 log = logging.getLogger(__name__)
@@ -109,12 +113,18 @@ _CHAT_CONNECT_TIMEOUT = 10.0
 _chat_tunnel_count = 0
 _chat_user_tunnels: dict[str, int] = {}
 _session_tunnels: dict[int, set["_ChatTunnelHandle"]] = {}
-_gateway_clients: dict[tuple, tuple[Any, Any]] = {}
+_session_tunnel_epochs: dict[int, int] = {}
+_session_tunnel_revoked: set[int] = set()
+_gateway_clients: dict[tuple[int | str, ...], tuple[Any, Any]] = {}
 _gateway_clients_lock = asyncio.Lock()
 
 
 class ChatTunnelCapacityError(RuntimeError):
     """Chat admission control rejected a new tunnel (overload protection)."""
+
+
+class ChatBodyTooLargeError(ValueError):
+    """A Chat upload exceeded the configured request-body limit."""
 
 
 class _ChatTunnelHandle:
@@ -152,12 +162,21 @@ async def close_session_chat_tunnels(session_id: int) -> int:
     outlive their sandbox. Access revocation (membership removal) applies
     when the connection ends; the tunnel maximum lifetime bounds that delay.
     """
+    _session_tunnel_epochs[session_id] = _session_tunnel_epochs.get(session_id, 0) + 1
+    _session_tunnel_revoked.add(session_id)
     handles = _session_tunnels.pop(session_id, None)
     if not handles:
         return 0
     for handle in list(handles):
         handle.request_close()
     return len(handles)
+
+
+def activate_session_chat_tunnels(session_id: int) -> int:
+    """Open a fresh run fence when an interactive session becomes ready."""
+    _session_tunnel_epochs[session_id] = _session_tunnel_epochs.get(session_id, 0) + 1
+    _session_tunnel_revoked.discard(session_id)
+    return _session_tunnel_epochs[session_id]
 
 
 def _chat_admission_error(user_key: str | None) -> str | None:
@@ -261,29 +280,11 @@ async def _queue_put(queue_: queue.Queue, item: bytes | None, stopped: threading
             await asyncio.sleep(0.005)
 
 
-def _reap_forward_stream(holder: dict, timeout: float = 60.0) -> None:
-    """Cancel a ForwardTcp stream whose caller timed out or was cancelled.
-
-    ``asyncio.to_thread`` cannot be aborted: if the caller stops waiting, the
-    worker thread still finishes creating the stream. The reaper waits for
-    the holder to populate, then half-closes the request queue and cancels
-    the stream so neither the SDK's consumption thread nor the RPC leaks.
-    """
-    deadline = time.monotonic() + timeout
-    while not holder and time.monotonic() < deadline:
-        time.sleep(0.05)
-    input_q = holder.get("queue")
-    if input_q is not None:
-        with contextlib.suppress(queue.Full):
-            input_q.put_nowait(None)
-    stream = holder.get("stream")
-    cancel = getattr(stream, "cancel", None)
-    if cancel is not None:
-        with contextlib.suppress(Exception):
-            cancel()
-
-
-async def _open_forward_stream(sandbox_name: str, target_port: int, client):
+async def _open_forward_stream(
+    sandbox_name: str,
+    target_port: int,
+    client: Any,
+) -> tuple[Iterator[Any], queue.Queue[bytes | None]]:
     """Open a ForwardTcp stream without blocking the event loop.
 
     Creating the stream invokes the OpenShell SDK's bearer interceptor
@@ -296,21 +297,50 @@ async def _open_forward_stream(sandbox_name: str, target_port: int, client):
     from swarmer import openshell_client
 
     holder: dict[str, Any] = {}
+    ownership_lock = threading.Lock()
+    abandoned = False
+
+    def _dispose(stream, input_q) -> None:
+        if input_q is not None:
+            with contextlib.suppress(queue.Full):
+                input_q.put_nowait(None)
+        cancel = getattr(stream, "cancel", None)
+        if cancel is not None:
+            with contextlib.suppress(Exception):
+                cancel()
 
     def _open():
         stream, input_q = openshell_client.forward_tcp(
             sandbox_name, _CHAT_TARGET_HOST, target_port, client=client
         )
-        holder["stream"] = stream
-        holder["queue"] = input_q
+        nonlocal abandoned
+        with ownership_lock:
+            if abandoned:
+                dispose = True
+            else:
+                holder["stream"] = stream
+                holder["queue"] = input_q
+                dispose = False
+        if dispose:
+            _dispose(stream, input_q)
         return stream, input_q
 
     try:
-        return await asyncio.wait_for(
+        result = await asyncio.wait_for(
             asyncio.to_thread(_open), timeout=_CHAT_STREAM_OPEN_TIMEOUT
         )
+        with ownership_lock:
+            abandoned = True  # caller now owns the returned pair
+        return result
     except (TimeoutError, asyncio.CancelledError):
-        threading.Thread(target=_reap_forward_stream, args=(holder,), daemon=True).start()
+        with ownership_lock:
+            abandoned = True
+            stream = holder.get("stream")
+            input_q = holder.get("queue")
+        if stream is not None or input_q is not None:
+            _dispose(stream, input_q)
+        # If the worker has not created its RPC yet, it observes `abandoned`
+        # when it returns and remains responsible for disposing the late result.
         raise
 
 
@@ -342,10 +372,12 @@ async def _tunnel_socket(local_base: str) -> socket.socket:
 async def _open_sandbox_tunnel(
     sandbox_name: str,
     target_port: int,
-    client,
+    client: Any,
     session_id: int | None = None,
     user_key: str | None = None,
-):
+    admission_reserved: bool = False,
+    run_epoch: int | None = None,
+) -> AsyncIterator[str]:
     """Expose one bounded loopback listener backed by OpenShell ForwardTcp.
 
     The listener exists only inside the Swarmer pod and is bound to IPv4
@@ -356,9 +388,13 @@ async def _open_sandbox_tunnel(
     exit path — including cancellation and partial initialization — closes
     the listener, the gRPC stream, its reader thread, and the admission slot.
     """
-    _admit_chat_tunnel(user_key)
+    if not admission_reserved:
+        _admit_chat_tunnel(user_key)
     handle = _ChatTunnelHandle()
     if session_id is not None:
+        if run_epoch is not None and _session_tunnel_epochs.get(session_id, 0) != run_epoch:
+            _release_chat_tunnel(user_key)
+            raise RuntimeError("Chat session run was revoked")
         _session_tunnels.setdefault(session_id, set()).add(handle)
 
     stopped = handle.stopped
@@ -499,6 +535,9 @@ async def _open_sandbox_tunnel(
 
     async def _accept_one(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         nonlocal accepted
+        nonlocal bridge_task
+        bridge_task = asyncio.current_task()
+        handle.attach(writer)
         peer = writer.get_extra_info("peername")
         if accepted or not peer or peer[0] != "127.0.0.1":
             writer.close()
@@ -514,21 +553,28 @@ async def _open_sandbox_tunnel(
         port = server.sockets[0].getsockname()[1]
         yield f"http://127.0.0.1:{port}"
     finally:
-        if session_id is not None:
-            handles = _session_tunnels.get(session_id)
-            if handles is not None:
-                handles.discard(handle)
-                if not handles:
-                    _session_tunnels.pop(session_id, None)
-        if server is not None:
-            server.close()
-            with contextlib.suppress(Exception, asyncio.CancelledError):
-                await server.wait_closed()
-        if bridge_task is not None:
-            bridge_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await bridge_task
-        _release_chat_tunnel(user_key)
+        try:
+            if session_id is not None:
+                handles = _session_tunnels.get(session_id)
+                if handles is not None:
+                    handles.discard(handle)
+                    if not handles:
+                        _session_tunnels.pop(session_id, None)
+            if server is not None:
+                server.close()
+            try:
+                if bridge_task is not None:
+                    bridge_task.cancel()
+                    if handle.writer is not None:
+                        _abort_writer(handle.writer)
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await bridge_task
+            finally:
+                if server is not None:
+                    with contextlib.suppress(Exception, asyncio.CancelledError):
+                        await server.wait_closed()
+        finally:
+            _release_chat_tunnel(user_key)
 
 
 # ── HTML rewriting ───────────────────────────────────────────────────────────
@@ -837,7 +883,7 @@ def _session_ok(ws_obj, session, ws_id: int) -> tuple[str, int] | None:
     if (
         session.mode not in ("server", "tui")
         or session.agent_tool != "opencode"
-        or not session.is_active
+        or session.phase != "running"
         or not session.sandbox_name
     ):
         return ("Session is not running", 503)
@@ -867,10 +913,14 @@ def _origin_matches_host(origin: str | None, host: str | None) -> bool:
     """Check a browser Origin against the public Swarmer Host header."""
     if not origin or not host:
         return False
-    parsed = urlparse(origin)
+    try:
+        parsed = urlparse(origin)
+        origin_hostname = parsed.hostname
+    except ValueError:
+        return False
     if (
         parsed.scheme not in {"http", "https"}
-        or not parsed.hostname
+        or not origin_hostname
         or parsed.username
         or parsed.password
         or parsed.path not in {"", "/"}
@@ -882,8 +932,12 @@ def _origin_matches_host(origin: str | None, host: str | None) -> bool:
     default_port = 443 if parsed.scheme == "https" else 80
 
     def _normalized_authority(value: str) -> tuple[str, int | None] | None:
-        parsed_authority = urlparse(f"//{value}")
-        if not parsed_authority.hostname:
+        try:
+            parsed_authority = urlparse(f"//{value}")
+            hostname = parsed_authority.hostname
+        except ValueError:
+            return None
+        if not hostname:
             return None
         try:
             port = parsed_authority.port
@@ -891,9 +945,11 @@ def _origin_matches_host(origin: str | None, host: str | None) -> bool:
             return None
         if port == default_port:
             port = None
-        return parsed_authority.hostname.lower(), port
+        return hostname.lower(), port
 
-    return _normalized_authority(parsed.netloc) == _normalized_authority(host)
+    parsed_authority = _normalized_authority(parsed.netloc)
+    request_authority = _normalized_authority(host)
+    return parsed_authority is not None and request_authority is not None and parsed_authority == request_authority
 
 
 def _chat_headers(headers, sid: int, session) -> dict[str, str]:
@@ -936,7 +992,12 @@ def _chat_target_port(session) -> int:
     return port
 
 
-def _client_config_matches(cached, current) -> bool:
+def _callable_provider_identity(value: Any) -> Any:
+    provider = getattr(value, "__self__", None)
+    return provider if provider is not None else value
+
+
+def _client_config_matches(cached: "GatewayConfig", current: "GatewayConfig") -> bool:
     """Return whether a cached client was built from an equivalent config.
 
     ``bearer_callable`` is compared by identity: ``oidc_manager.invalidate()``
@@ -944,24 +1005,35 @@ def _client_config_matches(cached, current) -> bool:
     an identity mismatch forces a new client (and closes the old one).
     """
     return (
-        cached.auth_mode == current.auth_mode
+        cached.gateway_url == current.gateway_url
+        and cached.auth_mode == current.auth_mode
         and cached.tls_verify == current.tls_verify
         and cached.tls_ca == current.tls_ca
         and cached.tls_cert == current.tls_cert
         and cached.tls_key == current.tls_key
-        and cached.bearer_token == current.bearer_token
-        and cached.bearer_callable is current.bearer_callable
+        and (
+            (cached.bearer_token is None and current.bearer_token is None)
+            or (
+                cached.bearer_token is not None
+                and current.bearer_token is not None
+                and hmac.compare_digest(
+                    cached.bearer_token.encode(), current.bearer_token.encode()
+                )
+            )
+        )
+        and _callable_provider_identity(cached.bearer_callable)
+        is _callable_provider_identity(current.bearer_callable)
     )
 
 
-def _safe_close_client(client) -> None:
+def _safe_close_client(client: Any) -> None:
     close = getattr(client, "close", None)
     if close is not None:
         with contextlib.suppress(Exception):
             close()
 
 
-async def _gateway_client_for(gateway_config):
+async def _gateway_client_for(gateway_config: "GatewayConfig") -> Any:
     """Return a shared OpenShell client for the gateway.
 
     ForwardTcp streams multiplex over one gRPC channel, so a page of Chat
@@ -973,10 +1045,7 @@ async def _gateway_client_for(gateway_config):
     """
     from swarmer import openshell_client
 
-    key = (
-        gateway_config.gateway_url,
-        gateway_config.workspace_id if gateway_config.workspace_id is not None else "default",
-    )
+    key = (gateway_config.workspace_id if gateway_config.workspace_id is not None else "default",)
     async with _gateway_clients_lock:
         cached = _gateway_clients.get(key)
         if cached is not None and _client_config_matches(cached[1], gateway_config):
@@ -991,7 +1060,10 @@ async def _gateway_client_for(gateway_config):
         return client
 
 
-async def _gateway_and_client(ws_obj, db=None):
+async def _gateway_and_client(
+    ws_obj: Workspace | int | None,
+    db: AsyncSession | None = None,
+) -> tuple["GatewayConfig", Any]:
     """Resolve the workspace gateway and its authenticated OpenShell client."""
     from swarmer import openshell_client
 
@@ -1001,13 +1073,36 @@ async def _gateway_and_client(ws_obj, db=None):
     return gateway_config, client
 
 
-async def _limited_request_body(request: Request):
+def _validate_declared_body_size(request: Request) -> None:
+    content_length = request.headers.get("content-length")
+    if content_length is not None:
+        try:
+            declared_size = int(content_length)
+        except ValueError:
+            raise ChatBodyTooLargeError("invalid Chat request body length") from None
+        if declared_size < 0 or declared_size > _CHAT_MAX_BUFFERED_BODY:
+            raise ChatBodyTooLargeError("Chat request body exceeds the configured limit")
+
+
+async def _limited_request_body(request: Request) -> AsyncIterator[bytes]:
+    _validate_declared_body_size(request)
     size = 0
     async for chunk in request.stream():
         size += len(chunk)
         if size > _CHAT_MAX_BUFFERED_BODY:
-            raise ValueError("Chat request body exceeds the configured limit")
+            raise ChatBodyTooLargeError("Chat request body exceeds the configured limit")
         yield chunk
+
+
+def _is_body_limit_error(exc: BaseException) -> bool:
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if isinstance(current, ChatBodyTooLargeError):
+            return True
+        current = current.__cause__ or current.__context__
+    return False
 
 
 async def _read_limited_response(upstream_resp: httpx.Response) -> bytes:
@@ -1086,6 +1181,8 @@ async def _chat_http_proxy(
         msg, code = err
         return Response(msg, status_code=code, media_type="text/plain")
     assert session is not None
+    if sid in _session_tunnel_revoked:
+        return Response("Session is stopping", status_code=503, media_type="text/plain")
 
     origin = request.headers.get("origin")
     if origin and not _origin_matches_host(origin, request.headers.get("host")):
@@ -1094,14 +1191,22 @@ async def _chat_http_proxy(
         origin, request.headers.get("host")
     ):
         return Response("Forbidden", status_code=403, media_type="text/plain")
-
-    # Admission control runs before gateway client resolution so an
-    # overloaded proxy does no gateway work at all.
-    user_key = request.session.get("username") or "anonymous"
-    admission_error = _chat_admission_error(user_key)
-    if admission_error:
+    try:
+        _validate_declared_body_size(request)
+    except ChatBodyTooLargeError:
         return Response(
-            f"{admission_error} — try again shortly",
+            "Chat request body is too large", status_code=413, media_type="text/plain"
+        )
+
+    # Reserve admission before gateway resolution so concurrent requests
+    # cannot start expensive gateway work without capacity.
+    user_key = request.session.get("username") or "anonymous"
+    run_epoch = _session_tunnel_epochs.get(sid, 0)
+    try:
+        _admit_chat_tunnel(user_key)
+    except ChatTunnelCapacityError as exc:
+        return Response(
+            f"{exc} — try again shortly",
             status_code=503,
             media_type="text/plain",
         )
@@ -1110,14 +1215,20 @@ async def _chat_http_proxy(
         _gateway_config, tunnel_client = await _gateway_and_client(ws_obj, db)
         target_port = _chat_target_port(session)
     except Exception as exc:  # noqa: BLE001 - gateway SDK/auth failures must fail closed
+        _release_chat_tunnel(user_key)
         log.warning("Chat tunnel setup failed for session %d (%s)", sid, type(exc).__name__)
         return Response("Chat tunnel is unavailable", status_code=503, media_type="text/plain")
 
-    upstream_path = f"/{path}"
-    query = _chat_query(str(request.url.query))
-    if query:
-        upstream_path += f"?{query}"
-    fwd_headers = _chat_headers(request.headers, sid, session)
+    try:
+        upstream_path = f"/{path}"
+        query = _chat_query(str(request.url.query))
+        if query:
+            upstream_path += f"?{query}"
+        fwd_headers = _chat_headers(request.headers, sid, session)
+    except Exception as exc:  # noqa: BLE001 - release admission on request setup errors
+        _release_chat_tunnel(user_key)
+        log.warning("Chat request setup failed for session %d (%s)", sid, type(exc).__name__)
+        return Response("Chat tunnel is unavailable", status_code=503, media_type="text/plain")
 
     accept = request.headers.get("accept", "")
     is_sse = (
@@ -1133,7 +1244,8 @@ async def _chat_http_proxy(
             local_base = await stack.enter_async_context(
                 _open_sandbox_tunnel(
                     session.sandbox_name, target_port, tunnel_client,
-                    session_id=sid, user_key=user_key,
+                    session_id=sid, user_key=user_key, admission_reserved=True,
+                    run_epoch=run_epoch,
                 )
             )
             http_client = await stack.enter_async_context(
@@ -1156,13 +1268,19 @@ async def _chat_http_proxy(
                     ),
                 )
             )
-        except ChatTunnelCapacityError as exc:
+        except (ChatTunnelCapacityError, ChatBodyTooLargeError) as exc:
             await stack.aclose()
             return Response(
-                f"{exc} — try again shortly", status_code=503, media_type="text/plain"
+                f"{exc}",
+                status_code=413 if isinstance(exc, ChatBodyTooLargeError) else 503,
+                media_type="text/plain",
             )
         except Exception as exc:  # noqa: BLE001 - tunnel setup may fail in gRPC or HTTPX
             await stack.aclose()
+            if _is_body_limit_error(exc):
+                return Response(
+                    "Chat request body is too large", status_code=413, media_type="text/plain"
+                )
             log.warning("Chat SSE tunnel failed for session %d (%s)", sid, type(exc).__name__)
             return Response("Could not connect to session", status_code=503, media_type="text/plain")
         except BaseException:
@@ -1172,20 +1290,29 @@ async def _chat_http_proxy(
             raise
 
         async def sse_generator():
-            try:
-                async for chunk in upstream_resp.aiter_bytes():
-                    yield chunk
-            except httpx.HTTPError as exc:
-                log.warning("Chat SSE stream failed for session %d (%s)", sid, type(exc).__name__)
-            finally:
-                await stack.aclose()
+            async for chunk in upstream_resp.aiter_bytes():
+                yield chunk
+
+        class _StackClosingStreamingResponse(StreamingResponse):
+            async def __call__(self, scope, receive, send):
+                try:
+                    await super().__call__(scope, receive, send)
+                except httpx.HTTPError as exc:
+                    log.warning("Chat SSE stream failed for session %d (%s)", sid, type(exc).__name__)
+                finally:
+                    close_task = asyncio.create_task(stack.aclose())
+                    try:
+                        await asyncio.shield(close_task)
+                    except asyncio.CancelledError:
+                        await close_task
+                        raise
 
         response_headers = _response_headers(upstream_resp.headers)
         response_headers["Cache-Control"] = "no-cache"
         response_headers["X-Accel-Buffering"] = "no"
         response_headers.pop("content-length", None)
         response_headers.pop("content-encoding", None)
-        return StreamingResponse(
+        return _StackClosingStreamingResponse(
             sse_generator(),
             status_code=upstream_resp.status_code,
             headers=response_headers,
@@ -1196,7 +1323,8 @@ async def _chat_http_proxy(
         async with (
             _open_sandbox_tunnel(
                 session.sandbox_name, target_port, tunnel_client,
-                session_id=sid, user_key=user_key,
+                session_id=sid, user_key=user_key, admission_reserved=True,
+                run_epoch=run_epoch,
             ) as local_base,
             httpx.AsyncClient(
                 trust_env=False,
@@ -1226,7 +1354,7 @@ async def _chat_http_proxy(
         )
     except Exception as exc:  # noqa: BLE001 - translate gRPC and HTTPX errors to a safe response
         log.warning("Chat proxy tunnel failed for session %d (%s)", sid, type(exc).__name__)
-        too_large = "exceeds the configured limit" in str(exc)
+        too_large = _is_body_limit_error(exc) or "exceeds the configured limit" in str(exc)
         message = "Chat request or response is too large" if too_large else "Could not connect to session"
         return Response(message, status_code=413 if too_large else 503, media_type="text/plain")
 
@@ -1324,13 +1452,16 @@ router.add_api_route(
 
 # ── WebSocket proxy ───────────────────────────────────────────────────────────
 
-@router.websocket("/workspaces/{ws_id}/sessions/{sid}/chat/{path:path}")
+@router.websocket(
+    "/workspaces/{ws_id}/sessions/{sid}/chat/{path:path}",
+    dependencies=[Depends(require_websocket_auth)],
+)
 async def chat_ws_proxy(
     websocket: WebSocket,
     ws_id: int,
     sid: int,
     path: str,
-):
+) -> None:
     if not websocket.session.get("authenticated"):
         await websocket.close(code=4001, reason="Not authenticated")
         return
@@ -1356,11 +1487,18 @@ async def chat_ws_proxy(
         await websocket.close(code=4404, reason="Session unavailable")
         return
     assert session is not None
+    if sid in _session_tunnel_revoked:
+        await websocket.close(code=4404, reason="Session unavailable")
+        return
 
-    # Admission control before any gateway work; 1013 = "try again later".
+    # Reserve before gateway work. Accept authorized requests before sending
+    # WebSocket close codes; auth, origin, and ACL failures remain pre-accept.
     user_key = websocket.session.get("username") or "anonymous"
-    admission_error = _chat_admission_error(user_key)
-    if admission_error:
+    run_epoch = _session_tunnel_epochs.get(sid, 0)
+    try:
+        _admit_chat_tunnel(user_key)
+    except ChatTunnelCapacityError:
+        await websocket.accept()
         await websocket.close(code=1013, reason="Chat is busy")
         return
 
@@ -1368,11 +1506,18 @@ async def chat_ws_proxy(
         _gateway_config, tunnel_client = await _gateway_and_client(ws_obj)
         target_port = _chat_target_port(session)
     except Exception as exc:  # noqa: BLE001 - gateway SDK/auth failures must fail closed
+        _release_chat_tunnel(user_key)
+        await websocket.accept()
         log.warning("Chat WS tunnel setup failed for session %d (%s)", sid, type(exc).__name__)
         await websocket.close(code=1011, reason="Chat tunnel unavailable")
         return
 
-    await websocket.accept()
+    try:
+        await websocket.accept()
+    except BaseException:
+        _release_chat_tunnel(user_key)
+        raise
+    websocket_accepted = True
     upstream_path = f"/{path}"
     query = _chat_query(websocket.url.query)
     if query:
@@ -1381,7 +1526,8 @@ async def chat_ws_proxy(
     try:
         async with _open_sandbox_tunnel(
             session.sandbox_name, target_port, tunnel_client,
-            session_id=sid, user_key=user_key,
+            session_id=sid, user_key=user_key, admission_reserved=True,
+            run_epoch=run_epoch,
         ) as local_base:
             # Connect a preconnected socket and hand it to websockets: the
             # library cannot follow any redirect on a socket it did not
@@ -1426,12 +1572,15 @@ async def chat_ws_proxy(
             await websocket.close(code=1013, reason="Chat is busy")
     except Exception as exc:  # noqa: BLE001 - translate upstream WebSocket errors to a safe close
         log.warning("Chat WS tunnel failed for session %d (%s)", sid, type(exc).__name__)
+        if websocket_accepted:
+            with contextlib.suppress(Exception):
+                await websocket.close(code=1011, reason="Chat tunnel unavailable")
     finally:
         with contextlib.suppress(Exception):
             await websocket.close()
 
 
-async def _relay_websocket(websocket: WebSocket, upstream_ws) -> None:
+async def _relay_websocket(websocket: WebSocket, upstream_ws: Any) -> None:
     """Pump frames between the browser and the tunneled OpenCode WebSocket."""
     async def client_to_upstream() -> None:
         try:
@@ -1460,7 +1609,10 @@ async def _relay_websocket(websocket: WebSocket, upstream_ws) -> None:
         asyncio.create_task(client_to_upstream()),
         asyncio.create_task(upstream_to_client()),
     ]
-    _done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
-    for task in pending:
-        task.cancel()
-    await asyncio.gather(*tasks, return_exceptions=True)
+    try:
+        await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+    finally:
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)

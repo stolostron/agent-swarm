@@ -70,8 +70,9 @@ async def lifespan(app: FastAPI):
         await _ensure_openshell_provider_profiles()
         await _track_default_gateway_version()
     await _restart_prompt_pollers()
-    if settings.openshell_gateway_url:
-        await _restart_server_sessions()
+    # Reconcile surviving workspace-gateway sessions even when there is no
+    # operator-configured default gateway.
+    await _restart_server_sessions()
     from swarmer import pr_watcher, scheduler
     scheduler.start_scheduler()
     if settings.openshell_gateway_url:
@@ -427,10 +428,13 @@ async def _restart_server_sessions() -> None:
     from swarmer.database import get_db
     from swarmer.models.session import Session
 
-    try:
-        default_live_sandboxes = set(await openshell_client.list_sandboxes())
-    except Exception:
-        log.warning("_restart_server_sessions: could not list sandboxes — skipping", exc_info=True)
+    if settings.openshell_gateway_url:
+        try:
+            default_live_sandboxes = set(await openshell_client.list_sandboxes())
+        except Exception:
+            log.warning("_restart_server_sessions: could not list sandboxes — skipping", exc_info=True)
+            default_live_sandboxes = None
+    else:
         default_live_sandboxes = None
 
     async for db in get_db():

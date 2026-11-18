@@ -93,8 +93,11 @@ Swarmer cluster. Create or edit a workspace and select **Custom OpenShell
 Gateway**. Enter the HTTPS gateway URL (host and optional port; no URL path),
 choose the gateway's configured authentication mode, fill in its OIDC issuer and
 client details or bearer token, then use **Test Gateway Connection** before
-saving. OIDC over HTTPS is recommended for hosted gateways. Use `None` only for
-a deliberately unauthenticated gateway on a trusted private network.
+saving. OIDC over HTTPS is recommended for hosted gateways. Chat does not
+support `None` for workspace-configured gateways, even when TLS is verified;
+workspace gateways used by Chat require OIDC, bearer, or mTLS authentication.
+Local and remote Chat both use authenticated `ForwardTcp`. Only the
+operator-configured private default gateway may omit gateway authentication.
 
 For local development against a remote gateway, set `OPENSHELL_GATEWAY_URL` and
 the matching `OPENSHELL_BEARER_TOKEN` or TLS settings in the untracked `.env`.

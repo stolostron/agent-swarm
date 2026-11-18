@@ -6,6 +6,7 @@ import shlex
 import uuid
 from collections.abc import Iterable
 from datetime import datetime, timezone
+from typing import Any
 
 import httpx
 
@@ -2244,7 +2245,7 @@ async def _setup_openshell_sandbox(
             from swarmer.crypto import opencode_service_password as _oc_password
 
             _svc_config = _json_filter.dumps({
-                "hostname": "0.0.0.0",
+                "hostname": "127.0.0.1",
                 "port": 4096,
                 "password": _oc_password(session_id),
             }, indent=2)
@@ -2794,7 +2795,10 @@ async def _run_openshell_agent(
             # publicly routable ExposeService endpoint.
             if _runs_shared_service:
                 await _update_db(status_detail="Waiting for server to start…")
-                await asyncio.sleep(8)
+                await _wait_for_opencode_ready(sandbox_name, oc_client)
+                from swarmer.routers.chat_proxy import activate_session_chat_tunnels
+
+                activate_session_chat_tunnels(session_id)
                 await _update_db(phase="running", service_url=None, status_detail="")
 
     except asyncio.CancelledError:
@@ -2810,6 +2814,39 @@ async def _run_openshell_agent(
             status_detail=_detail,
             run_completed_at=datetime.now(timezone.utc),
         )
+
+
+async def _wait_for_opencode_ready(
+    sandbox_name: str,
+    client: Any | None,
+    timeout: float = 30.0,
+) -> None:
+    """Wait a bounded time for the sandbox-local OpenCode TCP listener."""
+    from swarmer import openshell_client
+
+    deadline = asyncio.get_running_loop().time() + timeout
+    probe = (
+        "const net=require('node:net');"
+        "const socket=net.connect(4096,'127.0.0.1');"
+        "socket.setTimeout(1000,()=>{socket.destroy();process.exit(1)});"
+        "socket.once('connect',()=>{socket.destroy();process.exit(0)});"
+        "socket.once('error',()=>process.exit(1));"
+    )
+    while asyncio.get_running_loop().time() < deadline:
+        try:
+            result = await openshell_client.exec_command(
+                sandbox_name,
+                ["node", "-e", probe],
+                client=client,
+                timeout_seconds=2,
+            )
+            if result.exit_code == 0:
+                return
+        except Exception:
+            # A not-yet-running sandbox endpoint is expected during startup.
+            pass
+        await asyncio.sleep(min(1, max(0, deadline - asyncio.get_running_loop().time())))
+    raise TimeoutError(f"OpenCode server did not become ready within {timeout:g} seconds")
 
 
 @router.post(

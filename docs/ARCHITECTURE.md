@@ -220,10 +220,11 @@ endpoint-scoped egress rule. There is no deployment-level URL setting or default
 
 The Chat proxy uses a temporary loopback-only TCP listener in the Swarmer pod to adapt
 OpenShell's synchronous gRPC byte stream to the existing HTTP/WebSocket clients.
-Admission control runs before any gateway work: a global tunnel cap plus a per-user
-quota reject overload with an explicit 503 (WebSocket close 1013). ForwardTcp streams
-multiplex over a shared per-gateway gRPC client that the proxy owns and replaces when
-a workspace's gateway configuration changes. Stream opens happen off the event loop —
+Chat atomically reserves admission under the global tunnel cap and per-user
+quota before gateway work, then transfers the reservation to the relay for the
+tunnel lifetime. Exhausted capacity returns HTTP 503 or WebSocket close 1013.
+ForwardTcp streams multiplex over a shared per-gateway gRPC client that the proxy
+owns and replaces when a workspace's gateway configuration changes. Stream opens happen off the event loop —
 the OpenShell SDK's bearer interceptor may block on an OIDC refresh — with a reaper
 that cancels streams whose caller timed out or was cancelled. Every exit path closes
 the listener, stream, reader thread, and admission slot. Tunnels register in a
