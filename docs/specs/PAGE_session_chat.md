@@ -69,6 +69,51 @@ served through Chat can act with the signed-in browser's Swarmer origin. A
 separate Chat origin with scoped authentication would be needed to isolate a
 compromised upstream UI from other same-origin dashboard actions.
 
+## Remote gateway connectivity
+
+The remote (hosted) gateway scenario is the reason this tunnel exists: a hosted
+gateway's public ingress does not route the sandbox virtual-host service URLs
+that `ExposeService` returns (observed as upstream 404s), so Chat rides the
+same authenticated gRPC connection Swarmer already uses for sandbox lifecycle.
+One Chat request travels this path:
+
+1. The browser sends an authenticated HTTPS/WSS request to the Swarmer Chat
+   route; workspace ACL and same-origin checks run first.
+2. Admission control reserves a tunnel slot before any gateway work.
+3. `resolve_gateway_config()` loads the workspace's `WorkspaceGateway` row —
+   gateway URL, auth mode, encrypted OIDC/bearer/mTLS material — and
+   `_require_secure_gateway()` rejects anything except certificate-verified
+   TLS (`https`/`grpcs`) plus a configured authentication mode. A remote
+   workspace gateway gets no private-network exemption.
+4. `_gateway_client_for()` returns the shared `SandboxClient` for the
+   (gateway URL, workspace) pair. The client's bearer interceptor calls the
+   workspace's `OidcGatewayAuth.current_access_token`, which refreshes the
+   access token against the issuer when stale and persists the refreshed
+   bundle back to the encrypted `WorkspaceGateway` row. When gateway
+   credentials change, `oidc_manager.invalidate()` swaps the callable and the
+   cache replaces (and closes) the old client on the next request.
+5. The proxy opens the `ForwardTcp` stream on a worker thread under a bounded
+   timeout — the SDK's bearer interceptor may block on an OIDC discovery or
+   token refresh — and a reaper cancels streams whose caller timed out or was
+   cancelled.
+6. Request bytes travel inside the TLS-verified, authenticated gRPC channel to
+   the remote gateway, which relays them to the sandbox's `127.0.0.1:4096`
+   OpenCode endpoint. OpenCode sees only the per-session Basic credential;
+   the gateway credential never enters the sandbox or the browser.
+7. The response returns over the same stream; SSE and WebSocket connections
+   hold their stream open under the tunnel lifetime and idle-read bounds.
+
+Failure modes in the remote scenario, all fail-closed:
+
+- Missing or unverifiable gateway TLS, or no configured authentication →
+  HTTP 503 / WebSocket close 1011 before any tunnel is opened.
+- Slow or failed OIDC refresh → bounded by the stream-open timeout; Chat
+  fails closed rather than stalling other requests.
+- Gateway overload (global or per-user tunnel quota) → explicit 503 /
+  WebSocket 1013 "try again later".
+- Credential rotation → the shared client is replaced on the next request;
+  in-flight tunnels on the old client fail and the browser reconnects.
+
 ## Acceptance checks
 
 - Chat is unavailable for prompt-mode and non-running sessions.

@@ -232,6 +232,9 @@ revocation applies when a connection ends, bounded by the tunnel maximum lifetim
 and the SSE idle-read timeout. Streaming responses remain streaming and use the
 bounded queues and lifetime limit. Legacy service URLs are not used as Chat
 upstreams. TUI shell startup continues to belong in the WebSocket flow, not sandbox setup.
+The remote-gateway request path — including OIDC credential resolution, the shared
+client cache, and fail-closed failure modes — is specified in
+[`specs/PAGE_session_chat.md`](specs/PAGE_session_chat.md).
 
 ## Container Image and Version Flow
 
