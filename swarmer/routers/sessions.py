@@ -3040,6 +3040,9 @@ async def session_stop(
         await db.commit()
         return RedirectResponse(url=f"/workspaces/{ws_id}/sessions/{sid}", status_code=302)
 
+    observed_run_started_at = session.run_started_at
+    observed_sandbox_name = session.sandbox_name
+
     # Cancel any background tasks for this session before touching the DB so
     # the task cannot race and overwrite the "stopped" phase we're about to set.
     _task_names = (
@@ -3052,16 +3055,47 @@ async def session_stop(
             _t.cancel()
             log.info("session_stop: cancelled background task %s", _t.get_name())
 
-    # Close live Chat tunnels before deleting the sandbox so proxied
-    # connections cannot outlive the session.
-    from swarmer.routers.chat_proxy import close_session_chat_tunnels
+    # Commit the stop transition and revoke Chat under the same lock used by
+    # startup reconciliation. A stale readiness result cannot reopen its fence.
+    from swarmer.routers.chat_proxy import (
+        close_session_chat_tunnels,
+        session_run_transition,
+    )
 
-    closed_tunnels = await close_session_chat_tunnels(sid)
+    async with session_run_transition(sid):
+        closed_tunnels = await close_session_chat_tunnels(sid)
+        from swarmer.session_runs import STOPPED_BY_USER_DETAIL, record_session_run
+
+        completed_at = datetime.now(timezone.utc)
+        if observed_run_started_at and session.phase in ("pending", "running"):
+            await record_session_run(
+                db,
+                session,
+                phase="stopped",
+                status_detail=STOPPED_BY_USER_DETAIL,
+                last_output=session.last_output,
+                raw_output=session.raw_output,
+                completed_at=completed_at,
+            )
+        session.run_completed_at = completed_at
+        session.phase = "stopped"
+        session.status_detail = STOPPED_BY_USER_DETAIL
+        session.active_schedule_id = None
+        if session.cron_schedule and session.cron_next_run is not None:
+            try:
+                from croniter import croniter as _croniter
+                session.cron_next_run = _croniter(
+                    session.cron_schedule, datetime.now(timezone.utc)
+                ).get_next(datetime)
+            except Exception:
+                log.warning("session_stop: failed to advance cron_next_run for session %d", sid, exc_info=True)
+        await db.commit()
     if closed_tunnels:
         log.info("session_stop: closed %d live Chat tunnel(s) for session %d", closed_tunnels, sid)
 
     provider_client = _CLIENT_UNSET
-    if session.sandbox_name:
+    updated_policy_chunks = None
+    if observed_sandbox_name:
         from swarmer import openshell_client
         client = await openshell_client.get_client_for_workspace(ws_id, db)
         provider_client = client
@@ -3069,32 +3103,50 @@ async def session_stop(
         # Policy tab remains useful after the session is stopped.
         try:
             if client is not None:
-                chunks = await openshell_client.get_draft_chunks(session.sandbox_name, client=client)
+                chunks = await openshell_client.get_draft_chunks(observed_sandbox_name, client=client)
             else:
-                chunks = await openshell_client.get_draft_chunks(session.sandbox_name)
+                chunks = await openshell_client.get_draft_chunks(observed_sandbox_name)
             if chunks:
                 import json as _json_stop
-                session.policy_chunks = _json_stop.dumps(chunks)
+                updated_policy_chunks = _json_stop.dumps(chunks)
         except Exception:
             log.warning("Failed to snapshot policy chunks on stop for session %d", sid, exc_info=True)
         if session.service_url:
             try:
                 if client is not None:
-                    await openshell_client.delete_service(session.sandbox_name, "agent", client=client)
+                    await openshell_client.delete_service(observed_sandbox_name, "agent", client=client)
                 else:
-                    await openshell_client.delete_service(session.sandbox_name, "agent")
+                    await openshell_client.delete_service(observed_sandbox_name, "agent")
             except Exception as exc:
                 log.warning("DeleteService failed for session %d: %s", sid, exc)
         try:
             if client is not None:
-                await openshell_client.delete_sandbox(session.sandbox_name, client=client)
+                await openshell_client.delete_sandbox(observed_sandbox_name, client=client)
             else:
-                await openshell_client.delete_sandbox(session.sandbox_name)
+                await openshell_client.delete_sandbox(observed_sandbox_name)
         except Exception as exc:
             flash(request, f"Sandbox deletion failed: {exc}", "warning")
-        session.sandbox_name = None
-        session.service_url = None
-        session.opencode_session_id = None
+        from sqlalchemy import update
+
+        cleanup_values = {
+            "sandbox_name": None,
+            "service_url": None,
+            "opencode_session_id": None,
+        }
+        if updated_policy_chunks is not None:
+            cleanup_values["policy_chunks"] = updated_policy_chunks
+        await db.execute(
+            update(Session)
+            .where(
+                Session.id == sid,
+                Session.run_started_at == observed_run_started_at,
+                Session.sandbox_name == observed_sandbox_name,
+                Session.phase == "stopped",
+            )
+            .values(**cleanup_values)
+            .execution_options(synchronize_session=False)
+        )
+        await db.commit()
 
     # Clean up GitHub credentials providers AFTER sandbox deletion — the Gateway
     # rejects DeleteProvider with FAILED_PRECONDITION if the sandbox is still attached.
@@ -3102,41 +3154,6 @@ async def session_stop(
     await _delete_github_app_provider(ws_id, sid, client=provider_client)
     await _delete_pat_provider(ws_id, session.github_pat_id, sid, client=provider_client)
 
-    from swarmer.session_runs import STOPPED_BY_USER_DETAIL, record_session_run
-
-    completed_at = datetime.now(timezone.utc)
-    if session.run_started_at and session.phase in ("pending", "running"):
-        await record_session_run(
-            db,
-            session,
-            phase="stopped",
-            status_detail=STOPPED_BY_USER_DETAIL,
-            last_output=session.last_output,
-            raw_output=session.raw_output,
-            completed_at=completed_at,
-        )
-    session.run_completed_at = completed_at
-    session.phase = "stopped"
-    session.status_detail = STOPPED_BY_USER_DETAIL
-    session.active_schedule_id = None
-
-    # Advance cron_next_run so the scheduler doesn't immediately re-launch a
-    # cron-scheduled session that was manually stopped — it would re-queue it
-    # within the next 30-second poll if cron_next_run is already in the past.
-    if session.cron_schedule and session.cron_next_run is not None:
-        try:
-            from croniter import croniter as _croniter
-            session.cron_next_run = _croniter(
-                session.cron_schedule, datetime.now(timezone.utc)
-            ).get_next(datetime)
-            log.info(
-                "session_stop: advanced cron_next_run for session %d to %s",
-                sid, session.cron_next_run,
-            )
-        except Exception:
-            log.warning("session_stop: failed to advance cron_next_run for session %d", sid, exc_info=True)
-
-    await db.commit()
     return RedirectResponse(url=f"/workspaces/{ws_id}/sessions/{sid}", status_code=302)
 
 

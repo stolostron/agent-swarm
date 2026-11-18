@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 
@@ -12,8 +13,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from swarmer import k8s, workspace_acl
-from swarmer.config import settings
-from swarmer.database import get_db
 from swarmer.api.deps import (
     filter_accessible_workspaces,
     get_workspace_or_404,
@@ -35,12 +34,14 @@ from swarmer.api.schemas import (
     WorkspaceOut,
     WorkspaceUpdate,
 )
+from swarmer.config import settings
+from swarmer.database import get_db
 from swarmer.k8s_auth import TokenIdentity
+from swarmer.mcp_catalog import get_catalog_entry
+from swarmer.models.mcp_server import McpServer
 from swarmer.models.workspace import Workspace
 from swarmer.models.workspace_gateway import WorkspaceGateway
 from swarmer.models.workspace_member import WorkspaceMember
-from swarmer.models.mcp_server import McpServer
-from swarmer.mcp_catalog import get_catalog_entry
 from swarmer.openshell_command_parser import parse_gateway_command_or_json
 from swarmer.openshell_oidc import oidc_manager
 from swarmer.openshell_token_parser import parse_token_input
@@ -155,12 +156,12 @@ async def test_gateway_connection_endpoint(
     db: AsyncSession = Depends(get_db),
     identity: TokenIdentity = Depends(require_api_auth),
 ):
+    from swarmer.gateway_version import observe_gateway_version
     from swarmer.openshell_client import (
         GatewayConfig,
         get_client_for_config,
         probe_gateway_connectivity,
     )
-    from swarmer.gateway_version import observe_gateway_version
     from swarmer.openshell_oidc import OidcGatewayAuth
 
     if body.workspace_id is None and not await workspace_acl.can_create_workspace(
@@ -476,7 +477,7 @@ async def delete_workspace(
     k8s_ns = ws.k8s_namespace
 
     # Invalidate cached in-memory OIDC gateway auth manager
-    oidc_manager.invalidate(ws.id)
+    await asyncio.to_thread(oidc_manager.invalidate, ws.id)
 
     # Delete DB row first to avoid orphaned rows if K8s cleanup fails
     await db.delete(ws)
@@ -551,7 +552,7 @@ async def set_workspace_gateway(
     if body.tls_key is not None:
         gw.tls_key = body.tls_key
 
-    oidc_manager.invalidate(ws.id)
+    await asyncio.to_thread(oidc_manager.invalidate, ws.id)
     await db.commit()
     await db.refresh(gw)
     return _serialize_gateway(gw)
@@ -570,7 +571,7 @@ async def delete_workspace_gateway(
     gw = result.scalar_one_or_none()
     if gw is not None:
         await db.delete(gw)
-        oidc_manager.invalidate(ws.id)
+        await asyncio.to_thread(oidc_manager.invalidate, ws.id)
         await db.commit()
     return MessageOut(detail="Workspace reverted to default cluster OpenShell gateway.")
 

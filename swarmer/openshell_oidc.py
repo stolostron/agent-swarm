@@ -75,6 +75,8 @@ class OidcGatewayAuth:
         self._configuration_revision = configuration_revision
         self._lock = threading.Lock()
         self._bundle: dict[str, Any] | None = None
+        self._pending_writeback = None
+        self._deferred_writeback: tuple[dict, int] | None = None
         self._token_endpoint: str | None = None
         self._http = httpx.Client(
             follow_redirects=False,
@@ -349,6 +351,13 @@ class OidcGatewayAuth:
         if self._loop is None:
             log.warning("OIDC token refreshed but no event loop registered — not persisted to DB")
             return
+        pending = self._pending_writeback
+        if pending is not None:
+            # Preserve the newest rotation while an earlier timed-out write is
+            # unresolved. The completion callback serializes this follow-up
+            # against the revision actually left in the database.
+            self._deferred_writeback = (bundle, expected_revision)
+            return
         try:
             current_loop = None
             with contextlib.suppress(RuntimeError):
@@ -364,12 +373,31 @@ class OidcGatewayAuth:
                     ),
                     self._loop,
                 )
-                if (
-                    fut.result(timeout=_WRITE_BACK_TIMEOUT)
-                    and self._configuration_revision == expected_revision
-                ):
-                    self._bundle = bundle
-                    self._configuration_revision = expected_revision + 1
+                self._pending_writeback = fut
+                try:
+                    persisted = fut.result(timeout=_WRITE_BACK_TIMEOUT)
+                except TimeoutError:
+                    # The DB coroutine may finish after this worker times out.
+                    # Reconcile its eventual result rather than allowing an
+                    # unobserved commit to strand this auth object at an old
+                    # revision.
+                    fut.add_done_callback(
+                        lambda completed: self._schedule_late_writeback_reconcile(
+                            completed, bundle, expected_revision
+                        )
+                    )
+                    log.warning(
+                        "OpenShell OIDC token persistence timed out for workspace %s",
+                        self._workspace_id,
+                    )
+                    return
+                self._pending_writeback = None
+                if persisted:
+                    if self._configuration_revision == expected_revision:
+                        self._bundle = bundle
+                        self._configuration_revision = expected_revision + 1
+                else:
+                    self._reconcile_writeback_sync(bundle, expected_revision)
         except Exception:
             log.warning(
                 "Failed to persist refreshed OpenShell OIDC token for ws %s to DB",
@@ -380,15 +408,178 @@ class OidcGatewayAuth:
     async def _persist_and_advance_revision(
         self, bundle: dict, expected_revision: int
     ) -> None:
-        if await _persist_workspace_bundle(
+        persisted = await _persist_workspace_bundle(
             self._workspace_id, bundle, expected_revision
-        ):
+        )
+        if persisted:
             # The lock can be contended by a token-refresh worker. Never wait
             # for it on the event loop, and publish only if this token bundle's
             # originating configuration is still current.
             await asyncio.to_thread(
                 self._advance_if_current, bundle, expected_revision
             )
+        else:
+            # A zero-row CAS can mean a prior timed-out write committed. Adopt
+            # it only when the DB revision and rotated tokens match this exact
+            # write; a newer user configuration remains authoritative.
+            await self._reconcile_writeback_async(bundle, expected_revision)
+
+    def _reconcile_writeback_sync(self, bundle: dict, expected_revision: int) -> None:
+        if self._loop is None or self._workspace_id is None:
+            return
+        fut = asyncio.run_coroutine_threadsafe(
+            _load_workspace_bundle(self._workspace_id), self._loop
+        )
+        try:
+            current = fut.result(timeout=_WRITE_BACK_TIMEOUT)
+        except Exception:
+            log.warning("Could not reconcile OpenShell OIDC write-back for workspace %s", self._workspace_id)
+            return
+        adopted = self._adopt_persisted_write_if_matching(
+            current, bundle, expected_revision, lock_already_held=True
+        )
+        if not adopted:
+            log.warning(
+                "OpenShell OIDC write-back lost its configuration revision for workspace %s",
+                self._workspace_id,
+            )
+
+    async def _reconcile_writeback_async(
+        self, bundle: dict, expected_revision: int
+    ) -> None:
+        current = await _load_workspace_bundle(self._workspace_id)
+        adopted = await asyncio.to_thread(
+            self._adopt_persisted_write_if_matching,
+            current,
+            bundle,
+            expected_revision,
+        )
+        if not adopted:
+            log.warning(
+                "OpenShell OIDC write-back lost its configuration revision for workspace %s",
+                self._workspace_id,
+            )
+
+    def _schedule_late_writeback_reconcile(
+        self, completed, bundle: dict, expected_revision: int
+    ) -> None:
+        try:
+            persisted = completed.result()
+        except Exception:
+            log.warning(
+                "Late OpenShell OIDC write-back failed for workspace %s",
+                self._workspace_id,
+            )
+            persisted = False
+        if self._loop is None:
+            return
+        self._loop.call_soon_threadsafe(
+            lambda: self._loop.create_task(
+                self._finish_pending_writeback(
+                    completed, bundle, expected_revision, persisted
+                )
+            )
+        )
+
+    async def _finish_pending_writeback(
+        self, completed, bundle: dict, expected_revision: int, persisted: bool
+    ) -> None:
+        try:
+            current = await _load_workspace_bundle(self._workspace_id)
+        except Exception:
+            log.warning(
+                "Could not reload OpenShell OIDC state after write-back for workspace %s",
+                self._workspace_id,
+                exc_info=True,
+            )
+            await asyncio.to_thread(
+                self._take_deferred_writeback, completed, expected_revision, False
+            )
+            return
+        adopted = False
+        if persisted:
+            adopted = await asyncio.to_thread(
+                self._adopt_persisted_write_if_matching,
+                current,
+                bundle,
+                expected_revision,
+            )
+        else:
+            adopted = (
+                current is not None
+                and current.get("configuration_revision") == expected_revision
+                and self._configuration_revision == expected_revision
+            )
+
+        deferred = await asyncio.to_thread(
+            self._take_deferred_writeback,
+            completed,
+            expected_revision,
+            adopted,
+        )
+        if deferred is None:
+            return
+        deferred_bundle, next_revision = deferred
+        if current is None or current.get("configuration_revision") != next_revision:
+            return
+        try:
+            if await _persist_workspace_bundle(
+                self._workspace_id, deferred_bundle, next_revision
+            ):
+                await asyncio.to_thread(
+                    self._advance_if_current, deferred_bundle, next_revision
+                )
+            else:
+                await self._reconcile_writeback_async(deferred_bundle, next_revision)
+        except Exception:
+            log.warning(
+                "Deferred OpenShell OIDC write-back failed for workspace %s",
+                self._workspace_id,
+                exc_info=True,
+            )
+
+    def _take_deferred_writeback(
+        self, completed, expected_revision: int, prior_write_safe: bool
+    ) -> tuple[dict, int] | None:
+        if self._pending_writeback is completed:
+            self._pending_writeback = None
+        deferred = self._deferred_writeback
+        self._deferred_writeback = None
+        if (
+            not prior_write_safe
+            or deferred is None
+            or deferred[1] != expected_revision
+            or self._configuration_revision
+            not in (expected_revision, expected_revision + 1)
+        ):
+            return None
+        return deferred[0], self._configuration_revision
+
+    def _adopt_persisted_write_if_matching(
+        self,
+        current: dict | None,
+        bundle: dict,
+        expected_revision: int,
+        lock_already_held: bool = False,
+    ) -> bool:
+        if (
+            current is None
+            or current.get("configuration_revision") != expected_revision + 1
+            or current.get("access_token") != bundle.get("access_token")
+            or current.get("refresh_token") != bundle.get("refresh_token")
+        ):
+            return False
+        def adopt() -> bool:
+            if self._configuration_revision != expected_revision:
+                return False
+            self._bundle = current
+            self._configuration_revision = expected_revision + 1
+            return True
+
+        if lock_already_held:
+            return adopt()
+        with self._lock:
+            return adopt()
 
     def _advance_if_current(self, bundle: dict, expected_revision: int) -> bool:
         with self._lock:

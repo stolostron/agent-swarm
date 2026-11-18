@@ -17,11 +17,11 @@ from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
 
 from swarmer import k8s
+from swarmer.api.v1 import router as api_v1_router
 from swarmer.config import settings
 from swarmer.crypto import derive_session_secret, init_crypto
-from swarmer.database import checkpoint_db, create_tables, migrate_db, init_db
+from swarmer.database import checkpoint_db, create_tables, init_db, migrate_db
 from swarmer.deps import NotAuthenticated
-from swarmer.api.v1 import router as api_v1_router
 from swarmer.routers import admins as admins_router
 from swarmer.routers import auth as auth_router
 from swarmer.routers import chat_proxy as chat_proxy_router
@@ -29,8 +29,8 @@ from swarmer.routers import env_vars as env_vars_router
 from swarmer.routers import mcp_servers as mcp_servers_router
 from swarmer.routers import office as office_router
 from swarmer.routers import prompts as prompts_router
-from swarmer.routers import sessions as sessions_router
 from swarmer.routers import secrets as secrets_router
+from swarmer.routers import sessions as sessions_router
 from swarmer.routers import tui_ws as tui_router
 from swarmer.routers import workspaces as workspaces_router
 
@@ -439,21 +439,13 @@ async def _restart_server_sessions() -> None:
     without losing the proxy connection or GitHub App authentication.
     """
     from datetime import datetime, timezone
+
     from sqlalchemy import select
     from sqlalchemy.orm import selectinload
 
     from swarmer import openshell_client
     from swarmer.database import get_db
     from swarmer.models.session import Session
-
-    if settings.openshell_gateway_url:
-        try:
-            default_live_sandboxes = set(await openshell_client.list_sandboxes())
-        except Exception:
-            log.warning("_restart_server_sessions: could not list sandboxes — skipping", exc_info=True)
-            default_live_sandboxes = None
-    else:
-        default_live_sandboxes = None
 
     async for db in get_db():
         result = await db.execute(
@@ -469,11 +461,25 @@ async def _restart_server_sessions() -> None:
         if not sessions:
             break
 
-        for s in sessions:
-            sandbox_name = s.sandbox_name
+        # Snapshot candidate run identities before gateway inventory. A launch
+        # recorded after this query is not eligible for missing-sandbox cleanup.
+        candidates = [(s, s.run_started_at, s.sandbox_name, s.phase) for s in sessions]
+        await db.commit()
+
+        if settings.openshell_gateway_url:
+            try:
+                default_live_sandboxes = set(await openshell_client.list_sandboxes())
+            except Exception:
+                log.warning("_restart_server_sessions: could not list sandboxes — skipping", exc_info=True)
+                default_live_sandboxes = None
+        else:
+            default_live_sandboxes = None
+
+        for s, observed_run_started_at, sandbox_name, observed_phase in candidates:
             try:
                 oc_client = await openshell_client.get_client_for_workspace(s.workspace_id, db)
             except Exception as exc:  # noqa: BLE001
+                await db.rollback()
                 log.warning(
                     "restart: could not resolve gateway for workspace %d; "
                     "leaving session %d unchanged (%s)",
@@ -482,12 +488,17 @@ async def _restart_server_sessions() -> None:
                     type(exc).__name__,
                 )
                 continue
+            # Gateway resolution may read workspace configuration. Do not
+            # carry that transaction into inventory or readiness RPCs.
+            await db.commit()
             if oc_client is not None:
                 try:
                     live_sandboxes = set(await openshell_client.list_sandboxes(client=oc_client))
                 except Exception:
+                    await db.rollback()
                     log.warning("_restart_server_sessions: could not list sandboxes for workspace %d — skipping", s.workspace_id, exc_info=True)
                     continue
+                await db.commit()
             else:
                 if default_live_sandboxes is None:
                     log.warning("restart: default gateway unavailable — skipping session %d", s.id)
@@ -500,20 +511,37 @@ async def _restart_server_sessions() -> None:
                     "restart: %s-mode session %d sandbox %s not found — marking stopped",
                     s.mode, s.id, sandbox_name,
                 )
-                s.phase = "stopped"
-                s.sandbox_name = None
-                s.service_url = None
-                s.run_completed_at = datetime.now(timezone.utc)
+                from sqlalchemy import update
+
+                async with chat_proxy_router.session_run_transition(s.id):
+                    await db.execute(
+                        update(Session)
+                        .where(
+                            Session.id == s.id,
+                            Session.run_started_at == observed_run_started_at,
+                            Session.sandbox_name == sandbox_name,
+                            Session.phase.in_(("pending", "running")),
+                        )
+                        .values(
+                            phase="stopped",
+                            sandbox_name=None,
+                            service_url=None,
+                            run_completed_at=datetime.now(timezone.utc),
+                        )
+                        .execution_options(synchronize_session=False)
+                    )
+                    await db.commit()
                 continue
 
             # Remove a legacy public endpoint if an older Swarmer version
             # created one. Chat now connects only through OpenShell ForwardTcp.
+            clear_service_url = False
             if s.service_url:
                 try:
                     await openshell_client.delete_service(
                         sandbox_name, "agent", client=oc_client
                     )
-                    s.service_url = None
+                    clear_service_url = True
                 except Exception as exc:  # noqa: BLE001 - keep startup live if legacy cleanup fails
                     log.warning(
                         "restart: could not delete legacy exposed service for session %d (%s)",
@@ -527,6 +555,8 @@ async def _restart_server_sessions() -> None:
             interactive_opencode = (
                 s.mode == "server" or (s.mode == "tui" and s.agent_tool == "opencode")
             )
+            reconciled_phase = observed_phase
+            status_detail = s.status_detail
             if interactive_opencode:
                 try:
                     from swarmer.routers.sessions import _wait_for_opencode_ready
@@ -540,27 +570,54 @@ async def _restart_server_sessions() -> None:
                                 raise
                             await asyncio.sleep(_RESTART_READINESS_RETRY_DELAY)
                 except Exception as exc:  # noqa: BLE001 - retain a diagnostic pending session
-                    s.phase = "pending"
-                    s.status_detail = "OpenCode readiness probe failed after Swarmer restart"
+                    reconciled_phase = "pending"
+                    status_detail = "OpenCode readiness probe failed after Swarmer restart"
                     log.warning(
                         "restart: OpenCode was not ready for session %d (%s)",
                         s.id,
                         type(exc).__name__,
                     )
                 else:
-                    s.phase = "running"
-                    s.status_detail = ""
-                    chat_proxy_router.activate_session_chat_tunnels(s.id)
+                    reconciled_phase = "running"
+                    status_detail = ""
                     log.info(
                         "restart: interactive session %d re-connected to sandbox %s",
                         s.id,
                         sandbox_name,
                     )
 
+            from sqlalchemy import update
+
+            values = {"phase": reconciled_phase}
+            if interactive_opencode:
+                values["status_detail"] = status_detail
+            if clear_service_url:
+                values["service_url"] = None
+            async with chat_proxy_router.session_run_transition(s.id):
+                reconciled = await db.execute(
+                    update(Session)
+                    .where(
+                        Session.id == s.id,
+                        Session.run_started_at == observed_run_started_at,
+                        Session.sandbox_name == sandbox_name,
+                        Session.phase.in_(("pending", "running")),
+                    )
+                    .values(**values)
+                    .execution_options(synchronize_session=False)
+                )
+                await db.commit()
+                if (
+                    reconciled.rowcount == 1
+                    and interactive_opencode
+                    and reconciled_phase == "running"
+                ):
+                    chat_proxy_router.activate_session_chat_tunnels(s.id)
+
+            if reconciled.rowcount != 1:
+                continue
+
             await _restart_github_app_iat_refresh(s, db)
             await _restart_agent_swarm_token_refresh(s, db, client=oc_client)
-
-        await db.commit()
         break
 
 
@@ -582,7 +639,10 @@ async def _restart_github_app_iat_refresh(session: Session, db: AsyncSession) ->
         from swarmer import openshell_client
         from swarmer.github import github_slug as _github_slug
         from swarmer.github_app import get_workspace_github_app
-        from swarmer.github_auth import mint_installation_token, start_token_refresh_loop
+        from swarmer.github_auth import (
+            mint_installation_token,
+            start_token_refresh_loop,
+        )
         from swarmer.routers.sessions import _github_app_provider_name
 
         app = await get_workspace_github_app(session.workspace_id, db, user_id="")

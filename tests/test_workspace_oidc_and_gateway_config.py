@@ -96,17 +96,94 @@ async def test_oidc_async_writeback_lock_wait_does_not_block_event_loop(monkeypa
     persist = AsyncMock(return_value=True)
     monkeypatch.setattr("swarmer.openshell_oidc._persist_workspace_bundle", persist)
     bundle = {"refresh_token": "rotated", "access_token": "fresh"}
-    auth._lock.acquire()
+    lock_acquired = threading.Event()
+    release_lock = threading.Event()
+
+    def hold_lock_with_fallback():
+        auth._lock.acquire()
+        lock_acquired.set()
+        try:
+            release_lock.wait(timeout=2)
+        finally:
+            auth._lock.release()
+
+    holder = threading.Thread(target=hold_lock_with_fallback, daemon=True)
+    holder.start()
     try:
+        assert await asyncio.to_thread(lock_acquired.wait, 1)
         writeback = asyncio.create_task(auth._persist_and_advance_revision(bundle, 4))
         await asyncio.wait_for(asyncio.sleep(0.02), timeout=0.2)
         assert not writeback.done()
     finally:
-        auth._lock.release()
+        release_lock.set()
+        await asyncio.wait_for(asyncio.to_thread(holder.join), timeout=1)
     await asyncio.wait_for(writeback, timeout=1)
 
     assert auth._configuration_revision == 5
     assert auth._bundle is bundle
+    auth.close()
+
+
+@pytest.mark.asyncio
+async def test_oidc_late_writeback_reconciles_revision_before_next_rotation(monkeypatch):
+    auth = OidcGatewayAuth(
+        issuer="https://issuer.example.com",
+        client_id="client",
+        workspace_id=821,
+        configuration_revision=4,
+    )
+    auth.set_event_loop(asyncio.get_running_loop())
+    monkeypatch.setattr("swarmer.openshell_oidc._WRITE_BACK_TIMEOUT", 0.01)
+    first_write_started = asyncio.Event()
+    release_first_write = asyncio.Event()
+    reconciled_load = asyncio.Event()
+    state = {
+        "configuration_revision": 4,
+        "access_token": "old-access",
+        "refresh_token": "old-refresh",
+    }
+    expected_revisions = []
+
+    async def persist(_workspace_id, bundle, expected_revision):
+        expected_revisions.append(expected_revision)
+        if expected_revision != state["configuration_revision"]:
+            return False
+        if bundle["access_token"] == "first-access":
+            first_write_started.set()
+            await release_first_write.wait()
+        state.update(
+            configuration_revision=expected_revision + 1,
+            access_token=bundle["access_token"],
+            refresh_token=bundle["refresh_token"],
+        )
+        return True
+
+    async def load(_workspace_id):
+        reconciled_load.set()
+        return dict(state)
+
+    monkeypatch.setattr("swarmer.openshell_oidc._persist_workspace_bundle", persist)
+    monkeypatch.setattr("swarmer.openshell_oidc._load_workspace_bundle", load)
+    first = {"access_token": "first-access", "refresh_token": "first-refresh"}
+    await asyncio.to_thread(auth._write_back, first)
+    await asyncio.wait_for(first_write_started.wait(), timeout=1)
+    assert auth._configuration_revision == 4
+
+    second = {"access_token": "second-access", "refresh_token": "second-refresh"}
+    await asyncio.to_thread(auth._write_back, second)
+    assert expected_revisions == [4]
+    release_first_write.set()
+    await asyncio.wait_for(reconciled_load.wait(), timeout=1)
+    for _ in range(100):
+        if auth._configuration_revision == 6:
+            break
+        await asyncio.sleep(0.01)
+    assert auth._configuration_revision == 6
+    assert auth._bundle["refresh_token"] == "second-refresh"
+
+    assert expected_revisions == [4, 5]
+    assert state["access_token"] == "second-access"
+    assert state["refresh_token"] == "second-refresh"
     auth.close()
 
 
@@ -176,6 +253,39 @@ async def test_oidc_manager_checks_revision_with_atomic_credential_seed():
     assert auth._bundle["refresh_token"] == "rotated"
     assert auth._bundle["access_token"] == "rotated-access"
     manager.clear()
+
+
+@pytest.mark.asyncio
+async def test_workspace_delete_invalidates_oidc_off_event_loop(monkeypatch):
+    from unittest.mock import AsyncMock
+
+    from swarmer.api.v1 import workspaces as workspace_api
+
+    ws = MagicMock(id=901, display_name="test", k8s_namespace="namespace")
+    identity = MagicMock()
+    db = MagicMock()
+    db.delete = AsyncMock()
+    db.commit = AsyncMock()
+    invalidated_on = []
+    main_thread_id = threading.get_ident()
+
+    async def permit(*_args):
+        return None
+
+    monkeypatch.setattr(workspace_api, "_require_manage_permission", permit)
+    monkeypatch.setattr(workspace_api.settings, "k8s_namespace", "")
+    monkeypatch.setattr(workspace_api.k8s, "delete_namespace", lambda *_args: None)
+    monkeypatch.setattr(
+        workspace_api.oidc_manager,
+        "invalidate",
+        lambda _workspace_id: invalidated_on.append(threading.get_ident()),
+    )
+
+    await workspace_api.delete_workspace(ws, identity, db)
+
+    assert invalidated_on and invalidated_on[0] != main_thread_id
+    db.delete.assert_awaited_once_with(ws)
+    db.commit.assert_awaited_once()
 
 
 @pytest.mark.asyncio

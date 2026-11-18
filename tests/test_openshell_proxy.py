@@ -319,10 +319,11 @@ async def test_lifespan_reconciles_custom_gateway_sessions_without_default(monke
     monkeypatch.setattr(scheduler, "shutdown", AsyncMock())
     monkeypatch.setattr(pr_watcher, "shutdown", AsyncMock())
 
-    async with main.lifespan(main.app):
-        await asyncio.wait_for(reconciliation_started.wait(), timeout=1)
-        # A slow per-sandbox probe must not keep the lifespan from serving.
-        restart.assert_awaited_once()
+    async with asyncio.timeout(1):
+        async with main.lifespan(main.app):
+            await reconciliation_started.wait()
+            # A slow per-sandbox probe must not keep the lifespan from serving.
+            restart.assert_awaited_once()
 
 
 
@@ -952,6 +953,36 @@ class TestChatHttpProxy:
         assert response.text == "data: ready\n\n"
         assert response.headers["content-type"].startswith("text/event-stream")
         assert requests[0][0] == "GET /event HTTP/1.1"
+
+    @pytest.mark.asyncio
+    async def test_successful_sse_delete_clears_selected_conversation(self, client, monkeypatch):
+        ws, session = await self._session(client)
+        async with _TestSession() as db:
+            from swarmer.models.session import Session as SessionRow
+
+            row = await db.get(SessionRow, session["id"])
+            row.opencode_session_id = "ses_sse_delete"
+            await db.commit()
+        server, _requests = await self._upstream(
+            monkeypatch,
+            body=b"data: deleted\n\n",
+            content_type="text/event-stream",
+        )
+        try:
+            response = await client.delete(
+                f"/workspaces/{ws['id']}/sessions/{session['id']}/chat/session/ses_sse_delete",
+                headers={"Origin": "http://test", "Accept": "text/event-stream"},
+            )
+        finally:
+            server.close()
+            await server.wait_closed()
+
+        assert response.status_code == 200
+        async with _TestSession() as db:
+            from swarmer.models.session import Session as SessionRow
+
+            row = await db.get(SessionRow, session["id"])
+            assert row.opencode_session_id is None
 
     @pytest.mark.asyncio
     async def test_sse_upstream_read_error_completes_asgi_response(self, client, monkeypatch):
@@ -2371,6 +2402,167 @@ class TestRestartServerSessions:
             assert session_obj.phase == "stopped"
             assert session_obj.sandbox_name is None
             assert session_obj.service_url is None
+
+    @pytest.mark.asyncio
+    async def test_inventory_snapshot_does_not_stop_a_newly_recorded_launch(
+        self, client
+    ):
+        ws = await _create_workspace(client)
+        existing = await _create_session(client, ws["id"], mode="server", agent_tool="opencode")
+        launching = await _create_session(client, ws["id"], name="launching", mode="server", agent_tool="opencode")
+        async with _TestSession() as db:
+            from swarmer.models.session import Session as SessionRow
+
+            row = await db.get(SessionRow, existing["id"])
+            row.phase = "running"
+            row.sandbox_name = "sandbox-existing"
+            row.run_started_at = datetime.now(timezone.utc).replace(tzinfo=None)
+            await db.commit()
+
+        async def inventory_after_launch(*_args, **_kwargs):
+            async with _TestSession() as db:
+                from swarmer.models.session import Session as SessionRow
+
+                row = await db.get(SessionRow, launching["id"])
+                row.phase = "pending"
+                row.sandbox_name = "sandbox-new-launch"
+                row.run_started_at = datetime.now(timezone.utc).replace(tzinfo=None)
+                await db.commit()
+            return ["sandbox-existing"]
+
+        with (
+            patch("swarmer.openshell_client.list_sandboxes", new=AsyncMock(side_effect=inventory_after_launch)),
+            patch("swarmer.database.get_db", new=_override_get_db),
+        ):
+            from swarmer.main import _restart_server_sessions
+
+            await _restart_server_sessions()
+
+        async with _TestSession() as db:
+            from swarmer.models.session import Session as SessionRow
+
+            row = await db.get(SessionRow, launching["id"])
+            assert row.phase == "pending"
+            assert row.sandbox_name == "sandbox-new-launch"
+
+    @pytest.mark.asyncio
+    async def test_missing_inventory_cleanup_is_guarded_by_current_run_identity(
+        self, client
+    ):
+        ws = await _create_workspace(client)
+        created = await _create_session(client, ws["id"], mode="server", agent_tool="opencode")
+        async with _TestSession() as db:
+            from swarmer.models.session import Session as SessionRow
+
+            row = await db.get(SessionRow, created["id"])
+            row.phase = "running"
+            row.sandbox_name = "sandbox-old-run"
+            row.run_started_at = datetime.now(timezone.utc).replace(tzinfo=None)
+            await db.commit()
+
+        async def replace_run_before_inventory(*_args, **_kwargs):
+            async with _TestSession() as db:
+                from swarmer.models.session import Session as SessionRow
+
+                row = await db.get(SessionRow, created["id"])
+                row.sandbox_name = "sandbox-current-run"
+                row.run_started_at = datetime.now(timezone.utc).replace(tzinfo=None)
+                await db.commit()
+            return []
+
+        with (
+            patch("swarmer.openshell_client.list_sandboxes", new=AsyncMock(side_effect=replace_run_before_inventory)),
+            patch("swarmer.database.get_db", new=_override_get_db),
+        ):
+            from swarmer.main import _restart_server_sessions
+
+            await _restart_server_sessions()
+
+        async with _TestSession() as db:
+            from swarmer.models.session import Session as SessionRow
+
+            row = await db.get(SessionRow, created["id"])
+            assert row.phase == "running"
+            assert row.sandbox_name == "sandbox-current-run"
+
+    @pytest.mark.asyncio
+    async def test_readiness_retries_run_without_a_database_transaction(self, client, monkeypatch):
+        ws = await _create_workspace(client)
+        created = await _create_session(client, ws["id"], mode="server", agent_tool="opencode")
+        async with _TestSession() as db:
+            from swarmer.models.session import Session as SessionRow
+
+            row = await db.get(SessionRow, created["id"])
+            row.phase = "running"
+            row.sandbox_name = "sandbox-no-write-lock"
+            row.service_url = "https://legacy.example.com"
+            row.run_started_at = datetime.now(timezone.utc).replace(tzinfo=None)
+            await db.commit()
+
+        active_dbs = []
+
+        async def get_db_without_context():
+            async with _TestSession() as db:
+                active_dbs.append(db)
+                yield db
+
+        async def probe(*_args):
+            assert active_dbs
+            assert not active_dbs[0].in_transaction()
+
+        with (
+            patch("swarmer.openshell_client.list_sandboxes", new=AsyncMock(return_value=["sandbox-no-write-lock"])),
+            patch("swarmer.openshell_client.delete_service", new=AsyncMock()),
+            patch("swarmer.routers.sessions._wait_for_opencode_ready", new=AsyncMock(side_effect=probe)),
+            patch("swarmer.database.get_db", new=get_db_without_context),
+        ):
+            from swarmer.main import _restart_server_sessions
+
+            await _restart_server_sessions()
+
+    @pytest.mark.asyncio
+    async def test_stop_during_readiness_probe_cannot_reopen_chat_fence(self, client):
+        from swarmer.routers import chat_proxy as cp
+        from sqlalchemy import update
+
+        ws = await _create_workspace(client)
+        created = await _create_session(client, ws["id"], mode="server", agent_tool="opencode")
+        async with _TestSession() as db:
+            from swarmer.models.session import Session as SessionRow
+
+            row = await db.get(SessionRow, created["id"])
+            row.phase = "running"
+            row.sandbox_name = "sandbox-stopped-during-probe"
+            row.run_started_at = datetime.now(timezone.utc).replace(tzinfo=None)
+            await db.commit()
+        cp.activate_session_chat_tunnels(created["id"])
+
+        async def stop_during_probe(*_args):
+            async with cp.session_run_transition(created["id"]):
+                await cp.close_session_chat_tunnels(created["id"])
+                async with _TestSession() as db:
+                    await db.execute(
+                        update(SessionRow)
+                        .where(SessionRow.id == created["id"])
+                        .values(phase="stopped")
+                    )
+                    await db.commit()
+
+        with (
+            patch("swarmer.openshell_client.list_sandboxes", new=AsyncMock(return_value=["sandbox-stopped-during-probe"])),
+            patch("swarmer.routers.sessions._wait_for_opencode_ready", new=AsyncMock(side_effect=stop_during_probe)),
+            patch("swarmer.database.get_db", new=_override_get_db),
+        ):
+            from swarmer.main import _restart_server_sessions
+
+            await _restart_server_sessions()
+
+        assert created["id"] not in cp._session_run_fences
+        async with _TestSession() as db:
+            from swarmer.models.session import Session as SessionRow
+
+            row = await db.get(SessionRow, created["id"])
+            assert row.phase == "stopped"
 
     @pytest.mark.asyncio
     async def test_legacy_service_cleanup_failure_preserves_live_session(self, client):

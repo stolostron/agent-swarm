@@ -58,12 +58,15 @@ async def start_token_refresh_loop(
         while True:
             await asyncio.sleep(refresh_interval)
             token = mint_session_token(session_id, workspace_id)
+            # Do not retain the launch-time client: workspace OIDC credentials
+            # and their configuration revision may rotate while this task runs.
+            current_client = await openshell_client.get_client_for_workspace(workspace_id)
             await openshell_client.ensure_provider(
                 provider_name,
                 "agent-swarm",
                 {},
                 credentials={"AGENT_SWARM_API_TOKEN": token},
-                client=client,
+                client=current_client,
             )
     except asyncio.CancelledError:
         raise

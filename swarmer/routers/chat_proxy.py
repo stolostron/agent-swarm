@@ -27,6 +27,7 @@ import httpx
 import websockets
 from fastapi import APIRouter, Depends, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import Response
+from sqlalchemy import update
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -115,6 +116,7 @@ _chat_tunnel_count = 0
 _chat_user_tunnels: dict[str, int] = {}
 _session_tunnels: dict[int, set["_ChatTunnelHandle"]] = {}
 _session_run_fences: dict[int, "_SessionRunFence"] = {}
+_session_run_transition_locks: dict[int, asyncio.Lock] = {}
 _gateway_clients: dict[tuple[int | str, ...], tuple[Any, Any]] = {}
 _gateway_clients_lock = asyncio.Lock()
 
@@ -200,6 +202,14 @@ async def close_session_chat_tunnels(session_id: int) -> int:
     for handle in list(handles):
         handle.request_close()
     return len(handles)
+
+
+@asynccontextmanager
+async def session_run_transition(session_id: int):
+    """Serialize run-state changes with Chat fence activation/revocation."""
+    lock = _session_run_transition_locks.setdefault(session_id, asyncio.Lock())
+    async with lock:
+        yield
 
 
 def activate_session_chat_tunnels(session_id: int) -> _SessionRunFence:
@@ -1175,6 +1185,55 @@ def _deleted_opencode_session_id(path: str, method: str) -> str | None:
     return match.group(1)
 
 
+async def _persist_chat_conversation_selection(
+    db: AsyncSession,
+    sid: int,
+    path: str,
+    method: str,
+    response_body: bytes,
+    observed_run_started_at: datetime | None,
+    observed_sandbox_name: str,
+) -> None:
+    """Persist successful conversation selection/deletion for the observed run."""
+    selected_value = _selected_opencode_session_id(path, method, response_body)
+    deleted_session_id = _deleted_opencode_session_id(path, method)
+    if deleted_session_id:
+        statement = (
+            update(Session)
+            .where(
+                Session.id == sid,
+                Session.run_started_at == observed_run_started_at,
+                Session.sandbox_name == observed_sandbox_name,
+                Session.opencode_session_id == deleted_session_id,
+            )
+            .values(opencode_session_id=None)
+            .execution_options(synchronize_session=False)
+        )
+    elif selected_value:
+        statement = (
+            update(Session)
+            .where(
+                Session.id == sid,
+                Session.run_started_at == observed_run_started_at,
+                Session.sandbox_name == observed_sandbox_name,
+            )
+            .values(opencode_session_id=selected_value)
+            .execution_options(synchronize_session=False)
+        )
+    else:
+        return
+    try:
+        await db.execute(statement)
+        await db.commit()
+    except SQLAlchemyError as exc:
+        await db.rollback()
+        log.warning(
+            "chat proxy: could not persist OpenCode conversation for session %d (%s)",
+            sid,
+            type(exc).__name__,
+        )
+
+
 # ── Entry point: /chat (no trailing slash) ────────────────────────────────────
 
 async def _proxy_root(
@@ -1396,6 +1455,16 @@ async def _chat_http_proxy_admitted(
         response_headers["X-Accel-Buffering"] = "no"
         response_headers.pop("content-length", None)
         response_headers.pop("content-encoding", None)
+        if 200 <= upstream_resp.status_code < 300:
+            await _persist_chat_conversation_selection(
+                db,
+                sid,
+                path,
+                request.method,
+                b"",
+                observed_run_started_at,
+                observed_sandbox_name,
+            )
         return _StackClosingStreamingResponse(
             sse_generator(),
             status_code=upstream_resp.status_code,
@@ -1443,49 +1512,15 @@ async def _chat_http_proxy_admitted(
         return Response(message, status_code=413 if too_large else 503, media_type="text/plain")
 
     if 200 <= upstream_status < 300:
-        selected_session_id = _selected_opencode_session_id(path, request.method, content)
-        deleted_session_id = _deleted_opencode_session_id(path, request.method)
-        selected_value = selected_session_id or None
-        if deleted_session_id:
-            from sqlalchemy import update
-
-            statement = (
-                update(Session)
-                .where(
-                    Session.id == sid,
-                    Session.run_started_at == observed_run_started_at,
-                    Session.sandbox_name == observed_sandbox_name,
-                    Session.opencode_session_id == deleted_session_id,
-                )
-                .values(opencode_session_id=None)
-                .execution_options(synchronize_session=False)
-            )
-        elif selected_value:
-            from sqlalchemy import update
-
-            statement = (
-                update(Session)
-                .where(
-                    Session.id == sid,
-                    Session.run_started_at == observed_run_started_at,
-                    Session.sandbox_name == observed_sandbox_name,
-                )
-                .values(opencode_session_id=selected_value)
-                .execution_options(synchronize_session=False)
-            )
-        else:
-            statement = None
-        if statement is not None:
-            try:
-                await db.execute(statement)
-                await db.commit()
-            except SQLAlchemyError as exc:
-                await db.rollback()
-                log.warning(
-                    "chat proxy: could not persist selected OpenCode session for session %d (%s)",
-                    sid,
-                    type(exc).__name__,
-                )
+        await _persist_chat_conversation_selection(
+            db,
+            sid,
+            path,
+            request.method,
+            content,
+            observed_run_started_at,
+            observed_sandbox_name,
+        )
 
     log.debug("chat proxy: %s %s → %d", request.method, path, upstream_status)
     if upstream_status >= 400:
