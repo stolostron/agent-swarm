@@ -1,6 +1,8 @@
+import asyncio
 import os
 import ssl
 import sys
+import threading
 from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -53,6 +55,127 @@ def test_oidc_auth_refresh_flow():
     assert token == "new-access-token"
     assert auth._bundle["refresh_token"] == "rotated-refresh-token"
     assert auth._bundle["access_token"] == "new-access-token"
+
+
+@pytest.mark.asyncio
+async def test_oidc_async_writeback_captures_originating_revision(monkeypatch):
+    auth = OidcGatewayAuth(
+        issuer="https://issuer.example.com",
+        client_id="client",
+        workspace_id=81,
+        configuration_revision=4,
+    )
+    loop = asyncio.get_running_loop()
+    auth.set_event_loop(loop)
+    observed = []
+
+    async def persist_and_advance(bundle, expected_revision):
+        observed.append((bundle, expected_revision))
+
+    monkeypatch.setattr(auth, "_persist_and_advance_revision", persist_and_advance)
+    bundle = {"refresh_token": "rotated", "access_token": "fresh"}
+
+    auth._write_back(bundle)
+    auth._configuration_revision = 5
+    await asyncio.sleep(0)
+
+    assert observed == [(bundle, 4)]
+    auth.close()
+
+
+@pytest.mark.asyncio
+async def test_oidc_async_writeback_lock_wait_does_not_block_event_loop(monkeypatch):
+    from unittest.mock import AsyncMock
+
+    auth = OidcGatewayAuth(
+        issuer="https://issuer.example.com",
+        client_id="client",
+        workspace_id=82,
+        configuration_revision=4,
+    )
+    persist = AsyncMock(return_value=True)
+    monkeypatch.setattr("swarmer.openshell_oidc._persist_workspace_bundle", persist)
+    bundle = {"refresh_token": "rotated", "access_token": "fresh"}
+    auth._lock.acquire()
+    try:
+        writeback = asyncio.create_task(auth._persist_and_advance_revision(bundle, 4))
+        await asyncio.wait_for(asyncio.sleep(0.02), timeout=0.2)
+        assert not writeback.done()
+    finally:
+        auth._lock.release()
+    await asyncio.wait_for(writeback, timeout=1)
+
+    assert auth._configuration_revision == 5
+    assert auth._bundle is bundle
+    auth.close()
+
+
+@pytest.mark.asyncio
+async def test_oidc_manager_checks_revision_with_atomic_credential_seed():
+    from swarmer.openshell_oidc import (
+        StaleGatewayConfigurationError,
+        WorkspaceOidcAuthManager,
+    )
+
+    manager = WorkspaceOidcAuthManager()
+    auth = manager.get_or_create(
+        workspace_id=83,
+        issuer="https://issuer.example.com",
+        client_id="client",
+        refresh_token="original",
+        access_token="original-access",
+        configuration_revision=4,
+    )
+    original_lock = auth._lock
+    attempted_lock = threading.Event()
+
+    class _ObservedLock:
+        def __enter__(self):
+            attempted_lock.set()
+            original_lock.acquire()
+            return self
+
+        def __exit__(self, *_args):
+            original_lock.release()
+
+    original_lock.acquire()
+    auth._lock = _ObservedLock()
+    result = []
+
+    def apply_stale_snapshot():
+        try:
+            manager.get_or_create(
+                workspace_id=83,
+                issuer="https://issuer.example.com",
+                client_id="client",
+                refresh_token="stale",
+                access_token="stale-access",
+                configuration_revision=4,
+            )
+        except StaleGatewayConfigurationError as exc:
+            result.append(exc)
+
+    worker = threading.Thread(target=apply_stale_snapshot)
+    worker.start()
+    try:
+        assert await asyncio.to_thread(attempted_lock.wait, 1)
+        auth._bundle = {
+            "refresh_token": "rotated",
+            "access_token": "rotated-access",
+            "expires_at": None,
+        }
+        auth._configuration_revision = 5
+    finally:
+        original_lock.release()
+    await asyncio.to_thread(worker.join, 1)
+
+    assert not worker.is_alive()
+    assert len(result) == 1
+    assert isinstance(result[0], StaleGatewayConfigurationError)
+    assert auth._configuration_revision == 5
+    assert auth._bundle["refresh_token"] == "rotated"
+    assert auth._bundle["access_token"] == "rotated-access"
+    manager.clear()
 
 
 @pytest.mark.asyncio

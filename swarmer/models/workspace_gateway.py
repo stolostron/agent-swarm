@@ -3,7 +3,8 @@ from __future__ import annotations
 from datetime import datetime
 
 from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, event, func
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.engine import Connection
+from sqlalchemy.orm import Mapped, Mapper, mapped_column, relationship
 
 from swarmer.crypto import decrypt, encrypt
 from swarmer.database import Base
@@ -97,5 +98,12 @@ class WorkspaceGateway(Base):
 
 
 @event.listens_for(WorkspaceGateway, "before_update")
-def _advance_configuration_revision(_mapper, _connection, gateway: WorkspaceGateway) -> None:
-    gateway.configuration_revision = (gateway.configuration_revision or 0) + 1
+def _advance_configuration_revision(
+    _mapper: Mapper[WorkspaceGateway],
+    _connection: Connection,
+    gateway: WorkspaceGateway,
+) -> None:
+    # Let the database increment its current value in the UPDATE statement.
+    # Computing from the ORM object's value can reuse a revision when a stale
+    # settings object follows a concurrent token write-back.
+    gateway.configuration_revision = WorkspaceGateway.configuration_revision + 1

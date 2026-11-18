@@ -2842,7 +2842,10 @@ async def _wait_for_opencode_ready(
                     sandbox_name,
                     ["node", "-e", probe],
                     client=client,
-                    timeout_seconds=min(2.0, remaining),
+                    # OpenShell's protobuf duration is an integer. Keep the
+                    # precise remaining budget on wait_for below, but always
+                    # provide a positive whole-second RPC timeout.
+                    timeout_seconds=max(1, min(2, int(remaining))),
                 ),
                 timeout=remaining,
             )

@@ -307,16 +307,23 @@ async def test_lifespan_reconciles_custom_gateway_sessions_without_default(monke
     monkeypatch.setattr(main.k8s, "init_k8s", lambda *_args: None)
     monkeypatch.setattr(main, "_sync_k8s_workspace_members", AsyncMock())
     monkeypatch.setattr(main, "_restart_prompt_pollers", AsyncMock())
-    restart = AsyncMock()
+    reconciliation_started = asyncio.Event()
+
+    async def blocked_reconciliation():
+        reconciliation_started.set()
+        await asyncio.Event().wait()
+
+    restart = AsyncMock(side_effect=blocked_reconciliation)
     monkeypatch.setattr(main, "_restart_server_sessions", restart)
     monkeypatch.setattr(scheduler, "start_scheduler", lambda: None)
     monkeypatch.setattr(scheduler, "shutdown", AsyncMock())
     monkeypatch.setattr(pr_watcher, "shutdown", AsyncMock())
 
     async with main.lifespan(main.app):
-        pass
+        await asyncio.wait_for(reconciliation_started.wait(), timeout=1)
+        # A slow per-sandbox probe must not keep the lifespan from serving.
+        restart.assert_awaited_once()
 
-    restart.assert_awaited_once()
 
 
 # ---------------------------------------------------------------------------
@@ -511,7 +518,9 @@ class TestSessionOk:
         session.mode = mode
         session.phase = phase
         session.workspace_id = 1
-        session.is_active = phase == "running"
+        # Keep the model contract: pending sessions are active even though Chat
+        # specifically requires phase=running.
+        session.is_active = phase in ("queued", "pending", "running")
         session.repos = []
         return session
 
@@ -548,7 +557,9 @@ class TestSessionOk:
     def test_pending_session_is_rejected_before_chat_relay(self):
         from swarmer.routers.chat_proxy import _session_ok
 
-        assert _session_ok(self._make_ws(), self._make_session(phase="pending"), 1) is not None
+        pending = self._make_session(phase="pending")
+        assert pending.is_active is True
+        assert _session_ok(self._make_ws(), pending, 1) is not None
 
     def test_wrong_workspace_is_rejected(self):
         from swarmer.routers.chat_proxy import _session_ok
@@ -585,6 +596,7 @@ class TestChatHttpProxy:
         self, monkeypatch, body=b"ok", content_type="text/plain", extra_headers=b"",
         hold_open: asyncio.Event | None = None,
         event_written: asyncio.Event | None = None,
+        status_code: int = 200,
     ):
         requests = []
 
@@ -601,7 +613,7 @@ class TestChatHttpProxy:
                 request_body = await reader.readexactly(length) if length else b""
                 requests.append((lines[0], headers, request_body))
                 response = (
-                    b"HTTP/1.1 200 OK\r\n"
+                    f"HTTP/1.1 {status_code} Test\r\n".encode()
                     + f"Content-Type: {content_type}\r\n".encode()
                     + f"Content-Length: {len(body)}\r\n".encode()
                     + extra_headers
@@ -740,6 +752,31 @@ class TestChatHttpProxy:
         assert requests[0][1]["authorization"].startswith("Basic ")
 
     @pytest.mark.asyncio
+    async def test_admitted_http_request_reuses_authorized_session_snapshot(
+        self, client, monkeypatch
+    ):
+        from swarmer.routers import chat_proxy as cp
+
+        ws, session = await self._session(client)
+        server, _requests = await self._upstream(monkeypatch)
+        original_load = cp._load
+        load = AsyncMock(side_effect=original_load)
+        access = AsyncMock(return_value=True)
+        monkeypatch.setattr(cp, "_load", load)
+        monkeypatch.setattr(cp, "_workspace_accessible", access)
+        try:
+            response = await client.get(
+                f"/workspaces/{ws['id']}/sessions/{session['id']}/chat/api"
+            )
+        finally:
+            server.close()
+            await server.wait_closed()
+
+        assert response.status_code == 200
+        load.assert_awaited_once()
+        access.assert_awaited_once()
+
+    @pytest.mark.asyncio
     async def test_old_run_response_cannot_persist_chat_selection_after_relaunch(
         self, client, monkeypatch
     ):
@@ -822,6 +859,36 @@ class TestChatHttpProxy:
 
             row = await db.get(SessionRow, session["id"])
             assert row.opencode_session_id is None
+
+    @pytest.mark.asyncio
+    async def test_delete_redirect_does_not_clear_selected_chat(self, client, monkeypatch):
+        ws, session = await self._session(client)
+        async with _TestSession() as db:
+            from swarmer.models.session import Session as SessionRow
+
+            row = await db.get(SessionRow, session["id"])
+            row.opencode_session_id = "ses_redirected_delete"
+            await db.commit()
+        server, _requests = await self._upstream(
+            monkeypatch,
+            status_code=307,
+            extra_headers=b"Location: /session/ses_redirected_delete\r\n",
+        )
+        try:
+            response = await client.delete(
+                f"/workspaces/{ws['id']}/sessions/{session['id']}/chat/session/ses_redirected_delete",
+                headers={"Origin": "http://test"},
+            )
+        finally:
+            server.close()
+            await server.wait_closed()
+
+        assert response.status_code == 307
+        async with _TestSession() as db:
+            from swarmer.models.session import Session as SessionRow
+
+            row = await db.get(SessionRow, session["id"])
+            assert row.opencode_session_id == "ses_redirected_delete"
 
     @pytest.mark.asyncio
     async def test_proxy_rewrites_html_assets_through_loopback_tunnel(self, client, monkeypatch):
@@ -1090,6 +1157,7 @@ class TestChatHttpProxy:
         monkeypatch.setattr("swarmer.routers.chat_proxy._tunnel_socket", fake_tunnel_socket)
 
         class _Upstream:
+            subprotocol = "json"
             send = AsyncMock()
 
             def __aiter__(self):
@@ -1139,7 +1207,7 @@ class TestChatHttpProxy:
         # Handshake debug logging goes through the redaction filter.
         assert kwargs["logger"] is _ws_tunnel_logger
         websocket.send_text.assert_awaited_once_with("upstream reply")
-        websocket.accept.assert_awaited_once()
+        websocket.accept.assert_awaited_once_with(subprotocol="json")
 
 
 class TestChatTunnelBridge:
@@ -1829,6 +1897,8 @@ class TestChatTunnelSecurity:
         assert args[0] == "sandbox"
         assert args[1][0] == "node"
         assert kwargs["client"] == "client"
+        assert type(kwargs["timeout_seconds"]) is int
+        assert kwargs["timeout_seconds"] > 0
 
     @pytest.mark.asyncio
     async def test_opencode_readiness_probe_times_out(self, monkeypatch):
@@ -1858,7 +1928,8 @@ class TestChatTunnelSecurity:
             await sessions._wait_for_opencode_ready("sandbox", "client", timeout=0.03)
 
         assert asyncio.get_running_loop().time() - started < 0.1
-        assert observed_timeouts and observed_timeouts[0] <= 0.03
+        assert observed_timeouts and type(observed_timeouts[0]) is int
+        assert observed_timeouts[0] > 0
 
     # ── Stop/delete revocation wiring ───────────────────────────────────────
 
@@ -2379,21 +2450,27 @@ class TestRestartServerSessions:
             row.sandbox_name = "sandbox-not-ready"
             await db.commit()
 
+        probe = AsyncMock(side_effect=TimeoutError("probe timeout"))
         monkeypatch.setattr(
             "swarmer.routers.sessions._wait_for_opencode_ready",
-            AsyncMock(side_effect=TimeoutError("probe timeout")),
+            probe,
         )
+        refresh = AsyncMock()
+        token_refresh = AsyncMock()
         with (
             patch(
                 "swarmer.openshell_client.list_sandboxes",
                 new=AsyncMock(return_value=["sandbox-not-ready"]),
             ),
             patch("swarmer.database.get_db", new=_override_get_db),
-            patch("swarmer.main._restart_github_app_iat_refresh", new=AsyncMock()) as iat_refresh,
+            patch("swarmer.main._restart_github_app_iat_refresh", new=refresh),
+            patch("swarmer.main._restart_agent_swarm_token_refresh", new=token_refresh),
         ):
             await _restart_server_sessions()
 
-        iat_refresh.assert_not_awaited()
+        assert probe.await_count == 3
+        refresh.assert_awaited_once()
+        token_refresh.assert_awaited_once()
         async with _TestSession() as db:
             from swarmer.models.session import Session as SessionRow
 
@@ -2407,25 +2484,42 @@ class TestRestartServerSessions:
     ):
         from swarmer.main import _restart_server_sessions
 
-        ws = await _create_workspace(client)
-        created = await _create_session(client, ws["id"], mode="server", agent_tool="opencode")
+        failed_ws = await _create_workspace(client)
+        healthy_ws = await _create_workspace(client, name="Healthy Proxy Test WS")
+        failed = await _create_session(
+            client, failed_ws["id"], mode="server", agent_tool="opencode"
+        )
+        healthy = await _create_session(
+            client, healthy_ws["id"], mode="server", agent_tool="opencode"
+        )
         async with _TestSession() as db:
             from swarmer.models.session import Session as SessionRow
 
-            row = await db.get(SessionRow, created["id"])
-            row.phase = "running"
-            row.sandbox_name = "sandbox-resolution-error"
+            failed_row = await db.get(SessionRow, failed["id"])
+            failed_row.phase = "running"
+            failed_row.sandbox_name = "sandbox-resolution-error"
+            healthy_row = await db.get(SessionRow, healthy["id"])
+            healthy_row.phase = "running"
+            healthy_row.sandbox_name = "sandbox-healthy"
             await db.commit()
+
+        async def resolve_gateway(workspace, _db):
+            workspace_id = getattr(workspace, "id", workspace)
+            if workspace_id == failed_ws["id"]:
+                raise RuntimeError("gateway configuration unavailable")
+
+        ready_probe = AsyncMock()
 
         with (
             patch(
                 "swarmer.openshell_client.get_client_for_workspace",
-                new=AsyncMock(side_effect=RuntimeError("gateway configuration unavailable")),
+                new=AsyncMock(side_effect=resolve_gateway),
             ),
             patch(
                 "swarmer.openshell_client.list_sandboxes",
-                new=AsyncMock(return_value=["sandbox-resolution-error"]),
+                new=AsyncMock(return_value=["sandbox-healthy"]),
             ),
+            patch("swarmer.routers.sessions._wait_for_opencode_ready", new=ready_probe),
             patch("swarmer.database.get_db", new=_override_get_db),
         ):
             await _restart_server_sessions()
@@ -2433,9 +2527,13 @@ class TestRestartServerSessions:
         async with _TestSession() as db:
             from swarmer.models.session import Session as SessionRow
 
-            row = await db.get(SessionRow, created["id"])
-            assert row.phase == "running"
-            assert row.sandbox_name == "sandbox-resolution-error"
+            failed_row = await db.get(SessionRow, failed["id"])
+            healthy_row = await db.get(SessionRow, healthy["id"])
+            assert failed_row.phase == "running"
+            assert failed_row.sandbox_name == "sandbox-resolution-error"
+            assert healthy_row.phase == "running"
+            assert healthy_row.sandbox_name == "sandbox-healthy"
+        ready_probe.assert_awaited_once_with("sandbox-healthy", None)
 
     @pytest.mark.asyncio
     async def test_prompt_mode_sessions_are_not_touched(self, client):

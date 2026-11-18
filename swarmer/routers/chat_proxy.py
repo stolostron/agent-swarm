@@ -18,6 +18,7 @@ import socket
 import threading
 from collections.abc import AsyncIterator, Iterator
 from contextlib import AsyncExitStack, asynccontextmanager
+from datetime import datetime
 from ipaddress import ip_address
 from typing import TYPE_CHECKING, Any
 from urllib.parse import parse_qsl, urlencode, urlparse
@@ -1199,11 +1200,8 @@ async def _chat_http_proxy(
     db: AsyncSession,
     *,
     _run_fence: _SessionRunFence | None = None,
-    _admission: _ChatAdmissionReservation | None = None,
 ) -> Response:
     """Proxy HTTP/SSE through an authenticated OpenShell TCP relay."""
-    from starlette.responses import StreamingResponse
-
     # Capture run identity before session loading or any other await. If stop or
     # relaunch happens during ACL evaluation, this request cannot adopt the new
     # run's fence for the old sandbox snapshot.
@@ -1247,32 +1245,53 @@ async def _chat_http_proxy(
     # Revalidate after the awaited ACL check, before reserving resources.
     if _run_fence.revoked or _session_run_fences.get(sid) is not _run_fence:
         return Response("Session is stopping", status_code=503, media_type="text/plain")
-    if _admission is None:
-        try:
-            _admit_chat_tunnel(user_key)
-        except ChatTunnelCapacityError as exc:
-            return Response(
-                f"{exc} — try again shortly",
-                status_code=503,
-                media_type="text/plain",
-            )
-        reservation = _ChatAdmissionReservation(user_key)
-        try:
-            return await _chat_http_proxy(
-                ws_id,
-                sid,
-                request,
-                path,
-                db,
-                _run_fence=_run_fence,
-                _admission=reservation,
-            )
-        finally:
-            # Cancellation or any failure before the tunnel registers its
-            # cleanup handler releases capacity. A transferred reservation is
-            # owned and released by _open_sandbox_tunnel instead.
-            reservation.release()
-    admission = _admission
+    try:
+        _admit_chat_tunnel(user_key)
+    except ChatTunnelCapacityError as exc:
+        return Response(
+            f"{exc} — try again shortly",
+            status_code=503,
+            media_type="text/plain",
+        )
+    admission = _ChatAdmissionReservation(user_key)
+    try:
+        return await _chat_http_proxy_admitted(
+            ws_id,
+            sid,
+            request,
+            path,
+            db,
+            ws_obj,
+            session,
+            _run_fence,
+            admission,
+            user_key,
+            observed_run_started_at,
+            observed_sandbox_name,
+        )
+    finally:
+        # Cancellation or any failure before the tunnel registers its cleanup
+        # handler releases capacity. A transferred reservation is idempotent.
+        admission.release()
+
+
+
+async def _chat_http_proxy_admitted(
+    ws_id: int,
+    sid: int,
+    request: Request,
+    path: str,
+    db: AsyncSession,
+    ws_obj: Workspace,
+    session: Session,
+    run_fence: _SessionRunFence,
+    admission: _ChatAdmissionReservation,
+    user_key: str,
+    observed_run_started_at: datetime | None,
+    observed_sandbox_name: str,
+) -> Response:
+    """Forward an HTTP request using the snapshot already authorized by the caller."""
+    from starlette.responses import StreamingResponse
 
     try:
         _gateway_config, tunnel_client = await _gateway_and_client(ws_obj, db)
@@ -1306,7 +1325,7 @@ async def _chat_http_proxy(
                 _open_sandbox_tunnel(
                     session.sandbox_name, target_port, tunnel_client,
                     session_id=sid, user_key=user_key, admission_reserved=True,
-                    run_fence=_run_fence, admission=admission,
+                    run_fence=run_fence, admission=admission,
                 )
             )
             http_client = await stack.enter_async_context(
@@ -1389,7 +1408,7 @@ async def _chat_http_proxy(
             _open_sandbox_tunnel(
                 session.sandbox_name, target_port, tunnel_client,
                 session_id=sid, user_key=user_key, admission_reserved=True,
-                run_fence=_run_fence, admission=admission,
+                run_fence=run_fence, admission=admission,
             ) as local_base,
             httpx.AsyncClient(
                 trust_env=False,
@@ -1423,7 +1442,7 @@ async def _chat_http_proxy(
         message = "Chat request or response is too large" if too_large else "Could not connect to session"
         return Response(message, status_code=413 if too_large else 503, media_type="text/plain")
 
-    if upstream_status < 400:
+    if 200 <= upstream_status < 300:
         selected_session_id = _selected_opencode_session_id(path, request.method, content)
         deleted_session_id = _deleted_opencode_session_id(path, request.method)
         selected_value = selected_session_id or None
@@ -1635,8 +1654,7 @@ async def _chat_ws_proxy_admitted(
         await websocket.close(code=1011, reason="Chat tunnel unavailable")
         return
 
-    await websocket.accept()
-    websocket_accepted = True
+    websocket_accepted = False
     upstream_path = f"/{path}"
     query = _chat_query(websocket.url.query)
     if query:
@@ -1680,6 +1698,8 @@ async def _chat_ws_proxy_admitted(
                 async with websockets.connect(
                     "ws://localhost:4096" + upstream_path, **connect_options
                 ) as upstream_ws:
+                    await websocket.accept(subprotocol=upstream_ws.subprotocol)
+                    websocket_accepted = True
                     await _relay_websocket(websocket, upstream_ws)
             finally:
                 # websockets owns the socket once connected; closing here only
@@ -1691,9 +1711,10 @@ async def _chat_ws_proxy_admitted(
             await websocket.close(code=1013, reason="Chat is busy")
     except Exception as exc:  # noqa: BLE001 - translate upstream WebSocket errors to a safe close
         log.warning("Chat WS tunnel failed for session %d (%s)", sid, type(exc).__name__)
-        if websocket_accepted:
-            with contextlib.suppress(Exception):
-                await websocket.close(code=1011, reason="Chat tunnel unavailable")
+        with contextlib.suppress(Exception):
+            if not websocket_accepted:
+                await websocket.accept()
+            await websocket.close(code=1011, reason="Chat tunnel unavailable")
     finally:
         with contextlib.suppress(Exception):
             await websocket.close()

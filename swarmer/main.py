@@ -41,6 +41,17 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 
+_RESTART_READINESS_ATTEMPTS = 3
+_RESTART_READINESS_RETRY_DELAY = 1.0
+
+
+async def _restart_server_sessions_in_background() -> None:
+    """Run startup reconciliation without preventing the console from serving."""
+    try:
+        await _restart_server_sessions()
+    except Exception:  # noqa: BLE001 - reconciliation must not take down the console
+        log.warning("Startup server-session reconciliation failed", exc_info=True)
+
 # Strong references to fire-and-forget IAT-refresh restart tasks (one per surviving
 # server/TUI session in _restart_github_app_iat_refresh). asyncio only holds a weak
 # reference to tasks created via asyncio.create_task(); without this registry the
@@ -71,15 +82,22 @@ async def lifespan(app: FastAPI):
         await _track_default_gateway_version()
     await _restart_prompt_pollers()
     # Reconcile surviving workspace-gateway sessions even when there is no
-    # operator-configured default gateway.
-    await _restart_server_sessions()
+    # operator-configured default gateway. This can involve slow per-sandbox
+    # readiness RPCs, so keep it off the console startup path.
+    restart_task = asyncio.create_task(
+        _restart_server_sessions_in_background(), name="restart-server-sessions"
+    )
     from swarmer import pr_watcher, scheduler
     scheduler.start_scheduler()
     if settings.openshell_gateway_url:
         pr_watcher.start_pr_watcher()
-    yield
-    await pr_watcher.shutdown()
-    await scheduler.shutdown()
+    try:
+        yield
+    finally:
+        restart_task.cancel()
+        await asyncio.gather(restart_task, return_exceptions=True)
+        await pr_watcher.shutdown()
+        await scheduler.shutdown()
 
 
 async def _sync_k8s_workspace_members() -> None:
@@ -513,7 +531,14 @@ async def _restart_server_sessions() -> None:
                 try:
                     from swarmer.routers.sessions import _wait_for_opencode_ready
 
-                    await _wait_for_opencode_ready(sandbox_name, oc_client)
+                    for attempt in range(_RESTART_READINESS_ATTEMPTS):
+                        try:
+                            await _wait_for_opencode_ready(sandbox_name, oc_client)
+                            break
+                        except Exception:
+                            if attempt + 1 == _RESTART_READINESS_ATTEMPTS:
+                                raise
+                            await asyncio.sleep(_RESTART_READINESS_RETRY_DELAY)
                 except Exception as exc:  # noqa: BLE001 - retain a diagnostic pending session
                     s.phase = "pending"
                     s.status_detail = "OpenCode readiness probe failed after Swarmer restart"
@@ -522,15 +547,15 @@ async def _restart_server_sessions() -> None:
                         s.id,
                         type(exc).__name__,
                     )
-                    continue
-                s.phase = "running"
-                s.status_detail = ""
-                chat_proxy_router.activate_session_chat_tunnels(s.id)
-                log.info(
-                    "restart: interactive session %d re-connected to sandbox %s",
-                    s.id,
-                    sandbox_name,
-                )
+                else:
+                    s.phase = "running"
+                    s.status_detail = ""
+                    chat_proxy_router.activate_session_chat_tunnels(s.id)
+                    log.info(
+                        "restart: interactive session %d re-connected to sandbox %s",
+                        s.id,
+                        sandbox_name,
+                    )
 
             await _restart_github_app_iat_refresh(s, db)
             await _restart_agent_swarm_token_refresh(s, db, client=oc_client)

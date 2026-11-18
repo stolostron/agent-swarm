@@ -99,15 +99,32 @@ class OidcGatewayAuth:
     ) -> None:
         """Populate the in-memory token bundle."""
         with self._lock:
-            if client_secret:
-                self._client_secret = client_secret
-            if service_account_subject:
-                self._service_account_subject = service_account_subject
-            self._bundle = {
-                "refresh_token": refresh_token,
-                "access_token": access_token,
-                "expires_at": expires_at,
-            }
+            self._seed_unlocked(
+                refresh_token,
+                access_token,
+                expires_at,
+                client_secret,
+                service_account_subject,
+            )
+
+    def _seed_unlocked(
+        self,
+        refresh_token: str,
+        access_token: str,
+        expires_at: int | None,
+        client_secret: str,
+        service_account_subject: str,
+    ) -> None:
+        """Update credential state while the caller owns ``_lock``."""
+        if client_secret:
+            self._client_secret = client_secret
+        if service_account_subject:
+            self._service_account_subject = service_account_subject
+        self._bundle = {
+            "refresh_token": refresh_token,
+            "access_token": access_token,
+            "expires_at": expires_at,
+        }
 
     def current_access_token(self) -> str:
         """Zero-arg callable passed to SandboxClient(bearer_token=...).
@@ -323,6 +340,9 @@ class OidcGatewayAuth:
 
     def _write_back(self, bundle: dict) -> None:
         """Best-effort persist of the refreshed bundle to the DB."""
+        # current_access_token calls this while holding _lock, so the revision
+        # is the generation from which this exact bundle was produced.
+        expected_revision = self._configuration_revision
         if self._loop is None:
             with contextlib.suppress(RuntimeError):
                 self._loop = asyncio.get_running_loop()
@@ -334,16 +354,22 @@ class OidcGatewayAuth:
             with contextlib.suppress(RuntimeError):
                 current_loop = asyncio.get_running_loop()
             if current_loop is not None and current_loop is self._loop:
-                self._loop.create_task(self._persist_and_advance_revision(bundle))
+                self._loop.create_task(
+                    self._persist_and_advance_revision(bundle, expected_revision)
+                )
             else:
                 fut = asyncio.run_coroutine_threadsafe(
                     _persist_workspace_bundle(
-                        self._workspace_id, bundle, self._configuration_revision
+                        self._workspace_id, bundle, expected_revision
                     ),
                     self._loop,
                 )
-                if fut.result(timeout=_WRITE_BACK_TIMEOUT):
-                    self._configuration_revision += 1
+                if (
+                    fut.result(timeout=_WRITE_BACK_TIMEOUT)
+                    and self._configuration_revision == expected_revision
+                ):
+                    self._bundle = bundle
+                    self._configuration_revision = expected_revision + 1
         except Exception:
             log.warning(
                 "Failed to persist refreshed OpenShell OIDC token for ws %s to DB",
@@ -351,14 +377,26 @@ class OidcGatewayAuth:
                 exc_info=True,
             )
 
-    async def _persist_and_advance_revision(self, bundle: dict) -> None:
-        expected_revision = self._configuration_revision
+    async def _persist_and_advance_revision(
+        self, bundle: dict, expected_revision: int
+    ) -> None:
         if await _persist_workspace_bundle(
             self._workspace_id, bundle, expected_revision
         ):
-            with self._lock:
-                if self._configuration_revision == expected_revision:
-                    self._configuration_revision += 1
+            # The lock can be contended by a token-refresh worker. Never wait
+            # for it on the event loop, and publish only if this token bundle's
+            # originating configuration is still current.
+            await asyncio.to_thread(
+                self._advance_if_current, bundle, expected_revision
+            )
+
+    def _advance_if_current(self, bundle: dict, expected_revision: int) -> bool:
+        with self._lock:
+            if self._configuration_revision != expected_revision:
+                return False
+            self._bundle = bundle
+            self._configuration_revision = expected_revision + 1
+            return True
 
 
 class WorkspaceOidcAuthManager:
@@ -385,34 +423,32 @@ class WorkspaceOidcAuthManager:
     ) -> OidcGatewayAuth:
         with self._lock:
             existing = self._instances.get(workspace_id)
-            current_revision = existing._configuration_revision if existing else -1
-            if existing is not None and configuration_revision < current_revision:
-                # A delayed database snapshot must never reseed credentials or
-                # replace the auth object installed by a newer snapshot.
-                raise StaleGatewayConfigurationError(
-                    "Workspace gateway configuration snapshot was superseded"
-                )
-            if (
-                existing is not None
-                and existing._issuer == issuer.rstrip("/")
-                and existing._client_id == client_id
-                and existing._audience == audience
-                and existing._tls_verify == tls_verify
-            ):
-                if refresh_token or client_secret:
-                    existing.seed(
-                        refresh_token=refresh_token,
-                        access_token=access_token,
-                        expires_at=expires_at,
-                        client_secret=client_secret,
-                        service_account_subject=service_account_subject,
-                    )
-                with existing._lock:
-                    existing._configuration_revision = configuration_revision
-                return existing
-
             if existing is not None:
-                existing.close()
+                # The check and any reseed/replacement share the lock protecting
+                # the current bundle and revision. A refresh/write-back cannot
+                # rotate credentials between validation and publication.
+                with existing._lock:
+                    if configuration_revision < existing._configuration_revision:
+                        raise StaleGatewayConfigurationError(
+                            "Workspace gateway configuration snapshot was superseded"
+                        )
+                    if (
+                        existing._issuer == issuer.rstrip("/")
+                        and existing._client_id == client_id
+                        and existing._audience == audience
+                        and existing._tls_verify == tls_verify
+                    ):
+                        if refresh_token or client_secret:
+                            existing._seed_unlocked(
+                                refresh_token,
+                                access_token,
+                                expires_at,
+                                client_secret,
+                                service_account_subject,
+                            )
+                        existing._configuration_revision = configuration_revision
+                        return existing
+                    existing.close()
 
             auth = OidcGatewayAuth(
                 issuer=issuer,
