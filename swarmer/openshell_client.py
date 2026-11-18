@@ -661,6 +661,7 @@ async def resolve_gateway_config(
             service_account_subject=gw.service_account_subject,
             tls_ca=gw.tls_ca,
             tls_verify=gw.tls_verify,
+            configuration_revision=getattr(gw, "configuration_revision", 0),
         )
         # The manager's synchronous lock/seed path runs off-loop, while token
         # persistence from its worker must still target this DB event loop.

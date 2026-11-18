@@ -453,7 +453,17 @@ async def _restart_server_sessions() -> None:
 
         for s in sessions:
             sandbox_name = s.sandbox_name
-            oc_client = await openshell_client.get_client_for_workspace(s.workspace_id, db)
+            try:
+                oc_client = await openshell_client.get_client_for_workspace(s.workspace_id, db)
+            except Exception as exc:  # noqa: BLE001
+                log.warning(
+                    "restart: could not resolve gateway for workspace %d; "
+                    "leaving session %d unchanged (%s)",
+                    s.workspace_id,
+                    s.id,
+                    type(exc).__name__,
+                )
+                continue
             if oc_client is not None:
                 try:
                     live_sandboxes = set(await openshell_client.list_sandboxes(client=oc_client))
@@ -494,10 +504,28 @@ async def _restart_server_sessions() -> None:
                     )
 
             # OpenCode V2 server and TUI modes share one sandbox-local server.
-            # A surviving sandbox is ready for proxied Chat without exposing
-            # a gateway URL.
-            if s.mode == "server" or (s.mode == "tui" and s.agent_tool == "opencode"):
+            # Sandbox presence alone does not prove its listener survived the
+            # Swarmer restart; only promote after probing the fixed loopback port.
+            interactive_opencode = (
+                s.mode == "server" or (s.mode == "tui" and s.agent_tool == "opencode")
+            )
+            if interactive_opencode:
+                try:
+                    from swarmer.routers.sessions import _wait_for_opencode_ready
+
+                    await _wait_for_opencode_ready(sandbox_name, oc_client)
+                except Exception as exc:  # noqa: BLE001 - retain a diagnostic pending session
+                    s.phase = "pending"
+                    s.status_detail = "OpenCode readiness probe failed after Swarmer restart"
+                    log.warning(
+                        "restart: OpenCode was not ready for session %d (%s)",
+                        s.id,
+                        type(exc).__name__,
+                    )
+                    continue
                 s.phase = "running"
+                s.status_detail = ""
+                chat_proxy_router.activate_session_chat_tunnels(s.id)
                 log.info(
                     "restart: interactive session %d re-connected to sandbox %s",
                     s.id,

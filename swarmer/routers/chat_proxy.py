@@ -113,8 +113,7 @@ _CHAT_CONNECT_TIMEOUT = 10.0
 _chat_tunnel_count = 0
 _chat_user_tunnels: dict[str, int] = {}
 _session_tunnels: dict[int, set["_ChatTunnelHandle"]] = {}
-_session_tunnel_epochs: dict[int, int] = {}
-_session_tunnel_revoked: set[int] = set()
+_session_run_fences: dict[int, "_SessionRunFence"] = {}
 _gateway_clients: dict[tuple[int | str, ...], tuple[Any, Any]] = {}
 _gateway_clients_lock = asyncio.Lock()
 
@@ -125,6 +124,33 @@ class ChatTunnelCapacityError(RuntimeError):
 
 class ChatBodyTooLargeError(ValueError):
     """A Chat upload exceeded the configured request-body limit."""
+
+
+class _SessionRunFence:
+    """Identity token for one interactive run; requests retain it while in flight."""
+
+    __slots__ = ("revoked",)
+
+    def __init__(self) -> None:
+        self.revoked = False
+
+
+class _ChatAdmissionReservation:
+    """Own a reserved slot until a tunnel context takes responsibility for it."""
+
+    __slots__ = ("user_key", "owned")
+
+    def __init__(self, user_key: str | None) -> None:
+        self.user_key = user_key
+        self.owned = True
+
+    def transfer(self) -> None:
+        self.owned = False
+
+    def release(self) -> None:
+        if self.owned:
+            self.owned = False
+            _release_chat_tunnel(self.user_key)
 
 
 class _ChatTunnelHandle:
@@ -161,9 +187,12 @@ async def close_session_chat_tunnels(session_id: int) -> int:
     Called from session stop/delete so proxied Chat connections cannot
     outlive their sandbox. Access revocation (membership removal) applies
     when the connection ends; the tunnel maximum lifetime bounds that delay.
+    The active fence is removed after being revoked; in-flight requests retain
+    the object itself and cannot mistake a later run for their original one.
     """
-    _session_tunnel_epochs[session_id] = _session_tunnel_epochs.get(session_id, 0) + 1
-    _session_tunnel_revoked.add(session_id)
+    fence = _session_run_fences.pop(session_id, None)
+    if fence is not None:
+        fence.revoked = True
     handles = _session_tunnels.pop(session_id, None)
     if not handles:
         return 0
@@ -172,11 +201,11 @@ async def close_session_chat_tunnels(session_id: int) -> int:
     return len(handles)
 
 
-def activate_session_chat_tunnels(session_id: int) -> int:
+def activate_session_chat_tunnels(session_id: int) -> _SessionRunFence:
     """Open a fresh run fence when an interactive session becomes ready."""
-    _session_tunnel_epochs[session_id] = _session_tunnel_epochs.get(session_id, 0) + 1
-    _session_tunnel_revoked.discard(session_id)
-    return _session_tunnel_epochs[session_id]
+    fence = _SessionRunFence()
+    _session_run_fences[session_id] = fence
+    return fence
 
 
 def _chat_admission_error(user_key: str | None) -> str | None:
@@ -376,7 +405,8 @@ async def _open_sandbox_tunnel(
     session_id: int | None = None,
     user_key: str | None = None,
     admission_reserved: bool = False,
-    run_epoch: int | None = None,
+    run_fence: _SessionRunFence | None = None,
+    admission: _ChatAdmissionReservation | None = None,
 ) -> AsyncIterator[str]:
     """Expose one bounded loopback listener backed by OpenShell ForwardTcp.
 
@@ -388,27 +418,26 @@ async def _open_sandbox_tunnel(
     exit path — including cancellation and partial initialization — closes
     the listener, the gRPC stream, its reader thread, and the admission slot.
     """
-    if not admission_reserved:
+    if session_id is not None:
+        if run_fence is not None and (
+            run_fence.revoked or _session_run_fences.get(session_id) is not run_fence
+        ):
+            raise RuntimeError("Chat session run was revoked")
+    if not admission_reserved and admission is None:
         _admit_chat_tunnel(user_key)
+    owns_admission = admission is None
     handle = _ChatTunnelHandle()
     if session_id is not None:
-        if run_epoch is not None and _session_tunnel_epochs.get(session_id, 0) != run_epoch:
-            _release_chat_tunnel(user_key)
-            raise RuntimeError("Chat session run was revoked")
         _session_tunnels.setdefault(session_id, set()).add(handle)
+    if admission is not None:
+        admission.transfer()
+        owns_admission = True
 
     stopped = handle.stopped
     bridge_task: asyncio.Task | None = None
     accepted = False
 
     async def _bridge(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
-        nonlocal bridge_task
-        if bridge_task is not None:
-            writer.close()
-            with contextlib.suppress(Exception):
-                await writer.wait_closed()
-            return
-        handle.attach(writer)
         if handle.close_event.is_set():
             writer.close()
             with contextlib.suppress(Exception):
@@ -482,7 +511,6 @@ async def _open_sandbox_tunnel(
             await handle.close_event.wait()
             _abort_writer(writer)
 
-        bridge_task = asyncio.current_task()
         socket_task = asyncio.create_task(_socket_to_gateway())
         gateway_task = asyncio.create_task(_gateway_to_socket())
         close_task = asyncio.create_task(_close_watcher())
@@ -531,13 +559,10 @@ async def _open_sandbox_tunnel(
             writer.close()
             with contextlib.suppress(Exception, asyncio.CancelledError):
                 await writer.wait_closed()
-            bridge_task = None
 
     async def _accept_one(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         nonlocal accepted
         nonlocal bridge_task
-        bridge_task = asyncio.current_task()
-        handle.attach(writer)
         peer = writer.get_extra_info("peername")
         if accepted or not peer or peer[0] != "127.0.0.1":
             writer.close()
@@ -545,6 +570,8 @@ async def _open_sandbox_tunnel(
                 await writer.wait_closed()
             return
         accepted = True
+        bridge_task = asyncio.current_task()
+        handle.attach(writer)
         await _bridge(reader, writer)
 
     server = None
@@ -574,7 +601,8 @@ async def _open_sandbox_tunnel(
                     with contextlib.suppress(Exception, asyncio.CancelledError):
                         await server.wait_closed()
         finally:
-            _release_chat_tunnel(user_key)
+            if owns_admission:
+                _release_chat_tunnel(user_key)
 
 
 # ── HTML rewriting ───────────────────────────────────────────────────────────
@@ -1169,9 +1197,18 @@ async def _chat_http_proxy(
     request: Request,
     path: str,
     db: AsyncSession,
+    *,
+    _run_fence: _SessionRunFence | None = None,
+    _admission: _ChatAdmissionReservation | None = None,
 ) -> Response:
     """Proxy HTTP/SSE through an authenticated OpenShell TCP relay."""
     from starlette.responses import StreamingResponse
+
+    # Capture run identity before session loading or any other await. If stop or
+    # relaunch happens during ACL evaluation, this request cannot adopt the new
+    # run's fence for the old sandbox snapshot.
+    if _run_fence is None:
+        _run_fence = _session_run_fences.get(sid)
 
     ws_obj, session = await _load(ws_id, sid, db)
     if ws_obj is not None and not await _workspace_accessible(db, ws_obj, request.session):
@@ -1181,7 +1218,11 @@ async def _chat_http_proxy(
         msg, code = err
         return Response(msg, status_code=code, media_type="text/plain")
     assert session is not None
-    if sid in _session_tunnel_revoked:
+    if (
+        _run_fence is None
+        or _run_fence.revoked
+        or _session_run_fences.get(sid) is not _run_fence
+    ):
         return Response("Session is stopping", status_code=503, media_type="text/plain")
 
     origin = request.headers.get("origin")
@@ -1201,21 +1242,42 @@ async def _chat_http_proxy(
     # Reserve admission before gateway resolution so concurrent requests
     # cannot start expensive gateway work without capacity.
     user_key = request.session.get("username") or "anonymous"
-    run_epoch = _session_tunnel_epochs.get(sid, 0)
-    try:
-        _admit_chat_tunnel(user_key)
-    except ChatTunnelCapacityError as exc:
-        return Response(
-            f"{exc} — try again shortly",
-            status_code=503,
-            media_type="text/plain",
-        )
+    observed_run_started_at = session.run_started_at
+    observed_sandbox_name = session.sandbox_name
+    # Revalidate after the awaited ACL check, before reserving resources.
+    if _run_fence.revoked or _session_run_fences.get(sid) is not _run_fence:
+        return Response("Session is stopping", status_code=503, media_type="text/plain")
+    if _admission is None:
+        try:
+            _admit_chat_tunnel(user_key)
+        except ChatTunnelCapacityError as exc:
+            return Response(
+                f"{exc} — try again shortly",
+                status_code=503,
+                media_type="text/plain",
+            )
+        reservation = _ChatAdmissionReservation(user_key)
+        try:
+            return await _chat_http_proxy(
+                ws_id,
+                sid,
+                request,
+                path,
+                db,
+                _run_fence=_run_fence,
+                _admission=reservation,
+            )
+        finally:
+            # Cancellation or any failure before the tunnel registers its
+            # cleanup handler releases capacity. A transferred reservation is
+            # owned and released by _open_sandbox_tunnel instead.
+            reservation.release()
+    admission = _admission
 
     try:
         _gateway_config, tunnel_client = await _gateway_and_client(ws_obj, db)
         target_port = _chat_target_port(session)
     except Exception as exc:  # noqa: BLE001 - gateway SDK/auth failures must fail closed
-        _release_chat_tunnel(user_key)
         log.warning("Chat tunnel setup failed for session %d (%s)", sid, type(exc).__name__)
         return Response("Chat tunnel is unavailable", status_code=503, media_type="text/plain")
 
@@ -1226,7 +1288,6 @@ async def _chat_http_proxy(
             upstream_path += f"?{query}"
         fwd_headers = _chat_headers(request.headers, sid, session)
     except Exception as exc:  # noqa: BLE001 - release admission on request setup errors
-        _release_chat_tunnel(user_key)
         log.warning("Chat request setup failed for session %d (%s)", sid, type(exc).__name__)
         return Response("Chat tunnel is unavailable", status_code=503, media_type="text/plain")
 
@@ -1245,7 +1306,7 @@ async def _chat_http_proxy(
                 _open_sandbox_tunnel(
                     session.sandbox_name, target_port, tunnel_client,
                     session_id=sid, user_key=user_key, admission_reserved=True,
-                    run_epoch=run_epoch,
+                    run_fence=_run_fence, admission=admission,
                 )
             )
             http_client = await stack.enter_async_context(
@@ -1290,15 +1351,19 @@ async def _chat_http_proxy(
             raise
 
         async def sse_generator():
-            async for chunk in upstream_resp.aiter_bytes():
-                yield chunk
+            try:
+                async for chunk in upstream_resp.aiter_bytes():
+                    yield chunk
+            except httpx.HTTPError as exc:
+                # Once StreamingResponse has sent headers, an upstream read
+                # failure must end the body normally rather than escape the
+                # ASGI response task and leave the client response incomplete.
+                log.warning("Chat SSE stream failed for session %d (%s)", sid, type(exc).__name__)
 
         class _StackClosingStreamingResponse(StreamingResponse):
             async def __call__(self, scope, receive, send):
                 try:
                     await super().__call__(scope, receive, send)
-                except httpx.HTTPError as exc:
-                    log.warning("Chat SSE stream failed for session %d (%s)", sid, type(exc).__name__)
                 finally:
                     close_task = asyncio.create_task(stack.aclose())
                     try:
@@ -1324,7 +1389,7 @@ async def _chat_http_proxy(
             _open_sandbox_tunnel(
                 session.sandbox_name, target_port, tunnel_client,
                 session_id=sid, user_key=user_key, admission_reserved=True,
-                run_epoch=run_epoch,
+                run_fence=_run_fence, admission=admission,
             ) as local_base,
             httpx.AsyncClient(
                 trust_env=False,
@@ -1361,15 +1426,39 @@ async def _chat_http_proxy(
     if upstream_status < 400:
         selected_session_id = _selected_opencode_session_id(path, request.method, content)
         deleted_session_id = _deleted_opencode_session_id(path, request.method)
-        selection_changed = False
-        if deleted_session_id and deleted_session_id == session.opencode_session_id:
-            session.opencode_session_id = None
-            selection_changed = True
-        elif selected_session_id and session.opencode_session_id != selected_session_id:
-            session.opencode_session_id = selected_session_id
-            selection_changed = True
-        if selection_changed:
+        selected_value = selected_session_id or None
+        if deleted_session_id:
+            from sqlalchemy import update
+
+            statement = (
+                update(Session)
+                .where(
+                    Session.id == sid,
+                    Session.run_started_at == observed_run_started_at,
+                    Session.sandbox_name == observed_sandbox_name,
+                    Session.opencode_session_id == deleted_session_id,
+                )
+                .values(opencode_session_id=None)
+                .execution_options(synchronize_session=False)
+            )
+        elif selected_value:
+            from sqlalchemy import update
+
+            statement = (
+                update(Session)
+                .where(
+                    Session.id == sid,
+                    Session.run_started_at == observed_run_started_at,
+                    Session.sandbox_name == observed_sandbox_name,
+                )
+                .values(opencode_session_id=selected_value)
+                .execution_options(synchronize_session=False)
+            )
+        else:
+            statement = None
+        if statement is not None:
             try:
+                await db.execute(statement)
                 await db.commit()
             except SQLAlchemyError as exc:
                 await db.rollback()
@@ -1462,6 +1551,8 @@ async def chat_ws_proxy(
     sid: int,
     path: str,
 ) -> None:
+    # Capture the immutable run token before any database or ACL await.
+    run_fence = _session_run_fences.get(sid)
     if not websocket.session.get("authenticated"):
         await websocket.close(code=4001, reason="Not authenticated")
         return
@@ -1487,14 +1578,20 @@ async def chat_ws_proxy(
         await websocket.close(code=4404, reason="Session unavailable")
         return
     assert session is not None
-    if sid in _session_tunnel_revoked:
+    if (
+        run_fence is None
+        or run_fence.revoked
+        or _session_run_fences.get(sid) is not run_fence
+    ):
         await websocket.close(code=4404, reason="Session unavailable")
         return
 
-    # Reserve before gateway work. Accept authorized requests before sending
-    # WebSocket close codes; auth, origin, and ACL failures remain pre-accept.
+    # Revalidate after awaited ACL evaluation, then own the reservation until
+    # the tunnel context registers its cleanup handler.
     user_key = websocket.session.get("username") or "anonymous"
-    run_epoch = _session_tunnel_epochs.get(sid, 0)
+    if run_fence.revoked or _session_run_fences.get(sid) is not run_fence:
+        await websocket.close(code=4404, reason="Session unavailable")
+        return
     try:
         _admit_chat_tunnel(user_key)
     except ChatTunnelCapacityError:
@@ -1502,21 +1599,43 @@ async def chat_ws_proxy(
         await websocket.close(code=1013, reason="Chat is busy")
         return
 
+    reservation = _ChatAdmissionReservation(user_key)
+    try:
+        await _chat_ws_proxy_admitted(
+            websocket,
+            ws_obj,
+            session,
+            sid,
+            path,
+            user_key,
+            run_fence,
+            reservation,
+        )
+    finally:
+        reservation.release()
+
+
+async def _chat_ws_proxy_admitted(
+    websocket: WebSocket,
+    ws_obj: Workspace,
+    session: Session,
+    sid: int,
+    path: str,
+    user_key: str,
+    run_fence: _SessionRunFence,
+    reservation: _ChatAdmissionReservation,
+) -> None:
+    """Complete an authorized WebSocket request under its admission lease."""
     try:
         _gateway_config, tunnel_client = await _gateway_and_client(ws_obj)
         target_port = _chat_target_port(session)
     except Exception as exc:  # noqa: BLE001 - gateway SDK/auth failures must fail closed
-        _release_chat_tunnel(user_key)
         await websocket.accept()
         log.warning("Chat WS tunnel setup failed for session %d (%s)", sid, type(exc).__name__)
         await websocket.close(code=1011, reason="Chat tunnel unavailable")
         return
 
-    try:
-        await websocket.accept()
-    except BaseException:
-        _release_chat_tunnel(user_key)
-        raise
+    await websocket.accept()
     websocket_accepted = True
     upstream_path = f"/{path}"
     query = _chat_query(websocket.url.query)
@@ -1527,7 +1646,7 @@ async def chat_ws_proxy(
         async with _open_sandbox_tunnel(
             session.sandbox_name, target_port, tunnel_client,
             session_id=sid, user_key=user_key, admission_reserved=True,
-            run_epoch=run_epoch,
+            run_fence=run_fence, admission=reservation,
         ) as local_base:
             # Connect a preconnected socket and hand it to websockets: the
             # library cannot follow any redirect on a socket it did not

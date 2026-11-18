@@ -41,6 +41,10 @@ class OidcAuthError(RuntimeError):
     """Raised when OIDC discovery/refresh fails or the credential is missing."""
 
 
+class StaleGatewayConfigurationError(RuntimeError):
+    """A gateway snapshot lost the race to a newer configuration revision."""
+
+
 class _InvalidGrantError(OidcAuthError):
     """The IdP rejected the refresh_token (expired, revoked, or rotated away)."""
 
@@ -58,6 +62,7 @@ class OidcGatewayAuth:
         service_account_subject: str = "",
         tls_ca: str | None = None,
         tls_verify: bool = True,
+        configuration_revision: int = 0,
     ):
         self._issuer = issuer.rstrip("/")
         self._client_id = client_id
@@ -67,6 +72,7 @@ class OidcGatewayAuth:
         self._service_account_subject = service_account_subject
         self._tls_ca = tls_ca
         self._tls_verify = tls_verify
+        self._configuration_revision = configuration_revision
         self._lock = threading.Lock()
         self._bundle: dict[str, Any] | None = None
         self._token_endpoint: str | None = None
@@ -180,10 +186,21 @@ class OidcGatewayAuth:
             return False
         if bundle is None:
             return False
+        if (
+            bundle.get("configuration_revision", self._configuration_revision)
+            != self._configuration_revision
+        ):
+            # The database now describes a different credential/configuration
+            # generation. Let the next gateway-config resolution replace this
+            # auth object instead of pairing new secrets with stale OIDC data.
+            return False
         if bundle.get("client_secret"):
             self._client_secret = bundle["client_secret"]
         if bundle.get("service_account_subject"):
             self._service_account_subject = bundle["service_account_subject"]
+        self._configuration_revision = bundle.get(
+            "configuration_revision", self._configuration_revision
+        )
         self._bundle = bundle
         return True
 
@@ -317,18 +334,31 @@ class OidcGatewayAuth:
             with contextlib.suppress(RuntimeError):
                 current_loop = asyncio.get_running_loop()
             if current_loop is not None and current_loop is self._loop:
-                self._loop.create_task(_persist_workspace_bundle(self._workspace_id, bundle))
+                self._loop.create_task(self._persist_and_advance_revision(bundle))
             else:
                 fut = asyncio.run_coroutine_threadsafe(
-                    _persist_workspace_bundle(self._workspace_id, bundle), self._loop
+                    _persist_workspace_bundle(
+                        self._workspace_id, bundle, self._configuration_revision
+                    ),
+                    self._loop,
                 )
-                fut.result(timeout=_WRITE_BACK_TIMEOUT)
+                if fut.result(timeout=_WRITE_BACK_TIMEOUT):
+                    self._configuration_revision += 1
         except Exception:
             log.warning(
                 "Failed to persist refreshed OpenShell OIDC token for ws %s to DB",
                 self._workspace_id,
                 exc_info=True,
             )
+
+    async def _persist_and_advance_revision(self, bundle: dict) -> None:
+        expected_revision = self._configuration_revision
+        if await _persist_workspace_bundle(
+            self._workspace_id, bundle, expected_revision
+        ):
+            with self._lock:
+                if self._configuration_revision == expected_revision:
+                    self._configuration_revision += 1
 
 
 class WorkspaceOidcAuthManager:
@@ -351,9 +381,17 @@ class WorkspaceOidcAuthManager:
         service_account_subject: str = "",
         tls_ca: str | None = None,
         tls_verify: bool = True,
+        configuration_revision: int = 0,
     ) -> OidcGatewayAuth:
         with self._lock:
             existing = self._instances.get(workspace_id)
+            current_revision = existing._configuration_revision if existing else -1
+            if existing is not None and configuration_revision < current_revision:
+                # A delayed database snapshot must never reseed credentials or
+                # replace the auth object installed by a newer snapshot.
+                raise StaleGatewayConfigurationError(
+                    "Workspace gateway configuration snapshot was superseded"
+                )
             if (
                 existing is not None
                 and existing._issuer == issuer.rstrip("/")
@@ -369,6 +407,8 @@ class WorkspaceOidcAuthManager:
                         client_secret=client_secret,
                         service_account_subject=service_account_subject,
                     )
+                with existing._lock:
+                    existing._configuration_revision = configuration_revision
                 return existing
 
             if existing is not None:
@@ -383,6 +423,7 @@ class WorkspaceOidcAuthManager:
                 service_account_subject=service_account_subject,
                 tls_ca=tls_ca,
                 tls_verify=tls_verify,
+                configuration_revision=configuration_revision,
             )
             with contextlib.suppress(RuntimeError):
                 auth.set_event_loop(asyncio.get_running_loop())
@@ -465,33 +506,47 @@ async def _load_workspace_bundle(workspace_id: int | None) -> dict | None:
             "expires_at": expires_at,
             "client_secret": gw.client_secret,
             "service_account_subject": gw.service_account_subject,
+            "configuration_revision": gw.configuration_revision,
         }
     return None
 
 
-async def _persist_workspace_bundle(workspace_id: int | None, bundle: dict) -> None:
+async def _persist_workspace_bundle(
+    workspace_id: int | None,
+    bundle: dict,
+    expected_revision: int,
+) -> bool:
     if workspace_id is None:
-        return
+        return False
 
-    from sqlalchemy import select
+    from sqlalchemy import update
+    from swarmer.crypto import encrypt
     from swarmer.database import get_db
     from swarmer.models.workspace_gateway import WorkspaceGateway
 
     async for db in get_db():
-        gw = (
-            await db.execute(
-                select(WorkspaceGateway).where(WorkspaceGateway.workspace_id == workspace_id)
-            )
-        ).scalar_one_or_none()
-        if gw is not None:
-            if bundle.get("refresh_token"):
-                gw.refresh_token = bundle["refresh_token"]
-            gw.access_token = bundle.get("access_token", "")
-            expires_at = bundle.get("expires_at")
-            gw.access_token_expires_at = (
-                datetime.fromtimestamp(expires_at, tz=timezone.utc).replace(tzinfo=None)
-                if expires_at
+        values: dict[str, Any] = {
+            "access_token_enc": encrypt(bundle.get("access_token", ""))
+            if bundle.get("access_token")
+            else None,
+            "access_token_expires_at": (
+                datetime.fromtimestamp(bundle["expires_at"], tz=timezone.utc).replace(tzinfo=None)
+                if bundle.get("expires_at")
                 else None
+            ),
+            "configuration_revision": expected_revision + 1,
+        }
+        if bundle.get("refresh_token"):
+            values["refresh_token_enc"] = encrypt(bundle["refresh_token"])
+        result = await db.execute(
+            update(WorkspaceGateway)
+            .where(
+                WorkspaceGateway.workspace_id == workspace_id,
+                WorkspaceGateway.configuration_revision == expected_revision,
             )
-            await db.commit()
-        break
+            .values(**values)
+            .execution_options(synchronize_session=False)
+        )
+        await db.commit()
+        return result.rowcount == 1
+    return False

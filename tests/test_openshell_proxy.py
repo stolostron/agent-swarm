@@ -20,6 +20,7 @@ import threading
 import time
 import uuid
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 from urllib.parse import urlparse
 
@@ -159,6 +160,32 @@ _requires_sdk = pytest.mark.skipif(
 
 _engine = create_async_engine("sqlite+aiosqlite://", echo=False)
 _TestSession = async_sessionmaker(_engine, expire_on_commit=False)
+
+
+@pytest.fixture(autouse=True)
+def _isolate_chat_lifecycle_state():
+    """Keep per-process tunnel fences and admission counters test-local."""
+    from swarmer.routers import chat_proxy as cp
+
+    cp._chat_tunnel_count = 0
+    cp._chat_user_tunnels.clear()
+    for handles in cp._session_tunnels.values():
+        for handle in handles:
+            handle.request_close()
+    cp._session_tunnels.clear()
+    for fence in cp._session_run_fences.values():
+        fence.revoked = True
+    cp._session_run_fences.clear()
+    yield
+    for handles in cp._session_tunnels.values():
+        for handle in handles:
+            handle.request_close()
+    cp._session_tunnels.clear()
+    for fence in cp._session_run_fences.values():
+        fence.revoked = True
+    cp._session_run_fences.clear()
+    cp._chat_tunnel_count = 0
+    cp._chat_user_tunnels.clear()
 
 
 async def _override_get_db():
@@ -549,6 +576,9 @@ class TestChatHttpProxy:
             row.phase = "running"
             row.sandbox_name = "sandbox-test-abc"
             await db.commit()
+        from swarmer.routers.chat_proxy import activate_session_chat_tunnels
+
+        activate_session_chat_tunnels(session["id"])
         return ws, session
 
     async def _upstream(
@@ -598,12 +628,14 @@ class TestChatHttpProxy:
         @asynccontextmanager
         async def fake_tunnel(
             sandbox_name, target_port, tunnel_client, session_id=None,
-            user_key=None, **_kwargs,
+            user_key=None, admission=None, **_kwargs,
         ):
             assert sandbox_name == "sandbox-test-abc"
             assert target_port == 4096
             assert session_id is not None
             assert user_key
+            if admission is not None:
+                admission.transfer()
             try:
                 yield f"http://127.0.0.1:{port}"
             finally:
@@ -649,6 +681,39 @@ class TestChatHttpProxy:
         assert "unlogged" not in caplog.text
 
     @pytest.mark.asyncio
+    async def test_acl_wait_cannot_admit_old_sandbox_under_new_run_fence(
+        self, client, monkeypatch
+    ):
+        from swarmer.routers import chat_proxy as cp
+
+        ws, session = await self._session(client)
+        acl_started = asyncio.Event()
+        allow_acl = asyncio.Event()
+
+        async def delayed_acl(*_args, **_kwargs):
+            acl_started.set()
+            await allow_acl.wait()
+            return True
+
+        gateway = AsyncMock()
+        monkeypatch.setattr(cp, "_workspace_accessible", delayed_acl)
+        monkeypatch.setattr(cp, "_gateway_and_client", gateway)
+        request_task = asyncio.create_task(
+            client.get(f"/workspaces/{ws['id']}/sessions/{session['id']}/chat/api")
+        )
+        await asyncio.wait_for(acl_started.wait(), timeout=2)
+        old_fence = cp._session_run_fences[session["id"]]
+        await cp.close_session_chat_tunnels(session["id"])
+        cp.activate_session_chat_tunnels(session["id"])
+        allow_acl.set()
+        response = await request_task
+
+        assert old_fence.revoked
+        assert response.status_code == 503
+        gateway.assert_not_awaited()
+        assert cp._chat_tunnel_count == 0
+
+    @pytest.mark.asyncio
     async def test_proxy_persists_selected_chat(self, client, monkeypatch):
         ws, session = await self._session(client)
         server, requests = await self._upstream(
@@ -673,6 +738,90 @@ class TestChatHttpProxy:
             row = await db.get(Session, session["id"])
             assert row.opencode_session_id == "ses_selected_chat"
         assert requests[0][1]["authorization"].startswith("Basic ")
+
+    @pytest.mark.asyncio
+    async def test_old_run_response_cannot_persist_chat_selection_after_relaunch(
+        self, client, monkeypatch
+    ):
+        from swarmer.routers import chat_proxy as cp
+
+        ws, session = await self._session(client)
+        server, _requests = await self._upstream(
+            monkeypatch,
+            body=b'{"id":"ses_old_run"}',
+            content_type="application/json",
+        )
+        read_complete = asyncio.Event()
+        allow_persist = asyncio.Event()
+        original_read = cp._read_limited_response
+
+        async def pause_before_persist(response):
+            result = await original_read(response)
+            read_complete.set()
+            await allow_persist.wait()
+            return result
+
+        monkeypatch.setattr(cp, "_read_limited_response", pause_before_persist)
+        response_task = asyncio.create_task(
+            client.post(
+                f"/workspaces/{ws['id']}/sessions/{session['id']}/chat/session",
+                headers={"Origin": "http://test"},
+                json={"title": "old run"},
+            )
+        )
+        try:
+            await asyncio.wait_for(read_complete.wait(), timeout=2)
+            async with _TestSession() as db:
+                from swarmer.models.session import Session as SessionRow
+
+                row = await db.get(SessionRow, session["id"])
+                row.run_started_at = datetime.now(timezone.utc).replace(tzinfo=None)
+                row.sandbox_name = "sandbox-relaunched"
+                row.opencode_session_id = None
+                await db.commit()
+            allow_persist.set()
+            response = await response_task
+        finally:
+            allow_persist.set()
+            if not response_task.done():
+                response_task.cancel()
+            await asyncio.gather(response_task, return_exceptions=True)
+            server.close()
+            await server.wait_closed()
+
+        assert response.status_code == 200
+        async with _TestSession() as db:
+            from swarmer.models.session import Session as SessionRow
+
+            row = await db.get(SessionRow, session["id"])
+            assert row.sandbox_name == "sandbox-relaunched"
+            assert row.opencode_session_id is None
+
+    @pytest.mark.asyncio
+    async def test_delete_clears_only_the_matching_selected_chat(self, client, monkeypatch):
+        ws, session = await self._session(client)
+        async with _TestSession() as db:
+            from swarmer.models.session import Session as SessionRow
+
+            row = await db.get(SessionRow, session["id"])
+            row.opencode_session_id = "ses_to_delete"
+            await db.commit()
+        server, _requests = await self._upstream(monkeypatch, body=b"{}")
+        try:
+            response = await client.delete(
+                f"/workspaces/{ws['id']}/sessions/{session['id']}/chat/session/ses_to_delete",
+                headers={"Origin": "http://test"},
+            )
+        finally:
+            server.close()
+            await server.wait_closed()
+
+        assert response.status_code == 200
+        async with _TestSession() as db:
+            from swarmer.models.session import Session as SessionRow
+
+            row = await db.get(SessionRow, session["id"])
+            assert row.opencode_session_id is None
 
     @pytest.mark.asyncio
     async def test_proxy_rewrites_html_assets_through_loopback_tunnel(self, client, monkeypatch):
@@ -738,6 +887,59 @@ class TestChatHttpProxy:
         assert requests[0][0] == "GET /event HTTP/1.1"
 
     @pytest.mark.asyncio
+    async def test_sse_upstream_read_error_completes_asgi_response(self, client, monkeypatch):
+        from swarmer.routers import chat_proxy as cp
+
+        ws, session = await self._session(client)
+
+        async def handle(_reader, writer):
+            writer.write(
+                b"HTTP/1.1 200 OK\r\n"
+                b"Content-Type: text/event-stream\r\n"
+                b"Content-Length: 100\r\n"
+                b"Connection: close\r\n\r\n"
+                b"data: partial\n\n"
+            )
+            await writer.drain()
+            writer.close()
+            await writer.wait_closed()
+
+        server = await asyncio.start_server(handle, "127.0.0.1", 0)
+        port = server.sockets[0].getsockname()[1]
+
+        @asynccontextmanager
+        async def fake_tunnel(*_args, admission=None, user_key=None, **_kwargs):
+            if admission is not None:
+                admission.transfer()
+            try:
+                yield f"http://127.0.0.1:{port}"
+            finally:
+                from swarmer.routers.chat_proxy import _release_chat_tunnel
+
+                _release_chat_tunnel(user_key)
+
+        async def fake_gateway(_workspace, _db=None):
+            return MagicMock(gateway_url="", auth_mode="none"), None
+
+        monkeypatch.setattr("swarmer.routers.chat_proxy._open_sandbox_tunnel", fake_tunnel)
+        monkeypatch.setattr("swarmer.routers.chat_proxy._gateway_and_client", fake_gateway)
+        try:
+            response = await asyncio.wait_for(
+                client.get(
+                    f"/workspaces/{ws['id']}/sessions/{session['id']}/chat/event",
+                    headers={"Accept": "text/event-stream"},
+                ),
+                timeout=2,
+            )
+        finally:
+            server.close()
+            await server.wait_closed()
+
+        assert response.status_code == 200
+        assert "partial" in response.text
+        assert cp._chat_tunnel_count == 0
+
+    @pytest.mark.asyncio
     async def test_sse_delivers_event_before_upstream_eof(self, client, monkeypatch):
         from starlette.requests import Request
         from swarmer.routers.chat_proxy import _chat_http_proxy
@@ -762,8 +964,16 @@ class TestChatHttpProxy:
             "session": {"authenticated": True, "username": "test-user", "groups": []},
         }
 
+        first_receive = True
+        disconnected = asyncio.Event()
+
         async def receive():
-            return {"type": "http.request", "body": b"", "more_body": False}
+            nonlocal first_receive
+            if first_receive:
+                first_receive = False
+                return {"type": "http.request", "body": b"", "more_body": False}
+            await disconnected.wait()
+            return {"type": "http.disconnect"}
 
         request = Request(scope, receive)
         messages = []
@@ -786,8 +996,15 @@ class TestChatHttpProxy:
             await response_task
         finally:
             release_upstream.set()
+            disconnected.set()
             server.close()
             await server.wait_closed()
+            if not response_task.done():
+                try:
+                    await asyncio.wait_for(asyncio.shield(response_task), timeout=2)
+                except TimeoutError:
+                    response_task.cancel()
+            await asyncio.gather(response_task, return_exceptions=True)
 
         assert any(b"incremental" in message.get("body", b"") for message in messages)
         assert requests[0][0] == "GET /event HTTP/1.1"
@@ -844,9 +1061,14 @@ class TestChatHttpProxy:
         ws, session = await self._session(client, mode="tui")
 
         @asynccontextmanager
-        async def fake_tunnel(_sandbox, _port, _client, session_id=None, user_key=None, **_kwargs):
+        async def fake_tunnel(
+            _sandbox, _port, _client, session_id=None, user_key=None,
+            admission=None, **_kwargs,
+        ):
             assert session_id is not None
             assert user_key
+            if admission is not None:
+                admission.transfer()
             try:
                 yield "http://127.0.0.1:45678"
             finally:
@@ -927,6 +1149,8 @@ class TestChatTunnelBridge:
 
         from swarmer.routers.chat_proxy import _open_sandbox_tunnel
 
+        seen = {}
+
         def fake_forward_tcp(sandbox_name, host, port, client=None):
             seen.update(sandbox=sandbox_name, host=host, port=port, client=client)
             input_q = _queue.Queue(maxsize=16)
@@ -956,6 +1180,40 @@ class TestChatTunnelBridge:
             "port": 4096,
             "client": "client",
         }
+
+    @pytest.mark.asyncio
+    async def test_first_bridge_survives_rejected_duplicate_connection(self, monkeypatch):
+        from swarmer.routers import chat_proxy as cp
+
+        seen = self._install_fake_forward_tcp(monkeypatch)
+        async with cp._open_sandbox_tunnel(
+            "sandbox-bridge", 4096, "client", session_id=779
+        ) as local_url:
+            parsed = urlparse(local_url)
+            first_reader, first_writer = await asyncio.open_connection(parsed.hostname, parsed.port)
+            first_writer.write(b"first")
+            await first_writer.drain()
+            assert await asyncio.wait_for(first_reader.readexactly(5), timeout=2) == b"FIRST"
+            assert "stream" in seen
+            tunnel_handle = next(iter(cp._session_tunnels[779]))
+            accepted_writer = tunnel_handle.writer
+            assert accepted_writer is not None
+
+            duplicate_reader, duplicate_writer = await asyncio.open_connection(
+                parsed.hostname, parsed.port
+            )
+            assert await asyncio.wait_for(duplicate_reader.read(), timeout=2) == b""
+            duplicate_writer.close()
+            await duplicate_writer.wait_closed()
+            assert tunnel_handle.writer is accepted_writer
+
+            first_writer.write(b"still-active")
+            await first_writer.drain()
+            assert await asyncio.wait_for(
+                first_reader.readexactly(len(b"still-active")), timeout=2
+            ) == b"STILL-ACTIVE"
+            first_writer.close()
+            await first_writer.wait_closed()
 
     def test_remote_gateway_requires_verified_tls_and_authentication(self):
         from swarmer.openshell_client import GatewayConfig
@@ -1218,22 +1476,24 @@ class TestChatTunnelSecurity:
 
         self._install_fake_forward_tcp(monkeypatch)
         session_id = 778
-        observed_epoch = cp._session_tunnel_epochs.get(session_id, 0)
+        observed_fence = cp.activate_session_chat_tunnels(session_id)
         await cp.close_session_chat_tunnels(session_id)
+        assert observed_fence.revoked
+        assert session_id not in cp._session_run_fences
 
         with pytest.raises(RuntimeError, match="run was revoked"):
             async with cp._open_sandbox_tunnel(
                 "sandbox-old", 4096, "client", session_id=session_id,
-                user_key="alice", run_epoch=observed_epoch,
+                user_key="alice", run_fence=observed_fence,
             ):
                 pytest.fail("revoked run registered a tunnel")
         assert cp._chat_tunnel_count == 0
         assert session_id not in cp._session_tunnels
 
-        current_epoch = cp.activate_session_chat_tunnels(session_id)
+        current_fence = cp.activate_session_chat_tunnels(session_id)
         async with cp._open_sandbox_tunnel(
             "sandbox-new", 4096, "client", session_id=session_id,
-            user_key="alice", run_epoch=current_epoch,
+            user_key="alice", run_fence=current_fence,
         ):
             assert session_id in cp._session_tunnels
         assert cp._chat_tunnel_count == 0
@@ -1274,6 +1534,59 @@ class TestChatTunnelSecurity:
         assert response.status_code == 503
         assert observed_counts == [1]
         assert cp._chat_tunnel_count == 0
+
+    @pytest.mark.asyncio
+    async def test_gateway_setup_cancellation_releases_http_admission(self, client, monkeypatch):
+        from swarmer.routers import chat_proxy as cp
+
+        ws, session = await TestChatHttpProxy()._session(client)
+        entered_gateway = asyncio.Event()
+
+        async def wait_for_gateway(*_args, **_kwargs):
+            entered_gateway.set()
+            await asyncio.Event().wait()
+
+        monkeypatch.setattr(cp, "_gateway_and_client", wait_for_gateway)
+        request_task = asyncio.create_task(
+            client.get(f"/workspaces/{ws['id']}/sessions/{session['id']}/chat/api")
+        )
+        await asyncio.wait_for(entered_gateway.wait(), timeout=2)
+        request_task.cancel()
+        await asyncio.gather(request_task, return_exceptions=True)
+
+        assert cp._chat_tunnel_count == 0
+        assert cp._chat_user_tunnels == {}
+
+    @pytest.mark.asyncio
+    async def test_gateway_setup_cancellation_releases_websocket_admission(
+        self, client, monkeypatch
+    ):
+        from swarmer.routers import chat_proxy as cp
+
+        ws, session = await TestChatHttpProxy()._session(client, mode="tui")
+        entered_gateway = asyncio.Event()
+
+        async def wait_for_gateway(*_args, **_kwargs):
+            entered_gateway.set()
+            await asyncio.Event().wait()
+
+        monkeypatch.setattr(cp, "_gateway_and_client", wait_for_gateway)
+        websocket = MagicMock()
+        websocket.session = {"authenticated": True, "username": "test-user", "groups": []}
+        websocket.headers = {"origin": "http://test", "host": "test"}
+        websocket.accept = AsyncMock()
+        websocket.close = AsyncMock()
+
+        with patch("swarmer.routers.chat_proxy.get_db", _override_get_db):
+            request_task = asyncio.create_task(
+                cp.chat_ws_proxy(websocket, ws["id"], session["id"], "event")
+            )
+            await asyncio.wait_for(entered_gateway.wait(), timeout=2)
+            request_task.cancel()
+            await asyncio.gather(request_task, return_exceptions=True)
+
+        assert cp._chat_tunnel_count == 0
+        assert cp._chat_user_tunnels == {}
 
     @pytest.mark.asyncio
     async def test_global_overload_returns_explicit_503(self, client, monkeypatch):
@@ -1450,6 +1763,49 @@ class TestChatTunnelSecurity:
         assert observed_threads and observed_threads[0] != loop_thread
         provider.set_event_loop.assert_called_once()
 
+    def test_oidc_manager_rejects_a_superseded_gateway_snapshot(self):
+        from swarmer.openshell_oidc import (
+            StaleGatewayConfigurationError,
+            WorkspaceOidcAuthManager,
+        )
+
+        manager = WorkspaceOidcAuthManager()
+        try:
+            original = manager.get_or_create(
+                workspace_id=9876,
+                issuer="https://issuer.example.com",
+                client_id="client",
+                client_secret="credential-placeholder-a",
+                refresh_token="refresh-placeholder-a",
+                access_token="access-placeholder-a",
+                configuration_revision=4,
+            )
+            current = manager.get_or_create(
+                workspace_id=9876,
+                issuer="https://issuer.example.com",
+                client_id="client",
+                client_secret="credential-placeholder-b",
+                refresh_token="refresh-placeholder-b",
+                access_token="access-placeholder-b",
+                configuration_revision=5,
+            )
+            with pytest.raises(StaleGatewayConfigurationError):
+                manager.get_or_create(
+                    workspace_id=9876,
+                    issuer="https://issuer.example.com",
+                    client_id="client",
+                    client_secret="credential-placeholder-a",
+                    configuration_revision=4,
+                )
+
+            assert current is original
+            assert current._client_secret == "credential-placeholder-b"
+            assert current._configuration_revision == 5
+            assert current._bundle["refresh_token"] == "refresh-placeholder-b"
+            assert current._bundle["access_token"] == "access-placeholder-b"
+        finally:
+            manager.clear()
+
     @pytest.mark.asyncio
     async def test_opencode_readiness_probe_is_bounded_and_accepts_ready_server(self, monkeypatch):
         from swarmer.routers import sessions
@@ -1474,6 +1830,25 @@ class TestChatTunnelSecurity:
         )
         with pytest.raises(TimeoutError, match="did not become ready"):
             await sessions._wait_for_opencode_ready("sandbox", "client", timeout=0.01)
+
+    @pytest.mark.asyncio
+    async def test_opencode_readiness_rpc_is_bounded_by_remaining_deadline(self, monkeypatch):
+        from swarmer.routers import sessions
+
+        observed_timeouts = []
+
+        async def slow_probe(*_args, **kwargs):
+            observed_timeouts.append(kwargs["timeout_seconds"])
+            await asyncio.sleep(0.2)
+            return MagicMock(exit_code=0)
+
+        monkeypatch.setattr("swarmer.openshell_client.exec_command", slow_probe)
+        started = asyncio.get_running_loop().time()
+        with pytest.raises(TimeoutError, match="did not become ready"):
+            await sessions._wait_for_opencode_ready("sandbox", "client", timeout=0.03)
+
+        assert asyncio.get_running_loop().time() - started < 0.1
+        assert observed_timeouts and observed_timeouts[0] <= 0.03
 
     # ── Stop/delete revocation wiring ───────────────────────────────────────
 
@@ -1815,6 +2190,13 @@ class TestRestartServerSessions:
 
         monkeypatch.setattr(settings, "openshell_gateway_url", "http://default-gateway")
 
+    @pytest.fixture(autouse=True)
+    def _ready_probe_succeeds_by_default(self, monkeypatch):
+        monkeypatch.setattr(
+            "swarmer.routers.sessions._wait_for_opencode_ready",
+            AsyncMock(),
+        )
+
     @pytest.mark.asyncio
     async def test_live_sandbox_removes_legacy_service_url(self, client):
         """A live server-mode session no longer needs a public service URL."""
@@ -1970,6 +2352,80 @@ class TestRestartServerSessions:
             session_obj = await db.get(_Session, s["id"])
             assert session_obj.phase == "running"
             assert session_obj.service_url == "http://service:4096"
+
+    @pytest.mark.asyncio
+    async def test_startup_readiness_failure_leaves_diagnostic_pending_session(
+        self, client, monkeypatch
+    ):
+        from swarmer.main import _restart_server_sessions
+
+        ws = await _create_workspace(client)
+        created = await _create_session(client, ws["id"], mode="server", agent_tool="opencode")
+        async with _TestSession() as db:
+            from swarmer.models.session import Session as SessionRow
+
+            row = await db.get(SessionRow, created["id"])
+            row.phase = "running"
+            row.sandbox_name = "sandbox-not-ready"
+            await db.commit()
+
+        monkeypatch.setattr(
+            "swarmer.routers.sessions._wait_for_opencode_ready",
+            AsyncMock(side_effect=TimeoutError("probe timeout")),
+        )
+        with (
+            patch(
+                "swarmer.openshell_client.list_sandboxes",
+                new=AsyncMock(return_value=["sandbox-not-ready"]),
+            ),
+            patch("swarmer.database.get_db", new=_override_get_db),
+            patch("swarmer.main._restart_github_app_iat_refresh", new=AsyncMock()) as iat_refresh,
+        ):
+            await _restart_server_sessions()
+
+        iat_refresh.assert_not_awaited()
+        async with _TestSession() as db:
+            from swarmer.models.session import Session as SessionRow
+
+            row = await db.get(SessionRow, created["id"])
+            assert row.phase == "pending"
+            assert "readiness probe failed" in row.status_detail
+
+    @pytest.mark.asyncio
+    async def test_gateway_resolution_failure_skips_only_affected_session(
+        self, client, monkeypatch
+    ):
+        from swarmer.main import _restart_server_sessions
+
+        ws = await _create_workspace(client)
+        created = await _create_session(client, ws["id"], mode="server", agent_tool="opencode")
+        async with _TestSession() as db:
+            from swarmer.models.session import Session as SessionRow
+
+            row = await db.get(SessionRow, created["id"])
+            row.phase = "running"
+            row.sandbox_name = "sandbox-resolution-error"
+            await db.commit()
+
+        with (
+            patch(
+                "swarmer.openshell_client.get_client_for_workspace",
+                new=AsyncMock(side_effect=RuntimeError("gateway configuration unavailable")),
+            ),
+            patch(
+                "swarmer.openshell_client.list_sandboxes",
+                new=AsyncMock(return_value=["sandbox-resolution-error"]),
+            ),
+            patch("swarmer.database.get_db", new=_override_get_db),
+        ):
+            await _restart_server_sessions()
+
+        async with _TestSession() as db:
+            from swarmer.models.session import Session as SessionRow
+
+            row = await db.get(SessionRow, created["id"])
+            assert row.phase == "running"
+            assert row.sandbox_name == "sandbox-resolution-error"
 
     @pytest.mark.asyncio
     async def test_prompt_mode_sessions_are_not_touched(self, client):

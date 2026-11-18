@@ -376,6 +376,8 @@ async def migrate_db() -> None:
         "ALTER TABLE workspace_gateways ADD COLUMN client_secret_enc TEXT DEFAULT NULL",
         "ALTER TABLE workspace_gateways ADD COLUMN service_account_subject VARCHAR(255) DEFAULT NULL",
         "ALTER TABLE workspace_gateways ADD COLUMN gateway_version VARCHAR(64) NOT NULL DEFAULT ''",
+        "ALTER TABLE workspace_gateways ADD COLUMN "
+        "configuration_revision INTEGER NOT NULL DEFAULT 0",
         """CREATE TABLE IF NOT EXISTS openshell_gateway_versions (
             gateway_url VARCHAR(1024) PRIMARY KEY,
             gateway_version VARCHAR(64) NOT NULL,

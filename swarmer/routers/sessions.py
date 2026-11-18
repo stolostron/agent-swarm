@@ -2833,12 +2833,18 @@ async def _wait_for_opencode_ready(
         "socket.once('error',()=>process.exit(1));"
     )
     while asyncio.get_running_loop().time() < deadline:
+        remaining = max(0.0, deadline - asyncio.get_running_loop().time())
+        if remaining <= 0:
+            break
         try:
-            result = await openshell_client.exec_command(
-                sandbox_name,
-                ["node", "-e", probe],
-                client=client,
-                timeout_seconds=2,
+            result = await asyncio.wait_for(
+                openshell_client.exec_command(
+                    sandbox_name,
+                    ["node", "-e", probe],
+                    client=client,
+                    timeout_seconds=min(2.0, remaining),
+                ),
+                timeout=remaining,
             )
             if result.exit_code == 0:
                 return

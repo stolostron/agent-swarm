@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, func
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, event, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from swarmer.crypto import decrypt, encrypt
@@ -17,6 +17,11 @@ class WorkspaceGateway(Base):
     )
     gateway_url: Mapped[str] = mapped_column(String(1024), nullable=False)
     gateway_version: Mapped[str] = mapped_column(String(64), nullable=False, default="", server_default="")
+    # Monotonic fence for OIDC configuration/token snapshots. ORM updates to a
+    # gateway row advance this value so stale async reads cannot reseed auth.
+    configuration_revision: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
     auth_mode: Mapped[str] = mapped_column(String(32), nullable=False, default="oidc")
     # auth_mode values: "oidc", "bearer", "mtls", "none"
 
@@ -89,3 +94,8 @@ class WorkspaceGateway(Base):
     @tls_key.setter
     def tls_key(self, value: str | None) -> None:
         self.tls_key_enc = encrypt(value) if value else None
+
+
+@event.listens_for(WorkspaceGateway, "before_update")
+def _advance_configuration_revision(_mapper, _connection, gateway: WorkspaceGateway) -> None:
+    gateway.configuration_revision = (gateway.configuration_revision or 0) + 1
