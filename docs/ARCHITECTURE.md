@@ -45,13 +45,13 @@ repository root; symbols are the preferred code entry points.
 | Session orchestration | `swarmer/routers/sessions.py` | `_do_launch()`, `_setup_openshell_sandbox()`, `_run_openshell_agent()`, stop/delete paths |
 | Cron and queue | `swarmer/scheduler.py` | 30-second scheduler tick for cron and queue processing; `_process_queue()` applies a 2-minute retry cooldown when capacity is full; sandbox GC; capacity limit |
 | GitHub PR events | `swarmer/pr_watcher.py` | In-process ETag polling, trust filters, debounce, circuit breaker, event dispatch |
-| OpenShell SDK boundary | `swarmer/openshell_client.py` | `create_sandbox()`, `start_agent()`, `exec_command()`, `exec_interactive()`, `expose_service()` |
+| OpenShell SDK boundary | `swarmer/openshell_client.py` | `create_sandbox()`, `start_agent()`, `exec_command()`, `exec_interactive()`, `forward_tcp()`; legacy exposed-service helpers |
 | OpenShell policy | `swarmer/openshell_policy.py` | `build_session_network_policies()`; OPA/Landlock + egress proxy rules |
 | Gateway selection | `swarmer/openshell_client.py`, `swarmer/openshell_oidc.py` | `GatewayConfig`, `resolve_gateway_config()`, `get_client_for_workspace()`, OIDC refresh |
 | Credentials | `swarmer/crypto.py`, `swarmer/github_auth.py`, `swarmer/github_app.py` | Fernet; GitHub PAT/App; IAT minting and refresh |
 | Persistence | `swarmer/database.py`, `swarmer/models/` | `init_db()`, `migrate_db()`, `Base`; import all models in `models/__init__.py` |
 | Agent tool selection | `swarmer/agent_tools/` | `AgentToolStrategy`, `registry.py`, `opencode.py`, `shell.py` |
-| Server-mode proxy | `swarmer/routers/chat_proxy.py` | HTTP/SSE/WebSocket proxy; `_resolve_upstream()` rewrites Gateway virtual host |
+| Chat proxy | `swarmer/routers/chat_proxy.py` | HTTP/SSE/WebSocket proxy over a bounded OpenShell `ForwardTcp` tunnel to sandbox loopback |
 | TUI proxy | `swarmer/routers/tui_ws.py` | One-time browser token; xterm.js WebSocket to OpenShell interactive PTY |
 | Run history | `swarmer/session_runs.py`, `swarmer/models/session.py` | `record_session_run()`; processed and raw output retention |
 | K8s integration | `swarmer/k8s.py`, `swarmer/k8s_auth.py` | Auth identity, legacy pull secrets, candidate discovery; imports are lazy |
@@ -127,11 +127,12 @@ refresh loops -> start `scheduler.py` and `pr_watcher.py` background tasks.
    - **prompt:** start a detached one-shot agent (`opencode run --standalone`), stream
      output, record `SessionRun`, and delete the sandbox after successful completion.
    - **server** and **tui (OpenCode):** start the persistent OpenCode V2 shared service
-     (`opencode serve --service` on port 4096), call `expose_service()`, and store the
-     virtual URL. The Chat tab serves it through `chat_proxy.py` (which authenticates
-     with a deterministic per-session `auth_token`), and the Terminal tab's TUI client
-     discovers the service registration and attaches to the same live session — so a
-     dropped connection reconnects without losing work.
+     (`opencode serve --service` on sandbox loopback, port 4096). Chat HTTP, SSE, and
+     WebSocket requests use the authenticated workspace OpenShell gRPC client and
+     `ForwardTcp` to a fixed loopback destination; no public `ExposeService` URL is
+     created. OpenCode authentication is sent inside the tunnel as per-session Basic
+     auth, not in a URL query. The Terminal TUI client also attaches to the local
+     service, so dropped connections can reconnect without losing work.
    - **tui (shell):** keep the sandbox alive; `tui_ws.py` launches an interactive shell
      through `exec_interactive()` when the browser connects.
 
@@ -141,6 +142,36 @@ Bearer token -> `deps.py:require_auth()` -> `k8s_auth.py` TokenReview/fallback -
 in session cookie -> `workspace_acl.py:can_access_workspace()` -> owner, explicit member,
 global admin, or configured shared-namespace policy. Handlers must use dependencies and
 ACL helpers; they must not inspect bearer headers or implement ad hoc access checks.
+
+### Chat transport and TLS boundaries
+
+Chat validates the Swarmer session and workspace ACL before opening a tunnel. The
+browser cannot choose a sandbox, destination host, or port: Swarmer derives the sandbox
+from the authorized session and targets OpenCode's fixed `127.0.0.1:4096` endpoint.
+Workspace-configured gateways must always use certificate-verified TLS and gateway
+authentication (OIDC, bearer, or mTLS) — a `.svc` or `cluster.local` hostname is not
+treated as trust evidence. Only the deployment's default gateway, configured by the
+operator through `OPENSHELL_GATEWAY_URL`, may use the private-network exemption for
+in-cluster gRPC. Chat fails closed when a requirement is missing. Gateway credentials
+are used only by the server-side gRPC client and are never forwarded to the browser or
+OpenCode. Browser cookies and browser Authorization headers are not forwarded to
+OpenCode. Upstream WebSocket connections are made over a preconnected socket so a
+hostile upstream cannot redirect the session (or the OpenCode credential) to another
+destination, and proxied WebSocket handshake logging redacts credentials.
+
+The transport has these encryption boundaries:
+
+| Hop | Protection | Boundary |
+|---|---|---|
+| Browser to public Swarmer ingress | HTTPS/WSS | TLS terminates at the OpenShift Route. The current Route uses `termination: edge`, so ingress-to-Swarmer pod traffic is HTTP unless separately protected by the cluster network. |
+| Swarmer to a remote OpenShell gateway | TLS with certificate verification plus configured gateway authentication | `ForwardTcp` application bytes are carried inside this authenticated gRPC connection while crossing the external network. |
+| Gateway relay to OpenCode in the sandbox | HTTP to sandbox loopback | TLS terminates at the gateway. The application protocol is not end-to-end encrypted past that point; any gateway-to-sandbox transport protection is an OpenShell deployment property, not a Swarmer guarantee. |
+
+OpenCode's server binds only to sandbox loopback, and Swarmer creates no new public
+gateway service route for Chat. On startup, Swarmer attempts to delete the legacy
+exposed service for surviving sessions created by older versions; stop/delete also
+clean up any recorded legacy `service_url`. The database column remains for backward
+compatibility and cleanup, but new interactive sessions leave it unset.
 
 ### Cron and queue scheduling
 
@@ -182,14 +213,25 @@ endpoint-scoped egress rule. There is no deployment-level URL setting or default
 | Use case | Swarmer behavior | OpenShell behavior |
 |---|---|---|
 | Headless prompt | Starts agent and monitors output; reads processed response from `.opencode/opencode.db` | Creates isolated sandbox, injects providers, deletes sandbox on success |
-| Persistent server | Stores exposed service URL and proxies HTTP/SSE/WebSocket | Runs OpenCode server; `expose_service()` returns Gateway virtual host |
+| Persistent server | Proxies HTTP/SSE/WebSocket through authenticated `ForwardTcp`; does not store a new service URL | Runs OpenCode on sandbox loopback; Gateway relays to the fixed TCP target |
 | Interactive TUI | One-time UUID auth then WebSocket PTY bridge; OpenCode attaches to its shared service over authenticated loopback | `exec_interactive()` runs the selected TUI binary |
 | GitHub App auth | `github_auth.py` mints IAT; refresh loop restarts after app restart | Gateway provider receives refreshed token; raw private key never enters sandbox |
 | MCP access | `mcp_catalog.py`, `McpServer`, `create_provider()` | Gateway env injection plus policy allowlist |
 
-The server proxy must preserve the Gateway virtual `Host` header while connecting to the
-real Gateway address. The virtual hostname is not necessarily resolvable from the Swarmer
-pod. TUI agent startup belongs in the WebSocket flow, not sandbox setup.
+The Chat proxy uses a temporary loopback-only TCP listener in the Swarmer pod to adapt
+OpenShell's synchronous gRPC byte stream to the existing HTTP/WebSocket clients.
+Admission control runs before any gateway work: a global tunnel cap plus a per-user
+quota reject overload with an explicit 503 (WebSocket close 1013). ForwardTcp streams
+multiplex over a shared per-gateway gRPC client that the proxy owns and replaces when
+a workspace's gateway configuration changes. Stream opens happen off the event loop —
+the OpenShell SDK's bearer interceptor may block on an OIDC refresh — with a reaper
+that cancels streams whose caller timed out or was cancelled. Every exit path closes
+the listener, stream, reader thread, and admission slot. Tunnels register in a
+session-scoped registry so stop/delete abort live Chat connections; access
+revocation applies when a connection ends, bounded by the tunnel maximum lifetime
+and the SSE idle-read timeout. Streaming responses remain streaming and use the
+bounded queues and lifetime limit. Legacy service URLs are not used as Chat
+upstreams. TUI shell startup continues to belong in the WebSocket flow, not sandbox setup.
 
 ## Container Image and Version Flow
 

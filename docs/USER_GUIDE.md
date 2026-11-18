@@ -751,7 +751,7 @@ Persistent interactive session: the sandbox runs the OpenCode V2 shared service 
 
 - `restartPolicy: Always` — pod runs indefinitely
 - The **Terminal** tab opens a full browser terminal (xterm.js over a WebSocket PTY proxy)
-- The **Chat ↗** link opens the agent's own web UI through the dashboard proxy (HTTP/WS/SSE via Route on OpenShift, or sub-path proxy elsewhere)
+- The **Chat ↗** link opens the agent's own web UI through the dashboard proxy. HTTP, SSE, and WebSocket traffic is relayed by Swarmer over the authenticated OpenShell gateway connection; no public sandbox service URL is needed.
 - Terminal and chat share the same persistent OpenCode service, so a dropped browser connection can reconnect to it. The TUI resumes the saved chat conversation when one was persisted; otherwise it starts without `--session`
 - Shell-tool interactive sessions instead keep the sandbox alive with `sleep infinity` and exec an interactive bash on connect
 - OSC 52 clipboard support — clipboard copy operations in the pod reach the user's browser clipboard

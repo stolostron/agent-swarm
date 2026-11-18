@@ -211,6 +211,6 @@ Typical outputs include:
 - Agent conversation output, raw logs, and run history
 - Commits, branches, pull requests, review comments, labels, and approvals
 - Jira comments, field updates, transitions, and logged work
-- Sandbox service URLs for server-mode sessions
+- Interactive OpenCode Chat through the authenticated dashboard tunnel
 - Draft and approved network policy rules
 - Security audit and dependency update results

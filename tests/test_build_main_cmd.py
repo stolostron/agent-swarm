@@ -31,7 +31,7 @@ class _FakeSession:
 _opencode = OpenCodeStrategy()
 
 # The shared V2 service command used for both interactive modes.
-_SERVE_CMD = "opencode serve --service --hostname 0.0.0.0 --port 4096"
+_SERVE_CMD = "opencode serve --service --hostname 127.0.0.1 --port 4096"
 
 
 # ---------------------------------------------------------------------------

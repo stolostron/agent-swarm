@@ -94,6 +94,8 @@ class Session(Base):
     )
     # Runtime state — managed by dashboard
     sandbox_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # Legacy OpenShell ExposeService URL. New Chat traffic uses ForwardTcp;
+    # retain this field so restarts/stops can remove endpoints from older runs.
     service_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
     # The OpenCode conversation selected in Chat, shared with reconnecting TUI clients.
     opencode_session_id: Mapped[str | None] = mapped_column(String(128), nullable=True)

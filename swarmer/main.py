@@ -404,9 +404,9 @@ async def _restart_server_sessions() -> None:
     still active after a restart.
 
     For each server/TUI-mode session that was running/pending with a live sandbox:
-    - server mode and opencode TUI mode: re-call expose_service() to get a fresh
-      service_url (handles gateway restarts). Sessions whose sandbox has
-      disappeared are moved to 'stopped'.
+    - server mode and opencode TUI mode use the authenticated gRPC TCP relay;
+      no public service URL is needed. Remove any legacy exposed service left
+      by an earlier version. Sessions whose sandbox disappeared are stopped.
     - server/TUI mode: if the session is using a workspace GitHub App (no PAT
       assigned), restart the background IAT refresh loop. Swarmer's own restart
       does not affect the sandbox or the OpenShell provider — the previously
@@ -426,7 +426,6 @@ async def _restart_server_sessions() -> None:
     from swarmer import openshell_client
     from swarmer.database import get_db
     from swarmer.models.session import Session
-    from swarmer.agent_tools.registry import get as _get_tool
 
     try:
         default_live_sandboxes = set(await openshell_client.list_sandboxes())
@@ -475,41 +474,31 @@ async def _restart_server_sessions() -> None:
                 s.run_completed_at = datetime.now(timezone.utc)
                 continue
 
-            # OpenCode V2 unification: server and TUI interactive sessions run
-            # the same persistent shared service, so both need a fresh
-            # service_url after a Swarmer restart. Shell TUI sessions expose
-            # no service and are skipped by the service_url check.
-            if s.mode == "server" or (s.mode == "tui" and s.agent_tool == "opencode"):
-                # Sandbox is alive — re-expose the service to get a fresh URL.
+            # Remove a legacy public endpoint if an older Swarmer version
+            # created one. Chat now connects only through OpenShell ForwardTcp.
+            if s.service_url:
                 try:
-                    _tool = _get_tool(s.agent_tool)
-                    port = _tool.get_server_port() or 4096
-                    gateway_config = await openshell_client.resolve_gateway_config(s.workspace_id, db)
-                    service_url = await openshell_client.expose_service(
-                        sandbox_name, "agent", port, client=oc_client,
-                        gateway_config=gateway_config,
+                    await openshell_client.delete_service(
+                        sandbox_name, "agent", client=oc_client
                     )
-                    s.service_url = service_url
-                    s.phase = "running"
-                    # The service URL embeds the gateway hostname; keep it out
-                    # of log output (it is persisted on the session row).
-                    log.info(
-                        "restart: interactive session %d re-connected to sandbox %s",
-                        s.id, sandbox_name,
-                    )
-                except Exception:
+                    s.service_url = None
+                except Exception as exc:  # noqa: BLE001 - keep startup live if legacy cleanup fails
                     log.warning(
-                        "restart: could not re-expose service for session %d sandbox %s; "
-                        "leaving the live session intact for a later reconnect attempt",
-                        s.id, sandbox_name, exc_info=True,
+                        "restart: could not delete legacy exposed service for session %d (%s)",
+                        s.id,
+                        type(exc).__name__,
                     )
-                    # The sandbox is known to be live. Exposure can fail
-                    # transiently (for example during a gateway restart), so
-                    # keep its identity and active phase; a later startup
-                    # reconciliation can retry without orphaning the session.
-                    # Fall through: the sandbox survives without a fresh
-                    # service_url, so its credential-refresh loops must still
-                    # be restored or its tokens would silently expire.
+
+            # OpenCode V2 server and TUI modes share one sandbox-local server.
+            # A surviving sandbox is ready for proxied Chat without exposing
+            # a gateway URL.
+            if s.mode == "server" or (s.mode == "tui" and s.agent_tool == "opencode"):
+                s.phase = "running"
+                log.info(
+                    "restart: interactive session %d re-connected to sandbox %s",
+                    s.id,
+                    sandbox_name,
+                )
 
             await _restart_github_app_iat_refresh(s, db)
             await _restart_agent_swarm_token_refresh(s, db, client=oc_client)

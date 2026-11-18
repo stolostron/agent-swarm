@@ -585,14 +585,24 @@ terminal run, and deletes the sandbox after successful completion.
 
 ### Server mode
 
-The agent server runs persistently. OpenShell exposes a service and Swarmer
-stores its virtual URL. The HTTP/SSE/WebSocket proxy connects to the real
-gateway while preserving the virtual `Host` header required for routing.
+The agent server runs persistently on sandbox loopback. Swarmer does not expose
+a new public OpenShell service or require `service_url`. Chat HTTP/SSE/WebSocket
+requests use the authenticated workspace OpenShell gRPC client and `ForwardTcp`
+to the fixed sandbox loopback port. Older recorded service URLs are deleted on
+startup when possible and retained only for legacy cleanup.
+
+For a remote gateway, the gRPC connection uses verified TLS and configured
+gateway authentication. TLS terminates at the gateway; the proxied OpenCode
+application protocol is HTTP on sandbox loopback and is not end-to-end TLS.
 
 ### TUI mode
 
-The sandbox remains alive. A one-time browser token authorizes a WebSocket PTY
-connection, and the agent starts through OpenShell interactive execution.
+The sandbox remains alive. For OpenCode, the TUI and Chat share the sandbox-local
+server: the terminal uses a one-time browser token and OpenShell interactive PTY,
+while Chat uses the authenticated `ForwardTcp` relay described in
+[`PAGE_session_chat.md`](PAGE_session_chat.md). Shell TUI sessions keep the
+sandbox alive with `sleep infinity` and start an interactive shell through
+OpenShell interactive execution when the terminal connects.
 
 ## 8. API implementation acceptance criteria
 

@@ -2378,6 +2378,47 @@ def exec_interactive(
     return response_stream, input_q
 
 
+def forward_tcp(
+    sandbox_name: str,
+    host: str,
+    port: int,
+    client=None,
+):
+    """Open an OpenShell TCP relay stream to a fixed sandbox destination.
+
+    Returns (response_iterator, input_queue). The caller must send byte strings
+    to the thread-safe queue and put ``None`` to half-close the request stream.
+    The iterator yields TcpForwardFrame responses and can be cancelled when the
+    caller disconnects. Keep destination selection server-side; this helper is
+    intentionally low-level and must not receive browser-controlled values.
+    """
+    from openshell._proto import openshell_pb2
+
+    if host != "127.0.0.1" or not isinstance(port, int) or not 1 <= port <= 65535:
+        raise ValueError("ForwardTcp is restricted to a valid sandbox loopback destination")
+
+    if client is None:
+        client = _get_client()
+
+    input_q: queue.Queue[bytes | None] = queue.Queue(maxsize=16)
+
+    def _request_generator():
+        init = openshell_pb2.TcpForwardInit(
+            sandbox=sandbox_name,
+            workspace=_OPENSHELL_WORKSPACE,
+            tcp=openshell_pb2.TcpRelayTarget(host=host, port=port),
+        )
+        yield openshell_pb2.TcpForwardFrame(init=init)
+        while True:
+            item = input_q.get()
+            if item is None:
+                return
+            yield openshell_pb2.TcpForwardFrame(data=item)
+
+    response_stream = client._stub.ForwardTcp(_request_generator())
+    return response_stream, input_q
+
+
 async def expose_service(
     sandbox_name: str,
     service_name: str,

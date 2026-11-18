@@ -2636,18 +2636,12 @@ async def _run_openshell_agent(
         oc_client = client
         if oc_client is _CLIENT_UNSET:
             oc_client = await openshell_client.get_client_for_workspace(workspace_id)
-        # OpenCode V2 unification: both server and TUI interactive sessions run
-        # the same persistent shared service (`opencode serve --service`,
-        # started via start_agent below). The web console reaches it through
-        # the chat proxy, and TUI clients attach by discovering the service
-        # registration. Because exposure is what makes the session reachable,
-        # both modes stay "pending" until expose_service() stores the URL.
-        # Shell-tool TUI sessions have no service to expose, so they flip to
-        # running immediately (the TUI WebSocket execs bash directly).
+        # OpenCode V2 unification: server and TUI interactive sessions share
+        # the sandbox-local service. Chat reaches it through an authenticated
+        # OpenShell TCP relay; no public service exposure is created. Keep the
+        # session pending until the service startup delay has elapsed.
         _runs_shared_service = agent_tool == "opencode" and mode in ("server", "tui")
         if not _runs_shared_service:
-            # Server mode stays "pending" until expose_service succeeds and the
-            # service_url is stored — the Chat tab only becomes accessible then.
             await _update_db(phase="running")
 
         if mode == "prompt":
@@ -2795,39 +2789,13 @@ async def _run_openshell_agent(
                 else:
                     await openshell_client.start_agent(sandbox_name, cmd, env=env_vars or {})
 
-            # Expose the agent HTTP port so the chat proxy can reach it.
-            # With the unified V2 backend this applies to TUI sessions too —
-            # both the Chat tab and the Terminal tab talk to the same service.
+            # Wait for OpenCode's loopback server before marking Chat ready.
+            # Chat traffic is relayed through OpenShell gRPC; do not create a
+            # publicly routable ExposeService endpoint.
             if _runs_shared_service:
-                from swarmer.agent_tools.registry import get as _get_tool
-                _tool = _get_tool(agent_tool)
-                port = _tool.get_server_port() or 4096
-                try:
-                    await _update_db(status_detail="Waiting for server to start…")
-                    await asyncio.sleep(8)  # let the server process start listening
-                    gateway_config = await openshell_client.resolve_gateway_config(workspace_id)
-                    if oc_client is not None:
-                        service_url = await openshell_client.expose_service(
-                            sandbox_name, "agent", port, client=oc_client,
-                            gateway_config=gateway_config,
-                        )
-                    else:
-                        service_url = await openshell_client.expose_service(
-                            sandbox_name, "agent", port, gateway_config=gateway_config
-                        )
-                    # Transition to running and store the URL atomically so the
-                    # Chat tab is only accessible once it's reachable.
-                    await _update_db(phase="running", service_url=service_url, status_detail="")
-                except Exception:
-                    log.exception(
-                        "ExposeService failed for session %d sandbox %s",
-                        session_id, sandbox_name,
-                    )
-                    await _update_db(
-                        phase="failed",
-                        status_detail="Failed to expose service URL — check server logs",
-                        run_completed_at=datetime.now(timezone.utc),
-                    )
+                await _update_db(status_detail="Waiting for server to start…")
+                await asyncio.sleep(8)
+                await _update_db(phase="running", service_url=None, status_detail="")
 
     except asyncio.CancelledError:
         raise
@@ -3037,6 +3005,14 @@ async def session_stop(
         if _t.get_name() in _task_names:
             _t.cancel()
             log.info("session_stop: cancelled background task %s", _t.get_name())
+
+    # Close live Chat tunnels before deleting the sandbox so proxied
+    # connections cannot outlive the session.
+    from swarmer.routers.chat_proxy import close_session_chat_tunnels
+
+    closed_tunnels = await close_session_chat_tunnels(sid)
+    if closed_tunnels:
+        log.info("session_stop: closed %d live Chat tunnel(s) for session %d", closed_tunnels, sid)
 
     provider_client = _CLIENT_UNSET
     if session.sandbox_name:
@@ -3795,6 +3771,14 @@ async def session_delete(
     if session.is_active:
         flash(request, "Stop the session before deleting it.", "danger")
         return RedirectResponse(url=f"/workspaces/{ws_id}/sessions/{sid}", status_code=302)
+
+    # Close live Chat tunnels before deleting the sandbox so proxied
+    # connections cannot outlive the session.
+    from swarmer.routers.chat_proxy import close_session_chat_tunnels
+
+    closed_tunnels = await close_session_chat_tunnels(sid)
+    if closed_tunnels:
+        log.info("session_delete: closed %d live Chat tunnel(s) for session %d", closed_tunnels, sid)
 
     provider_client = _CLIENT_UNSET
     if session.sandbox_name:

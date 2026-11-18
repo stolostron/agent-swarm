@@ -162,9 +162,9 @@ Use placeholder patterns instead: `<YOUR_PROJECT>`, `example.com`, `your-registr
 
 5. **Session mode affects sandbox lifecycle**:
    - `prompt` mode: sandbox runs the agent command once; on success, `_run_openshell_agent` auto-deletes the sandbox. On app restart, `_restart_prompt_pollers()` resumes monitoring via `exec_command_streaming`.
-   - `server` mode: sandbox runs the agent serve command indefinitely; `expose_service()` creates a routable URL stored in `session.service_url`. The chat proxy rewrites the gateway-assigned virtual hostname to the real gateway address at connect time (`_resolve_upstream()`) and sets the `Host` header to the virtual domain for gateway routing — the domain itself is not DNS-resolvable from the Swarmer pod.
-   - `tui` mode: sandbox runs `sleep infinity`; browser connects via xterm.js → WebSocket → OpenShell `exec_interactive()` PTY
-   - Stopping always calls `openshell_client.delete_sandbox()` (and `delete_service()` for server mode)
+   - `server` and OpenCode `tui` modes: start the persistent OpenCode V2 server on sandbox loopback. Chat uses authenticated OpenShell `ForwardTcp` to the fixed loopback port; do not create a public `ExposeService` URL. Remote gateways require verified TLS and gateway authentication. See `docs/ARCHITECTURE.md` for transport encryption boundaries.
+   - `tui` mode: OpenCode shares its loopback server; shell TUI keeps the sandbox alive with `sleep infinity`. The browser terminal uses xterm.js → WebSocket → OpenShell `exec_interactive()` PTY.
+   - Stopping calls `openshell_client.delete_sandbox()` and removes any legacy exposed service recorded in `session.service_url`.
 
 6. **OpenCode model format quirk**: Model strings use `provider/model@version` format (e.g., `google-vertex/claude-sonnet-5@default`). The `@version` suffix is part of the model ID; Haiku uses a date suffix (e.g., `@20251001`). OpenCode V2 uses the canonical `google-vertex` provider ID for all Vertex models (Claude and Gemini); the V1 `google-vertex-anthropic` prefix is normalized automatically at resolve time.
 
