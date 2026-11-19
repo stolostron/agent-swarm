@@ -306,7 +306,7 @@ class OpenCodeStrategy(AgentToolStrategy):
             # pre-written by Swarmer at sandbox setup — service mode ignores the
             # OPENCODE_PASSWORD env var. The port must be passed explicitly:
             # --service would otherwise default to the channel port (49374).
-            return "opencode serve --service --hostname 0.0.0.0 --port 4096"
+            return "opencode serve --service --hostname 127.0.0.1 --port 4096"
         else:
             prompt_text = session.instruction_prompt if resolved_prompt is None else resolved_prompt
             prompt_text = prompt_text or ""

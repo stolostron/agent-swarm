@@ -135,6 +135,47 @@ class TestMintInstallationToken:
 
 class TestStartTokenRefreshLoop:
     @pytest.mark.asyncio
+    async def test_refresh_resolves_current_workspace_gateway_client(self):
+        from swarmer import openshell_client
+
+        app = _make_app()
+        old_client = object()
+        current_client = object()
+        resolved = AsyncMock(return_value=current_client)
+        ensure_called = asyncio.Event()
+
+        async def fake_mint(_app, **_kwargs):
+            return "ghs_current"
+
+        async def fake_ensure(*_args, **kwargs):
+            assert kwargs["client"] is current_client
+            ensure_called.set()
+
+        with (
+            patch("swarmer.github_auth.IAT_REFRESH_INTERVAL", 0),
+            patch("swarmer.github_auth.mint_installation_token", side_effect=fake_mint),
+            patch.object(openshell_client, "get_client_for_workspace", resolved),
+            patch.object(openshell_client, "ensure_provider", side_effect=fake_ensure),
+        ):
+            from swarmer.github_auth import start_token_refresh_loop
+
+            task = asyncio.create_task(
+                start_token_refresh_loop(
+                    app,
+                    session_id=43,
+                    provider_name="provider",
+                    workspace_id=7,
+                    client=old_client,
+                    resolve_workspace_client=False,
+                )
+            )
+            await asyncio.wait_for(ensure_called.wait(), timeout=1)
+            task.cancel()
+            await task
+
+        resolved.assert_awaited_once_with(7)
+
+    @pytest.mark.asyncio
     async def test_loop_refreshes_and_updates_provider(self):
         app = _make_app()
         calls = []

@@ -6,6 +6,7 @@ import shlex
 import uuid
 from collections.abc import Iterable
 from datetime import datetime, timezone
+from typing import Any
 
 import httpx
 
@@ -2244,7 +2245,7 @@ async def _setup_openshell_sandbox(
             from swarmer.crypto import opencode_service_password as _oc_password
 
             _svc_config = _json_filter.dumps({
-                "hostname": "0.0.0.0",
+                "hostname": "127.0.0.1",
                 "port": 4096,
                 "password": _oc_password(session_id),
             }, indent=2)
@@ -2636,18 +2637,12 @@ async def _run_openshell_agent(
         oc_client = client
         if oc_client is _CLIENT_UNSET:
             oc_client = await openshell_client.get_client_for_workspace(workspace_id)
-        # OpenCode V2 unification: both server and TUI interactive sessions run
-        # the same persistent shared service (`opencode serve --service`,
-        # started via start_agent below). The web console reaches it through
-        # the chat proxy, and TUI clients attach by discovering the service
-        # registration. Because exposure is what makes the session reachable,
-        # both modes stay "pending" until expose_service() stores the URL.
-        # Shell-tool TUI sessions have no service to expose, so they flip to
-        # running immediately (the TUI WebSocket execs bash directly).
+        # OpenCode V2 unification: server and TUI interactive sessions share
+        # the sandbox-local service. Chat reaches it through an authenticated
+        # OpenShell TCP relay; no public service exposure is created. Keep the
+        # session pending until the service startup delay has elapsed.
         _runs_shared_service = agent_tool == "opencode" and mode in ("server", "tui")
         if not _runs_shared_service:
-            # Server mode stays "pending" until expose_service succeeds and the
-            # service_url is stored — the Chat tab only becomes accessible then.
             await _update_db(phase="running")
 
         if mode == "prompt":
@@ -2795,39 +2790,16 @@ async def _run_openshell_agent(
                 else:
                     await openshell_client.start_agent(sandbox_name, cmd, env=env_vars or {})
 
-            # Expose the agent HTTP port so the chat proxy can reach it.
-            # With the unified V2 backend this applies to TUI sessions too —
-            # both the Chat tab and the Terminal tab talk to the same service.
+            # Wait for OpenCode's loopback server before marking Chat ready.
+            # Chat traffic is relayed through OpenShell gRPC; do not create a
+            # publicly routable ExposeService endpoint.
             if _runs_shared_service:
-                from swarmer.agent_tools.registry import get as _get_tool
-                _tool = _get_tool(agent_tool)
-                port = _tool.get_server_port() or 4096
-                try:
-                    await _update_db(status_detail="Waiting for server to start…")
-                    await asyncio.sleep(8)  # let the server process start listening
-                    gateway_config = await openshell_client.resolve_gateway_config(workspace_id)
-                    if oc_client is not None:
-                        service_url = await openshell_client.expose_service(
-                            sandbox_name, "agent", port, client=oc_client,
-                            gateway_config=gateway_config,
-                        )
-                    else:
-                        service_url = await openshell_client.expose_service(
-                            sandbox_name, "agent", port, gateway_config=gateway_config
-                        )
-                    # Transition to running and store the URL atomically so the
-                    # Chat tab is only accessible once it's reachable.
-                    await _update_db(phase="running", service_url=service_url, status_detail="")
-                except Exception:
-                    log.exception(
-                        "ExposeService failed for session %d sandbox %s",
-                        session_id, sandbox_name,
-                    )
-                    await _update_db(
-                        phase="failed",
-                        status_detail="Failed to expose service URL — check server logs",
-                        run_completed_at=datetime.now(timezone.utc),
-                    )
+                await _update_db(status_detail="Waiting for server to start…")
+                await _wait_for_opencode_ready(sandbox_name, oc_client)
+                from swarmer.routers.chat_proxy import activate_session_chat_tunnels
+
+                activate_session_chat_tunnels(session_id)
+                await _update_db(phase="running", service_url=None, status_detail="")
 
     except asyncio.CancelledError:
         raise
@@ -2842,6 +2814,48 @@ async def _run_openshell_agent(
             status_detail=_detail,
             run_completed_at=datetime.now(timezone.utc),
         )
+
+
+async def _wait_for_opencode_ready(
+    sandbox_name: str,
+    client: Any | None,
+    timeout: float = 30.0,
+) -> None:
+    """Wait a bounded time for the sandbox-local OpenCode TCP listener."""
+    from swarmer import openshell_client
+
+    deadline = asyncio.get_running_loop().time() + timeout
+    probe = (
+        "const net=require('node:net');"
+        "const socket=net.connect(4096,'127.0.0.1');"
+        "socket.setTimeout(1000,()=>{socket.destroy();process.exit(1)});"
+        "socket.once('connect',()=>{socket.destroy();process.exit(0)});"
+        "socket.once('error',()=>process.exit(1));"
+    )
+    while asyncio.get_running_loop().time() < deadline:
+        remaining = max(0.0, deadline - asyncio.get_running_loop().time())
+        if remaining <= 0:
+            break
+        try:
+            result = await asyncio.wait_for(
+                openshell_client.exec_command(
+                    sandbox_name,
+                    ["node", "-e", probe],
+                    client=client,
+                    # OpenShell's protobuf duration is an integer. Keep the
+                    # precise remaining budget on wait_for below, but always
+                    # provide a positive whole-second RPC timeout.
+                    timeout_seconds=max(1, min(2, int(remaining))),
+                ),
+                timeout=remaining,
+            )
+            if result.exit_code == 0:
+                return
+        except Exception:
+            # A not-yet-running sandbox endpoint is expected during startup.
+            pass
+        await asyncio.sleep(min(1, max(0, deadline - asyncio.get_running_loop().time())))
+    raise TimeoutError(f"OpenCode server did not become ready within {timeout:g} seconds")
 
 
 @router.post(
@@ -3026,6 +3040,9 @@ async def session_stop(
         await db.commit()
         return RedirectResponse(url=f"/workspaces/{ws_id}/sessions/{sid}", status_code=302)
 
+    observed_run_started_at = session.run_started_at
+    observed_sandbox_name = session.sandbox_name
+
     # Cancel any background tasks for this session before touching the DB so
     # the task cannot race and overwrite the "stopped" phase we're about to set.
     _task_names = (
@@ -3038,8 +3055,47 @@ async def session_stop(
             _t.cancel()
             log.info("session_stop: cancelled background task %s", _t.get_name())
 
+    # Commit the stop transition and revoke Chat under the same lock used by
+    # startup reconciliation. A stale readiness result cannot reopen its fence.
+    from swarmer.routers.chat_proxy import (
+        close_session_chat_tunnels,
+        session_run_transition,
+    )
+
+    async with session_run_transition(sid):
+        closed_tunnels = await close_session_chat_tunnels(sid)
+        from swarmer.session_runs import STOPPED_BY_USER_DETAIL, record_session_run
+
+        completed_at = datetime.now(timezone.utc)
+        if observed_run_started_at and session.phase in ("pending", "running"):
+            await record_session_run(
+                db,
+                session,
+                phase="stopped",
+                status_detail=STOPPED_BY_USER_DETAIL,
+                last_output=session.last_output,
+                raw_output=session.raw_output,
+                completed_at=completed_at,
+            )
+        session.run_completed_at = completed_at
+        session.phase = "stopped"
+        session.status_detail = STOPPED_BY_USER_DETAIL
+        session.active_schedule_id = None
+        if session.cron_schedule and session.cron_next_run is not None:
+            try:
+                from croniter import croniter as _croniter
+                session.cron_next_run = _croniter(
+                    session.cron_schedule, datetime.now(timezone.utc)
+                ).get_next(datetime)
+            except Exception:
+                log.warning("session_stop: failed to advance cron_next_run for session %d", sid, exc_info=True)
+        await db.commit()
+    if closed_tunnels:
+        log.info("session_stop: closed %d live Chat tunnel(s) for session %d", closed_tunnels, sid)
+
     provider_client = _CLIENT_UNSET
-    if session.sandbox_name:
+    updated_policy_chunks = None
+    if observed_sandbox_name:
         from swarmer import openshell_client
         client = await openshell_client.get_client_for_workspace(ws_id, db)
         provider_client = client
@@ -3047,32 +3103,50 @@ async def session_stop(
         # Policy tab remains useful after the session is stopped.
         try:
             if client is not None:
-                chunks = await openshell_client.get_draft_chunks(session.sandbox_name, client=client)
+                chunks = await openshell_client.get_draft_chunks(observed_sandbox_name, client=client)
             else:
-                chunks = await openshell_client.get_draft_chunks(session.sandbox_name)
+                chunks = await openshell_client.get_draft_chunks(observed_sandbox_name)
             if chunks:
                 import json as _json_stop
-                session.policy_chunks = _json_stop.dumps(chunks)
+                updated_policy_chunks = _json_stop.dumps(chunks)
         except Exception:
             log.warning("Failed to snapshot policy chunks on stop for session %d", sid, exc_info=True)
         if session.service_url:
             try:
                 if client is not None:
-                    await openshell_client.delete_service(session.sandbox_name, "agent", client=client)
+                    await openshell_client.delete_service(observed_sandbox_name, "agent", client=client)
                 else:
-                    await openshell_client.delete_service(session.sandbox_name, "agent")
+                    await openshell_client.delete_service(observed_sandbox_name, "agent")
             except Exception as exc:
                 log.warning("DeleteService failed for session %d: %s", sid, exc)
         try:
             if client is not None:
-                await openshell_client.delete_sandbox(session.sandbox_name, client=client)
+                await openshell_client.delete_sandbox(observed_sandbox_name, client=client)
             else:
-                await openshell_client.delete_sandbox(session.sandbox_name)
+                await openshell_client.delete_sandbox(observed_sandbox_name)
         except Exception as exc:
             flash(request, f"Sandbox deletion failed: {exc}", "warning")
-        session.sandbox_name = None
-        session.service_url = None
-        session.opencode_session_id = None
+        from sqlalchemy import update
+
+        cleanup_values = {
+            "sandbox_name": None,
+            "service_url": None,
+            "opencode_session_id": None,
+        }
+        if updated_policy_chunks is not None:
+            cleanup_values["policy_chunks"] = updated_policy_chunks
+        await db.execute(
+            update(Session)
+            .where(
+                Session.id == sid,
+                Session.run_started_at == observed_run_started_at,
+                Session.sandbox_name == observed_sandbox_name,
+                Session.phase == "stopped",
+            )
+            .values(**cleanup_values)
+            .execution_options(synchronize_session=False)
+        )
+        await db.commit()
 
     # Clean up GitHub credentials providers AFTER sandbox deletion — the Gateway
     # rejects DeleteProvider with FAILED_PRECONDITION if the sandbox is still attached.
@@ -3080,41 +3154,6 @@ async def session_stop(
     await _delete_github_app_provider(ws_id, sid, client=provider_client)
     await _delete_pat_provider(ws_id, session.github_pat_id, sid, client=provider_client)
 
-    from swarmer.session_runs import STOPPED_BY_USER_DETAIL, record_session_run
-
-    completed_at = datetime.now(timezone.utc)
-    if session.run_started_at and session.phase in ("pending", "running"):
-        await record_session_run(
-            db,
-            session,
-            phase="stopped",
-            status_detail=STOPPED_BY_USER_DETAIL,
-            last_output=session.last_output,
-            raw_output=session.raw_output,
-            completed_at=completed_at,
-        )
-    session.run_completed_at = completed_at
-    session.phase = "stopped"
-    session.status_detail = STOPPED_BY_USER_DETAIL
-    session.active_schedule_id = None
-
-    # Advance cron_next_run so the scheduler doesn't immediately re-launch a
-    # cron-scheduled session that was manually stopped — it would re-queue it
-    # within the next 30-second poll if cron_next_run is already in the past.
-    if session.cron_schedule and session.cron_next_run is not None:
-        try:
-            from croniter import croniter as _croniter
-            session.cron_next_run = _croniter(
-                session.cron_schedule, datetime.now(timezone.utc)
-            ).get_next(datetime)
-            log.info(
-                "session_stop: advanced cron_next_run for session %d to %s",
-                sid, session.cron_next_run,
-            )
-        except Exception:
-            log.warning("session_stop: failed to advance cron_next_run for session %d", sid, exc_info=True)
-
-    await db.commit()
     return RedirectResponse(url=f"/workspaces/{ws_id}/sessions/{sid}", status_code=302)
 
 
@@ -3795,6 +3834,14 @@ async def session_delete(
     if session.is_active:
         flash(request, "Stop the session before deleting it.", "danger")
         return RedirectResponse(url=f"/workspaces/{ws_id}/sessions/{sid}", status_code=302)
+
+    # Close live Chat tunnels before deleting the sandbox so proxied
+    # connections cannot outlive the session.
+    from swarmer.routers.chat_proxy import close_session_chat_tunnels
+
+    closed_tunnels = await close_session_chat_tunnels(sid)
+    if closed_tunnels:
+        log.info("session_delete: closed %d live Chat tunnel(s) for session %d", closed_tunnels, sid)
 
     provider_client = _CLIENT_UNSET
     if session.sandbox_name:

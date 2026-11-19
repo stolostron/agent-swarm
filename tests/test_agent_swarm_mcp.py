@@ -83,6 +83,9 @@ async def test_agent_swarm_token_refresh_updates_provider(monkeypatch):
 
     ensure_provider = AsyncMock()
     monkeypatch.setattr(openshell_client, "ensure_provider", ensure_provider)
+    current_client = object()
+    resolve_client = AsyncMock(return_value=current_client)
+    monkeypatch.setattr(openshell_client, "get_client_for_workspace", resolve_client)
     sleeps = 0
 
     async def sleep(_interval):
@@ -99,3 +102,5 @@ async def test_agent_swarm_token_refresh_updates_provider(monkeypatch):
     args = ensure_provider.await_args
     assert args.args[:3] == ("agent-swarm-provider", "agent-swarm", {})
     assert "AGENT_SWARM_API_TOKEN" in args.kwargs["credentials"]
+    assert args.kwargs["client"] is current_client
+    resolve_client.assert_awaited_once_with(34)

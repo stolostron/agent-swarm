@@ -235,7 +235,7 @@ Unique key: `(workspace_id, name)`.
 | `mcp_server_ids` | Comma-separated selected MCP IDs; empty retains legacy/API inheritance, `none` means explicitly disabled; new sessions without selections store `none` |
 | `phase` | Runtime lifecycle state |
 | `sandbox_name` | OpenShell sandbox name |
-| `service_url` | Exposed server-mode service URL |
+| `service_url` | Legacy exposed service URL; retained for cleanup of endpoints created by older versions. New Chat tunnels do not set or consume it. |
 | `last_output`, `raw_output` | Latest processed/raw output |
 | `status_detail` | Current status text |
 | `event_context` | Serialized launch/event context |
@@ -423,8 +423,10 @@ These tables are not public REST resources and are not exposed by MCP.
 5. Stopping an executing session records a `stopped` run when possible.
 6. Successful prompt-mode completion deletes the sandbox.
 7. Server/TUI sessions retain a sandbox while active.
-8. Server mode stores a gateway virtual service URL; the virtual hostname may
-   not be DNS-resolvable from Swarmer.
+8. New OpenCode server/TUI sessions do not store or expose a gateway service
+   URL. Chat reaches the fixed sandbox loopback service through authenticated
+   OpenShell `ForwardTcp`; `service_url` is retained only to clean up legacy
+   exposed services.
 9. GitHub App private keys never enter a sandbox.
 10. Workspace credentials are encrypted before persistence.
 11. Schedule run history stores source snapshots so later schedule/prompt edits

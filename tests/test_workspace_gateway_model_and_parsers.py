@@ -5,10 +5,14 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import pytest
+from sqlalchemy import update
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+from swarmer.crypto import init_crypto
+from swarmer.models.workspace import Workspace
+from swarmer.models.workspace_gateway import WorkspaceGateway
 from swarmer.openshell_command_parser import parse_gateway_command_or_json
 from swarmer.openshell_token_parser import parse_token_input
-from swarmer.crypto import init_crypto
-from swarmer.models.workspace_gateway import WorkspaceGateway
 
 
 @pytest.fixture(autouse=True)
@@ -186,6 +190,53 @@ def test_workspace_gateway_encryption():
     assert gw.client_secret_enc is not None
     assert gw.client_secret_enc != "my-secret-client-secret"
     assert gw.client_secret == "my-secret-client-secret"
+
+
+@pytest.mark.asyncio
+async def test_workspace_gateway_revision_increments_from_persisted_value():
+    from swarmer.database import Base
+
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    session_maker = async_sessionmaker(engine, expire_on_commit=False)
+
+    async with session_maker() as setup_db:
+        workspace = Workspace(id=991, display_name="revision test", namespace="revision-test")
+        gateway = WorkspaceGateway(
+            workspace_id=991,
+            gateway_url="https://gateway.example.com",
+            auth_mode="none",
+        )
+        workspace.gateway = gateway
+        setup_db.add_all([workspace, gateway])
+        await setup_db.commit()
+
+    async with session_maker() as stale_db:
+        stale_gateway = await stale_db.get(WorkspaceGateway, 991)
+        assert stale_gateway is not None
+        assert stale_gateway.configuration_revision == 0
+
+        async with session_maker() as token_db:
+            await token_db.execute(
+                update(WorkspaceGateway)
+                .where(WorkspaceGateway.workspace_id == 991)
+                .values(
+                    configuration_revision=WorkspaceGateway.configuration_revision + 1
+                )
+            )
+            await token_db.commit()
+
+        stale_gateway.gateway_version = "updated-from-stale-snapshot"
+        await stale_db.commit()
+
+    async with session_maker() as verify_db:
+        current = await verify_db.get(WorkspaceGateway, 991)
+        assert current is not None
+        assert current.configuration_revision == 2
+        assert current.gateway_version == "updated-from-stale-snapshot"
+
+    await engine.dispose()
 
 
 def test_parse_command_with_client_secret():

@@ -353,6 +353,14 @@ async def delete_session(
     if session.is_active:
         raise HTTPException(status_code=409, detail="Stop the session before deleting")
 
+    # Close live Chat tunnels before deleting the sandbox so proxied
+    # connections cannot outlive the session.
+    from swarmer.routers.chat_proxy import close_session_chat_tunnels
+
+    closed_tunnels = await close_session_chat_tunnels(sid)
+    if closed_tunnels:
+        log.info("delete_session: closed %d live Chat tunnel(s) for session %d", closed_tunnels, sid)
+
     if session.sandbox_name:
         # OpenShell session — delete sandbox
         from swarmer import openshell_client
@@ -458,6 +466,14 @@ async def stop_session(
         if _t.get_name() in _task_names:
             _t.cancel()
             log.info("stop_session: cancelled background task %s", _t.get_name())
+
+    # Close live Chat tunnels before deleting the sandbox so proxied
+    # connections cannot outlive the session.
+    from swarmer.routers.chat_proxy import close_session_chat_tunnels
+
+    closed_tunnels = await close_session_chat_tunnels(sid)
+    if closed_tunnels:
+        log.info("stop_session: closed %d live Chat tunnel(s) for session %d", closed_tunnels, sid)
 
     if session.sandbox_name:
         from swarmer import openshell_client

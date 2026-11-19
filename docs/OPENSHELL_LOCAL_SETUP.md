@@ -93,8 +93,11 @@ Swarmer cluster. Create or edit a workspace and select **Custom OpenShell
 Gateway**. Enter the HTTPS gateway URL (host and optional port; no URL path),
 choose the gateway's configured authentication mode, fill in its OIDC issuer and
 client details or bearer token, then use **Test Gateway Connection** before
-saving. OIDC over HTTPS is recommended for hosted gateways. Use `None` only for
-a deliberately unauthenticated gateway on a trusted private network.
+saving. OIDC over HTTPS is recommended for hosted gateways. Chat does not
+support `None` for workspace-configured gateways, even when TLS is verified;
+workspace gateways used by Chat require OIDC, bearer, or mTLS authentication.
+Local and remote Chat both use authenticated `ForwardTcp`. Only the
+operator-configured private default gateway may omit gateway authentication.
 
 For local development against a remote gateway, set `OPENSHELL_GATEWAY_URL` and
 the matching `OPENSHELL_BEARER_TOKEN` or TLS settings in the untracked `.env`.
@@ -105,8 +108,19 @@ or mTLS gateway. Never commit tokens, private keys, or certificate contents.
 Remote gateways must be able to pull the configured agent image. Swarmer imports
 the pinned provider profiles on each gateway before creating providers, and
 continues to store provider credentials on the gateway. The session lifecycle,
-pagination, cleanup, and service exposure use the same OpenShell 0.1.5 API for
-local and remote gateways.
+pagination, and cleanup use the same OpenShell API for local and remote
+gateways.
+
+Chat connectivity is transport-identical for local and remote gateways and does
+not create an `ExposeService` endpoint: Chat HTTP, SSE, and WebSocket traffic
+rides the workspace's authenticated OpenShell gRPC connection (`ForwardTcp`)
+to the sandbox's loopback OpenCode port. This is what makes Chat work against
+hosted gateways whose ingress does not route virtual-host service URLs.
+Workspace-configured (remote) gateways must use certificate-verified TLS with
+OIDC, bearer, or mTLS authentication — Chat fails closed otherwise. See the
+[Session Chat specification](specs/PAGE_session_chat.md) for the full
+transport contract, including the remote-gateway request path and failure
+modes.
 
 ---
 
